@@ -247,7 +247,159 @@ func (m *Manager) ensureAgent(channelID string) error {
 
 ---
 
-## 十一、開發順序
+## 十一、實測紀錄（2026-03-21）
+
+### 環境
+- kiro-cli 1.28.1
+- acp-bridge 0.3.0（npm global）
+- acp-bridge daemon: `ACP_BRIDGE_PORT=7800 acp-bridged`
+
+---
+
+### 測試 1：acp-bridge 基本 API ✅
+
+```bash
+# 啟動 daemon
+ACP_BRIDGE_PORT=7800 acp-bridged > /tmp/acp-bridge.log 2>&1 &
+curl http://localhost:7800/health
+# → {"ok":true,"agents":0}
+
+# 啟動 kiro agent
+curl -X POST http://localhost:7800/agents \
+  -H "Content-Type: application/json" \
+  -d '{"type":"kiro","name":"ch-001","command":"/path/to/kiro-cli","args":["acp"],"cwd":"/projects"}'
+# → {"state":"idle","sessionId":"xxxx-...","protocolVersion":1,...}
+
+# ask（同步）
+curl -X POST http://localhost:7800/agents/ch-001/ask \
+  -d '{"prompt":"你好"}' --max-time 60
+# → {"state":"idle","stopReason":"end_turn","response":"..."}
+
+# ask（SSE stream）
+curl -N -X POST "http://localhost:7800/agents/ch-001/ask?stream=true" \
+  -d '{"prompt":"列出3個數字"}' --max-time 60
+# → event: chunk\ndata: {"chunk":"1"}\n\n
+# → event: chunk\ndata: {"chunk":", 2, 3"}\n\n
+# → event: done\ndata: {"response":"1, 2, 3","stopReason":"end_turn"}\n\n
+
+# alive check
+curl http://localhost:7800/agents/ch-001
+# → {"state":"idle",...}  或  {"error":"not_found"}（404）
+
+# cancel
+curl -X POST http://localhost:7800/agents/ch-001/cancel
+# → {"ok":true,"cancelledPermissions":0}
+
+# stop
+curl -X DELETE http://localhost:7800/agents/ch-001
+# → {"ok":true}
+```
+
+**重要：acp-bridge 的 `POST /agents` 不接受 `sessionId` 參數**，每次 start 都建新 session。
+
+---
+
+### 測試 2：同一 session 內的對話記憶 ✅
+
+```bash
+# 第一輪
+curl -X POST http://localhost:7800/agents/ch-001/ask \
+  -d '{"prompt":"記住這個暗號：ALPHA-7749"}' --max-time 30
+# → "我無法記住跨對話的資訊..."（kiro 說明自身限制，但仍記錄在 session）
+
+# 第二輪（同一 agent process，同一 sessionId）
+curl -X POST http://localhost:7800/agents/ch-001/ask \
+  -d '{"prompt":"我剛才說的暗號是什麼？"}' --max-time 30
+# → "你剛才說的暗號是 ALPHA-7749。"  ✅ 有記憶
+```
+
+**結論：同一 agent process 存活期間，對話歷史完整接續。**
+
+---
+
+### 測試 3：session/load 跨 process 恢復 ❌
+
+kiro 宣告 `agentCapabilities.loadSession: true`，但實測無法正常使用。
+
+#### 測試的 ACP JSON-RPC 序列
+
+```
+Client → kiro-cli acp (stdin/stdout JSON-RPC)
+
+1. initialize
+   → {"jsonrpc":"2.0","id":0,"method":"initialize","params":{
+       "protocolVersion":1,"clientCapabilities":{},"clientInfo":{"name":"test","version":"1.0"}
+     }}
+   ← {"result":{"protocolVersion":1,"agentCapabilities":{"loadSession":true,...},...},"id":0}
+
+2. session/new（必須先建立 session，kiro 才接受後續指令）
+   → {"jsonrpc":"2.0","id":1,"method":"session/new","params":{"cwd":"/projects","mcpServers":[]}}
+   ← [先收到多個 notifications]
+     {"method":"_kiro.dev/mcp/server_initialized","params":{"sessionId":"xxxx",...}}
+     {"method":"_kiro.dev/commands/available","params":{"sessionId":"xxxx","commands":[...]}}
+     {"method":"_kiro.dev/metadata","params":{"sessionId":"xxxx","contextUsagePercentage":5.8}}
+   ← [最後才收到 result，注意：result 在 notifications 之後]
+     {"result":{"sessionId":"xxxx","modes":{...},"models":{...}},"id":1}
+
+3. session/load（嘗試載入舊 session）
+   → {"jsonrpc":"2.0","id":2,"method":"session/load","params":{"sessionId":"<old-id>"}}
+   ← [無任何回應，kiro 完全忽略此 method]
+```
+
+#### 其他嘗試方式（均失敗）
+
+| 方式 | 結果 |
+|------|------|
+| `session/load` 獨立 method | 無回應，kiro 忽略 |
+| `session/new` params 帶 `sessionId` | kiro 卡死，無回應 |
+| `_kiro.dev/commands/execute` 帶 `/chat <sessionId>` | 無回應，kiro 退出 |
+
+#### session 檔案位置
+
+kiro 會將 session 持久化到磁碟：
+```
+~/.kiro/sessions/cli/<session-id>.json   # metadata（title、cwd、created_at）
+~/.kiro/sessions/cli/<session-id>.jsonl  # 對話歷史 event log
+~/.kiro/sessions/cli/<session-id>.lock   # 鎖定檔
+```
+
+檔案存在，但 `session/load` 無法正常觸發載入。
+
+**結論：kiro 1.28.1 的 session/load 無法跨 process 恢復對話歷史。**
+
+---
+
+### 測試 4：ACP 訊息順序注意事項
+
+`session/new` 的 result 會在多個 notifications **之後**才到達，實作時必須用 id 匹配而非順序讀取：
+
+```
+收到順序：
+  1. {"method":"_kiro.dev/mcp/server_initialized", ...}   ← notification
+  2. {"method":"_kiro.dev/commands/available", ...}        ← notification（可能出現 2 次）
+  3. {"method":"_kiro.dev/metadata", ...}                  ← notification
+  4. {"result":{...}, "id":1}                              ← session/new 的 result（最後才到）
+```
+
+Go 實作時需要用 goroutine 讀取所有訊息，用 map[id]chan 分發 response，不能用同步 readline。
+
+---
+
+### 設計決策更新
+
+基於以上測試，**session 持久化策略調整**：
+
+| 情境 | 行為 |
+|------|------|
+| agent process 存活 | 對話歷史完整接續 ✅ |
+| bot 重啟 / process 崩潰 | 建新 session，歷史不延續 |
+| `!reset` 指令 | 主動建新 session |
+
+**不實作 session/load**，因為 kiro 1.28.1 不支援。若未來 kiro 修復此功能，可再加入。
+
+---
+
+## 十二、開發順序
 
 1. `acp/client.go` — HTTP client + SSE 解析
 2. `channel/session.go` — Session 結構 + JSON 持久化
