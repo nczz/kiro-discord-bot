@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/nczz/kiro-discord-bot/acp"
@@ -200,14 +201,18 @@ func (m *Manager) startAgentAndWorker(channelID string) (*Worker, error) {
 		killProcessTree(sess.AgentPID)
 	}
 
-	beforePIDs := currentPIDs(m.kiroCLI)
+	beforePIDs := currentPIDs()
 
 	status, err := m.acpClient.StartAgent(agentName, m.kiroCLI, cwd)
 	if err != nil {
 		return nil, fmt.Errorf("start agent: %w", err)
 	}
 
-	agentPID := findNewPID(m.kiroCLI, beforePIDs)
+	agentPID := findNewPID(beforePIDs)
+	if agentPID == 0 {
+		time.Sleep(2 * time.Second)
+		agentPID = findNewPID(beforePIDs)
+	}
 	if agentPID > 0 {
 		log.Printf("[manager] agent %s pid=%d", agentName, agentPID)
 	}
@@ -258,9 +263,9 @@ func (m *Manager) IsPaused(channelID string) bool {
 	return m.paused[channelID]
 }
 
-// findNewPID returns the PID of a "kiro-cli acp" process that wasn't in the before set.
-func findNewPID(kiroCLI string, before map[int]bool) int {
-	out, err := exec.Command("pgrep", "-f", kiroCLI+` acp`).Output()
+// findNewPID returns the PID of a "kiro-cli-chat" process that wasn't in the before set.
+func findNewPID(before map[int]bool) int {
+	out, err := exec.Command("pgrep", "-f", "kiro-cli-chat acp").Output()
 	if err != nil {
 		return 0
 	}
@@ -272,10 +277,10 @@ func findNewPID(kiroCLI string, before map[int]bool) int {
 	return 0
 }
 
-// currentPIDs returns a set of PIDs matching "kiro-cli acp".
-func currentPIDs(kiroCLI string) map[int]bool {
+// currentPIDs returns a set of PIDs matching "kiro-cli-chat acp".
+func currentPIDs() map[int]bool {
 	pids := make(map[int]bool)
-	out, err := exec.Command("pgrep", "-f", kiroCLI+` acp`).Output()
+	out, err := exec.Command("pgrep", "-f", "kiro-cli-chat acp").Output()
 	if err != nil {
 		return pids
 	}
