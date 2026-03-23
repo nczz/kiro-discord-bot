@@ -75,7 +75,8 @@ func (m *Manager) Reset(channelID string) error {
 
 	if sess, ok := m.store.Get(channelID); ok {
 		_ = m.acpClient.StopAgent(sess.AgentName)
-		_ = m.store.Delete(channelID)
+		// Preserve CWD across reset
+		_ = m.store.Set(channelID, &Session{CWD: sess.CWD})
 	}
 	return nil
 }
