@@ -18,7 +18,8 @@ const usageMessage = `🤖 **Agent 已就緒！** 以下是可用指令：
 ` + "```" + `
 !status   — 查詢 agent 狀態
 !cancel   — 取消目前執行中的任務
-!cwd      — 查詢目前工作目錄
+!cwd          — 查詢目前工作目錄
+!cwd <目錄>   — 設定新工作目錄（下次 !reset 生效）
 !reset    — 重啟 agent session
 !start <目錄> — 綁定新的專案目錄
 !pause    — 切換為 @mention 模式（僅回應 @提及）
@@ -155,6 +156,14 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 	case content == "!cwd":
 		ds.ChannelMessageSend(m.ChannelID, b.manager.CWD(m.ChannelID))
 
+	case strings.HasPrefix(content, "!cwd "):
+		newCwd := strings.TrimSpace(strings.TrimPrefix(content, "!cwd "))
+		if err := b.manager.SetCWD(m.ChannelID, newCwd); err != nil {
+			ds.ChannelMessageSend(m.ChannelID, "❌ "+err.Error())
+			return
+		}
+		ds.ChannelMessageSend(m.ChannelID, "✅ CWD 已設定為 `"+newCwd+"`，下次 `!reset` 時生效。")
+
 	case strings.HasPrefix(content, "!start "):
 		cwd := strings.TrimSpace(strings.TrimPrefix(content, "!start "))
 		if cwd == "" {
@@ -192,7 +201,9 @@ var slashCommands = []*discordgo.ApplicationCommand{
 	{Name: "reset", Description: "重啟 agent"},
 	{Name: "status", Description: "查詢目前 agent 狀態"},
 	{Name: "cancel", Description: "取消目前執行中的任務"},
-	{Name: "cwd", Description: "查詢目前工作目錄"},
+	{Name: "cwd", Description: "查詢或設定工作目錄", Options: []*discordgo.ApplicationCommandOption{
+		{Type: discordgo.ApplicationCommandOptionString, Name: "path", Description: "新的工作目錄（留空則查詢）", Required: false},
+	}},
 	{Name: "pause", Description: "暫停監聽，改為 @mention 模式"},
 	{Name: "back", Description: "恢復完整監聽所有訊息"},
 }
@@ -262,7 +273,16 @@ func (b *Bot) handleInteraction(ds *discordgo.Session, i *discordgo.InteractionC
 			respond("⚠️ Cancel requested.")
 		}
 	case "cwd":
-		respond(b.manager.CWD(channelID))
+		if len(data.Options) > 0 {
+			newCwd := data.Options[0].StringValue()
+			if err := b.manager.SetCWD(channelID, newCwd); err != nil {
+				respond("❌ " + err.Error())
+			} else {
+				respond("✅ CWD 已設定為 `" + newCwd + "`，下次 `/reset` 時生效。")
+			}
+		} else {
+			respond(b.manager.CWD(channelID))
+		}
 	case "pause":
 		b.manager.Pause(channelID)
 		respond("⏸️ 暫停監聽，改為 @mention 模式")
