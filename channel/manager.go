@@ -3,7 +3,11 @@ package channel
 import (
 	"fmt"
 	"log"
+	"os/exec"
+	"strconv"
+	"strings"
 	"sync"
+	"syscall"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/nczz/kiro-discord-bot/acp"
@@ -75,6 +79,7 @@ func (m *Manager) Reset(channelID string) error {
 
 	if sess, ok := m.store.Get(channelID); ok {
 		_ = m.acpClient.StopAgent(sess.AgentName)
+		killProcessTree(sess.AgentPID)
 		// Preserve CWD across reset
 		_ = m.store.Set(channelID, &Session{CWD: sess.CWD})
 	}
@@ -132,6 +137,7 @@ func (m *Manager) StartAt(channelID, cwd string) error {
 	}
 	if sess, ok := m.store.Get(channelID); ok {
 		_ = m.acpClient.StopAgent(sess.AgentName)
+		killProcessTree(sess.AgentPID)
 	}
 	// Store cwd so ensureWorker picks it up
 	_ = m.store.Set(channelID, &Session{CWD: cwd})
@@ -190,16 +196,27 @@ func (m *Manager) startAgentAndWorker(channelID string) (*Worker, error) {
 	// Cancel + stop any existing agent with same name (best effort)
 	_ = m.acpClient.CancelAgent(agentName)
 	_ = m.acpClient.StopAgent(agentName)
+	if sess, ok := m.store.Get(channelID); ok && sess.AgentPID > 0 {
+		killProcessTree(sess.AgentPID)
+	}
+
+	beforePIDs := currentPIDs(m.kiroCLI)
 
 	status, err := m.acpClient.StartAgent(agentName, m.kiroCLI, cwd)
 	if err != nil {
 		return nil, fmt.Errorf("start agent: %w", err)
 	}
 
+	agentPID := findNewPID(m.kiroCLI, beforePIDs)
+	if agentPID > 0 {
+		log.Printf("[manager] agent %s pid=%d", agentName, agentPID)
+	}
+
 	if err := m.store.Set(channelID, &Session{
 		AgentName: agentName,
 		SessionID: status.SessionID,
 		CWD:       cwd,
+		AgentPID:  agentPID,
 	}); err != nil {
 		log.Printf("[manager] save session: %v", err)
 	}
@@ -239,4 +256,49 @@ func (m *Manager) IsPaused(channelID string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.paused[channelID]
+}
+
+// findNewPID returns the PID of a "kiro-cli acp" process that wasn't in the before set.
+func findNewPID(kiroCLI string, before map[int]bool) int {
+	out, err := exec.Command("pgrep", "-f", kiroCLI+` acp`).Output()
+	if err != nil {
+		return 0
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if pid, err := strconv.Atoi(strings.TrimSpace(line)); err == nil && !before[pid] {
+			return pid
+		}
+	}
+	return 0
+}
+
+// currentPIDs returns a set of PIDs matching "kiro-cli acp".
+func currentPIDs(kiroCLI string) map[int]bool {
+	pids := make(map[int]bool)
+	out, err := exec.Command("pgrep", "-f", kiroCLI+` acp`).Output()
+	if err != nil {
+		return pids
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if pid, err := strconv.Atoi(strings.TrimSpace(line)); err == nil {
+			pids[pid] = true
+		}
+	}
+	return pids
+}
+
+// killProcessTree kills a process and all its descendants.
+func killProcessTree(pid int) {
+	if pid <= 0 {
+		return
+	}
+	// Kill all children first
+	if out, err := exec.Command("pgrep", "-P", strconv.Itoa(pid)).Output(); err == nil {
+		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+			if childPID, err := strconv.Atoi(strings.TrimSpace(line)); err == nil {
+				killProcessTree(childPID)
+			}
+		}
+	}
+	_ = syscall.Kill(pid, syscall.SIGTERM)
 }
