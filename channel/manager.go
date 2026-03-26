@@ -338,6 +338,24 @@ func (m *Manager) GetAgentStatus(agentName string) (*acp.AgentStatus, error) {
 	return m.acpClient.GetAgent(agentName)
 }
 
+// ActiveSessions returns all channels with an active agent (for heartbeat).
+func (m *Manager) ActiveSessions() []struct{ ChannelID, AgentName string } {
+	all := m.store.All()
+	var out []struct{ ChannelID, AgentName string }
+	for chID, sess := range all {
+		if sess.AgentName != "" {
+			out = append(out, struct{ ChannelID, AgentName string }{chID, sess.AgentName})
+		}
+	}
+	return out
+}
+
+// CheckAgent returns an error if the agent is not reachable.
+func (m *Manager) CheckAgent(agentName string) error {
+	_, err := m.acpClient.GetAgent(agentName)
+	return err
+}
+
 // Pause sets the channel to mention-only mode.
 func (m *Manager) Pause(channelID string) {
 	m.mu.Lock()

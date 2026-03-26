@@ -23,6 +23,7 @@ func main() {
 		StreamUpdateSec: cfg.StreamUpdateSec,
 		GuildID:         cfg.DiscordGuildID,
 		KiroModel:       cfg.KiroModel,
+		HeartbeatSec:    cfg.HeartbeatSec,
 	})
 	if err != nil {
 		log.Fatal(err)

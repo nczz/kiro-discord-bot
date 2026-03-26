@@ -16,6 +16,7 @@ type Config struct {
 	StreamUpdateSec int
 	DiscordGuildID  string
 	KiroModel       string
+	HeartbeatSec    int
 }
 
 func loadConfig() *Config {
@@ -30,6 +31,7 @@ func loadConfig() *Config {
 		StreamUpdateSec: envInt("STREAM_UPDATE_SEC", 3),
 		DiscordGuildID:  envOr("DISCORD_GUILD_ID", ""),
 		KiroModel:       envOr("KIRO_MODEL", ""),
+		HeartbeatSec:    envInt("HEARTBEAT_SEC", 60),
 	}
 }
 

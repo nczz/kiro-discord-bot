@@ -86,6 +86,7 @@ STREAM_UPDATE_SEC=3
 | `ASK_TIMEOUT_SEC` | Agent response timeout in seconds | `300` |
 | `STREAM_UPDATE_SEC` | Discord message update interval during streaming | `3` |
 | `KIRO_MODEL` | Default model ID for kiro-cli (empty = kiro default) | `` |
+| `HEARTBEAT_SEC` | Agent health check interval in seconds | `60` |
 
 ---
 

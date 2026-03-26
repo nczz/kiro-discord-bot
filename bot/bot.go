@@ -1,18 +1,23 @@
 package bot
 
 import (
+	"context"
 	"log"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/nczz/kiro-discord-bot/acp"
 	"github.com/nczz/kiro-discord-bot/channel"
+	"github.com/nczz/kiro-discord-bot/heartbeat"
 )
 
 type Bot struct {
-	discord *discordgo.Session
-	manager *channel.Manager
-	guildID string
-	dataDir string
+	discord       *discordgo.Session
+	manager       *channel.Manager
+	guildID       string
+	dataDir       string
+	hb            *heartbeat.Heartbeat
+	hbCancel      context.CancelFunc
+	acpBridgeURL  string
 }
 
 func New(cfg interface{ GetBotConfig() BotConfig }) (*Bot, error) {
@@ -30,6 +35,7 @@ type BotConfig struct {
 	StreamUpdateSec int
 	GuildID         string
 	KiroModel       string
+	HeartbeatSec    int
 }
 
 func NewFromConfig(cfg BotConfig) (*Bot, error) {
@@ -53,7 +59,11 @@ func NewFromConfig(cfg BotConfig) (*Bot, error) {
 		cfg.KiroModel,
 	)
 
-	b := &Bot{discord: ds, manager: manager, guildID: cfg.GuildID, dataDir: cfg.DataDir}
+	b := &Bot{discord: ds, manager: manager, guildID: cfg.GuildID, dataDir: cfg.DataDir, acpBridgeURL: cfg.AcpBridgeURL}
+
+	hb := heartbeat.New(cfg.HeartbeatSec)
+	hb.Register(heartbeat.NewHealthTask(&healthAdapter{bot: b}, cfg.AcpBridgeURL))
+	b.hb = hb
 	ds.AddHandler(b.handleMessage)
 	ds.AddHandler(b.handleInteraction)
 	ds.AddHandler(func(s *discordgo.Session, e *discordgo.InteractionCreate) {
@@ -71,9 +81,18 @@ func (b *Bot) Start() error {
 		_ = ds.UpdateGameStatus(0, "kiro-cli agent")
 		b.registerSlashCommands()
 	})
-	return b.discord.Open()
+	if err := b.discord.Open(); err != nil {
+		return err
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	b.hbCancel = cancel
+	go b.hb.Start(ctx)
+	return nil
 }
 
 func (b *Bot) Stop() {
+	if b.hbCancel != nil {
+		b.hbCancel()
+	}
 	b.discord.Close()
 }
