@@ -59,9 +59,6 @@ func NewFromConfig(cfg BotConfig) (*Bot, error) {
 	ds.AddHandler(func(s *discordgo.Session, e *discordgo.InteractionCreate) {
 		log.Printf("[debug] InteractionCreate type=%d data=%+v", e.Type, e.ApplicationCommandData())
 	})
-	ds.AddHandler(func(s *discordgo.Session, e *discordgo.Event) {
-		log.Printf("[debug] raw event: %s", e.Type)
-	})
 	ds.AddHandler(func(s *discordgo.Session, e *discordgo.MessageCreate) {
 		log.Printf("[debug] MessageCreate from=%s content=%q", e.Author.Username, e.Content)
 	})

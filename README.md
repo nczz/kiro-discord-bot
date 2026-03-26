@@ -30,6 +30,8 @@ A Discord bot that bridges Discord channels to [kiro-cli](https://kiro.dev) AI a
 6. Open the generated URL to invite the bot to your server
 7. Note your **Guild ID** (right-click server → Copy Server ID, requires Developer Mode)
 
+> ⚠️ **Important:** Make sure the **Interactions Endpoint URL** field (under General Information) is **empty**. If a URL is set there, Discord will send slash command interactions to that URL instead of the bot's gateway connection, and all `/` commands will fail with "application did not respond in time".
+
 ---
 
 ### 2. Install acp-bridge
@@ -310,6 +312,8 @@ The agent will read the guide, build the binary, update `mcp.json`, and prompt y
   - Scopes：`bot`、`applications.commands`
   - 權限：查看頻道、發送訊息、新增反應、讀取訊息歷史
   - Privileged Intents：啟用 **Message Content Intent**
+
+> ⚠️ **重要：** 請確認 Discord Developer Portal → General Information 中的 **Interactions Endpoint URL** 欄位為**空白**。若該欄位有設定 URL，Discord 會將 slash command 的 interaction 送往該 URL 而非 bot 的 gateway 連線，導致所有 `/` 指令出現「該應用程式未及時回應」錯誤。
 
 ### 快速開始
 
