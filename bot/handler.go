@@ -74,6 +74,10 @@ func buildPrompt(text string, attachments []string, channelID, guildID string) s
 }
 
 func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
+	// Ignore messages from other guilds
+	if b.guildID != "" && m.GuildID != b.guildID {
+		return
+	}
 	// Ignore bot's own messages
 	if m.Author.ID == ds.State.User.ID {
 		return
@@ -259,6 +263,10 @@ func (b *Bot) registerSlashCommands() {
 }
 
 func (b *Bot) handleInteraction(ds *discordgo.Session, i *discordgo.InteractionCreate) {
+	// Ignore interactions from other guilds
+	if b.guildID != "" && i.GuildID != b.guildID {
+		return
+	}
 	switch i.Type {
 	case discordgo.InteractionApplicationCommand:
 		b.handleSlashCommand(ds, i)
