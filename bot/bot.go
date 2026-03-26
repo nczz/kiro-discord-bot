@@ -56,7 +56,7 @@ func NewFromConfig(cfg BotConfig) (*Bot, error) {
 		store, acpClient,
 		cfg.KiroCLIPath, cfg.DefaultCWD,
 		cfg.QueueBufferSize, cfg.AskTimeoutSec, cfg.StreamUpdateSec,
-		cfg.KiroModel,
+		cfg.KiroModel, cfg.DataDir,
 	)
 
 	b := &Bot{discord: ds, manager: manager, guildID: cfg.GuildID, dataDir: cfg.DataDir, acpBridgeURL: cfg.AcpBridgeURL}

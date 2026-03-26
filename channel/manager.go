@@ -28,9 +28,10 @@ type Manager struct {
 	askTimeoutSec   int
 	streamUpdateSec int
 	defaultModel    string
+	logger          *ChatLogger
 }
 
-func NewManager(store *SessionStore, acpClient *acp.Client, kiroCLI, defaultCWD string, queueBufSize, askTimeoutSec, streamUpdateSec int, defaultModel string) *Manager {
+func NewManager(store *SessionStore, acpClient *acp.Client, kiroCLI, defaultCWD string, queueBufSize, askTimeoutSec, streamUpdateSec int, defaultModel string, dataDir string) *Manager {
 	return &Manager{
 		workers:         make(map[string]*Worker),
 		paused:          make(map[string]bool),
@@ -42,6 +43,7 @@ func NewManager(store *SessionStore, acpClient *acp.Client, kiroCLI, defaultCWD 
 		askTimeoutSec:   askTimeoutSec,
 		streamUpdateSec: streamUpdateSec,
 		defaultModel:    defaultModel,
+		logger:          NewChatLogger(dataDir),
 	}
 }
 
@@ -322,7 +324,7 @@ func (m *Manager) startAgentAndWorker(channelID string) (*Worker, error) {
 		log.Printf("[manager] save session: %v", err)
 	}
 
-	w := NewWorker(channelID, agentName, m.queueBufSize, m.askTimeoutSec, m.streamUpdateSec, m.acpClient)
+	w := NewWorker(channelID, agentName, m.queueBufSize, m.askTimeoutSec, m.streamUpdateSec, m.acpClient, m.logger, model)
 	w.Start()
 	m.workers[channelID] = w
 	return w, nil

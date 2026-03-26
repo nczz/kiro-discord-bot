@@ -211,9 +211,12 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 		prompt := buildPrompt(content, localPaths, m.ChannelID, m.GuildID)
 
 		job := &channel.Job{
-			ChannelID: m.ChannelID,
-			MessageID: m.ID,
-			Prompt:    prompt,
+			ChannelID:   m.ChannelID,
+			MessageID:   m.ID,
+			Prompt:      prompt,
+			UserID:      m.Author.ID,
+			Username:    m.Author.Username,
+			Attachments: localPaths,
 		}
 		if err := b.manager.Enqueue(ds, job); err != nil {
 			ds.ChannelMessageSend(m.ChannelID, "❌ "+err.Error())

@@ -14,10 +14,13 @@ import (
 
 // Job represents a single user message to be processed.
 type Job struct {
-	ChannelID string
-	MessageID string // original user message ID (for reactions)
-	Prompt    string
-	Session   *discordgo.Session // discord session for sending replies
+	ChannelID   string
+	MessageID   string // original user message ID (for reactions)
+	Prompt      string
+	Session     *discordgo.Session // discord session for sending replies
+	UserID      string
+	Username    string
+	Attachments []string
 }
 
 // Worker manages a per-channel job queue and executes jobs sequentially.
@@ -31,9 +34,11 @@ type Worker struct {
 	streamUpdateSec int
 	stopCh          chan struct{}
 	once            sync.Once
+	logger          *ChatLogger
+	model           string
 }
 
-func NewWorker(channelID, agentName string, bufSize, askTimeoutSec, streamUpdateSec int, acpClient *acp.Client) *Worker {
+func NewWorker(channelID, agentName string, bufSize, askTimeoutSec, streamUpdateSec int, acpClient *acp.Client, logger *ChatLogger, model string) *Worker {
 	return &Worker{
 		channelID:       channelID,
 		agentName:       agentName,
@@ -42,6 +47,8 @@ func NewWorker(channelID, agentName string, bufSize, askTimeoutSec, streamUpdate
 		askTimeoutSec:   askTimeoutSec,
 		streamUpdateSec: streamUpdateSec,
 		stopCh:          make(chan struct{}),
+		logger:          logger,
+		model:           model,
 	}
 }
 
@@ -81,6 +88,18 @@ func (w *Worker) run() {
 
 func (w *Worker) execute(job *Job) {
 	ds := job.Session
+
+	// Log user message
+	if w.logger != nil {
+		w.logger.Log(w.channelID, ChatEntry{
+			Role:        "user",
+			UserID:      job.UserID,
+			Username:    job.Username,
+			MessageID:   job.MessageID,
+			Content:     job.Prompt,
+			Attachments: job.Attachments,
+		})
+	}
 
 	// ⏳ → 🔄
 	swapReaction(ds, job.ChannelID, job.MessageID, "⏳", "🔄")
@@ -153,6 +172,15 @@ func (w *Worker) execute(job *Job) {
 
 	swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "✅")
 	sendLong(ds, job.ChannelID, replyMsg.ID, response)
+
+	// Log assistant response
+	if w.logger != nil {
+		w.logger.Log(w.channelID, ChatEntry{
+			Role:    "assistant",
+			Content: response,
+			Model:   w.model,
+		})
+	}
 }
 
 // editMessage edits a Discord message, truncating to 2000 chars.
