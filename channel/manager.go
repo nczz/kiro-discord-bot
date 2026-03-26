@@ -90,6 +90,24 @@ func (m *Manager) Reset(channelID string) error {
 	return nil
 }
 
+// Restart stops the current agent and immediately starts a new one.
+func (m *Manager) Restart(channelID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if w, ok := m.workers[channelID]; ok {
+		w.Stop()
+		delete(m.workers, channelID)
+	}
+	if sess, ok := m.store.Get(channelID); ok {
+		_ = m.acpClient.StopAgent(sess.AgentName)
+		killProcessTree(sess.AgentPID)
+		_ = m.store.Set(channelID, &Session{CWD: sess.CWD, Model: sess.Model})
+	}
+	_, err := m.startAgentAndWorker(channelID)
+	return err
+}
+
 // Status returns a human-readable status string for a channel.
 func (m *Manager) Status(channelID string) string {
 	m.mu.Lock()

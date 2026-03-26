@@ -199,7 +199,7 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 			return
 		}
 		ds.ChannelMessageSend(m.ChannelID, "⏳ Model 設定為 `"+model+"`，正在重啟 agent...")
-		if err := b.manager.Reset(m.ChannelID); err != nil {
+		if err := b.manager.Restart(m.ChannelID); err != nil {
 			ds.ChannelMessageSend(m.ChannelID, "❌ Reset failed: "+err.Error())
 			return
 		}
@@ -323,7 +323,7 @@ func (b *Bot) handleInteraction(ds *discordgo.Session, i *discordgo.InteractionC
 					return
 				}
 				reply("⏳ Model 設定為 `" + model + "`，正在重啟 agent...")
-				if err := b.manager.Reset(channelID); err != nil {
+				if err := b.manager.Restart(channelID); err != nil {
 					reply("❌ Reset failed: " + err.Error())
 				} else {
 					reply("✅ Agent 已使用 model `" + model + "` 重啟。")
