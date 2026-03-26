@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/nczz/kiro-discord-bot/channel"
@@ -31,18 +32,15 @@ const usageMessage = `🤖 **Agent 已就緒！** 以下是可用指令：
 ` + "```" + `
 直接在頻道輸入訊息即可與 agent 對話。`
 
-// downloadAttachments saves message attachments to DATA_DIR/<agentName>/ and returns local paths.
+// downloadAttachments saves message attachments to DATA_DIR/ch-<channelID>/attachments/ and returns local paths.
 func (b *Bot) downloadAttachments(channelID string, attachments []*discordgo.MessageAttachment) []string {
 	if len(attachments) == 0 {
 		return nil
 	}
-	sess, ok := b.manager.GetSession(channelID)
-	agentDir := filepath.Join(b.dataDir, "ch-"+channelID)
-	if ok && sess.AgentName != "" {
-		agentDir = filepath.Join(b.dataDir, sess.AgentName)
-	}
-	_ = os.MkdirAll(agentDir, 0755)
+	attDir := filepath.Join(b.dataDir, "ch-"+channelID, "attachments")
+	_ = os.MkdirAll(attDir, 0755)
 
+	ts := time.Now().Format("20060102-150405")
 	var paths []string
 	for _, att := range attachments {
 		resp, err := http.Get(att.URL)
@@ -50,7 +48,7 @@ func (b *Bot) downloadAttachments(channelID string, attachments []*discordgo.Mes
 			log.Printf("[attach] download %s: %v", att.Filename, err)
 			continue
 		}
-		dst := filepath.Join(agentDir, att.Filename)
+		dst := filepath.Join(attDir, ts+"-"+att.Filename)
 		f, err := os.Create(dst)
 		if err != nil {
 			resp.Body.Close()

@@ -17,6 +17,7 @@ type Config struct {
 	DiscordGuildID  string
 	KiroModel       string
 	HeartbeatSec    int
+	AttRetainDays   int
 }
 
 func loadConfig() *Config {
@@ -32,6 +33,7 @@ func loadConfig() *Config {
 		DiscordGuildID:  envOr("DISCORD_GUILD_ID", ""),
 		KiroModel:       envOr("KIRO_MODEL", ""),
 		HeartbeatSec:    envInt("HEARTBEAT_SEC", 60),
+		AttRetainDays:   envInt("ATTACHMENT_RETAIN_DAYS", 7),
 	}
 }
 

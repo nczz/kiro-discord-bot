@@ -36,6 +36,7 @@ type BotConfig struct {
 	GuildID         string
 	KiroModel       string
 	HeartbeatSec    int
+	AttRetainDays   int
 }
 
 func NewFromConfig(cfg BotConfig) (*Bot, error) {
@@ -63,6 +64,7 @@ func NewFromConfig(cfg BotConfig) (*Bot, error) {
 
 	hb := heartbeat.New(cfg.HeartbeatSec)
 	hb.Register(heartbeat.NewHealthTask(&healthAdapter{bot: b}, cfg.AcpBridgeURL))
+	hb.Register(heartbeat.NewCleanupTask(cfg.DataDir, cfg.AttRetainDays))
 	b.hb = hb
 	ds.AddHandler(b.handleMessage)
 	ds.AddHandler(b.handleInteraction)

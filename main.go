@@ -24,6 +24,7 @@ func main() {
 		GuildID:         cfg.DiscordGuildID,
 		KiroModel:       cfg.KiroModel,
 		HeartbeatSec:    cfg.HeartbeatSec,
+		AttRetainDays:   cfg.AttRetainDays,
 	})
 	if err != nil {
 		log.Fatal(err)
