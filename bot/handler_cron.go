@@ -58,6 +58,16 @@ func (b *Bot) handleCronModal(ds *discordgo.Session, i *discordgo.InteractionCre
 						MaxLength:   200,
 					},
 				}},
+				discordgo.ActionsRow{Components: []discordgo.MessageComponent{
+					discordgo.TextInput{
+						CustomID:    "cron_model",
+						Label:       "Model（選填，留空用預設）",
+						Style:       discordgo.TextInputShort,
+						Placeholder: "例：claude-sonnet-4-20250514",
+						Required:    false,
+						MaxLength:   100,
+					},
+				}},
 			},
 		},
 	})
@@ -85,6 +95,7 @@ func (b *Bot) handleCronModalSubmit(ds *discordgo.Session, i *discordgo.Interact
 	scheduleInput := fields["cron_schedule"]
 	prompt := fields["cron_prompt"]
 	cwd := fields["cron_cwd"]
+	model := fields["cron_model"]
 
 	// Parse schedule
 	cronExpr, err := heartbeat.ParseSchedule(scheduleInput)
@@ -97,14 +108,20 @@ func (b *Bot) handleCronModalSubmit(ds *discordgo.Session, i *discordgo.Interact
 	if i.Member != nil && i.Member.User != nil {
 		username = i.Member.User.Username
 	}
+	guildID := ""
+	if i.GuildID != "" {
+		guildID = i.GuildID
+	}
 
 	job := &heartbeat.CronJob{
 		Name:          name,
 		ChannelID:     i.ChannelID,
+		GuildID:       guildID,
 		Schedule:      cronExpr,
 		ScheduleHuman: scheduleInput,
 		Prompt:        prompt,
 		CWD:           cwd,
+		Model:         model,
 		HistoryLimit:  10,
 		Enabled:       true,
 		CreatedBy:     username,
@@ -134,6 +151,9 @@ func (b *Bot) handleCronList(ds *discordgo.Session, i *discordgo.InteractionCrea
 		status := "✅"
 		if !job.Enabled {
 			status = "⏸️"
+		}
+		if job.OneShot {
+			status = "🔔"
 		}
 
 		lastRun := "無"
@@ -263,7 +283,7 @@ func truncate(s string, n int) string {
 }
 
 // handleCronTextCommand handles !cron text commands.
-func (b *Bot) handleCronTextCommand(ds *discordgo.Session, channelID, content string) {
+func (b *Bot) handleCronTextCommand(ds *discordgo.Session, channelID, guildID, userID, content string) {
 	switch {
 	case content == "!cron list":
 		jobs := b.cronStore.ListByChannel(channelID)
@@ -277,6 +297,9 @@ func (b *Bot) handleCronTextCommand(ds *discordgo.Session, channelID, content st
 			status := "✅"
 			if !job.Enabled {
 				status = "⏸️"
+			}
+			if job.OneShot {
+				status = "🔔"
 			}
 			sb.WriteString(fmt.Sprintf("%d. %s **%s** — %s\n   Prompt: %s\n",
 				i+1, status, job.Name, job.ScheduleHuman, truncate(job.Prompt, 80)))
@@ -297,6 +320,110 @@ func (b *Bot) handleCronTextCommand(ds *discordgo.Session, channelID, content st
 	default:
 		ds.ChannelMessageSend(channelID, "Usage: `!cron list` | `!cron run <name>`")
 	}
+}
+
+// handleRemind handles /remind slash command.
+func (b *Bot) handleRemind(ds *discordgo.Session, i *discordgo.InteractionCreate, timeStr, content string) {
+	loc := time.Now().Location()
+	if b.cronTimezone != "" {
+		if l, err := time.LoadLocation(b.cronTimezone); err == nil {
+			loc = l
+		}
+	}
+
+	target, err := heartbeat.ParseTime(timeStr, loc)
+	if err != nil {
+		respondInteraction(ds, i, "❌ 無法解析時間："+err.Error())
+		return
+	}
+
+	userID := ""
+	username := ""
+	if i.Member != nil && i.Member.User != nil {
+		userID = i.Member.User.ID
+		username = i.Member.User.Username
+	}
+	guildID := i.GuildID
+
+	job := &heartbeat.CronJob{
+		Name:          fmt.Sprintf("提醒：%s", truncate(content, 30)),
+		ChannelID:     i.ChannelID,
+		GuildID:       guildID,
+		Prompt:        content,
+		OneShot:       true,
+		MentionID:     userID,
+		Enabled:       true,
+		CreatedBy:     username,
+		NextRun:       target.Format(time.RFC3339),
+		ScheduleHuman: timeStr,
+		HistoryLimit:  0,
+	}
+	if err := b.cronStore.Add(job); err != nil {
+		respondInteraction(ds, i, "❌ 儲存失敗："+err.Error())
+		return
+	}
+
+	respondInteraction(ds, i, fmt.Sprintf("🔔 已預約提醒\n時間：%s\n內容：%s",
+		target.Format("2006/01/02 15:04"), content))
+}
+
+// handleRemindText handles !remind text command.
+func (b *Bot) handleRemindText(ds *discordgo.Session, channelID, guildID, userID, username, content string) {
+	// Parse: !remind <time> <content>
+	// Find first space after time portion
+	parts := strings.SplitN(content, " ", 2)
+	if len(parts) < 2 {
+		ds.ChannelMessageSend(channelID, "Usage: `!remind <時間> <內容>`\n例：`!remind 下午五點 提醒我要開會`")
+		return
+	}
+
+	// Try progressively longer time strings
+	loc := time.Now().Location()
+	if b.cronTimezone != "" {
+		if l, err := time.LoadLocation(b.cronTimezone); err == nil {
+			loc = l
+		}
+	}
+
+	words := strings.Fields(content)
+	var target time.Time
+	var timeStr, prompt string
+	var found bool
+
+	for i := 1; i <= len(words) && i <= 3; i++ {
+		candidate := strings.Join(words[:i], " ")
+		if t, err := heartbeat.ParseTime(candidate, loc); err == nil {
+			target = t
+			timeStr = candidate
+			prompt = strings.TrimSpace(strings.Join(words[i:], " "))
+			found = true
+		}
+	}
+	if !found || prompt == "" {
+		ds.ChannelMessageSend(channelID, "❌ 無法解析時間或內容為空\nUsage: `!remind <時間> <內容>`")
+		return
+	}
+
+	job := &heartbeat.CronJob{
+		Name:          fmt.Sprintf("提醒：%s", truncate(prompt, 30)),
+		ChannelID:     channelID,
+		GuildID:       guildID,
+		Prompt:        prompt,
+		OneShot:       true,
+		MentionID:     userID,
+		Enabled:       true,
+		CreatedBy:     username,
+		NextRun:       target.Format(time.RFC3339),
+		ScheduleHuman: timeStr,
+		HistoryLimit:  0,
+	}
+	if err := b.cronStore.Add(job); err != nil {
+		ds.ChannelMessageSend(channelID, "❌ 儲存失敗："+err.Error())
+		return
+	}
+
+	ds.ChannelMessageSend(channelID, fmt.Sprintf("🔔 已預約提醒\n時間：%s\n內容：%s",
+		target.Format("2006/01/02 15:04"), prompt))
 }
 
 func init() {

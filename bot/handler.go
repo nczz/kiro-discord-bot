@@ -204,7 +204,10 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 		ds.ChannelMessageSend(m.ChannelID, "✅ Agent 已使用 model `"+model+"` 重啟。")
 
 	case strings.HasPrefix(content, "!cron"):
-		b.handleCronTextCommand(ds, m.ChannelID, content)
+		b.handleCronTextCommand(ds, m.ChannelID, m.GuildID, m.Author.ID, content)
+
+	case strings.HasPrefix(content, "!remind "):
+		b.handleRemindText(ds, m.ChannelID, m.GuildID, m.Author.ID, m.Author.Username, strings.TrimPrefix(content, "!remind "))
 
 	default:
 		// Download attachments if any
@@ -245,6 +248,10 @@ var slashCommands = []*discordgo.ApplicationCommand{
 	{Name: "cron-list", Description: "列出排程任務"},
 	{Name: "cron-run", Description: "手動執行排程任務", Options: []*discordgo.ApplicationCommandOption{
 		{Type: discordgo.ApplicationCommandOptionString, Name: "name", Description: "任務名稱", Required: true},
+	}},
+	{Name: "remind", Description: "預約單次提醒", Options: []*discordgo.ApplicationCommandOption{
+		{Type: discordgo.ApplicationCommandOptionString, Name: "time", Description: "時間（例：下午五點、30分鐘後、明天09:00）", Required: true},
+		{Type: discordgo.ApplicationCommandOptionString, Name: "content", Description: "提醒內容", Required: true},
 	}},
 }
 
@@ -296,6 +303,11 @@ func (b *Bot) handleSlashCommand(ds *discordgo.Session, i *discordgo.Interaction
 	case "cron-run":
 		name := data.Options[0].StringValue()
 		b.handleCronRun(ds, i, name)
+		return
+	case "remind":
+		timeStr := data.Options[0].StringValue()
+		content := data.Options[1].StringValue()
+		b.handleRemind(ds, i, timeStr, content)
 		return
 	}
 

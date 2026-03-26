@@ -19,6 +19,7 @@ type Bot struct {
 	hbCancel      context.CancelFunc
 	acpBridgeURL  string
 	cronStore     *heartbeat.CronStore
+	cronTimezone  string
 }
 
 func New(cfg interface{ GetBotConfig() BotConfig }) (*Bot, error) {
@@ -62,7 +63,7 @@ func NewFromConfig(cfg BotConfig) (*Bot, error) {
 		cfg.KiroModel, cfg.DataDir,
 	)
 
-	b := &Bot{discord: ds, manager: manager, guildID: cfg.GuildID, dataDir: cfg.DataDir, acpBridgeURL: cfg.AcpBridgeURL}
+	b := &Bot{discord: ds, manager: manager, guildID: cfg.GuildID, dataDir: cfg.DataDir, acpBridgeURL: cfg.AcpBridgeURL, cronTimezone: cfg.CronTimezone}
 
 	cronStore, err := heartbeat.NewCronStore(cfg.DataDir)
 	if err != nil {

@@ -360,8 +360,8 @@ func (m *Manager) CheckAgent(agentName string) error {
 }
 
 // StartTempAgent starts a temporary agent (for cron jobs).
-func (m *Manager) StartTempAgent(name, cwd string) (*acp.AgentStatus, error) {
-	return m.acpClient.StartAgent(name, m.kiroCLI, cwd, "")
+func (m *Manager) StartTempAgent(name, cwd, model string) (*acp.AgentStatus, error) {
+	return m.acpClient.StartAgent(name, m.kiroCLI, cwd, model)
 }
 
 // StopTempAgent stops a temporary agent.

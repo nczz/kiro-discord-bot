@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"time"
 )
 
 // ParseSchedule converts natural language or raw cron expression to a cron expression.
@@ -81,4 +82,89 @@ func ParseSchedule(input string) (string, error) {
 	}
 
 	return "", fmt.Errorf("無法解析排程: %s", s)
+}
+
+// ParseTime converts natural language time to an absolute time.Time.
+// Supported: "下午五點", "17:00", "30 分鐘後", "2 小時後", "明天 09:00", "明天下午三點"
+func ParseTime(input string, loc *time.Location) (time.Time, error) {
+	s := strings.TrimSpace(input)
+	if s == "" {
+		return time.Time{}, fmt.Errorf("empty time")
+	}
+	now := time.Now().In(loc)
+
+	// N 分鐘後 / N min later
+	if m := regexp.MustCompile(`(\d+)\s*(?:分鐘|分|min)(?:後|later)?`).FindStringSubmatch(s); m != nil {
+		n := 0
+		fmt.Sscanf(m[1], "%d", &n)
+		return now.Add(time.Duration(n) * time.Minute), nil
+	}
+
+	// N 小時後 / N hour later
+	if m := regexp.MustCompile(`(\d+)\s*(?:小時|hour)(?:後|later)?`).FindStringSubmatch(s); m != nil {
+		n := 0
+		fmt.Sscanf(m[1], "%d", &n)
+		return now.Add(time.Duration(n) * time.Hour), nil
+	}
+
+	// Chinese AM/PM hour: 下午五點, 上午十點, 下午3點
+	cnNums := map[string]int{
+		"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6,
+		"七": 7, "八": 8, "九": 9, "十": 10, "十一": 11, "十二": 12,
+	}
+	tomorrow := false
+	work := s
+	if strings.HasPrefix(work, "明天") {
+		tomorrow = true
+		work = strings.TrimPrefix(work, "明天")
+	}
+
+	// 下午X點 / 上午X點
+	cnTimeRe := regexp.MustCompile(`(上午|下午|早上|晚上)?(\d+|[一二三四五六七八九十]+)(?:點|:)(\d{2})?`)
+	if m := cnTimeRe.FindStringSubmatch(work); m != nil {
+		period := m[1]
+		hourStr := m[2]
+		minStr := m[3]
+
+		hour := 0
+		if h, ok := cnNums[hourStr]; ok {
+			hour = h
+		} else {
+			fmt.Sscanf(hourStr, "%d", &hour)
+		}
+		min := 0
+		if minStr != "" {
+			fmt.Sscanf(minStr, "%d", &min)
+		}
+
+		if period == "下午" || period == "晚上" {
+			if hour < 12 {
+				hour += 12
+			}
+		}
+
+		target := time.Date(now.Year(), now.Month(), now.Day(), hour, min, 0, 0, loc)
+		if tomorrow {
+			target = target.AddDate(0, 0, 1)
+		} else if target.Before(now) {
+			target = target.AddDate(0, 0, 1)
+		}
+		return target, nil
+	}
+
+	// HH:MM format
+	if m := regexp.MustCompile(`^(?:明天\s*)?(\d{1,2}):(\d{2})$`).FindStringSubmatch(s); m != nil {
+		hour, min := 0, 0
+		fmt.Sscanf(m[1], "%d", &hour)
+		fmt.Sscanf(m[2], "%d", &min)
+		target := time.Date(now.Year(), now.Month(), now.Day(), hour, min, 0, 0, loc)
+		if strings.HasPrefix(s, "明天") {
+			target = target.AddDate(0, 0, 1)
+		} else if target.Before(now) {
+			target = target.AddDate(0, 0, 1)
+		}
+		return target, nil
+	}
+
+	return time.Time{}, fmt.Errorf("無法解析時間: %s", s)
 }

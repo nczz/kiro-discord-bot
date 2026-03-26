@@ -25,7 +25,7 @@ type CronHistory struct {
 
 // CronDeps abstracts dependencies for the cron task.
 type CronDeps interface {
-	StartTempAgent(name, cwd string) error
+	StartTempAgent(name, cwd, model string) error
 	StopTempAgent(name string)
 	AskAgent(ctx context.Context, name, prompt string) (string, error)
 	Notify(channelID, msg string)
@@ -76,7 +76,7 @@ func (c *CronTask) Run() error {
 }
 
 func (c *CronTask) isDue(job *CronJob, now time.Time) bool {
-	if job.NextRun == "" {
+	if job.NextRun == "" && !job.OneShot {
 		// First run — compute next from schedule
 		next, err := c.computeNext(job.Schedule, job.CreatedAt)
 		if err != nil {
@@ -84,6 +84,9 @@ func (c *CronTask) isDue(job *CronJob, now time.Time) bool {
 		}
 		job.NextRun = next.Format(time.RFC3339)
 		_ = c.store.Update(job)
+	}
+	if job.NextRun == "" {
+		return false
 	}
 	nextRun, err := time.ParseInLocation(time.RFC3339, job.NextRun, c.location)
 	if err != nil {
@@ -112,26 +115,33 @@ func (c *CronTask) execute(job *CronJob, now time.Time) {
 	agentName := "cron-" + job.ID
 	start := time.Now()
 
+	label := "排程任務"
+	if job.OneShot {
+		label = "預約提醒"
+	}
 	log.Printf("[cron] executing job %s (%s)", job.ID, job.Name)
-	c.deps.Notify(job.ChannelID, fmt.Sprintf("⏰ 排程任務執行中：**%s**", job.Name))
+	c.deps.Notify(job.ChannelID, fmt.Sprintf("⏰ %s執行中：**%s**", label, job.Name))
 
-	// Load history
-	history := c.loadHistory(job.ID, job.HistoryLimit)
+	// Load history (skip for one-shot)
+	var history []CronHistory
+	if !job.OneShot {
+		history = c.loadHistory(job.ID, job.HistoryLimit)
+	}
 	prompt := c.buildPrompt(job, history)
 
-	// Start temp agent
+	// Start temp agent with model
 	cwd := job.CWD
 	if cwd == "" {
 		cwd = "/tmp"
 	}
-	if err := c.deps.StartTempAgent(agentName, cwd); err != nil {
+	if err := c.deps.StartTempAgent(agentName, cwd, job.Model); err != nil {
 		log.Printf("[cron] start agent for %s failed: %v", job.ID, err)
-		c.deps.Notify(job.ChannelID, fmt.Sprintf("❌ 排程任務 **%s** 啟動失敗：%s", job.Name, err.Error()))
+		c.deps.Notify(job.ChannelID, fmt.Sprintf("❌ %s **%s** 啟動失敗：%s", label, job.Name, err.Error()))
 		c.saveHistory(job.ID, CronHistory{
 			Timestamp: now.Format(time.RFC3339), Prompt: job.Prompt, Response: err.Error(), Status: "error",
 			DurationSec: int(time.Since(start).Seconds()),
 		})
-		c.advanceNextRun(job, now)
+		c.finishJob(job, now)
 		return
 	}
 	defer c.deps.StopTempAgent(agentName)
@@ -147,24 +157,42 @@ func (c *CronTask) execute(job *CronJob, now time.Time) {
 	if err != nil {
 		response = err.Error()
 		status = "error"
-		c.deps.Notify(job.ChannelID, fmt.Sprintf("❌ 排程任務 **%s** 失敗：%s", job.Name, err.Error()))
+		c.deps.Notify(job.ChannelID, fmt.Sprintf("❌ %s **%s** 失敗：%s", label, job.Name, err.Error()))
 	} else {
-		// Truncate for Discord (2000 char limit)
-		display := response
-		if len(display) > 1900 {
-			display = display[:1900] + "\n...(truncated)"
+		// Build response message with optional mention
+		mention := ""
+		if job.MentionID != "" {
+			mention = fmt.Sprintf("<@%s> ", job.MentionID)
 		}
-		c.deps.Notify(job.ChannelID, fmt.Sprintf("⏰ **%s** 執行完成：\n%s", job.Name, display))
+		display := response
+		if len(display) > 1800 {
+			display = display[:1800] + "\n...(truncated)"
+		}
+		c.deps.Notify(job.ChannelID, fmt.Sprintf("⏰ %s**%s** 執行完成：\n%s%s", mention, job.Name, mention, display))
 	}
 
 	c.saveHistory(job.ID, CronHistory{
 		Timestamp: now.Format(time.RFC3339), Prompt: job.Prompt, Response: response, Status: status, DurationSec: duration,
 	})
-	c.advanceNextRun(job, now)
+	c.finishJob(job, now)
 }
 
 func (c *CronTask) buildPrompt(job *CronJob, history []CronHistory) string {
 	var sb strings.Builder
+	// Inject Discord context for MCP tools
+	sb.WriteString(fmt.Sprintf("[Discord context] channel_id=%s guild_id=%s\n\n", job.ChannelID, job.GuildID))
+
+	if job.OneShot {
+		sb.WriteString("[預約提醒]\n")
+		if job.MentionID != "" {
+			sb.WriteString(fmt.Sprintf("請在回覆中 tag <@%s> 並提醒：", job.MentionID))
+		} else {
+			sb.WriteString("請提醒：")
+		}
+		sb.WriteString(job.Prompt)
+		return sb.String()
+	}
+
 	sb.WriteString(fmt.Sprintf("[排程任務: %s]\n", job.Name))
 	if len(history) > 0 {
 		sb.WriteString("\n以下是過去的執行紀錄：\n---\n")
@@ -177,6 +205,15 @@ func (c *CronTask) buildPrompt(job *CronJob, history []CronHistory) string {
 	sb.WriteString("請執行：")
 	sb.WriteString(job.Prompt)
 	return sb.String()
+}
+
+func (c *CronTask) finishJob(job *CronJob, after time.Time) {
+	if job.OneShot {
+		_ = c.store.Remove(job.ID)
+		log.Printf("[cron] one-shot job %s (%s) completed and removed", job.ID, job.Name)
+		return
+	}
+	c.advanceNextRun(job, after)
 }
 
 func (c *CronTask) advanceNextRun(job *CronJob, after time.Time) {

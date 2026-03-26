@@ -15,12 +15,16 @@ type CronJob struct {
 	ID            string `json:"id"`
 	Name          string `json:"name"`
 	ChannelID     string `json:"channel_id"`
-	Schedule      string `json:"schedule"`       // cron expression
+	GuildID       string `json:"guild_id"`
+	Schedule      string `json:"schedule"`        // cron expression (empty for one-shot)
 	ScheduleHuman string `json:"schedule_human"`  // original user input
 	Prompt        string `json:"prompt"`
 	CWD           string `json:"cwd,omitempty"`
+	Model         string `json:"model,omitempty"`
 	HistoryLimit  int    `json:"history_limit"`
 	Enabled       bool   `json:"enabled"`
+	OneShot       bool   `json:"one_shot,omitempty"`
+	MentionID     string `json:"mention_id,omitempty"`
 	CreatedBy     string `json:"created_by"`
 	CreatedAt     string `json:"created_at"`
 	LastRun       string `json:"last_run,omitempty"`
