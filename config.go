@@ -15,6 +15,7 @@ type Config struct {
 	DataDir         string
 	StreamUpdateSec int
 	DiscordGuildID  string
+	KiroModel       string
 }
 
 func loadConfig() *Config {
@@ -28,6 +29,7 @@ func loadConfig() *Config {
 		DataDir:         envOr("DATA_DIR", "./data"),
 		StreamUpdateSec: envInt("STREAM_UPDATE_SEC", 3),
 		DiscordGuildID:  envOr("DISCORD_GUILD_ID", ""),
+		KiroModel:       envOr("KIRO_MODEL", ""),
 	}
 }
 

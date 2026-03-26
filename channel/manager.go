@@ -1,6 +1,7 @@
 package channel
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"os/exec"
@@ -26,9 +27,10 @@ type Manager struct {
 	queueBufSize    int
 	askTimeoutSec   int
 	streamUpdateSec int
+	defaultModel    string
 }
 
-func NewManager(store *SessionStore, acpClient *acp.Client, kiroCLI, defaultCWD string, queueBufSize, askTimeoutSec, streamUpdateSec int) *Manager {
+func NewManager(store *SessionStore, acpClient *acp.Client, kiroCLI, defaultCWD string, queueBufSize, askTimeoutSec, streamUpdateSec int, defaultModel string) *Manager {
 	return &Manager{
 		workers:         make(map[string]*Worker),
 		paused:          make(map[string]bool),
@@ -39,6 +41,7 @@ func NewManager(store *SessionStore, acpClient *acp.Client, kiroCLI, defaultCWD 
 		queueBufSize:    queueBufSize,
 		askTimeoutSec:   askTimeoutSec,
 		streamUpdateSec: streamUpdateSec,
+		defaultModel:    defaultModel,
 	}
 }
 
@@ -81,8 +84,8 @@ func (m *Manager) Reset(channelID string) error {
 	if sess, ok := m.store.Get(channelID); ok {
 		_ = m.acpClient.StopAgent(sess.AgentName)
 		killProcessTree(sess.AgentPID)
-		// Preserve CWD across reset
-		_ = m.store.Set(channelID, &Session{CWD: sess.CWD})
+		// Preserve CWD and Model across reset
+		_ = m.store.Set(channelID, &Session{CWD: sess.CWD, Model: sess.Model})
 	}
 	return nil
 }
@@ -113,8 +116,8 @@ func (m *Manager) Status(channelID string) string {
 		sid = sid[:8]
 	}
 
-	return fmt.Sprintf("Agent: `%s` | State: `%s` | Queue: %d | Session: `%s`",
-		sess.AgentName, state, qLen, sid)
+	return fmt.Sprintf("Agent: `%s` | State: `%s` | Queue: %d | Session: `%s` | Model: `%s`",
+		sess.AgentName, state, qLen, sid, modelDisplay(sess.Model))
 }
 
 // Cancel cancels the current running job for a channel.
@@ -140,8 +143,13 @@ func (m *Manager) StartAt(channelID, cwd string) error {
 		_ = m.acpClient.StopAgent(sess.AgentName)
 		killProcessTree(sess.AgentPID)
 	}
-	// Store cwd so ensureWorker picks it up
-	_ = m.store.Set(channelID, &Session{CWD: cwd})
+	// Store cwd (preserve model) so ensureWorker picks it up
+	existing, _ := m.store.Get(channelID)
+	newSess := &Session{CWD: cwd}
+	if existing != nil {
+		newSess.Model = existing.Model
+	}
+	_ = m.store.Set(channelID, newSess)
 
 	_, err := m.startAgentAndWorker(channelID)
 	return err
@@ -163,6 +171,69 @@ func (m *Manager) SetCWD(channelID, cwd string) error {
 	}
 	sess.CWD = cwd
 	return m.store.Set(channelID, sess)
+}
+
+// SetModel updates the model for a channel, then resets the agent to apply it.
+func (m *Manager) SetModel(channelID, model string) error {
+	sess, ok := m.store.Get(channelID)
+	if !ok {
+		sess = &Session{}
+	}
+	sess.Model = model
+	if err := m.store.Set(channelID, sess); err != nil {
+		return err
+	}
+	return nil
+}
+
+func modelDisplay(model string) string {
+	if model == "" {
+		return "default"
+	}
+	return model
+}
+
+// Model returns the current model for a channel.
+func (m *Manager) Model(channelID string) string {
+	if sess, ok := m.store.Get(channelID); ok && sess.Model != "" {
+		return "Current model: `" + sess.Model + "`"
+	}
+	if m.defaultModel != "" {
+		return "Current model: `" + m.defaultModel + "` (global default)"
+	}
+	return "Current model: `default` (kiro default)"
+}
+
+// ListModels calls kiro-cli to get available models.
+func (m *Manager) ListModels() (string, error) {
+	out, err := exec.Command(m.kiroCLI, "chat", "--list-models", "-f", "json").Output()
+	if err != nil {
+		return "", fmt.Errorf("list models: %w", err)
+	}
+	var result struct {
+		Models []struct {
+			Name        string  `json:"model_name"`
+			ID          string  `json:"model_id"`
+			Description string  `json:"description"`
+			Rate        float64 `json:"rate_multiplier"`
+			Unit        string  `json:"rate_unit"`
+		} `json:"models"`
+		Default string `json:"default_model"`
+	}
+	if err := json.Unmarshal(out, &result); err != nil {
+		return "", fmt.Errorf("parse models: %w", err)
+	}
+	var sb strings.Builder
+	sb.WriteString("**Available Models:**\n")
+	for _, m := range result.Models {
+		marker := " "
+		if m.ID == result.Default {
+			marker = "▸"
+		}
+		sb.WriteString(fmt.Sprintf("%s `%s` — %s (%.2f %s)\n", marker, m.ID, m.Description, m.Rate, m.Unit))
+	}
+	sb.WriteString("\nUsage: `/model <model-id>` or `!model <model-id>`")
+	return sb.String(), nil
 }
 
 // ensureWorker returns the worker for a channel, creating agent+worker if needed.
@@ -187,11 +258,17 @@ func (m *Manager) ensureWorker(channelID string) (*Worker, error) {
 
 func (m *Manager) startAgentAndWorker(channelID string) (*Worker, error) {
 	cwd := m.defaultCWD
+	model := m.defaultModel
 	agentName := "ch-" + channelID
 
-	// Use stored CWD if available
-	if sess, ok := m.store.Get(channelID); ok && sess.CWD != "" {
-		cwd = sess.CWD
+	// Use stored CWD/Model if available
+	if sess, ok := m.store.Get(channelID); ok {
+		if sess.CWD != "" {
+			cwd = sess.CWD
+		}
+		if sess.Model != "" {
+			model = sess.Model
+		}
 	}
 
 	// Cancel + stop any existing agent with same name (best effort)
@@ -203,7 +280,7 @@ func (m *Manager) startAgentAndWorker(channelID string) (*Worker, error) {
 
 	beforePIDs := currentPIDs()
 
-	status, err := m.acpClient.StartAgent(agentName, m.kiroCLI, cwd)
+	status, err := m.acpClient.StartAgent(agentName, m.kiroCLI, cwd, model)
 	if err != nil {
 		return nil, fmt.Errorf("start agent: %w", err)
 	}
@@ -214,7 +291,7 @@ func (m *Manager) startAgentAndWorker(channelID string) (*Worker, error) {
 		agentPID = findNewPID(beforePIDs)
 	}
 	if agentPID > 0 {
-		log.Printf("[manager] agent %s pid=%d", agentName, agentPID)
+		log.Printf("[manager] agent %s pid=%d model=%q", agentName, agentPID, model)
 	}
 
 	if err := m.store.Set(channelID, &Session{
@@ -222,6 +299,7 @@ func (m *Manager) startAgentAndWorker(channelID string) (*Worker, error) {
 		SessionID: status.SessionID,
 		CWD:       cwd,
 		AgentPID:  agentPID,
+		Model:     model,
 	}); err != nil {
 		log.Printf("[manager] save session: %v", err)
 	}

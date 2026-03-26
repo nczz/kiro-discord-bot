@@ -13,6 +13,7 @@ type Session struct {
 	SessionID string `json:"sessionId"`
 	CWD       string `json:"cwd"`
 	AgentPID  int    `json:"agentPid,omitempty"`
+	Model     string `json:"model,omitempty"`
 }
 
 // SessionStore persists channel→session mappings to a JSON file.

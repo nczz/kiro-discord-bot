@@ -34,12 +34,16 @@ type AgentStatus struct {
 }
 
 // StartAgent starts a new kiro agent via POST /agents
-func (c *Client) StartAgent(name, kiroCLI, cwd string) (*AgentStatus, error) {
+func (c *Client) StartAgent(name, kiroCLI, cwd, model string) (*AgentStatus, error) {
+	args := []string{"acp", "--trust-all-tools"}
+	if model != "" {
+		args = append(args, "--model", model)
+	}
 	body, _ := json.Marshal(map[string]any{
 		"type":    "kiro",
 		"name":    name,
 		"command": kiroCLI,
-		"args":    []string{"acp", "--trust-all-tools"},
+		"args":    args,
 		"cwd":     cwd,
 	})
 	resp, err := c.httpClient.Post(c.baseURL+"/agents", "application/json", bytes.NewReader(body))

@@ -83,6 +83,7 @@ STREAM_UPDATE_SEC=3
 | `DATA_DIR` | Directory for sessions.json | `./data` |
 | `ASK_TIMEOUT_SEC` | Agent response timeout in seconds | `300` |
 | `STREAM_UPDATE_SEC` | Discord message update interval during streaming | `3` |
+| `KIRO_MODEL` | Default model ID for kiro-cli (empty = kiro default) | `` |
 
 ---
 
@@ -140,6 +141,9 @@ The bot needs explicit permission in each channel it should respond to:
 | `/cwd` | Show current working directory |
 | `/pause` | Switch to mention-only mode (bot ignores non-mention messages) |
 | `/back` | Resume full-listen mode |
+| `/model` | Show current model |
+| `/model <model-id>` | Switch model and restart agent |
+| `/models` | List all available models |
 
 All commands also work with `!` prefix (e.g. `!status`, `!reset`).
 
@@ -336,6 +340,9 @@ chmod +x start.sh && ./start.sh
 | `/cwd` | 查詢目前工作目錄 |
 | `/pause` | 切換為 @mention 模式 |
 | `/back` | 恢復完整監聽模式 |
+| `/model` | 查詢目前使用的 model |
+| `/model <model-id>` | 切換 model 並重啟 agent |
+| `/models` | 列出所有可用的 model |
 
 所有指令也支援 `!` 前綴（如 `!status`、`!reset`）。
 

@@ -29,6 +29,7 @@ type BotConfig struct {
 	AskTimeoutSec   int
 	StreamUpdateSec int
 	GuildID         string
+	KiroModel       string
 }
 
 func NewFromConfig(cfg BotConfig) (*Bot, error) {
@@ -49,6 +50,7 @@ func NewFromConfig(cfg BotConfig) (*Bot, error) {
 		store, acpClient,
 		cfg.KiroCLIPath, cfg.DefaultCWD,
 		cfg.QueueBufferSize, cfg.AskTimeoutSec, cfg.StreamUpdateSec,
+		cfg.KiroModel,
 	)
 
 	b := &Bot{discord: ds, manager: manager, guildID: cfg.GuildID, dataDir: cfg.DataDir}

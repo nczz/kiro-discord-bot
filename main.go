@@ -22,6 +22,7 @@ func main() {
 		AskTimeoutSec:   cfg.AskTimeoutSec,
 		StreamUpdateSec: cfg.StreamUpdateSec,
 		GuildID:         cfg.DiscordGuildID,
+		KiroModel:       cfg.KiroModel,
 	})
 	if err != nil {
 		log.Fatal(err)

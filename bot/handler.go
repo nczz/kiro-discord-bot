@@ -25,6 +25,9 @@ const usageMessage = `🤖 **Agent 已就緒！** 以下是可用指令：
 !pause    — 切換為 @mention 模式（僅回應 @提及）
 !back     — 恢復完整監聽模式
 !resume   — 重新顯示上次被截斷的回應
+!model          — 查詢目前使用的 model
+!model <model>  — 切換 model（會自動重啟 agent）
+!models         — 列出所有可用的 model
 ` + "```" + `
 直接在頻道輸入訊息即可與 agent 對話。`
 
@@ -178,6 +181,30 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 		ds.ChannelMessageSend(m.ChannelID, "✅ Agent started at `"+cwd+"`")
 		ds.ChannelMessageSend(m.ChannelID, usageMessage)
 
+	case content == "!model":
+		ds.ChannelMessageSend(m.ChannelID, b.manager.Model(m.ChannelID))
+
+	case content == "!models":
+		msg, err := b.manager.ListModels()
+		if err != nil {
+			ds.ChannelMessageSend(m.ChannelID, "❌ "+err.Error())
+			return
+		}
+		ds.ChannelMessageSend(m.ChannelID, msg)
+
+	case strings.HasPrefix(content, "!model "):
+		model := strings.TrimSpace(strings.TrimPrefix(content, "!model "))
+		if err := b.manager.SetModel(m.ChannelID, model); err != nil {
+			ds.ChannelMessageSend(m.ChannelID, "❌ "+err.Error())
+			return
+		}
+		ds.ChannelMessageSend(m.ChannelID, "⏳ Model 設定為 `"+model+"`，正在重啟 agent...")
+		if err := b.manager.Reset(m.ChannelID); err != nil {
+			ds.ChannelMessageSend(m.ChannelID, "❌ Reset failed: "+err.Error())
+			return
+		}
+		ds.ChannelMessageSend(m.ChannelID, "✅ Agent 已使用 model `"+model+"` 重啟。")
+
 	default:
 		// Download attachments if any
 		localPaths := b.downloadAttachments(m.ChannelID, m.Attachments)
@@ -206,6 +233,10 @@ var slashCommands = []*discordgo.ApplicationCommand{
 	}},
 	{Name: "pause", Description: "暫停監聽，改為 @mention 模式"},
 	{Name: "back", Description: "恢復完整監聽所有訊息"},
+	{Name: "model", Description: "查詢或切換 model", Options: []*discordgo.ApplicationCommandOption{
+		{Type: discordgo.ApplicationCommandOptionString, Name: "model", Description: "Model ID（留空則查詢）", Required: false},
+	}},
+	{Name: "models", Description: "列出所有可用的 model"},
 }
 
 func (b *Bot) registerSlashCommands() {
@@ -289,5 +320,30 @@ func (b *Bot) handleInteraction(ds *discordgo.Session, i *discordgo.InteractionC
 	case "back":
 		b.manager.Back(channelID)
 		respond("▶️ 恢復完整監聽")
+	case "model":
+		if len(data.Options) > 0 {
+			model := data.Options[0].StringValue()
+			if err := b.manager.SetModel(channelID, model); err != nil {
+				respond("❌ " + err.Error())
+				return
+			}
+			respond("⏳ Model 設定為 `" + model + "`，正在重啟 agent...")
+			go func() {
+				if err := b.manager.Reset(channelID); err != nil {
+					followup("❌ Reset failed: " + err.Error())
+				} else {
+					followup("✅ Agent 已使用 model `" + model + "` 重啟。")
+				}
+			}()
+		} else {
+			respond(b.manager.Model(channelID))
+		}
+	case "models":
+		msg, err := b.manager.ListModels()
+		if err != nil {
+			respond("❌ " + err.Error())
+		} else {
+			respond(msg)
+		}
 	}
 }
