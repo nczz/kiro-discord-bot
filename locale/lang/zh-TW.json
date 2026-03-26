@@ -1,0 +1,100 @@
+{
+  "usage_message": "🤖 **Agent 已就緒！** 以下是可用指令：\n\n```\n!status   — 查詢 agent 狀態\n!cancel   — 取消目前執行中的任務\n!cwd          — 查詢目前工作目錄\n!cwd <目錄>   — 設定新工作目錄（下次 !reset 生效）\n!reset    — 重啟 agent session\n!start <目錄> — 綁定新的專案目錄\n!pause    — 切換為 @mention 模式（僅回應 @提及）\n!back     — 恢復完整監聽模式\n!resume   — 重新顯示上次被截斷的回應\n!model          — 查詢目前使用的 model\n!model <model>  — 切換 model（會自動重啟 agent）\n!models         — 列出所有可用的 model\n```\n直接在頻道輸入訊息即可與 agent 對話。",
+
+  "error.no_active_session": "❌ 沒有活躍的 session",
+  "error.no_response": "❌ 沒有可恢復的回應",
+  "error.reset_failed": "❌ 重啟失敗：%s",
+  "error.cancel_failed": "❌ 取消失敗：%s",
+  "error.not_found": "❌ 找不到：%s",
+  "error.save_failed": "❌ 儲存失敗：%s",
+  "error.parse_schedule": "❌ 無法解析排程：%s",
+  "error.parse_time": "❌ 無法解析時間：%s",
+  "error.parse_time_or_empty": "❌ 無法解析時間或內容為空\nUsage: `!remind <時間> <內容>`",
+
+  "pause.on": "⏸️ 暫停監聽，改為 @mention 模式",
+  "pause.off": "▶️ 恢復完整監聽",
+
+  "reset.success": "✅ Session 已重啟，下一條訊息將啟動新的 agent。",
+  "cancel.success": "⚠️ 已發送取消請求。",
+
+  "cwd.set": "✅ CWD 已設定為 `%s`，下次 reset 時生效。",
+
+  "start.usage": "Usage: `!start /path/to/project`",
+  "start.starting": "⏳ 正在啟動 agent，目錄：`%s`...",
+  "start.success": "✅ Agent 已啟動，目錄：`%s`",
+
+  "model.switching": "⏳ Model 設定為 `%s`，正在重啟 agent...",
+  "model.switched": "✅ Agent 已使用 model `%s` 重啟。",
+  "model.current": "目前 model：`%s`",
+  "model.current_global": "目前 model：`%s`（全域預設）",
+  "model.current_default": "目前 model：`default`（kiro 預設）",
+
+  "status.no_session": "沒有活躍的 session。",
+  "status.queued": "⏳ 排隊中（第 %d 位）",
+
+  "reset.resetting": "⏳ 正在重啟...",
+
+  "worker.processing": "🔄 處理中...",
+  "worker.tool_running": "⚙️ 執行工具中...",
+  "worker.timeout": "任務超時（%ds），已取消",
+
+  "health.restart_failed": "⚠️ Agent 異常且重啟失敗：%s",
+  "health.restarted": "⚠️ Agent 異常，已自動重啟。",
+
+  "cmd.start.desc": "綁定專案目錄並啟動 agent",
+  "cmd.start.opt.cwd": "專案目錄路徑",
+  "cmd.reset.desc": "重啟 agent",
+  "cmd.status.desc": "查詢目前 agent 狀態",
+  "cmd.cancel.desc": "取消目前執行中的任務",
+  "cmd.cwd.desc": "查詢或設定工作目錄",
+  "cmd.cwd.opt.path": "新的工作目錄（留空則查詢）",
+  "cmd.pause.desc": "暫停監聽，改為 @mention 模式",
+  "cmd.back.desc": "恢復完整監聽所有訊息",
+  "cmd.model.desc": "查詢或切換 model",
+  "cmd.model.opt.model": "Model ID（留空則查詢）",
+  "cmd.models.desc": "列出所有可用的 model",
+  "cmd.cron.desc": "新增排程任務",
+  "cmd.cron_list.desc": "列出排程任務",
+  "cmd.cron_run.desc": "手動執行排程任務",
+  "cmd.cron_run.opt.name": "任務名稱",
+  "cmd.remind.desc": "預約單次提醒",
+  "cmd.remind.opt.time": "時間（例：下午五點、30分鐘後、明天09:00）",
+  "cmd.remind.opt.content": "提醒內容",
+
+  "cron.modal.title": "新增排程任務",
+  "cron.modal.name": "任務名稱",
+  "cron.modal.name_ph": "例：每日伺服器健檢",
+  "cron.modal.schedule": "執行頻率",
+  "cron.modal.schedule_ph": "例：每天 09:00、每 30 分鐘、0 9 * * *",
+  "cron.modal.prompt": "要 agent 做什麼",
+  "cron.modal.prompt_ph": "例：檢查伺服器 CPU、記憶體、磁碟用量，跟上次比較",
+  "cron.modal.cwd": "工作目錄（選填）",
+  "cron.modal.cwd_ph": "例：/home/user/project",
+  "cron.modal.model": "Model（選填，留空用預設）",
+  "cron.modal.model_ph": "例：claude-sonnet-4-20250514",
+
+  "cron.created": "✅ 排程任務已建立\n名稱：**%s**\n頻率：%s (`%s`)\nPrompt：%s",
+  "cron.list.empty": "📋 此頻道沒有排程任務。使用 `/cron` 新增。",
+  "cron.list.header": "📋 **排程任務列表**\n\n",
+  "cron.not_found": "❌ 找不到任務：%s",
+  "cron.paused": "⏸️ 已暫停：**%s**",
+  "cron.resumed": "▶️ 已恢復：**%s**",
+  "cron.running": "⏰ 正在手動執行：**%s**",
+  "cron.deleted": "🗑️ 已刪除：**%s**",
+  "cron.usage": "Usage: `!cron list` | `!cron run <name>`",
+
+  "cron.btn.pause": "⏸️ 暫停",
+  "cron.btn.resume": "▶️ 恢復",
+  "cron.btn.run": "▶️ 立即執行",
+  "cron.btn.delete": "🗑️ 刪除",
+
+  "cron.exec.running": "⏰ %s執行中：**%s**",
+  "cron.exec.failed": "❌ %s **%s** 失敗：%s",
+  "cron.exec.start_failed": "❌ %s **%s** 啟動失敗：%s",
+  "cron.exec.done": "⏰ %s**%s** 執行完成：\n%s%s",
+  "cron.label.cron": "排程任務",
+  "cron.label.reminder": "預約提醒",
+
+  "remind.created": "🔔 已預約提醒\n時間：%s\n內容：%s",
+  "remind.usage": "Usage: `!remind <時間> <內容>`\n例：`!remind 下午五點 提醒我要開會`"
+}

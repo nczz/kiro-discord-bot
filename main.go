@@ -7,10 +7,12 @@ import (
 	"syscall"
 
 	"github.com/nczz/kiro-discord-bot/bot"
+	"github.com/nczz/kiro-discord-bot/locale"
 )
 
 func main() {
 	cfg := loadConfig()
+	locale.Load(cfg.BotLocale)
 
 	b, err := bot.NewFromConfig(bot.BotConfig{
 		DiscordToken:    cfg.DiscordToken,

@@ -10,6 +10,7 @@ import (
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/nczz/kiro-discord-bot/acp"
+	L "github.com/nczz/kiro-discord-bot/locale"
 )
 
 // Job represents a single user message to be processed.
@@ -105,7 +106,7 @@ func (w *Worker) execute(job *Job) {
 	swapReaction(ds, job.ChannelID, job.MessageID, "⏳", "🔄")
 
 	// Send placeholder as reply to user message
-	replyMsg, err := ds.ChannelMessageSendReply(job.ChannelID, "🔄 處理中...", &discordgo.MessageReference{
+	replyMsg, err := ds.ChannelMessageSendReply(job.ChannelID, L.Get("worker.processing"), &discordgo.MessageReference{
 		MessageID: job.MessageID,
 		ChannelID: job.ChannelID,
 	})
@@ -121,7 +122,7 @@ func (w *Worker) execute(job *Job) {
 	var mu sync.Mutex
 	accumulated := ""
 	lastUpdate := time.Now()
-	statusLine := "🔄 處理中..."
+	statusLine := L.Get("worker.processing")
 
 	onChunk := func(chunk string) {
 		mu.Lock()
@@ -130,7 +131,7 @@ func (w *Worker) execute(job *Job) {
 		lower := strings.ToLower(chunk)
 		for _, kw := range []string{"running tool", "bash", "read_file", "write_file", "fs_read", "fs_write", "execute"} {
 			if strings.Contains(lower, kw) {
-				statusLine = "⚙️ 執行工具中..."
+				statusLine = L.Get("worker.tool_running")
 				break
 			}
 		}
@@ -152,7 +153,7 @@ func (w *Worker) execute(job *Job) {
 	if err != nil {
 		errMsg := err.Error()
 		if ctx.Err() == context.DeadlineExceeded {
-			errMsg = fmt.Sprintf("任務超時（%ds），已取消", w.askTimeoutSec)
+			errMsg = L.Getf("worker.timeout", w.askTimeoutSec)
 			_ = w.acpClient.CancelAgent(w.agentName)
 			swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "⚠️")
 		} else {
@@ -203,7 +204,7 @@ func sendLong(ds *discordgo.Session, channelID, placeholderID, content string) {
 	const limit = 1990
 	parts := splitMessage(content, limit)
 	if len(parts) == 0 {
-		editMessage(ds, channelID, placeholderID, "(empty response)")
+		editMessage(ds, channelID, placeholderID, L.Get("worker.empty_response"))
 		return
 	}
 

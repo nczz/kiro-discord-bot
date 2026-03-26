@@ -3,6 +3,8 @@ package heartbeat
 import (
 	"log"
 	"net/http"
+
+	L "github.com/nczz/kiro-discord-bot/locale"
 	"time"
 )
 
@@ -54,9 +56,9 @@ func (h *HealthTask) Run() error {
 			log.Printf("[health] agent %s dead, restarting", s.AgentName)
 			if restartErr := h.deps.RestartAgent(s.ChannelID); restartErr != nil {
 				log.Printf("[health] restart %s failed: %v", s.AgentName, restartErr)
-				h.deps.Notify(s.ChannelID, "⚠️ Agent 異常且重啟失敗："+restartErr.Error())
+				h.deps.Notify(s.ChannelID, L.Getf("health.restart_failed", restartErr.Error()))
 			} else {
-				h.deps.Notify(s.ChannelID, "⚠️ Agent 異常，已自動重啟。")
+				h.deps.Notify(s.ChannelID, L.Get("health.restarted"))
 			}
 		}
 	}

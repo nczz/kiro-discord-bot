@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/robfig/cron/v3"
+
+	L "github.com/nczz/kiro-discord-bot/locale"
 )
 
 // CronHistory is a single execution record.
@@ -117,12 +119,12 @@ func (c *CronTask) execute(job *CronJob, now time.Time) {
 	agentName := "cron-" + job.ID
 	start := time.Now()
 
-	label := "排程任務"
+	label := L.Get("cron.label.cron")
 	if job.OneShot {
-		label = "預約提醒"
+		label = L.Get("cron.label.reminder")
 	}
 	log.Printf("[cron] executing job %s (%s)", job.ID, job.Name)
-	c.deps.Notify(job.ChannelID, fmt.Sprintf("⏰ %s執行中：**%s**", label, job.Name))
+	c.deps.Notify(job.ChannelID, L.Getf("cron.exec.running", label, job.Name))
 
 	// Load history (skip for one-shot)
 	var history []CronHistory
@@ -138,7 +140,7 @@ func (c *CronTask) execute(job *CronJob, now time.Time) {
 	}
 	if err := c.deps.StartTempAgent(agentName, cwd, job.Model); err != nil {
 		log.Printf("[cron] start agent for %s failed: %v", job.ID, err)
-		c.deps.Notify(job.ChannelID, fmt.Sprintf("❌ %s **%s** 啟動失敗：%s", label, job.Name, err.Error()))
+		c.deps.Notify(job.ChannelID, L.Getf("cron.exec.start_failed", label, job.Name, err.Error()))
 		c.saveHistory(job.ID, CronHistory{
 			Timestamp: now.Format(time.RFC3339), Prompt: job.Prompt, Response: err.Error(), Status: "error",
 			DurationSec: int(time.Since(start).Seconds()),
@@ -159,7 +161,7 @@ func (c *CronTask) execute(job *CronJob, now time.Time) {
 	if err != nil {
 		response = err.Error()
 		status = "error"
-		c.deps.Notify(job.ChannelID, fmt.Sprintf("❌ %s **%s** 失敗：%s", label, job.Name, err.Error()))
+		c.deps.Notify(job.ChannelID, L.Getf("cron.exec.failed", label, job.Name, err.Error()))
 	} else {
 		// Build response message with optional mention
 		mention := ""
@@ -170,7 +172,7 @@ func (c *CronTask) execute(job *CronJob, now time.Time) {
 		if len(display) > 1800 {
 			display = display[:1800] + "\n...(truncated)"
 		}
-		c.deps.Notify(job.ChannelID, fmt.Sprintf("⏰ %s**%s** 執行完成：\n%s%s", mention, job.Name, mention, display))
+		c.deps.Notify(job.ChannelID, L.Getf("cron.exec.done", mention, job.Name, mention, display))
 	}
 
 	c.saveHistory(job.ID, CronHistory{

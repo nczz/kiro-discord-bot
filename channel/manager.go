@@ -14,6 +14,7 @@ import (
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/nczz/kiro-discord-bot/acp"
+	L "github.com/nczz/kiro-discord-bot/locale"
 )
 
 // Manager manages per-channel sessions and workers.
@@ -66,7 +67,7 @@ func (m *Manager) Enqueue(ds *discordgo.Session, job *Job) error {
 	qLen := worker.QueueLen()
 	_ = ds.MessageReactionAdd(job.ChannelID, job.MessageID, "⏳")
 	if qLen > 1 {
-		_, _ = ds.ChannelMessageSendReply(job.ChannelID, fmt.Sprintf("⏳ 排隊中（第 %d 位）", qLen), &discordgo.MessageReference{
+		_, _ = ds.ChannelMessageSendReply(job.ChannelID, L.Getf("status.queued", qLen), &discordgo.MessageReference{
 			MessageID: job.MessageID,
 			ChannelID: job.ChannelID,
 		})
@@ -118,7 +119,7 @@ func (m *Manager) Status(channelID string) string {
 
 	sess, ok := m.store.Get(channelID)
 	if !ok || sess.AgentName == "" {
-		return "No active session."
+		return L.Get("status.no_session")
 	}
 
 	agentStatus, err := m.acpClient.GetAgent(sess.AgentName)
@@ -137,8 +138,7 @@ func (m *Manager) Status(channelID string) string {
 		sid = sid[:8]
 	}
 
-	return fmt.Sprintf("Agent: `%s` | State: `%s` | Queue: %d | Session: `%s` | Model: `%s`",
-		sess.AgentName, state, qLen, sid, modelDisplay(sess.Model))
+	return L.Getf("status.format", sess.AgentName, state, qLen, sid, modelDisplay(sess.Model))
 }
 
 // Cancel cancels the current running job for a channel.
@@ -179,9 +179,9 @@ func (m *Manager) StartAt(channelID, cwd string) error {
 // CWD returns the current working directory for a channel.
 func (m *Manager) CWD(channelID string) string {
 	if sess, ok := m.store.Get(channelID); ok && sess.CWD != "" {
-		return "Current CWD: `" + sess.CWD + "`"
+		return L.Getf("cwd.current", sess.CWD)
 	}
-	return "Current CWD: `" + m.defaultCWD + "` (default)"
+	return L.Getf("cwd.default", m.defaultCWD)
 }
 
 // SetCWD updates the working directory for a channel (takes effect on next reset).
@@ -217,12 +217,12 @@ func modelDisplay(model string) string {
 // Model returns the current model for a channel.
 func (m *Manager) Model(channelID string) string {
 	if sess, ok := m.store.Get(channelID); ok && sess.Model != "" {
-		return "Current model: `" + sess.Model + "`"
+		return L.Getf("model.current", sess.Model)
 	}
 	if m.defaultModel != "" {
-		return "Current model: `" + m.defaultModel + "` (global default)"
+		return L.Getf("model.current_global", m.defaultModel)
 	}
-	return "Current model: `default` (kiro default)"
+	return L.Get("model.current_default")
 }
 
 // ListModels calls kiro-cli to get available models.
@@ -245,7 +245,7 @@ func (m *Manager) ListModels() (string, error) {
 		return "", fmt.Errorf("parse models: %w", err)
 	}
 	var sb strings.Builder
-	sb.WriteString("**Available Models:**\n")
+	sb.WriteString(L.Get("models.header"))
 	for _, m := range result.Models {
 		marker := " "
 		if m.ID == result.Default {
@@ -253,7 +253,7 @@ func (m *Manager) ListModels() (string, error) {
 		}
 		sb.WriteString(fmt.Sprintf("%s `%s` — %s (%.2f %s)\n", marker, m.ID, m.Description, m.Rate, m.Unit))
 	}
-	sb.WriteString("\nUsage: `/model <model-id>` or `!model <model-id>`")
+	sb.WriteString(L.Get("models.footer"))
 	return sb.String(), nil
 }
 

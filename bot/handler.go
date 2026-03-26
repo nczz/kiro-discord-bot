@@ -12,25 +12,11 @@ import (
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/nczz/kiro-discord-bot/channel"
+	L "github.com/nczz/kiro-discord-bot/locale"
 )
 
-const usageMessage = `🤖 **Agent 已就緒！** 以下是可用指令：
+func usageMessage() string { return L.Get("usage_message") }
 
-` + "```" + `
-!status   — 查詢 agent 狀態
-!cancel   — 取消目前執行中的任務
-!cwd          — 查詢目前工作目錄
-!cwd <目錄>   — 設定新工作目錄（下次 !reset 生效）
-!reset    — 重啟 agent session
-!start <目錄> — 綁定新的專案目錄
-!pause    — 切換為 @mention 模式（僅回應 @提及）
-!back     — 恢復完整監聽模式
-!resume   — 重新顯示上次被截斷的回應
-!model          — 查詢目前使用的 model
-!model <model>  — 切換 model（會自動重啟 agent）
-!models         — 列出所有可用的 model
-` + "```" + `
-直接在頻道輸入訊息即可與 agent 對話。`
 
 // downloadAttachments saves message attachments to DATA_DIR/ch-<channelID>/attachments/ and returns local paths.
 func (b *Bot) downloadAttachments(channelID string, attachments []*discordgo.MessageAttachment) []string {
@@ -118,41 +104,41 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 	case content == "!resume":
 		sess, ok := b.manager.GetSession(m.ChannelID)
 		if !ok {
-			ds.ChannelMessageSendReply(m.ChannelID, "❌ No active session", &discordgo.MessageReference{MessageID: m.ID, ChannelID: m.ChannelID})
+			ds.ChannelMessageSendReply(m.ChannelID, L.Get("error.no_active_session"), &discordgo.MessageReference{MessageID: m.ID, ChannelID: m.ChannelID})
 			return
 		}
 		agent, err := b.manager.GetAgentStatus(sess.AgentName)
 		if err != nil || agent.LastText == "" {
-			ds.ChannelMessageSendReply(m.ChannelID, "❌ No response to resume", &discordgo.MessageReference{MessageID: m.ID, ChannelID: m.ChannelID})
+			ds.ChannelMessageSendReply(m.ChannelID, L.Get("error.no_response"), &discordgo.MessageReference{MessageID: m.ID, ChannelID: m.ChannelID})
 			return
 		}
 		ds.ChannelMessageSendReply(m.ChannelID, agent.LastText, &discordgo.MessageReference{MessageID: m.ID, ChannelID: m.ChannelID})
 
 	case content == "!pause":
 		b.manager.Pause(m.ChannelID)
-		ds.ChannelMessageSendReply(m.ChannelID, "⏸️ 暫停監聽，改為 @mention 模式", &discordgo.MessageReference{MessageID: m.ID, ChannelID: m.ChannelID})
+		ds.ChannelMessageSendReply(m.ChannelID, L.Get("pause.on"), &discordgo.MessageReference{MessageID: m.ID, ChannelID: m.ChannelID})
 
 	case content == "!back":
 		b.manager.Back(m.ChannelID)
-		ds.ChannelMessageSendReply(m.ChannelID, "▶️ 恢復完整監聽", &discordgo.MessageReference{MessageID: m.ID, ChannelID: m.ChannelID})
+		ds.ChannelMessageSendReply(m.ChannelID, L.Get("pause.off"), &discordgo.MessageReference{MessageID: m.ID, ChannelID: m.ChannelID})
 
 	case content == "!reset":
 		if err := b.manager.Reset(m.ChannelID); err != nil {
-			ds.ChannelMessageSend(m.ChannelID, "❌ Reset failed: "+err.Error())
+			ds.ChannelMessageSend(m.ChannelID, L.Getf("error.reset_failed", err.Error()))
 			return
 		}
-		ds.ChannelMessageSend(m.ChannelID, "✅ Session reset. Next message starts a new agent.")
-		ds.ChannelMessageSend(m.ChannelID, usageMessage)
+		ds.ChannelMessageSend(m.ChannelID, L.Get("reset.success"))
+		ds.ChannelMessageSend(m.ChannelID, usageMessage())
 
 	case content == "!status":
 		ds.ChannelMessageSend(m.ChannelID, b.manager.Status(m.ChannelID))
 
 	case content == "!cancel":
 		if err := b.manager.Cancel(m.ChannelID); err != nil {
-			ds.ChannelMessageSend(m.ChannelID, "❌ Cancel failed: "+err.Error())
+			ds.ChannelMessageSend(m.ChannelID, L.Getf("error.cancel_failed", err.Error()))
 			return
 		}
-		ds.ChannelMessageSend(m.ChannelID, "⚠️ Cancel requested.")
+		ds.ChannelMessageSend(m.ChannelID, L.Get("cancel.success"))
 
 	case content == "!cwd":
 		ds.ChannelMessageSend(m.ChannelID, b.manager.CWD(m.ChannelID))
@@ -160,24 +146,24 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 	case strings.HasPrefix(content, "!cwd "):
 		newCwd := strings.TrimSpace(strings.TrimPrefix(content, "!cwd "))
 		if err := b.manager.SetCWD(m.ChannelID, newCwd); err != nil {
-			ds.ChannelMessageSend(m.ChannelID, "❌ "+err.Error())
+			ds.ChannelMessageSend(m.ChannelID, L.Getf("error.generic", err.Error()))
 			return
 		}
-		ds.ChannelMessageSend(m.ChannelID, "✅ CWD 已設定為 `"+newCwd+"`，下次 `!reset` 時生效。")
+		ds.ChannelMessageSend(m.ChannelID, L.Getf("cwd.set", newCwd))
 
 	case strings.HasPrefix(content, "!start "):
 		cwd := strings.TrimSpace(strings.TrimPrefix(content, "!start "))
 		if cwd == "" {
-			ds.ChannelMessageSend(m.ChannelID, "Usage: `!start /path/to/project`")
+			ds.ChannelMessageSend(m.ChannelID, L.Get("start.usage"))
 			return
 		}
-		ds.ChannelMessageSend(m.ChannelID, "⏳ Starting agent at `"+cwd+"`...")
+		ds.ChannelMessageSend(m.ChannelID, L.Getf("start.starting", cwd))
 		if err := b.manager.StartAt(m.ChannelID, cwd); err != nil {
-			ds.ChannelMessageSend(m.ChannelID, "❌ "+err.Error())
+			ds.ChannelMessageSend(m.ChannelID, L.Getf("error.generic", err.Error()))
 			return
 		}
-		ds.ChannelMessageSend(m.ChannelID, "✅ Agent started at `"+cwd+"`")
-		ds.ChannelMessageSend(m.ChannelID, usageMessage)
+		ds.ChannelMessageSend(m.ChannelID, L.Getf("start.success", cwd))
+		ds.ChannelMessageSend(m.ChannelID, usageMessage())
 
 	case content == "!model":
 		ds.ChannelMessageSend(m.ChannelID, b.manager.Model(m.ChannelID))
@@ -185,7 +171,7 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 	case content == "!models":
 		msg, err := b.manager.ListModels()
 		if err != nil {
-			ds.ChannelMessageSend(m.ChannelID, "❌ "+err.Error())
+			ds.ChannelMessageSend(m.ChannelID, L.Getf("error.generic", err.Error()))
 			return
 		}
 		ds.ChannelMessageSend(m.ChannelID, msg)
@@ -193,15 +179,15 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 	case strings.HasPrefix(content, "!model "):
 		model := strings.TrimSpace(strings.TrimPrefix(content, "!model "))
 		if err := b.manager.SetModel(m.ChannelID, model); err != nil {
-			ds.ChannelMessageSend(m.ChannelID, "❌ "+err.Error())
+			ds.ChannelMessageSend(m.ChannelID, L.Getf("error.generic", err.Error()))
 			return
 		}
-		ds.ChannelMessageSend(m.ChannelID, "⏳ Model 設定為 `"+model+"`，正在重啟 agent...")
+		ds.ChannelMessageSend(m.ChannelID, L.Getf("model.switching", model))
 		if err := b.manager.Restart(m.ChannelID); err != nil {
-			ds.ChannelMessageSend(m.ChannelID, "❌ Reset failed: "+err.Error())
+			ds.ChannelMessageSend(m.ChannelID, L.Getf("error.reset_failed", err.Error()))
 			return
 		}
-		ds.ChannelMessageSend(m.ChannelID, "✅ Agent 已使用 model `"+model+"` 重啟。")
+		ds.ChannelMessageSend(m.ChannelID, L.Getf("model.switched", model))
 
 	case strings.HasPrefix(content, "!cron"):
 		b.handleCronTextCommand(ds, m.ChannelID, m.GuildID, m.Author.ID, content)
@@ -223,35 +209,35 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 			Attachments: localPaths,
 		}
 		if err := b.manager.Enqueue(ds, job); err != nil {
-			ds.ChannelMessageSend(m.ChannelID, "❌ "+err.Error())
+			ds.ChannelMessageSend(m.ChannelID, L.Getf("error.generic", err.Error()))
 		}
 	}
 }
 
 var slashCommands = []*discordgo.ApplicationCommand{
-	{Name: "start", Description: "綁定專案目錄並啟動 agent", Options: []*discordgo.ApplicationCommandOption{
-		{Type: discordgo.ApplicationCommandOptionString, Name: "cwd", Description: "專案目錄路徑", Required: true},
+	{Name: "start", Description: L.Get("cmd.start.desc"), Options: []*discordgo.ApplicationCommandOption{
+		{Type: discordgo.ApplicationCommandOptionString, Name: "cwd", Description: L.Get("cmd.start.opt.cwd"), Required: true},
 	}},
-	{Name: "reset", Description: "重啟 agent"},
-	{Name: "status", Description: "查詢目前 agent 狀態"},
-	{Name: "cancel", Description: "取消目前執行中的任務"},
-	{Name: "cwd", Description: "查詢或設定工作目錄", Options: []*discordgo.ApplicationCommandOption{
-		{Type: discordgo.ApplicationCommandOptionString, Name: "path", Description: "新的工作目錄（留空則查詢）", Required: false},
+	{Name: "reset", Description: L.Get("cmd.reset.desc")},
+	{Name: "status", Description: L.Get("cmd.status.desc")},
+	{Name: "cancel", Description: L.Get("cmd.cancel.desc")},
+	{Name: "cwd", Description: L.Get("cmd.cwd.desc"), Options: []*discordgo.ApplicationCommandOption{
+		{Type: discordgo.ApplicationCommandOptionString, Name: "path", Description: L.Get("cmd.cwd.opt.path"), Required: false},
 	}},
-	{Name: "pause", Description: "暫停監聽，改為 @mention 模式"},
-	{Name: "back", Description: "恢復完整監聽所有訊息"},
-	{Name: "model", Description: "查詢或切換 model", Options: []*discordgo.ApplicationCommandOption{
-		{Type: discordgo.ApplicationCommandOptionString, Name: "model", Description: "Model ID（留空則查詢）", Required: false},
+	{Name: "pause", Description: L.Get("cmd.pause.desc")},
+	{Name: "back", Description: L.Get("cmd.back.desc")},
+	{Name: "model", Description: L.Get("cmd.model.desc"), Options: []*discordgo.ApplicationCommandOption{
+		{Type: discordgo.ApplicationCommandOptionString, Name: "model", Description: L.Get("cmd.model.opt.model"), Required: false},
 	}},
-	{Name: "models", Description: "列出所有可用的 model"},
-	{Name: "cron", Description: "新增排程任務"},
-	{Name: "cron-list", Description: "列出排程任務"},
-	{Name: "cron-run", Description: "手動執行排程任務", Options: []*discordgo.ApplicationCommandOption{
-		{Type: discordgo.ApplicationCommandOptionString, Name: "name", Description: "任務名稱", Required: true},
+	{Name: "models", Description: L.Get("cmd.models.desc")},
+	{Name: "cron", Description: L.Get("cmd.cron.desc")},
+	{Name: "cron-list", Description: L.Get("cmd.cron_list.desc")},
+	{Name: "cron-run", Description: L.Get("cmd.cron_run.desc"), Options: []*discordgo.ApplicationCommandOption{
+		{Type: discordgo.ApplicationCommandOptionString, Name: "name", Description: L.Get("cmd.cron_run.opt.name"), Required: true},
 	}},
-	{Name: "remind", Description: "預約單次提醒", Options: []*discordgo.ApplicationCommandOption{
-		{Type: discordgo.ApplicationCommandOptionString, Name: "time", Description: "時間（例：下午五點、30分鐘後、明天09:00）", Required: true},
-		{Type: discordgo.ApplicationCommandOptionString, Name: "content", Description: "提醒內容", Required: true},
+	{Name: "remind", Description: L.Get("cmd.remind.desc"), Options: []*discordgo.ApplicationCommandOption{
+		{Type: discordgo.ApplicationCommandOptionString, Name: "time", Description: L.Get("cmd.remind.opt.time"), Required: true},
+		{Type: discordgo.ApplicationCommandOptionString, Name: "content", Description: L.Get("cmd.remind.opt.content"), Required: true},
 	}},
 }
 
@@ -323,58 +309,58 @@ func (b *Bot) handleSlashCommand(ds *discordgo.Session, i *discordgo.Interaction
 		switch data.Name {
 		case "start":
 			cwd := data.Options[0].StringValue()
-			reply("⏳ Starting agent at `" + cwd + "`...")
+			reply(L.Getf("start.starting", cwd))
 			if err := b.manager.StartAt(channelID, cwd); err != nil {
-				reply("❌ " + err.Error())
+				reply(L.Getf("error.generic", err.Error()))
 			} else {
-				reply("✅ Agent started at `" + cwd + "`")
-				reply(usageMessage)
+				reply(L.Getf("start.success", cwd))
+				reply(usageMessage())
 			}
 		case "reset":
-			reply("⏳ Resetting...")
+			reply(L.Get("reset.resetting"))
 			if err := b.manager.Reset(channelID); err != nil {
-				reply("❌ " + err.Error())
+				reply(L.Getf("error.generic", err.Error()))
 			} else {
-				reply("✅ Session reset.")
-				reply(usageMessage)
+				reply(L.Get("reset.success"))
+				reply(usageMessage())
 			}
 		case "status":
 			reply(b.manager.Status(channelID))
 		case "cancel":
 			if err := b.manager.Cancel(channelID); err != nil {
-				reply("❌ " + err.Error())
+				reply(L.Getf("error.generic", err.Error()))
 			} else {
-				reply("⚠️ Cancel requested.")
+				reply(L.Get("cancel.success"))
 			}
 		case "cwd":
 			if len(data.Options) > 0 {
 				newCwd := data.Options[0].StringValue()
 				if err := b.manager.SetCWD(channelID, newCwd); err != nil {
-					reply("❌ " + err.Error())
+					reply(L.Getf("error.generic", err.Error()))
 				} else {
-					reply("✅ CWD 已設定為 `" + newCwd + "`，下次 `/reset` 時生效。")
+					reply(L.Getf("cwd.set", newCwd))
 				}
 			} else {
 				reply(b.manager.CWD(channelID))
 			}
 		case "pause":
 			b.manager.Pause(channelID)
-			reply("⏸️ 暫停監聽，改為 @mention 模式")
+			reply(L.Get("pause.on"))
 		case "back":
 			b.manager.Back(channelID)
-			reply("▶️ 恢復完整監聽")
+			reply(L.Get("pause.off"))
 		case "model":
 			if len(data.Options) > 0 {
 				model := data.Options[0].StringValue()
 				if err := b.manager.SetModel(channelID, model); err != nil {
-					reply("❌ " + err.Error())
+					reply(L.Getf("error.generic", err.Error()))
 					return
 				}
-				reply("⏳ Model 設定為 `" + model + "`，正在重啟 agent...")
+				reply(L.Getf("model.switching", model))
 				if err := b.manager.Restart(channelID); err != nil {
-					reply("❌ Reset failed: " + err.Error())
+					reply(L.Getf("error.reset_failed", err.Error()))
 				} else {
-					reply("✅ Agent 已使用 model `" + model + "` 重啟。")
+					reply(L.Getf("model.switched", model))
 				}
 			} else {
 				reply(b.manager.Model(channelID))
@@ -382,7 +368,7 @@ func (b *Bot) handleSlashCommand(ds *discordgo.Session, i *discordgo.Interaction
 		case "models":
 			msg, err := b.manager.ListModels()
 			if err != nil {
-				reply("❌ " + err.Error())
+				reply(L.Getf("error.generic", err.Error()))
 			} else {
 				reply(msg)
 			}

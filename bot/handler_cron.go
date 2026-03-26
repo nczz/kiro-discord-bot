@@ -8,6 +8,7 @@ import (
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/nczz/kiro-discord-bot/heartbeat"
+	L "github.com/nczz/kiro-discord-bot/locale"
 )
 
 // handleCronModal responds to /cron by showing a modal form.
@@ -16,14 +17,14 @@ func (b *Bot) handleCronModal(ds *discordgo.Session, i *discordgo.InteractionCre
 		Type: discordgo.InteractionResponseModal,
 		Data: &discordgo.InteractionResponseData{
 			CustomID: "cron_add_modal",
-			Title:    "新增排程任務",
+			Title:    L.Get("cron.modal.title"),
 			Components: []discordgo.MessageComponent{
 				discordgo.ActionsRow{Components: []discordgo.MessageComponent{
 					discordgo.TextInput{
 						CustomID:    "cron_name",
-						Label:       "任務名稱",
+						Label:       L.Get("cron.modal.name"),
 						Style:       discordgo.TextInputShort,
-						Placeholder: "例：每日伺服器健檢",
+						Placeholder: L.Get("cron.modal.name_ph"),
 						Required:    true,
 						MaxLength:   100,
 					},
@@ -31,9 +32,9 @@ func (b *Bot) handleCronModal(ds *discordgo.Session, i *discordgo.InteractionCre
 				discordgo.ActionsRow{Components: []discordgo.MessageComponent{
 					discordgo.TextInput{
 						CustomID:    "cron_schedule",
-						Label:       "執行頻率",
+						Label:       L.Get("cron.modal.schedule"),
 						Style:       discordgo.TextInputShort,
-						Placeholder: "例：每天 09:00、每 30 分鐘、0 9 * * *",
+						Placeholder: L.Get("cron.modal.schedule_ph"),
 						Required:    true,
 						MaxLength:   100,
 					},
@@ -41,9 +42,9 @@ func (b *Bot) handleCronModal(ds *discordgo.Session, i *discordgo.InteractionCre
 				discordgo.ActionsRow{Components: []discordgo.MessageComponent{
 					discordgo.TextInput{
 						CustomID:    "cron_prompt",
-						Label:       "要 agent 做什麼",
+						Label:       L.Get("cron.modal.prompt"),
 						Style:       discordgo.TextInputParagraph,
-						Placeholder: "例：檢查伺服器 CPU、記憶體、磁碟用量，跟上次比較",
+						Placeholder: L.Get("cron.modal.prompt_ph"),
 						Required:    true,
 						MaxLength:   2000,
 					},
@@ -51,9 +52,9 @@ func (b *Bot) handleCronModal(ds *discordgo.Session, i *discordgo.InteractionCre
 				discordgo.ActionsRow{Components: []discordgo.MessageComponent{
 					discordgo.TextInput{
 						CustomID:    "cron_cwd",
-						Label:       "工作目錄（選填）",
+						Label:       L.Get("cron.modal.cwd"),
 						Style:       discordgo.TextInputShort,
-						Placeholder: "例：/home/user/project",
+						Placeholder: L.Get("cron.modal.cwd_ph"),
 						Required:    false,
 						MaxLength:   200,
 					},
@@ -61,9 +62,9 @@ func (b *Bot) handleCronModal(ds *discordgo.Session, i *discordgo.InteractionCre
 				discordgo.ActionsRow{Components: []discordgo.MessageComponent{
 					discordgo.TextInput{
 						CustomID:    "cron_model",
-						Label:       "Model（選填，留空用預設）",
+						Label:       L.Get("cron.modal.model"),
 						Style:       discordgo.TextInputShort,
-						Placeholder: "例：claude-sonnet-4-20250514",
+						Placeholder: L.Get("cron.modal.model_ph"),
 						Required:    false,
 						MaxLength:   100,
 					},
@@ -100,7 +101,7 @@ func (b *Bot) handleCronModalSubmit(ds *discordgo.Session, i *discordgo.Interact
 	// Parse schedule
 	cronExpr, err := heartbeat.ParseSchedule(scheduleInput)
 	if err != nil {
-		respondInteraction(ds, i, "❌ 無法解析排程："+err.Error())
+		respondInteraction(ds, i, L.Getf("error.parse_schedule", err.Error()))
 		return
 	}
 
@@ -127,11 +128,11 @@ func (b *Bot) handleCronModalSubmit(ds *discordgo.Session, i *discordgo.Interact
 		CreatedBy:     username,
 	}
 	if err := b.cronStore.Add(job); err != nil {
-		respondInteraction(ds, i, "❌ 儲存失敗："+err.Error())
+		respondInteraction(ds, i, L.Getf("error.save_failed", err.Error()))
 		return
 	}
 
-	respondInteraction(ds, i, fmt.Sprintf("✅ 排程任務已建立\n名稱：**%s**\n頻率：%s (`%s`)\nPrompt：%s",
+	respondInteraction(ds, i, L.Getf("cron.created",
 		name, scheduleInput, cronExpr, prompt))
 }
 
@@ -143,7 +144,7 @@ func (b *Bot) handleCronList(ds *discordgo.Session, i *discordgo.InteractionCrea
 
 	jobs := b.cronStore.ListByChannel(i.ChannelID)
 	if len(jobs) == 0 {
-		followupInteraction(ds, i, "📋 此頻道沒有排程任務。使用 `/cron` 新增。")
+		followupInteraction(ds, i, L.Get("cron.list.empty"))
 		return
 	}
 
@@ -176,25 +177,25 @@ func (b *Bot) handleCronList(ds *discordgo.Session, i *discordgo.InteractionCrea
 		var buttons []discordgo.MessageComponent
 		if job.Enabled {
 			buttons = append(buttons, discordgo.Button{
-				Label:    "⏸️ 暫停",
+				Label:    L.Get("cron.btn.pause"),
 				Style:    discordgo.SecondaryButton,
 				CustomID: "cron_pause_" + job.ID,
 			})
 		} else {
 			buttons = append(buttons, discordgo.Button{
-				Label:    "▶️ 恢復",
+				Label:    L.Get("cron.btn.resume"),
 				Style:    discordgo.SuccessButton,
 				CustomID: "cron_resume_" + job.ID,
 			})
 		}
 		buttons = append(buttons,
 			discordgo.Button{
-				Label:    "▶️ 立即執行",
+				Label:    L.Get("cron.btn.run"),
 				Style:    discordgo.PrimaryButton,
 				CustomID: "cron_run_" + job.ID,
 			},
 			discordgo.Button{
-				Label:    "🗑️ 刪除",
+				Label:    L.Get("cron.btn.delete"),
 				Style:    discordgo.DangerButton,
 				CustomID: "cron_delete_" + job.ID,
 			},
@@ -228,7 +229,7 @@ func (b *Bot) handleCronButton(ds *discordgo.Session, i *discordgo.InteractionCr
 
 	job, ok := b.cronStore.Get(jobID)
 	if !ok {
-		respondInteraction(ds, i, "❌ 找不到此任務")
+		respondInteraction(ds, i, L.Get("cron.not_found"))
 		return
 	}
 
@@ -236,19 +237,19 @@ func (b *Bot) handleCronButton(ds *discordgo.Session, i *discordgo.InteractionCr
 	case "pause":
 		job.Enabled = false
 		_ = b.cronStore.Update(job)
-		respondInteraction(ds, i, fmt.Sprintf("⏸️ 已暫停：**%s**", job.Name))
+		respondInteraction(ds, i, L.Getf("cron.paused", job.Name))
 	case "resume":
 		job.Enabled = true
 		_ = b.cronStore.Update(job)
-		respondInteraction(ds, i, fmt.Sprintf("▶️ 已恢復：**%s**", job.Name))
+		respondInteraction(ds, i, L.Getf("cron.resumed", job.Name))
 	case "run":
-		respondInteraction(ds, i, fmt.Sprintf("⏰ 正在手動執行：**%s**", job.Name))
+		respondInteraction(ds, i, L.Getf("cron.running", job.Name))
 		// Trigger execution in background — set NextRun to now so next heartbeat picks it up
 		job.NextRun = time.Now().Add(-time.Minute).Format(time.RFC3339)
 		_ = b.cronStore.Update(job)
 	case "delete":
 		_ = b.cronStore.Remove(jobID)
-		respondInteraction(ds, i, fmt.Sprintf("🗑️ 已刪除：**%s**", job.Name))
+		respondInteraction(ds, i, L.Getf("cron.deleted", job.Name))
 	}
 }
 
@@ -256,10 +257,10 @@ func (b *Bot) handleCronButton(ds *discordgo.Session, i *discordgo.InteractionCr
 func (b *Bot) handleCronRun(ds *discordgo.Session, i *discordgo.InteractionCreate, name string) {
 	job, ok := b.cronStore.FindByName(i.ChannelID, name)
 	if !ok {
-		respondInteraction(ds, i, "❌ 找不到任務："+name)
+		respondInteraction(ds, i, L.Getf("cron.not_found", name))
 		return
 	}
-	respondInteraction(ds, i, fmt.Sprintf("⏰ 正在手動執行：**%s**", job.Name))
+	respondInteraction(ds, i, L.Getf("cron.running", job.Name))
 	job.NextRun = time.Now().Add(-time.Minute).Format(time.RFC3339)
 	_ = b.cronStore.Update(job)
 }
@@ -288,11 +289,11 @@ func (b *Bot) handleCronTextCommand(ds *discordgo.Session, channelID, guildID, u
 	case content == "!cron list":
 		jobs := b.cronStore.ListByChannel(channelID)
 		if len(jobs) == 0 {
-			ds.ChannelMessageSend(channelID, "📋 此頻道沒有排程任務。")
+			ds.ChannelMessageSend(channelID, L.Get("cron.list.empty"))
 			return
 		}
 		var sb strings.Builder
-		sb.WriteString("📋 **排程任務列表**\n\n")
+		sb.WriteString(L.Get("cron.list.header"))
 		for i, job := range jobs {
 			status := "✅"
 			if !job.Enabled {
@@ -310,15 +311,15 @@ func (b *Bot) handleCronTextCommand(ds *discordgo.Session, channelID, guildID, u
 		name := strings.TrimSpace(strings.TrimPrefix(content, "!cron run "))
 		job, ok := b.cronStore.FindByName(channelID, name)
 		if !ok {
-			ds.ChannelMessageSend(channelID, "❌ 找不到任務："+name)
+			ds.ChannelMessageSend(channelID, L.Getf("cron.not_found", name))
 			return
 		}
-		ds.ChannelMessageSend(channelID, fmt.Sprintf("⏰ 正在手動執行：**%s**", job.Name))
+		ds.ChannelMessageSend(channelID, L.Getf("cron.running", job.Name))
 		job.NextRun = time.Now().Add(-time.Minute).Format(time.RFC3339)
 		_ = b.cronStore.Update(job)
 
 	default:
-		ds.ChannelMessageSend(channelID, "Usage: `!cron list` | `!cron run <name>`")
+		ds.ChannelMessageSend(channelID, L.Get("cron.usage"))
 	}
 }
 
@@ -333,7 +334,7 @@ func (b *Bot) handleRemind(ds *discordgo.Session, i *discordgo.InteractionCreate
 
 	target, err := heartbeat.ParseTime(timeStr, loc)
 	if err != nil {
-		respondInteraction(ds, i, "❌ 無法解析時間："+err.Error())
+		respondInteraction(ds, i, L.Getf("error.parse_time", err.Error()))
 		return
 	}
 
@@ -359,11 +360,11 @@ func (b *Bot) handleRemind(ds *discordgo.Session, i *discordgo.InteractionCreate
 		HistoryLimit:  0,
 	}
 	if err := b.cronStore.Add(job); err != nil {
-		respondInteraction(ds, i, "❌ 儲存失敗："+err.Error())
+		respondInteraction(ds, i, L.Getf("error.save_failed", err.Error()))
 		return
 	}
 
-	respondInteraction(ds, i, fmt.Sprintf("🔔 已預約提醒\n時間：%s\n內容：%s",
+	respondInteraction(ds, i, L.Getf("remind.created",
 		target.Format("2006/01/02 15:04"), content))
 }
 
@@ -373,7 +374,7 @@ func (b *Bot) handleRemindText(ds *discordgo.Session, channelID, guildID, userID
 	// Find first space after time portion
 	parts := strings.SplitN(content, " ", 2)
 	if len(parts) < 2 {
-		ds.ChannelMessageSend(channelID, "Usage: `!remind <時間> <內容>`\n例：`!remind 下午五點 提醒我要開會`")
+		ds.ChannelMessageSend(channelID, L.Get("remind.usage"))
 		return
 	}
 
@@ -400,7 +401,7 @@ func (b *Bot) handleRemindText(ds *discordgo.Session, channelID, guildID, userID
 		}
 	}
 	if !found || prompt == "" {
-		ds.ChannelMessageSend(channelID, "❌ 無法解析時間或內容為空\nUsage: `!remind <時間> <內容>`")
+		ds.ChannelMessageSend(channelID, L.Get("error.parse_time_or_empty"))
 		return
 	}
 
@@ -418,11 +419,11 @@ func (b *Bot) handleRemindText(ds *discordgo.Session, channelID, guildID, userID
 		HistoryLimit:  0,
 	}
 	if err := b.cronStore.Add(job); err != nil {
-		ds.ChannelMessageSend(channelID, "❌ 儲存失敗："+err.Error())
+		ds.ChannelMessageSend(channelID, L.Getf("error.save_failed", err.Error()))
 		return
 	}
 
-	ds.ChannelMessageSend(channelID, fmt.Sprintf("🔔 已預約提醒\n時間：%s\n內容：%s",
+	ds.ChannelMessageSend(channelID, L.Getf("remind.created",
 		target.Format("2006/01/02 15:04"), prompt))
 }
 

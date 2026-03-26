@@ -102,6 +102,7 @@ CRON_TIMEZONE=Asia/Taipei
 | `HEARTBEAT_SEC` | Agent health check interval in seconds | `60` |
 | `ATTACHMENT_RETAIN_DAYS` | Auto-delete attachments older than N days (0 = keep forever) | `7` |
 | `CRON_TIMEZONE` | Timezone for cron schedules (empty = server local) | `` |
+| `BOT_LOCALE` | Bot display language (`en`, `zh-TW`) | `en` |
 
 ---
 
