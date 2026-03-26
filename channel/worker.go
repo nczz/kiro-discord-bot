@@ -159,6 +159,13 @@ func (w *Worker) execute(job *Job) {
 			swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "❌")
 		}
 		editMessage(ds, job.ChannelID, replyMsg.ID, "❌ "+errMsg)
+		if w.logger != nil {
+			w.logger.Log(w.channelID, ChatEntry{
+				Role:    "assistant",
+				Content: "❌ " + errMsg,
+				Model:   w.model,
+			})
+		}
 		return
 	}
 
