@@ -1,9 +1,12 @@
 package channel
 
 import (
+	"bufio"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -52,4 +55,52 @@ func (l *ChatLogger) Log(channelID string, entry ChatEntry) {
 	}
 	defer f.Close()
 	_, _ = f.Write(data)
+}
+
+// RecentHistory reads the last N conversation turns from the JSONL log.
+func (l *ChatLogger) RecentHistory(channelID string, maxTurns int) []ChatEntry {
+	path := filepath.Join(l.dataDir, "ch-"+channelID, "chat.jsonl")
+	f, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+
+	var all []ChatEntry
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 256*1024), 256*1024)
+	for scanner.Scan() {
+		var e ChatEntry
+		if json.Unmarshal(scanner.Bytes(), &e) == nil {
+			all = append(all, e)
+		}
+	}
+	if len(all) > maxTurns {
+		all = all[len(all)-maxTurns:]
+	}
+	return all
+}
+
+// BuildContextPrompt formats recent history as a context preamble for a new session.
+// Returns empty string if no history.
+func (l *ChatLogger) BuildContextPrompt(channelID string, maxTurns int) string {
+	entries := l.RecentHistory(channelID, maxTurns)
+	if len(entries) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("[Previous conversation context for session continuity]\n")
+	for _, e := range entries {
+		role := "User"
+		if e.Role == "assistant" {
+			role = "Assistant"
+		}
+		content := e.Content
+		if len(content) > 500 {
+			content = content[:500] + "...(truncated)"
+		}
+		sb.WriteString(fmt.Sprintf("[%s] %s\n", role, content))
+	}
+	sb.WriteString("[End of previous context]\n\n")
+	return sb.String()
 }

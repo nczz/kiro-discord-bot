@@ -25,8 +25,11 @@ type Agent struct {
 	mu          sync.Mutex
 	currentText strings.Builder
 	onChunk     func(string)
+	onExit      func() // called when child process exits unexpectedly
 
 	initResult *InitializeResult
+	stopOnce   sync.Once
+	exited     chan struct{} // closed when child process exits
 }
 
 // StartAgent spawns kiro-cli acp and performs the ACP handshake (initialize + session/new).
@@ -67,6 +70,7 @@ func StartAgent(name, kiroCLI, cwd, model string) (*Agent, error) {
 		cmd:       cmd,
 		transport: NewTransport(stdout, stdin),
 		state:     "starting",
+		exited:    make(chan struct{}),
 	}
 
 	a.transport.OnNotification = a.handleNotification
@@ -74,6 +78,25 @@ func StartAgent(name, kiroCLI, cwd, model string) (*Agent, error) {
 	go func() {
 		if err := a.transport.ReadLoop(); err != nil {
 			log.Printf("[agent:%s] read loop: %v", name, err)
+		}
+	}()
+
+	// Watch for unexpected child exit
+	go func() {
+		a.cmd.Wait()
+		close(a.exited)
+		a.mu.Lock()
+		wasRunning := a.state != "stopped"
+		if wasRunning {
+			a.state = "stopped"
+		}
+		cb := a.onExit
+		a.mu.Unlock()
+		if wasRunning {
+			log.Printf("[agent:%s] process exited unexpectedly", name)
+			if cb != nil {
+				cb()
+			}
 		}
 	}()
 
@@ -154,10 +177,19 @@ func (a *Agent) Pid() int {
 
 // IsAlive returns true if the child process is still running.
 func (a *Agent) IsAlive() bool {
-	if a.cmd.Process == nil {
+	select {
+	case <-a.exited:
 		return false
+	default:
+		return true
 	}
-	return a.cmd.ProcessState == nil // not yet waited
+}
+
+// OnExitFunc sets a callback invoked when the child process exits unexpectedly.
+func (a *Agent) OnExitFunc(fn func()) {
+	a.mu.Lock()
+	a.onExit = fn
+	a.mu.Unlock()
 }
 
 // State returns the current agent state.
@@ -231,42 +263,44 @@ func (a *Agent) Ask(ctx context.Context, prompt string, onChunk func(string)) (s
 }
 
 // Stop gracefully stops the agent: SIGTERM → wait 2s → SIGKILL entire process group.
+// Safe to call multiple times.
 func (a *Agent) Stop() {
-	a.mu.Lock()
-	a.state = "stopped"
-	a.mu.Unlock()
+	a.stopOnce.Do(func() {
+		a.mu.Lock()
+		a.state = "stopped"
+		a.mu.Unlock()
 
-	if a.cmd.Process == nil {
-		return
-	}
+		if a.cmd.Process == nil {
+			return
+		}
 
-	pid := a.cmd.Process.Pid
-	log.Printf("[agent:%s] stopping pid=%d", a.Name, pid)
+		pid := a.cmd.Process.Pid
+		log.Printf("[agent:%s] stopping pid=%d", a.Name, pid)
 
-	_ = syscall.Kill(-pid, syscall.SIGTERM)
+		_ = syscall.Kill(-pid, syscall.SIGTERM)
 
-	done := make(chan struct{})
-	go func() {
-		a.cmd.Wait()
-		close(done)
-	}()
-
-	select {
-	case <-done:
-		log.Printf("[agent:%s] exited cleanly", a.Name)
-	case <-time.After(2 * time.Second):
-		log.Printf("[agent:%s] force killing", a.Name)
-		_ = syscall.Kill(-pid, syscall.SIGKILL)
-		<-done
-	}
+		select {
+		case <-a.exited:
+			log.Printf("[agent:%s] exited cleanly", a.Name)
+		case <-time.After(2 * time.Second):
+			log.Printf("[agent:%s] force killing", a.Name)
+			_ = syscall.Kill(-pid, syscall.SIGKILL)
+			<-a.exited
+		}
+	})
 }
 
 // Kill immediately kills the agent process group.
 func (a *Agent) Kill() {
-	if a.cmd.Process != nil {
-		_ = syscall.Kill(-a.cmd.Process.Pid, syscall.SIGKILL)
-		a.cmd.Wait()
-	}
+	a.stopOnce.Do(func() {
+		a.mu.Lock()
+		a.state = "stopped"
+		a.mu.Unlock()
+		if a.cmd.Process != nil {
+			_ = syscall.Kill(-a.cmd.Process.Pid, syscall.SIGKILL)
+			<-a.exited
+		}
+	})
 }
 
 // PreflightCheck validates the full ACP lifecycle: spawn → handshake → ask → stop.

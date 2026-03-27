@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/nczz/kiro-discord-bot/acp"
@@ -292,6 +293,26 @@ func (m *Manager) startAgentAndWorker(channelID string) (*Worker, error) {
 		return nil, fmt.Errorf("start agent: %w", err)
 	}
 	m.agents[channelID] = agent
+
+	// Watch for unexpected exit — auto-restart on next message
+	agent.OnExitFunc(func() {
+		m.mu.Lock()
+		delete(m.agents, channelID)
+		if w, ok := m.workers[channelID]; ok {
+			w.Stop()
+			delete(m.workers, channelID)
+		}
+		m.mu.Unlock()
+		log.Printf("[manager] agent %s exited, will restart on next message", agentName)
+	})
+
+	// Inject previous conversation context into new session
+	if ctx := m.logger.BuildContextPrompt(channelID, 10); ctx != "" {
+		askCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		_, _ = agent.Ask(askCtx, ctx+"Please acknowledge you have this context. Reply with: OK", nil)
+		cancel()
+		log.Printf("[manager] injected %d chars of history into %s", len(ctx), agentName)
+	}
 
 	if err := m.store.Set(channelID, &Session{
 		AgentName: agentName,
