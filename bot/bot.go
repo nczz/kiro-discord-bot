@@ -5,21 +5,19 @@ import (
 	"log"
 
 	"github.com/bwmarrin/discordgo"
-	"github.com/nczz/kiro-discord-bot/acp"
 	"github.com/nczz/kiro-discord-bot/channel"
 	"github.com/nczz/kiro-discord-bot/heartbeat"
 )
 
 type Bot struct {
-	discord       *discordgo.Session
-	manager       *channel.Manager
-	guildID       string
-	dataDir       string
-	hb            *heartbeat.Heartbeat
-	hbCancel      context.CancelFunc
-	acpBridgeURL  string
-	cronStore     *heartbeat.CronStore
-	cronTimezone  string
+	discord      *discordgo.Session
+	manager      *channel.Manager
+	guildID      string
+	dataDir      string
+	hb           *heartbeat.Heartbeat
+	hbCancel     context.CancelFunc
+	cronStore    *heartbeat.CronStore
+	cronTimezone string
 }
 
 func New(cfg interface{ GetBotConfig() BotConfig }) (*Bot, error) {
@@ -28,7 +26,6 @@ func New(cfg interface{ GetBotConfig() BotConfig }) (*Bot, error) {
 
 type BotConfig struct {
 	DiscordToken    string
-	AcpBridgeURL    string
 	KiroCLIPath     string
 	DefaultCWD      string
 	DataDir         string
@@ -49,21 +46,19 @@ func NewFromConfig(cfg BotConfig) (*Bot, error) {
 	}
 	ds.Identify.Intents = discordgo.IntentsGuildMessages | discordgo.IntentsDirectMessages | discordgo.IntentsGuildMessageReactions | discordgo.IntentsMessageContent
 
-	acpClient := acp.NewClient(cfg.AcpBridgeURL)
-
 	store, err := channel.NewSessionStore(cfg.DataDir)
 	if err != nil {
 		return nil, err
 	}
 
 	manager := channel.NewManager(
-		store, acpClient,
+		store,
 		cfg.KiroCLIPath, cfg.DefaultCWD,
 		cfg.QueueBufferSize, cfg.AskTimeoutSec, cfg.StreamUpdateSec,
 		cfg.KiroModel, cfg.DataDir,
 	)
 
-	b := &Bot{discord: ds, manager: manager, guildID: cfg.GuildID, dataDir: cfg.DataDir, acpBridgeURL: cfg.AcpBridgeURL, cronTimezone: cfg.CronTimezone}
+	b := &Bot{discord: ds, manager: manager, guildID: cfg.GuildID, dataDir: cfg.DataDir, cronTimezone: cfg.CronTimezone}
 
 	cronStore, err := heartbeat.NewCronStore(cfg.DataDir)
 	if err != nil {
@@ -72,18 +67,12 @@ func NewFromConfig(cfg BotConfig) (*Bot, error) {
 	b.cronStore = cronStore
 
 	hb := heartbeat.New(cfg.HeartbeatSec)
-	hb.Register(heartbeat.NewHealthTask(&healthAdapter{bot: b}, cfg.AcpBridgeURL))
+	hb.Register(heartbeat.NewHealthTask(&healthAdapter{bot: b}))
 	hb.Register(heartbeat.NewCleanupTask(cfg.DataDir, cfg.AttRetainDays))
 	hb.Register(heartbeat.NewCronTask(cronStore, &cronAdapter{bot: b}, cfg.DataDir, cfg.CronTimezone))
 	b.hb = hb
 	ds.AddHandler(b.handleMessage)
 	ds.AddHandler(b.handleInteraction)
-	ds.AddHandler(func(s *discordgo.Session, e *discordgo.InteractionCreate) {
-		log.Printf("[debug] InteractionCreate type=%d", e.Type)
-	})
-	ds.AddHandler(func(s *discordgo.Session, e *discordgo.MessageCreate) {
-		log.Printf("[debug] MessageCreate from=%s content=%q", e.Author.Username, e.Content)
-	})
 	return b, nil
 }
 

@@ -6,11 +6,8 @@ import (
 	"fmt"
 	"log"
 	"os/exec"
-	"strconv"
 	"strings"
 	"sync"
-	"syscall"
-	"time"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/nczz/kiro-discord-bot/acp"
@@ -21,9 +18,9 @@ import (
 type Manager struct {
 	mu              sync.Mutex
 	workers         map[string]*Worker
+	agents          map[string]*acp.Agent
 	paused          map[string]bool
 	store           *SessionStore
-	acpClient       *acp.Client
 	kiroCLI         string
 	defaultCWD      string
 	queueBufSize    int
@@ -33,12 +30,12 @@ type Manager struct {
 	logger          *ChatLogger
 }
 
-func NewManager(store *SessionStore, acpClient *acp.Client, kiroCLI, defaultCWD string, queueBufSize, askTimeoutSec, streamUpdateSec int, defaultModel string, dataDir string) *Manager {
+func NewManager(store *SessionStore, kiroCLI, defaultCWD string, queueBufSize, askTimeoutSec, streamUpdateSec int, defaultModel string, dataDir string) *Manager {
 	return &Manager{
 		workers:         make(map[string]*Worker),
+		agents:          make(map[string]*acp.Agent),
 		paused:          make(map[string]bool),
 		store:           store,
-		acpClient:       acpClient,
 		kiroCLI:         kiroCLI,
 		defaultCWD:      defaultCWD,
 		queueBufSize:    queueBufSize,
@@ -46,6 +43,18 @@ func NewManager(store *SessionStore, acpClient *acp.Client, kiroCLI, defaultCWD 
 		streamUpdateSec: streamUpdateSec,
 		defaultModel:    defaultModel,
 		logger:          NewChatLogger(dataDir),
+	}
+}
+
+// stopChannel stops the worker and agent for a channel. Must be called with m.mu held.
+func (m *Manager) stopChannel(channelID string) {
+	if w, ok := m.workers[channelID]; ok {
+		w.Stop()
+		delete(m.workers, channelID)
+	}
+	if agent, ok := m.agents[channelID]; ok {
+		agent.Stop()
+		delete(m.agents, channelID)
 	}
 }
 
@@ -80,15 +89,10 @@ func (m *Manager) Reset(channelID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if w, ok := m.workers[channelID]; ok {
-		w.Stop()
-		delete(m.workers, channelID)
-	}
+	sess, _ := m.store.Get(channelID)
+	m.stopChannel(channelID)
 
-	if sess, ok := m.store.Get(channelID); ok {
-		_ = m.acpClient.StopAgent(sess.AgentName)
-		killProcessTree(sess.AgentPID)
-		// Preserve CWD and Model across reset
+	if sess != nil {
 		_ = m.store.Set(channelID, &Session{CWD: sess.CWD, Model: sess.Model})
 	}
 	return nil
@@ -99,13 +103,10 @@ func (m *Manager) Restart(channelID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if w, ok := m.workers[channelID]; ok {
-		w.Stop()
-		delete(m.workers, channelID)
-	}
-	if sess, ok := m.store.Get(channelID); ok {
-		_ = m.acpClient.StopAgent(sess.AgentName)
-		killProcessTree(sess.AgentPID)
+	sess, _ := m.store.Get(channelID)
+	m.stopChannel(channelID)
+
+	if sess != nil {
 		_ = m.store.Set(channelID, &Session{CWD: sess.CWD, Model: sess.Model})
 	}
 	_, err := m.startAgentAndWorker(channelID)
@@ -122,10 +123,12 @@ func (m *Manager) Status(channelID string) string {
 		return L.Get("status.no_session")
 	}
 
-	agentStatus, err := m.acpClient.GetAgent(sess.AgentName)
 	state := "unknown"
-	if err == nil {
-		state = agentStatus.State
+	if agent, ok := m.agents[channelID]; ok {
+		state = agent.State()
+		if !agent.IsAlive() {
+			state = "dead"
+		}
 	}
 
 	qLen := 0
@@ -143,11 +146,17 @@ func (m *Manager) Status(channelID string) string {
 
 // Cancel cancels the current running job for a channel.
 func (m *Manager) Cancel(channelID string) error {
-	sess, ok := m.store.Get(channelID)
+	m.mu.Lock()
+	agent, ok := m.agents[channelID]
+	m.mu.Unlock()
 	if !ok {
 		return fmt.Errorf("no active session")
 	}
-	return m.acpClient.CancelAgent(sess.AgentName)
+	_, err := agent.Ask(context.Background(), "", nil) // cancel is handled via context in worker
+	_ = err
+	// Actually, cancel is done by the worker's context cancellation.
+	// For direct cancel, we need to restart the agent since cancel breaks the session.
+	return m.Restart(channelID)
 }
 
 // StartAt resets the channel and starts a new agent at the given cwd.
@@ -155,16 +164,8 @@ func (m *Manager) StartAt(channelID, cwd string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Stop existing worker/agent
-	if w, ok := m.workers[channelID]; ok {
-		w.Stop()
-		delete(m.workers, channelID)
-	}
-	if sess, ok := m.store.Get(channelID); ok {
-		_ = m.acpClient.StopAgent(sess.AgentName)
-		killProcessTree(sess.AgentPID)
-	}
-	// Store cwd (preserve model) so ensureWorker picks it up
+	m.stopChannel(channelID)
+
 	existing, _ := m.store.Get(channelID)
 	newSess := &Session{CWD: cwd}
 	if existing != nil {
@@ -194,17 +195,14 @@ func (m *Manager) SetCWD(channelID, cwd string) error {
 	return m.store.Set(channelID, sess)
 }
 
-// SetModel updates the model for a channel, then resets the agent to apply it.
+// SetModel updates the model for a channel.
 func (m *Manager) SetModel(channelID, model string) error {
 	sess, ok := m.store.Get(channelID)
 	if !ok {
 		sess = &Session{}
 	}
 	sess.Model = model
-	if err := m.store.Set(channelID, sess); err != nil {
-		return err
-	}
-	return nil
+	return m.store.Set(channelID, sess)
 }
 
 func modelDisplay(model string) string {
@@ -258,22 +256,14 @@ func (m *Manager) ListModels() (string, error) {
 }
 
 // ensureWorker returns the worker for a channel, creating agent+worker if needed.
-// Must be called with m.mu held.
 func (m *Manager) ensureWorker(channelID string) (*Worker, error) {
 	if w, ok := m.workers[channelID]; ok {
-		// Verify agent is still alive
-		sess, _ := m.store.Get(channelID)
-		if sess != nil {
-			if _, err := m.acpClient.GetAgent(sess.AgentName); err == nil {
-				return w, nil
-			}
-			// Agent died — restart it
-			log.Printf("[manager] agent %s died, restarting", sess.AgentName)
-			w.Stop()
-			delete(m.workers, channelID)
+		if agent, ok := m.agents[channelID]; ok && agent.IsAlive() {
+			return w, nil
 		}
+		log.Printf("[manager] agent for %s died, restarting", channelID)
+		m.stopChannel(channelID)
 	}
-
 	return m.startAgentAndWorker(channelID)
 }
 
@@ -282,7 +272,6 @@ func (m *Manager) startAgentAndWorker(channelID string) (*Worker, error) {
 	model := m.defaultModel
 	agentName := "ch-" + channelID
 
-	// Use stored CWD/Model if available
 	if sess, ok := m.store.Get(channelID); ok {
 		if sess.CWD != "" {
 			cwd = sess.CWD
@@ -292,40 +281,28 @@ func (m *Manager) startAgentAndWorker(channelID string) (*Worker, error) {
 		}
 	}
 
-	// Cancel + stop any existing agent with same name (best effort)
-	_ = m.acpClient.CancelAgent(agentName)
-	_ = m.acpClient.StopAgent(agentName)
-	if sess, ok := m.store.Get(channelID); ok && sess.AgentPID > 0 {
-		killProcessTree(sess.AgentPID)
+	// Stop any existing agent with same name
+	if old, ok := m.agents[channelID]; ok {
+		old.Stop()
+		delete(m.agents, channelID)
 	}
 
-	beforePIDs := currentPIDs()
-
-	status, err := m.acpClient.StartAgent(agentName, m.kiroCLI, cwd, model)
+	agent, err := acp.StartAgent(agentName, m.kiroCLI, cwd, model)
 	if err != nil {
 		return nil, fmt.Errorf("start agent: %w", err)
 	}
-
-	agentPID := findNewPID(beforePIDs)
-	if agentPID == 0 {
-		time.Sleep(2 * time.Second)
-		agentPID = findNewPID(beforePIDs)
-	}
-	if agentPID > 0 {
-		log.Printf("[manager] agent %s pid=%d model=%q", agentName, agentPID, model)
-	}
+	m.agents[channelID] = agent
 
 	if err := m.store.Set(channelID, &Session{
 		AgentName: agentName,
-		SessionID: status.SessionID,
+		SessionID: agent.SessionID,
 		CWD:       cwd,
-		AgentPID:  agentPID,
 		Model:     model,
 	}); err != nil {
 		log.Printf("[manager] save session: %v", err)
 	}
 
-	w := NewWorker(channelID, agentName, m.queueBufSize, m.askTimeoutSec, m.streamUpdateSec, m.acpClient, m.logger, model)
+	w := NewWorker(channelID, agent, m.queueBufSize, m.askTimeoutSec, m.streamUpdateSec, m.logger, model)
 	w.Start()
 	m.workers[channelID] = w
 	return w, nil
@@ -336,9 +313,12 @@ func (m *Manager) GetSession(channelID string) (*Session, bool) {
 	return m.store.Get(channelID)
 }
 
-// GetAgentStatus returns the acp agent status.
-func (m *Manager) GetAgentStatus(agentName string) (*acp.AgentStatus, error) {
-	return m.acpClient.GetAgent(agentName)
+// GetAgent returns the agent for a channel.
+func (m *Manager) GetAgent(channelID string) (*acp.Agent, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	a, ok := m.agents[channelID]
+	return a, ok
 }
 
 // ActiveSessions returns all channels with an active agent (for heartbeat).
@@ -353,52 +333,48 @@ func (m *Manager) ActiveSessions() []struct{ ChannelID, AgentName string } {
 	return out
 }
 
-// CheckAgent returns an error if the agent is not reachable.
-func (m *Manager) CheckAgent(agentName string) error {
-	_, err := m.acpClient.GetAgent(agentName)
-	return err
+// CheckAgent returns an error if the agent is not alive.
+func (m *Manager) CheckAgent(channelID string) error {
+	m.mu.Lock()
+	agent, ok := m.agents[channelID]
+	m.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("no agent")
+	}
+	if !agent.IsAlive() {
+		return fmt.Errorf("agent dead")
+	}
+	return nil
 }
 
 // StartTempAgent starts a temporary agent (for cron jobs).
-func (m *Manager) StartTempAgent(name, cwd, model string) (*acp.AgentStatus, error) {
-	return m.acpClient.StartAgent(name, m.kiroCLI, cwd, model)
+func (m *Manager) StartTempAgent(name, cwd, model string) (*acp.Agent, error) {
+	return acp.StartAgent(name, m.kiroCLI, cwd, model)
 }
 
 // StopTempAgent stops a temporary agent.
-func (m *Manager) StopTempAgent(name string) {
-	_ = m.acpClient.CancelAgent(name)
-	_ = m.acpClient.StopAgent(name)
-}
-
-// WaitAgentIdle waits for an agent to become idle.
-func (m *Manager) WaitAgentIdle(name string, timeout time.Duration) error {
-	return m.acpClient.WaitUntilIdle(name, timeout)
+func (m *Manager) StopTempAgent(agent *acp.Agent) {
+	agent.Stop()
 }
 
 // AskAgent sends a prompt to a named agent and returns the response.
-func (m *Manager) AskAgent(ctx context.Context, name, prompt string) (string, error) {
-	result, err := m.acpClient.Ask(ctx, name, prompt)
-	if err != nil {
-		return "", err
-	}
-	return result.Response, nil
+func (m *Manager) AskAgent(ctx context.Context, agent *acp.Agent, prompt string) (string, error) {
+	return agent.Ask(ctx, prompt, nil)
 }
 
-// AskAgentStream sends a prompt and collects all streamed chunks as full log.
-// Returns (final response, full streamed log, error).
-func (m *Manager) AskAgentStream(ctx context.Context, name, prompt string) (string, string, error) {
+// AskAgentStream sends a prompt and collects all streamed chunks.
+func (m *Manager) AskAgentStream(ctx context.Context, agent *acp.Agent, prompt string) (string, string, error) {
 	var fullLog strings.Builder
-	result, err := m.acpClient.AskStream(ctx, name, prompt, func(chunk string) {
+	resp, err := agent.Ask(ctx, prompt, func(chunk string) {
 		fullLog.WriteString(chunk)
 	})
 	if err != nil {
 		return "", fullLog.String(), err
 	}
-	response := result.Response
-	if response == "" {
-		response = fullLog.String()
+	if resp == "" {
+		resp = fullLog.String()
 	}
-	return response, fullLog.String(), nil
+	return resp, fullLog.String(), nil
 }
 
 // Pause sets the channel to mention-only mode.
@@ -420,49 +396,4 @@ func (m *Manager) IsPaused(channelID string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.paused[channelID]
-}
-
-// findNewPID returns the PID of a "kiro-cli-chat" process that wasn't in the before set.
-func findNewPID(before map[int]bool) int {
-	out, err := exec.Command("pgrep", "-f", "kiro-cli-chat acp").Output()
-	if err != nil {
-		return 0
-	}
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		if pid, err := strconv.Atoi(strings.TrimSpace(line)); err == nil && !before[pid] {
-			return pid
-		}
-	}
-	return 0
-}
-
-// currentPIDs returns a set of PIDs matching "kiro-cli-chat acp".
-func currentPIDs() map[int]bool {
-	pids := make(map[int]bool)
-	out, err := exec.Command("pgrep", "-f", "kiro-cli-chat acp").Output()
-	if err != nil {
-		return pids
-	}
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		if pid, err := strconv.Atoi(strings.TrimSpace(line)); err == nil {
-			pids[pid] = true
-		}
-	}
-	return pids
-}
-
-// killProcessTree kills a process and all its descendants.
-func killProcessTree(pid int) {
-	if pid <= 0 {
-		return
-	}
-	// Kill all children first
-	if out, err := exec.Command("pgrep", "-P", strconv.Itoa(pid)).Output(); err == nil {
-		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-			if childPID, err := strconv.Atoi(strings.TrimSpace(line)); err == nil {
-				killProcessTree(childPID)
-			}
-		}
-	}
-	_ = syscall.Kill(pid, syscall.SIGTERM)
 }

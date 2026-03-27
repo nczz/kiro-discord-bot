@@ -2,7 +2,6 @@ package bot
 
 import "github.com/nczz/kiro-discord-bot/heartbeat"
 
-// healthAdapter bridges Manager + Discord session to heartbeat.HealthDeps.
 type healthAdapter struct {
 	bot *Bot
 }
@@ -16,8 +15,8 @@ func (a *healthAdapter) ActiveSessions() []heartbeat.SessionInfo {
 	return out
 }
 
-func (a *healthAdapter) CheckAgent(agentName string) error {
-	return a.bot.manager.CheckAgent(agentName)
+func (a *healthAdapter) CheckAgent(channelID string) error {
+	return a.bot.manager.CheckAgent(channelID)
 }
 
 func (a *healthAdapter) RestartAgent(channelID string) error {

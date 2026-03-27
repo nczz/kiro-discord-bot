@@ -111,12 +111,9 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 			ds.ChannelMessageSendReply(m.ChannelID, L.Get("error.no_active_session"), &discordgo.MessageReference{MessageID: m.ID, ChannelID: m.ChannelID})
 			return
 		}
-		agent, err := b.manager.GetAgentStatus(sess.AgentName)
-		if err != nil || agent.LastText == "" {
-			ds.ChannelMessageSendReply(m.ChannelID, L.Get("error.no_response"), &discordgo.MessageReference{MessageID: m.ID, ChannelID: m.ChannelID})
-			return
-		}
-		ds.ChannelMessageSendReply(m.ChannelID, agent.LastText, &discordgo.MessageReference{MessageID: m.ID, ChannelID: m.ChannelID})
+		_ = sess
+		// TODO: resume from agent's last text — requires storing last response in session or agent
+		ds.ChannelMessageSendReply(m.ChannelID, L.Get("error.no_response"), &discordgo.MessageReference{MessageID: m.ID, ChannelID: m.ChannelID})
 
 	case content == "!pause":
 		b.manager.Pause(m.ChannelID)

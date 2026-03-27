@@ -1,6 +1,6 @@
 # kiro-discord-bot
 
-Turn any Discord channel into an AI-powered workspace. This bot connects Discord to [kiro-cli](https://kiro.dev) AI agents via [acp-bridge](https://www.npmjs.com/package/acp-bridge), giving your team on-demand access to coding assistants, DevOps automation, scheduled tasks, and more — all from the chat interface you already use.
+Turn any Discord channel into an AI-powered workspace. This bot connects Discord to [kiro-cli](https://kiro.dev) AI agents directly via the Agent Client Protocol (ACP) over stdio, giving your team on-demand access to coding assistants, DevOps automation, scheduled tasks, and more — all from the chat interface you already use.
 
 **What you can do:**
 - 💬 Chat with AI agents per channel — each channel gets its own isolated session and project context
@@ -20,7 +20,6 @@ Turn any Discord channel into an AI-powered workspace. This bot connects Discord
 ### Prerequisites
 
 - Go 1.21+
-- Node.js 20+ (for acp-bridge)
 - [kiro-cli](https://cli.kiro.dev/install) installed and logged in
 - A Discord bot token with the following:
   - Scopes: `bot`, `applications.commands`
@@ -43,16 +42,7 @@ Turn any Discord channel into an AI-powered workspace. This bot connects Discord
 
 ---
 
-### 2. Install acp-bridge
-
-```bash
-npm install -g acp-bridge
-acp-bridged --version
-```
-
----
-
-### 3. Install kiro-cli and Log In
+### 2. Install kiro-cli and Log In
 
 ```bash
 curl -fsSL https://cli.kiro.dev/install | bash
@@ -62,7 +52,7 @@ kiro-cli login
 
 ---
 
-### 4. Clone and Configure
+### 3. Clone and Configure
 
 ```bash
 git clone https://github.com/nczz/kiro-discord-bot.git
@@ -76,7 +66,6 @@ Edit `.env`:
 ```env
 DISCORD_TOKEN=your-bot-token
 DISCORD_GUILD_ID=your-guild-id
-ACP_BRIDGE_URL=http://localhost:7800
 KIRO_CLI_PATH=/home/user/.local/bin/kiro-cli
 DEFAULT_CWD=/projects
 DATA_DIR=/tmp/kiro-bot-data
@@ -92,7 +81,6 @@ CRON_TIMEZONE=Asia/Taipei
 |----------|-------------|---------|
 | `DISCORD_TOKEN` | Discord bot token | required |
 | `DISCORD_GUILD_ID` | Guild ID for instant slash command registration | required |
-| `ACP_BRIDGE_URL` | acp-bridge daemon URL | `http://localhost:7800` |
 | `KIRO_CLI_PATH` | Full path to kiro-cli binary | `kiro-cli` |
 | `DEFAULT_CWD` | Default working directory for agents | `/projects` |
 | `DATA_DIR` | Directory for sessions, logs, and attachments | `./data` |
@@ -115,13 +103,12 @@ chmod +x start.sh
 
 The script:
 - Skips restart if bot is already running
-- Starts acp-bridge with auto-restart watchdog
 - Builds and starts the bot with auto-restart watchdog
 - Reads all config from `.env`
 
 To force restart:
 ```bash
-pkill -f kiro-discord-bot && pkill -f acp-bridged
+pkill -f kiro-discord-bot
 ./start.sh
 ```
 
@@ -211,15 +198,9 @@ Discord Bot (Go)
                 │
                 ▼
           Temp Agent (per job)     isolated context, auto-cleanup
-          │
-          ▼
-    AcpClient (HTTP)
-          │
-          ▼
-acp-bridge daemon :7800
-          │
-          ▼
-kiro-cli acp --trust-all-tools   (one process per channel)
+                │
+                ▼
+kiro-cli acp --trust-all-tools   (one process per channel, stdio JSON-RPC)
           │
           ▼
     AWS Bedrock / Anthropic
@@ -254,8 +235,9 @@ kiro-discord-bot/
 │   ├── cron_store.go     cron job persistence (JSON)
 │   └── schedule.go       natural language → cron/time parser
 ├── acp/
-│   ├── client.go         acp-bridge HTTP client + SSE stream parser
-│   └── sse.go
+│   ├── agent.go          ACP agent process management (spawn, handshake, ask, stop)
+│   ├── jsonrpc.go        JSON-RPC 2.0 ndjson transport
+│   └── protocol.go       ACP protocol constants and types
 ├── cmd/
 │   └── mcp-discord/
 │       └── main.go       Discord MCP server (optional)
@@ -350,7 +332,7 @@ The agent will read the guide, build the binary, update `mcp.json`, and prompt y
 ### 前置需求
 
 - Go 1.21+
-- Node.js 20+（用於 acp-bridge）
+- Go 1.21+
 - 已安裝並登入 [kiro-cli](https://cli.kiro.dev/install)
 - Discord bot token，需具備：
   - Scopes：`bot`、`applications.commands`
@@ -362,18 +344,15 @@ The agent will read the guide, build the binary, update `mcp.json`, and prompt y
 ### 快速開始
 
 ```bash
-# 1. 安裝 acp-bridge
-npm install -g acp-bridge
-
-# 2. 安裝並登入 kiro-cli
+# 1. 安裝並登入 kiro-cli
 curl -fsSL https://cli.kiro.dev/install | bash
 kiro-cli login
 
-# 3. 設定環境變數
+# 2. 設定環境變數
 cp .env.example .env
 # 編輯 .env，填入 DISCORD_TOKEN、DISCORD_GUILD_ID、KIRO_CLI_PATH 等
 
-# 4. 啟動
+# 3. 啟動
 chmod +x start.sh && ./start.sh
 ```
 
