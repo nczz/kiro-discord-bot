@@ -125,8 +125,10 @@ func (m *Manager) Status(channelID string) string {
 	}
 
 	state := "unknown"
+	kiroVersion := ""
 	if agent, ok := m.agents[channelID]; ok {
 		state = agent.State()
+		kiroVersion = agent.AgentVersion()
 		if !agent.IsAlive() {
 			state = "dead"
 		}
@@ -142,7 +144,11 @@ func (m *Manager) Status(channelID string) string {
 		sid = sid[:8]
 	}
 
-	return L.Getf("status.format", sess.AgentName, state, qLen, sid, modelDisplay(sess.Model))
+	if kiroVersion == "" {
+		kiroVersion = "n/a"
+	}
+
+	return L.Getf("status.format", sess.AgentName, state, qLen, sid, modelDisplay(sess.Model), kiroVersion)
 }
 
 // Cancel cancels the current running job for a channel.

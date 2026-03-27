@@ -25,7 +25,7 @@
   "model.current": "Current model: `%s`",
   "model.current_global": "Current model: `%s` (global default)",
   "model.current_default": "Current model: `default` (kiro default)",
-  "status.format": "Agent: `%s` | State: `%s` | Queue: %d | Session: `%s` | Model: `%s`",
+  "status.format": "Agent: `%s` | State: `%s` | Queue: %d | Session: `%s` | Model: `%s` | kiro: `%s`",
   "status.no_session": "No active session.",
   "status.queued": "⏳ Queued (position %d)",
   "reset.resetting": "⏳ Resetting...",
