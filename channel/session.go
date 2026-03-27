@@ -7,12 +7,11 @@ import (
 	"sync"
 )
 
-// Session holds the mapping between a Discord channel and an acp-bridge agent.
+// Session holds the mapping between a Discord channel and a kiro-cli agent.
 type Session struct {
 	AgentName string `json:"agentName"`
 	SessionID string `json:"sessionId"`
 	CWD       string `json:"cwd"`
-	AgentPID  int    `json:"agentPid,omitempty"`
 	Model     string `json:"model,omitempty"`
 }
 

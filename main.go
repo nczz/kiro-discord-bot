@@ -6,6 +6,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/nczz/kiro-discord-bot/acp"
 	"github.com/nczz/kiro-discord-bot/bot"
 	"github.com/nczz/kiro-discord-bot/locale"
 )
@@ -14,9 +15,15 @@ func main() {
 	cfg := loadConfig()
 	locale.Load(cfg.BotLocale)
 
+	// Preflight check
+	if os.Getenv("SKIP_PREFLIGHT") == "" {
+		if err := acp.PreflightCheck(cfg.KiroCLIPath); err != nil {
+			log.Fatalf("[preflight] FATAL: %v — kiro-cli may have updated its ACP protocol", err)
+		}
+	}
+
 	b, err := bot.NewFromConfig(bot.BotConfig{
 		DiscordToken:    cfg.DiscordToken,
-		AcpBridgeURL:    cfg.AcpBridgeURL,
 		KiroCLIPath:     cfg.KiroCLIPath,
 		DefaultCWD:      cfg.DefaultCWD,
 		DataDir:         cfg.DataDir,

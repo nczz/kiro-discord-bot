@@ -16,9 +16,9 @@ import (
 // Job represents a single user message to be processed.
 type Job struct {
 	ChannelID   string
-	MessageID   string // original user message ID (for reactions)
+	MessageID   string
 	Prompt      string
-	Session     *discordgo.Session // discord session for sending replies
+	Session     *discordgo.Session
 	UserID      string
 	Username    string
 	Attachments []string
@@ -27,24 +27,22 @@ type Job struct {
 // Worker manages a per-channel job queue and executes jobs sequentially.
 type Worker struct {
 	channelID       string
-	agentName       string
+	agent           *acp.Agent
 	queue           chan *Job
-	acpClient       *acp.Client
-	discord         *discordgo.Session
 	askTimeoutSec   int
 	streamUpdateSec int
 	stopCh          chan struct{}
-	once            sync.Once
+	stopped         sync.Once
+	started         sync.Once
 	logger          *ChatLogger
 	model           string
 }
 
-func NewWorker(channelID, agentName string, bufSize, askTimeoutSec, streamUpdateSec int, acpClient *acp.Client, logger *ChatLogger, model string) *Worker {
+func NewWorker(channelID string, agent *acp.Agent, bufSize, askTimeoutSec, streamUpdateSec int, logger *ChatLogger, model string) *Worker {
 	return &Worker{
 		channelID:       channelID,
-		agentName:       agentName,
+		agent:           agent,
 		queue:           make(chan *Job, bufSize),
-		acpClient:       acpClient,
 		askTimeoutSec:   askTimeoutSec,
 		streamUpdateSec: streamUpdateSec,
 		stopCh:          make(chan struct{}),
@@ -67,13 +65,15 @@ func (w *Worker) QueueLen() int {
 }
 
 func (w *Worker) Start() {
-	w.once.Do(func() {
+	w.started.Do(func() {
 		go w.run()
 	})
 }
 
 func (w *Worker) Stop() {
-	close(w.stopCh)
+	w.stopped.Do(func() {
+		close(w.stopCh)
+	})
 }
 
 func (w *Worker) run() {
@@ -90,7 +90,6 @@ func (w *Worker) run() {
 func (w *Worker) execute(job *Job) {
 	ds := job.Session
 
-	// Log user message
 	if w.logger != nil {
 		w.logger.Log(w.channelID, ChatEntry{
 			Role:        "user",
@@ -102,10 +101,8 @@ func (w *Worker) execute(job *Job) {
 		})
 	}
 
-	// ⏳ → 🔄
 	swapReaction(ds, job.ChannelID, job.MessageID, "⏳", "🔄")
 
-	// Send placeholder as reply to user message
 	replyMsg, err := ds.ChannelMessageSendReply(job.ChannelID, L.Get("worker.processing"), &discordgo.MessageReference{
 		MessageID: job.MessageID,
 		ChannelID: job.ChannelID,
@@ -127,7 +124,6 @@ func (w *Worker) execute(job *Job) {
 	onChunk := func(chunk string) {
 		mu.Lock()
 		accumulated += chunk
-		// Detect tool usage from chunk content
 		lower := strings.ToLower(chunk)
 		for _, kw := range []string{"running tool", "bash", "read_file", "write_file", "fs_read", "fs_write", "execute"} {
 			if strings.Contains(lower, kw) {
@@ -148,13 +144,12 @@ func (w *Worker) execute(job *Job) {
 		}
 	}
 
-	result, err := w.acpClient.AskStream(ctx, w.agentName, job.Prompt, onChunk)
+	response, err := w.agent.Ask(ctx, job.Prompt, onChunk)
 
 	if err != nil {
 		errMsg := err.Error()
 		if ctx.Err() == context.DeadlineExceeded {
 			errMsg = L.Getf("worker.timeout", w.askTimeoutSec)
-			_ = w.acpClient.CancelAgent(w.agentName)
 			swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "⚠️")
 		} else {
 			swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "❌")
@@ -170,8 +165,6 @@ func (w *Worker) execute(job *Job) {
 		return
 	}
 
-	// Final edit with complete response
-	response := result.Response
 	if response == "" {
 		mu.Lock()
 		response = accumulated
@@ -181,7 +174,6 @@ func (w *Worker) execute(job *Job) {
 	swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "✅")
 	sendLong(ds, job.ChannelID, replyMsg.ID, response)
 
-	// Log assistant response
 	if w.logger != nil {
 		w.logger.Log(w.channelID, ChatEntry{
 			Role:    "assistant",
@@ -191,7 +183,6 @@ func (w *Worker) execute(job *Job) {
 	}
 }
 
-// editMessage edits a Discord message, truncating to 2000 chars.
 func editMessage(ds *discordgo.Session, channelID, msgID, content string) {
 	if len(content) > 2000 {
 		content = content[:1997] + "..."
@@ -199,7 +190,6 @@ func editMessage(ds *discordgo.Session, channelID, msgID, content string) {
 	_, _ = ds.ChannelMessageEdit(channelID, msgID, content)
 }
 
-// sendLong edits the placeholder with the first chunk, then sends additional messages if needed.
 func sendLong(ds *discordgo.Session, channelID, placeholderID, content string) {
 	const limit = 1990
 	parts := splitMessage(content, limit)
@@ -223,7 +213,6 @@ func sendLong(ds *discordgo.Session, channelID, placeholderID, content string) {
 func splitMessage(s string, limit int) []string {
 	var parts []string
 	for len(s) > limit {
-		// Try to split at newline
 		idx := strings.LastIndex(s[:limit], "\n")
 		if idx < limit/2 {
 			idx = limit

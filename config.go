@@ -2,12 +2,12 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"os"
 )
 
 type Config struct {
 	DiscordToken    string
-	AcpBridgeURL    string
 	KiroCLIPath     string
 	DefaultCWD      string
 	AskTimeoutSec   int
@@ -25,7 +25,6 @@ type Config struct {
 func loadConfig() *Config {
 	return &Config{
 		DiscordToken:    mustEnv("DISCORD_TOKEN"),
-		AcpBridgeURL:    envOr("ACP_BRIDGE_URL", "http://localhost:7800"),
 		KiroCLIPath:     envOr("KIRO_CLI_PATH", "kiro-cli"),
 		DefaultCWD:      envOr("DEFAULT_CWD", "/projects"),
 		AskTimeoutSec:   envInt("ASK_TIMEOUT_SEC", 300),
@@ -44,7 +43,7 @@ func loadConfig() *Config {
 func mustEnv(key string) string {
 	v := os.Getenv(key)
 	if v == "" {
-		panic("missing required env: " + key)
+		log.Fatalf("missing required env: %s", key)
 	}
 	return v
 }

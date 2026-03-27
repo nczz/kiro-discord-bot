@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/nczz/kiro-discord-bot/acp"
 	"github.com/robfig/cron/v3"
 
 	L "github.com/nczz/kiro-discord-bot/locale"
@@ -29,9 +30,9 @@ type CronHistory struct {
 
 // CronDeps abstracts dependencies for the cron task.
 type CronDeps interface {
-	StartTempAgent(name, cwd, model string) error
-	StopTempAgent(name string)
-	AskAgentStream(ctx context.Context, name, prompt string) (response string, fullLog string, err error)
+	StartTempAgent(name, cwd, model string) (*acp.Agent, error)
+	StopTempAgent(agent *acp.Agent)
+	AskAgentStream(ctx context.Context, agent *acp.Agent, prompt string) (response string, fullLog string, err error)
 	Notify(channelID, msg string)
 }
 
@@ -149,7 +150,8 @@ func (c *CronTask) execute(job *CronJob, now time.Time) {
 	if cwd == "" {
 		cwd = "/tmp"
 	}
-	if err := c.deps.StartTempAgent(agentName, cwd, job.Model); err != nil {
+	agent, err := c.deps.StartTempAgent(agentName, cwd, job.Model)
+	if err != nil {
 		log.Printf("[cron] start agent for %s failed: %v", job.ID, err)
 		c.deps.Notify(job.ChannelID, L.Getf("cron.exec.start_failed", label, job.Name, err.Error()))
 		c.saveHistory(job.ID, CronHistory{
@@ -159,13 +161,13 @@ func (c *CronTask) execute(job *CronJob, now time.Time) {
 		c.finishJob(job, now)
 		return
 	}
-	defer c.deps.StopTempAgent(agentName)
+	defer c.deps.StopTempAgent(agent)
 
 	// Ask
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	response, fullLog, err := c.deps.AskAgentStream(ctx, agentName, prompt)
+	response, fullLog, err := c.deps.AskAgentStream(ctx, agent, prompt)
 	duration := int(time.Since(start).Seconds())
 	status := "ok"
 
