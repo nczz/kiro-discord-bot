@@ -7,88 +7,46 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jsuar/go-cron-descriptor/pkg/crondescriptor"
+	"github.com/robfig/cron/v3"
+
 	L "github.com/nczz/kiro-discord-bot/locale"
 )
 
-// ParseSchedule converts natural language or raw cron expression to a cron expression.
-// Supported patterns:
-//   - "每天 09:00"         → "0 9 * * *"
-//   - "每天 09:00 18:00"   → "0 9,18 * * *"
-//   - "每小時"             → "0 * * * *"
-//   - "每 30 分鐘"         → "*/30 * * * *"
-//   - "每 N 小時"          → "0 */N * * *"
-//   - "每週一 10:00"       → "0 10 * * 1"
-//   - "0 9 * * *"          → "0 9 * * *" (passthrough)
+var cronFieldRe = regexp.MustCompile(`^[0-9*/,-]+\s+[0-9*/,-]+\s+[0-9*/,-]+\s+[0-9*/,-]+\s+[0-9*/,-]+$`)
+
+// ParseSchedule validates a cron expression (5 fields). Returns the expression or error.
 func ParseSchedule(input string) (string, error) {
 	s := strings.TrimSpace(input)
 	if s == "" {
 		return "", fmt.Errorf("empty schedule")
 	}
-
-	// Raw cron expression (5 fields)
-	if matched, _ := regexp.MatchString(`^[0-9*/,-]+\s+[0-9*/,-]+\s+[0-9*/,-]+\s+[0-9*/,-]+\s+[0-9*/,-]+$`, s); matched {
-		return s, nil
+	if !cronFieldRe.MatchString(s) {
+		return "", fmt.Errorf("%s", L.Get("error.not_cron_format"))
 	}
-
-	// 每 N 分鐘 / every N minutes
-	if m := regexp.MustCompile(`(?:每|every)\s*(\d+)\s*(?:分鐘|分|min)`).FindStringSubmatch(s); m != nil {
-		return fmt.Sprintf("*/%s * * * *", m[1]), nil
+	// Validate with cron parser
+	parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
+	if _, err := parser.Parse(s); err != nil {
+		return "", fmt.Errorf("%s", L.Getf("error.invalid_cron", err.Error()))
 	}
-
-	// 每小時 / every hour
-	if regexp.MustCompile(`(?:每小時|every\s*hour)`).MatchString(s) {
-		return "0 * * * *", nil
-	}
-
-	// 每 N 小時 / every N hours
-	if m := regexp.MustCompile(`(?:每|every)\s*(\d+)\s*(?:小時|hour)`).FindStringSubmatch(s); m != nil {
-		return fmt.Sprintf("0 */%s * * *", m[1]), nil
-	}
-
-	// 每週X HH:MM
-	weekdays := map[string]string{
-		"日": "0", "一": "1", "二": "2", "三": "3", "四": "4", "五": "5", "六": "6",
-		"天": "0", "mon": "1", "tue": "2", "wed": "3", "thu": "4", "fri": "5", "sat": "6", "sun": "0",
-	}
-	weekRe := regexp.MustCompile(`(?:每週|every\s*)([日一二三四五六天]|mon|tue|wed|thu|fri|sat|sun)\s+(\d{1,2}):(\d{2})`)
-	if m := weekRe.FindStringSubmatch(strings.ToLower(s)); m != nil {
-		dow, ok := weekdays[m[1]]
-		if !ok {
-			return "", fmt.Errorf("unknown weekday: %s", m[1])
-		}
-		return fmt.Sprintf("%s %s * * %s", m[3], m[2], dow), nil
-	}
-
-	// 每天 HH:MM [HH:MM ...] / every day
-	dayRe := regexp.MustCompile(`(?:每天|every\s*day)\s+(.+)`)
-	if m := dayRe.FindStringSubmatch(s); m != nil {
-		timeRe := regexp.MustCompile(`(\d{1,2}):(\d{2})`)
-		times := timeRe.FindAllStringSubmatch(m[1], -1)
-		if len(times) == 0 {
-			return "", fmt.Errorf("no time found in: %s", s)
-		}
-		var hours, mins []string
-		allSameMin := true
-		firstMin := times[0][2]
-		for _, t := range times {
-			hours = append(hours, t[1])
-			mins = append(mins, t[2])
-			if t[2] != firstMin {
-				allSameMin = false
-			}
-		}
-		if allSameMin {
-			return fmt.Sprintf("%s %s * * *", firstMin, strings.Join(hours, ",")), nil
-		}
-		// Different minutes — use first time only
-		return fmt.Sprintf("%s %s * * *", times[0][2], times[0][1]), nil
-	}
-
-	return "", fmt.Errorf("%s", L.Getf("error.parse_schedule_internal", s))
+	return s, nil
 }
 
-// ParseTime converts natural language time to an absolute time.Time.
-// Supported: "下午五點", "17:00", "30 分鐘後", "2 小時後", "明天 09:00", "明天下午三點"
+// DescribeSchedule returns a human-readable description of a cron expression.
+func DescribeSchedule(cronExpr string) string {
+	cd, err := crondescriptor.NewCronDescriptor(cronExpr)
+	if err != nil {
+		return cronExpr
+	}
+	desc, err := cd.GetDescription(crondescriptor.Full)
+	if err != nil || desc == nil {
+		return cronExpr
+	}
+	return *desc
+}
+
+// ParseTime converts relative duration or HH:MM to absolute time.
+// Supported: "+30m", "+2h", "HH:MM", "明天 HH:MM", "tomorrow HH:MM"
 func ParseTime(input string, loc *time.Location) (time.Time, error) {
 	s := strings.TrimSpace(input)
 	if s == "" {
@@ -96,54 +54,39 @@ func ParseTime(input string, loc *time.Location) (time.Time, error) {
 	}
 	now := time.Now().In(loc)
 
-	// N 分鐘後 / N min later
-	if m := regexp.MustCompile(`(\d+)\s*(?:分鐘|分|min)(?:後|later)?`).FindStringSubmatch(s); m != nil {
+	// +Nm / +Nh duration format
+	if m := regexp.MustCompile(`^\+(\d+)\s*([mh])$`).FindStringSubmatch(s); m != nil {
 		n, _ := strconv.Atoi(m[1])
+		if m[2] == "h" {
+			return now.Add(time.Duration(n) * time.Hour), nil
+		}
 		return now.Add(time.Duration(n) * time.Minute), nil
 	}
 
-	// N 小時後 / N hour later
-	if m := regexp.MustCompile(`(\d+)\s*(?:小時|hour)(?:後|later)?`).FindStringSubmatch(s); m != nil {
+	// N分鐘後 / N小時後
+	if m := regexp.MustCompile(`^(\d+)\s*(?:分鐘|分|min)(?:後|later)?$`).FindStringSubmatch(s); m != nil {
+		n, _ := strconv.Atoi(m[1])
+		return now.Add(time.Duration(n) * time.Minute), nil
+	}
+	if m := regexp.MustCompile(`^(\d+)\s*(?:小時|hour|hr)(?:後|later)?$`).FindStringSubmatch(s); m != nil {
 		n, _ := strconv.Atoi(m[1])
 		return now.Add(time.Duration(n) * time.Hour), nil
 	}
 
-	// Chinese AM/PM hour: 下午五點, 上午十點, 下午3點
-	cnNums := map[string]int{
-		"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6,
-		"七": 7, "八": 8, "九": 9, "十": 10, "十一": 11, "十二": 12,
-	}
+	// [明天|tomorrow] HH:MM
 	tomorrow := false
 	work := s
 	if strings.HasPrefix(work, "明天") {
 		tomorrow = true
-		work = strings.TrimPrefix(work, "明天")
+		work = strings.TrimSpace(strings.TrimPrefix(work, "明天"))
+	} else if strings.HasPrefix(strings.ToLower(work), "tomorrow") {
+		tomorrow = true
+		work = strings.TrimSpace(strings.TrimPrefix(strings.ToLower(work), "tomorrow"))
 	}
 
-	// 下午X點 / 上午X點
-	cnTimeRe := regexp.MustCompile(`(上午|下午|早上|晚上)?(\d+|[一二三四五六七八九十]+)(?:點|:)(\d{2})?`)
-	if m := cnTimeRe.FindStringSubmatch(work); m != nil {
-		period := m[1]
-		hourStr := m[2]
-		minStr := m[3]
-
-		hour := 0
-		if h, ok := cnNums[hourStr]; ok {
-			hour = h
-		} else {
-			hour, _ = strconv.Atoi(hourStr)
-		}
-		min := 0
-		if minStr != "" {
-			min, _ = strconv.Atoi(minStr)
-		}
-
-		if period == "下午" || period == "晚上" {
-			if hour < 12 {
-				hour += 12
-			}
-		}
-
+	if m := regexp.MustCompile(`^(\d{1,2}):(\d{2})$`).FindStringSubmatch(work); m != nil {
+		hour, _ := strconv.Atoi(m[1])
+		min, _ := strconv.Atoi(m[2])
 		target := time.Date(now.Year(), now.Month(), now.Day(), hour, min, 0, 0, loc)
 		if tomorrow {
 			target = target.AddDate(0, 0, 1)
@@ -153,18 +96,5 @@ func ParseTime(input string, loc *time.Location) (time.Time, error) {
 		return target, nil
 	}
 
-	// HH:MM format
-	if m := regexp.MustCompile(`^(?:明天\s*)?(\d{1,2}):(\d{2})$`).FindStringSubmatch(s); m != nil {
-		hour, _ := strconv.Atoi(m[1])
-		min, _ := strconv.Atoi(m[2])
-		target := time.Date(now.Year(), now.Month(), now.Day(), hour, min, 0, 0, loc)
-		if strings.HasPrefix(s, "明天") {
-			target = target.AddDate(0, 0, 1)
-		} else if target.Before(now) {
-			target = target.AddDate(0, 0, 1)
-		}
-		return target, nil
-	}
-
-	return time.Time{}, fmt.Errorf("%s", L.Getf("error.parse_time_internal", s))
+	return time.Time{}, fmt.Errorf("%s", L.Get("error.parse_time_help"))
 }

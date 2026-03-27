@@ -133,7 +133,7 @@ func (b *Bot) handleCronModalSubmit(ds *discordgo.Session, i *discordgo.Interact
 	}
 
 	respondInteraction(ds, i, L.Getf("cron.created",
-		name, scheduleInput, cronExpr, prompt))
+		name, cronExpr, heartbeat.DescribeSchedule(cronExpr), prompt))
 }
 
 // handleCronEditSubmit processes the edit modal form submission.
@@ -180,7 +180,7 @@ func (b *Bot) handleCronEditSubmit(ds *discordgo.Session, i *discordgo.Interacti
 	}
 
 	respondInteraction(ds, i, L.Getf("cron.updated",
-		job.Name, scheduleInput, cronExpr, job.Prompt))
+		job.Name, cronExpr, heartbeat.DescribeSchedule(cronExpr), job.Prompt))
 }
 
 // handleCronList responds to /cron-list with a list of jobs and action buttons.
@@ -217,8 +217,9 @@ func (b *Bot) handleCronList(ds *discordgo.Session, i *discordgo.InteractionCrea
 			}
 		}
 
+		schedDesc := "`" + job.Schedule + "` " + heartbeat.DescribeSchedule(job.Schedule)
 		content := L.Getf("cron.list.item",
-			status, job.Name, job.ScheduleHuman, lastRun, nextRun, truncate(job.Prompt, 100))
+			status, job.Name, schedDesc, lastRun, nextRun, truncate(job.Prompt, 100))
 
 		// Build buttons
 		var buttons []discordgo.MessageComponent
