@@ -31,6 +31,13 @@ type Agent struct {
 
 // StartAgent spawns kiro-cli acp and performs the ACP handshake (initialize + session/new).
 func StartAgent(name, kiroCLI, cwd, model string) (*Agent, error) {
+	if _, err := os.Stat(kiroCLI); err != nil {
+		return nil, fmt.Errorf("kiro-cli binary not found: %s", kiroCLI)
+	}
+	if _, err := os.Stat(cwd); err != nil {
+		return nil, fmt.Errorf("working directory not found: %s", cwd)
+	}
+
 	args := []string{"acp", "--trust-all-tools"}
 	if model != "" {
 		args = append(args, "--model", model)
