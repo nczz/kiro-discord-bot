@@ -91,5 +91,8 @@
   "error.parse_time_internal": "無法解析時間: %s",
   "cron.list.last_run_none": "無",
   "cron.list.next_run_pending": "計算中",
-  "cron.list.item": "%s **%s**\n頻率：%s | 上次：%s | 下次：%s\nPrompt：%s"
+  "cron.list.item": "%s **%s**\n頻率：%s | 上次：%s | 下次：%s\nPrompt：%s",
+  "cron.modal.title_edit": "編輯排程任務",
+  "cron.btn.edit": "✏️ 編輯",
+  "cron.updated": "✅ 任務已更新\n名稱：**%s**\n頻率：%s (`%s`)\nPrompt：%s"
 }

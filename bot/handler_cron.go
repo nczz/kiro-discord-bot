@@ -136,6 +136,53 @@ func (b *Bot) handleCronModalSubmit(ds *discordgo.Session, i *discordgo.Interact
 		name, scheduleInput, cronExpr, prompt))
 }
 
+// handleCronEditSubmit processes the edit modal form submission.
+func (b *Bot) handleCronEditSubmit(ds *discordgo.Session, i *discordgo.InteractionCreate, jobID string) {
+	job, ok := b.cronStore.Get(jobID)
+	if !ok {
+		respondInteraction(ds, i, L.Get("cron.not_found"))
+		return
+	}
+
+	data := i.ModalSubmitData()
+	fields := map[string]string{}
+	for _, row := range data.Components {
+		ar, ok := row.(*discordgo.ActionsRow)
+		if !ok {
+			continue
+		}
+		for _, comp := range ar.Components {
+			ti, ok := comp.(*discordgo.TextInput)
+			if !ok {
+				continue
+			}
+			fields[ti.CustomID] = ti.Value
+		}
+	}
+
+	scheduleInput := fields["cron_schedule"]
+	cronExpr, err := heartbeat.ParseSchedule(scheduleInput)
+	if err != nil {
+		respondInteraction(ds, i, L.Getf("error.parse_schedule", err.Error()))
+		return
+	}
+
+	job.Name = fields["cron_name"]
+	job.Schedule = cronExpr
+	job.ScheduleHuman = scheduleInput
+	job.Prompt = fields["cron_prompt"]
+	job.CWD = fields["cron_cwd"]
+	job.Model = fields["cron_model"]
+
+	if err := b.cronStore.Update(job); err != nil {
+		respondInteraction(ds, i, L.Getf("error.save_failed", err.Error()))
+		return
+	}
+
+	respondInteraction(ds, i, L.Getf("cron.updated",
+		job.Name, scheduleInput, cronExpr, job.Prompt))
+}
+
 // handleCronList responds to /cron-list with a list of jobs and action buttons.
 func (b *Bot) handleCronList(ds *discordgo.Session, i *discordgo.InteractionCreate) {
 	_ = ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
@@ -195,6 +242,11 @@ func (b *Bot) handleCronList(ds *discordgo.Session, i *discordgo.InteractionCrea
 				CustomID: "cron_run_" + job.ID,
 			},
 			discordgo.Button{
+				Label:    L.Get("cron.btn.edit"),
+				Style:    discordgo.SecondaryButton,
+				CustomID: "cron_edit_" + job.ID,
+			},
+			discordgo.Button{
 				Label:    L.Get("cron.btn.delete"),
 				Style:    discordgo.DangerButton,
 				CustomID: "cron_delete_" + job.ID,
@@ -216,7 +268,7 @@ func (b *Bot) handleCronButton(ds *discordgo.Session, i *discordgo.InteractionCr
 
 	// Parse action and job ID
 	var action, jobID string
-	for _, prefix := range []string{"cron_pause_", "cron_resume_", "cron_run_", "cron_delete_"} {
+	for _, prefix := range []string{"cron_pause_", "cron_resume_", "cron_run_", "cron_edit_", "cron_delete_"} {
 		if strings.HasPrefix(customID, prefix) {
 			action = strings.TrimSuffix(strings.TrimPrefix(prefix, "cron_"), "_")
 			jobID = strings.TrimPrefix(customID, prefix)
@@ -250,6 +302,66 @@ func (b *Bot) handleCronButton(ds *discordgo.Session, i *discordgo.InteractionCr
 	case "delete":
 		_ = b.cronStore.Remove(jobID)
 		respondInteraction(ds, i, L.Getf("cron.deleted", job.Name))
+	case "edit":
+		_ = ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseModal,
+			Data: &discordgo.InteractionResponseData{
+				CustomID: "cron_edit_modal_" + jobID,
+				Title:    L.Get("cron.modal.title_edit"),
+				Components: []discordgo.MessageComponent{
+					discordgo.ActionsRow{Components: []discordgo.MessageComponent{
+						discordgo.TextInput{
+							CustomID:  "cron_name",
+							Label:     L.Get("cron.modal.name"),
+							Style:     discordgo.TextInputShort,
+							Value:     job.Name,
+							Required:  true,
+							MaxLength: 100,
+						},
+					}},
+					discordgo.ActionsRow{Components: []discordgo.MessageComponent{
+						discordgo.TextInput{
+							CustomID:  "cron_schedule",
+							Label:     L.Get("cron.modal.schedule"),
+							Style:     discordgo.TextInputShort,
+							Value:     job.ScheduleHuman,
+							Required:  true,
+							MaxLength: 100,
+						},
+					}},
+					discordgo.ActionsRow{Components: []discordgo.MessageComponent{
+						discordgo.TextInput{
+							CustomID:  "cron_prompt",
+							Label:     L.Get("cron.modal.prompt"),
+							Style:     discordgo.TextInputParagraph,
+							Value:     job.Prompt,
+							Required:  true,
+							MaxLength: 2000,
+						},
+					}},
+					discordgo.ActionsRow{Components: []discordgo.MessageComponent{
+						discordgo.TextInput{
+							CustomID:  "cron_cwd",
+							Label:     L.Get("cron.modal.cwd"),
+							Style:     discordgo.TextInputShort,
+							Value:     job.CWD,
+							Required:  false,
+							MaxLength: 200,
+						},
+					}},
+					discordgo.ActionsRow{Components: []discordgo.MessageComponent{
+						discordgo.TextInput{
+							CustomID:  "cron_model",
+							Label:     L.Get("cron.modal.model"),
+							Style:     discordgo.TextInputShort,
+							Value:     job.Model,
+							Required:  false,
+							MaxLength: 100,
+						},
+					}},
+				},
+			},
+		})
 	}
 }
 

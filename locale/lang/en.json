@@ -98,5 +98,8 @@
   "error.parse_time_internal": "cannot parse time: %s",
   "cron.list.last_run_none": "N/A",
   "cron.list.next_run_pending": "pending",
-  "cron.list.item": "%s **%s**\nSchedule: %s | Last: %s | Next: %s\nPrompt: %s"
+  "cron.list.item": "%s **%s**\nSchedule: %s | Last: %s | Next: %s\nPrompt: %s",
+  "cron.modal.title_edit": "Edit Scheduled Task",
+  "cron.btn.edit": "✏️ Edit",
+  "cron.updated": "✅ Task updated\nName: **%s**\nFrequency: %s (`%s`)\nPrompt: %s"
 }

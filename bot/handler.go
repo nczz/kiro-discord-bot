@@ -269,8 +269,11 @@ func (b *Bot) handleInteraction(ds *discordgo.Session, i *discordgo.InteractionC
 	case discordgo.InteractionApplicationCommand:
 		b.handleSlashCommand(ds, i)
 	case discordgo.InteractionModalSubmit:
-		if i.ModalSubmitData().CustomID == "cron_add_modal" {
+		customID := i.ModalSubmitData().CustomID
+		if customID == "cron_add_modal" {
 			b.handleCronModalSubmit(ds, i)
+		} else if strings.HasPrefix(customID, "cron_edit_modal_") {
+			b.handleCronEditSubmit(ds, i, strings.TrimPrefix(customID, "cron_edit_modal_"))
 		}
 	case discordgo.InteractionMessageComponent:
 		customID := i.MessageComponentData().CustomID
