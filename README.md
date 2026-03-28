@@ -69,8 +69,9 @@ DISCORD_GUILD_ID=your-guild-id
 KIRO_CLI_PATH=/home/user/.local/bin/kiro-cli
 DEFAULT_CWD=/projects
 DATA_DIR=/tmp/kiro-bot-data
-ASK_TIMEOUT_SEC=300
+ASK_TIMEOUT_SEC=3600
 STREAM_UPDATE_SEC=3
+THREAD_AUTO_ARCHIVE=1440
 KIRO_MODEL=
 HEARTBEAT_SEC=60
 ATTACHMENT_RETAIN_DAYS=7
@@ -84,8 +85,9 @@ CRON_TIMEZONE=Asia/Taipei
 | `KIRO_CLI_PATH` | Full path to kiro-cli binary | `kiro-cli` |
 | `DEFAULT_CWD` | Default working directory for agents | `/projects` |
 | `DATA_DIR` | Directory for sessions, logs, and attachments | `./data` |
-| `ASK_TIMEOUT_SEC` | Agent response timeout in seconds | `300` |
+| `ASK_TIMEOUT_SEC` | Agent response timeout (safety net) in seconds | `3600` |
 | `STREAM_UPDATE_SEC` | Discord message update interval during streaming | `3` |
+| `THREAD_AUTO_ARCHIVE` | Thread auto-archive duration in minutes (60/1440/4320/10080) | `1440` |
 | `KIRO_MODEL` | Default model ID for kiro-cli (empty = kiro default) | `` |
 | `HEARTBEAT_SEC` | Agent health check interval in seconds | `60` |
 | `ATTACHMENT_RETAIN_DAYS` | Auto-delete attachments older than N days (0 = keep forever) | `7` |
@@ -163,6 +165,8 @@ All commands also work with `!` prefix (e.g. `!status`, `!reset`).
 
 **Mention mode (after `/pause`):** Only `@BotName your message` triggers the agent.
 
+**Thread-based progress:** Each task automatically creates a Discord Thread from your message. Tool execution status and the final response are posted in the thread, keeping the main channel clean.
+
 ### Status Indicators
 
 | Reaction | Meaning |
@@ -189,7 +193,7 @@ Discord User
 Discord Bot (Go)
     ├── per-channel SessionStore   { agentName, sessionId, cwd }
     ├── per-channel JobQueue       buffered chan, FIFO
-    ├── per-channel Worker         goroutine, sequential execution
+    ├── per-channel Worker         goroutine, async thread-based execution
     ├── per-channel ChatLogger     JSONL conversation log
     └── Heartbeat                  background maintenance loop
           ├── HealthTask           agent liveness check + auto-restart
