@@ -2,12 +2,14 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -383,6 +385,328 @@ func main() {
 			}
 			abs, _ := filepath.Abs(dst)
 			return mcp.NewToolResultText(fmt.Sprintf("Saved %s (%d bytes)", abs, n)), nil
+		},
+	)
+
+	// 12. Edit message
+	s.AddTool(
+		mcp.NewTool("discord_edit_message",
+			mcp.WithDescription("Edit a message (bot's own message)"),
+			mcp.WithString("channel_id", mcp.Required(), mcp.Description("Channel ID")),
+			mcp.WithString("message_id", mcp.Required(), mcp.Description("Message ID to edit")),
+			mcp.WithString("content", mcp.Required(), mcp.Description("New message content")),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			if err := ensureDiscord(); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			chID, _ := req.RequireString("channel_id")
+			msgID, _ := req.RequireString("message_id")
+			content, _ := req.RequireString("content")
+			_, err := dg.ChannelMessageEdit(chID, msgID, content)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			return mcp.NewToolResultText(fmt.Sprintf("Edited message %s", msgID)), nil
+		},
+	)
+
+	// 13. Delete message
+	s.AddTool(
+		mcp.NewTool("discord_delete_message",
+			mcp.WithDescription("Delete a message"),
+			mcp.WithString("channel_id", mcp.Required(), mcp.Description("Channel ID")),
+			mcp.WithString("message_id", mcp.Required(), mcp.Description("Message ID to delete")),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			if err := ensureDiscord(); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			chID, _ := req.RequireString("channel_id")
+			msgID, _ := req.RequireString("message_id")
+			if err := dg.ChannelMessageDelete(chID, msgID); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			return mcp.NewToolResultText(fmt.Sprintf("Deleted message %s", msgID)), nil
+		},
+	)
+
+	// 14. Get message
+	s.AddTool(
+		mcp.NewTool("discord_get_message",
+			mcp.WithDescription("Get a single message by ID"),
+			mcp.WithString("channel_id", mcp.Required(), mcp.Description("Channel ID")),
+			mcp.WithString("message_id", mcp.Required(), mcp.Description("Message ID")),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			if err := ensureDiscord(); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			chID, _ := req.RequireString("channel_id")
+			msgID, _ := req.RequireString("message_id")
+			m, err := dg.ChannelMessage(chID, msgID)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			t := time.Time(m.Timestamp).Format(time.RFC3339)
+			var parts []string
+			parts = append(parts, fmt.Sprintf("id: %s\nauthor: %s (%s)\ntime: %s\ncontent: %s", m.ID, m.Author.Username, m.Author.ID, t, m.Content))
+			for _, a := range m.Attachments {
+				parts = append(parts, fmt.Sprintf("attachment: %s (%d bytes) %s", a.Filename, a.Size, a.URL))
+			}
+			for _, e := range m.Embeds {
+				parts = append(parts, fmt.Sprintf("embed: %s — %s", e.Title, e.Description))
+			}
+			return mcp.NewToolResultText(strings.Join(parts, "\n")), nil
+		},
+	)
+
+	// 15. Send embed
+	s.AddTool(
+		mcp.NewTool("discord_send_embed",
+			mcp.WithDescription("Send a rich embed message to a channel"),
+			mcp.WithString("channel_id", mcp.Required(), mcp.Description("Channel ID")),
+			mcp.WithString("title", mcp.Required(), mcp.Description("Embed title")),
+			mcp.WithString("description", mcp.Description("Embed description")),
+			mcp.WithString("color", mcp.Description("Hex color, e.g. #FF5733")),
+			mcp.WithString("footer", mcp.Description("Footer text")),
+			mcp.WithString("url", mcp.Description("Title URL")),
+			mcp.WithString("fields_json", mcp.Description(`JSON array of fields, e.g. [{"name":"k","value":"v","inline":true}]`)),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			if err := ensureDiscord(); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			chID, _ := req.RequireString("channel_id")
+			title, _ := req.RequireString("title")
+			embed := &discordgo.MessageEmbed{
+				Title:       title,
+				Description: req.GetString("description", ""),
+				URL:         req.GetString("url", ""),
+			}
+			if c := req.GetString("color", ""); c != "" {
+				c = strings.TrimPrefix(c, "#")
+				if v, err := strconv.ParseInt(c, 16, 64); err == nil {
+					embed.Color = int(v)
+				}
+			}
+			if f := req.GetString("footer", ""); f != "" {
+				embed.Footer = &discordgo.MessageEmbedFooter{Text: f}
+			}
+			if fj := req.GetString("fields_json", ""); fj != "" {
+				var fields []*discordgo.MessageEmbedField
+				if err := json.Unmarshal([]byte(fj), &fields); err != nil {
+					return mcp.NewToolResultError(fmt.Sprintf("invalid fields_json: %v", err)), nil
+				}
+				embed.Fields = fields
+			}
+			msg, err := dg.ChannelMessageSendEmbed(chID, embed)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			return mcp.NewToolResultText(fmt.Sprintf("Sent embed message %s", msg.ID)), nil
+		},
+	)
+
+	// 16. Pin message
+	s.AddTool(
+		mcp.NewTool("discord_pin_message",
+			mcp.WithDescription("Pin or unpin a message"),
+			mcp.WithString("channel_id", mcp.Required(), mcp.Description("Channel ID")),
+			mcp.WithString("message_id", mcp.Required(), mcp.Description("Message ID")),
+			mcp.WithBoolean("unpin", mcp.Description("Set true to unpin instead of pin")),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			if err := ensureDiscord(); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			chID, _ := req.RequireString("channel_id")
+			msgID, _ := req.RequireString("message_id")
+			unpin := req.GetBool("unpin", false)
+			if unpin {
+				if err := dg.ChannelMessageUnpin(chID, msgID); err != nil {
+					return mcp.NewToolResultError(err.Error()), nil
+				}
+				return mcp.NewToolResultText(fmt.Sprintf("Unpinned message %s", msgID)), nil
+			}
+			if err := dg.ChannelMessagePin(chID, msgID); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			return mcp.NewToolResultText(fmt.Sprintf("Pinned message %s", msgID)), nil
+		},
+	)
+
+	// 17. Create thread
+	s.AddTool(
+		mcp.NewTool("discord_create_thread",
+			mcp.WithDescription("Create a thread from a message"),
+			mcp.WithString("channel_id", mcp.Required(), mcp.Description("Channel ID")),
+			mcp.WithString("message_id", mcp.Required(), mcp.Description("Message ID to start thread from")),
+			mcp.WithString("name", mcp.Required(), mcp.Description("Thread name")),
+			mcp.WithNumber("auto_archive_duration", mcp.Description("Auto-archive in minutes: 60, 1440, 4320, or 10080 (default 1440)")),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			if err := ensureDiscord(); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			chID, _ := req.RequireString("channel_id")
+			msgID, _ := req.RequireString("message_id")
+			name, _ := req.RequireString("name")
+			dur := int(req.GetFloat("auto_archive_duration", 1440))
+			th, err := dg.MessageThreadStart(chID, msgID, name, dur)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			return mcp.NewToolResultText(fmt.Sprintf("Created thread #%s (%s)", th.Name, th.ID)), nil
+		},
+	)
+
+	// 18. List threads
+	s.AddTool(
+		mcp.NewTool("discord_list_threads",
+			mcp.WithDescription("List active threads in a guild"),
+			mcp.WithString("guild_id", mcp.Required(), mcp.Description("Guild/server ID")),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			if err := ensureDiscord(); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			guildID, _ := req.RequireString("guild_id")
+			tl, err := dg.GuildThreadsActive(guildID)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			if len(tl.Threads) == 0 {
+				return mcp.NewToolResultText("No active threads."), nil
+			}
+			var lines []string
+			for _, t := range tl.Threads {
+				lines = append(lines, fmt.Sprintf("#%s (%s) parent:%s", t.Name, t.ID, t.ParentID))
+			}
+			return mcp.NewToolResultText(strings.Join(lines, "\n")), nil
+		},
+	)
+
+	// 19. Remove reaction
+	s.AddTool(
+		mcp.NewTool("discord_remove_reaction",
+			mcp.WithDescription("Remove a reaction from a message (bot's own reaction, or specify user_id)"),
+			mcp.WithString("channel_id", mcp.Required(), mcp.Description("Channel ID")),
+			mcp.WithString("message_id", mcp.Required(), mcp.Description("Message ID")),
+			mcp.WithString("emoji", mcp.Required(), mcp.Description("Emoji (unicode or name:id)")),
+			mcp.WithString("user_id", mcp.Description("User ID (default: @me)")),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			if err := ensureDiscord(); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			chID, _ := req.RequireString("channel_id")
+			msgID, _ := req.RequireString("message_id")
+			emoji, _ := req.RequireString("emoji")
+			userID := req.GetString("user_id", "@me")
+			if err := dg.MessageReactionRemove(chID, msgID, emoji, userID); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			return mcp.NewToolResultText(fmt.Sprintf("Removed reaction %s from %s", emoji, msgID)), nil
+		},
+	)
+
+	// 20. Get reactions
+	s.AddTool(
+		mcp.NewTool("discord_get_reactions",
+			mcp.WithDescription("Get users who reacted with a specific emoji on a message"),
+			mcp.WithString("channel_id", mcp.Required(), mcp.Description("Channel ID")),
+			mcp.WithString("message_id", mcp.Required(), mcp.Description("Message ID")),
+			mcp.WithString("emoji", mcp.Required(), mcp.Description("Emoji (unicode or name:id)")),
+			mcp.WithNumber("limit", mcp.Description("Max users to return, default 25")),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			if err := ensureDiscord(); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			chID, _ := req.RequireString("channel_id")
+			msgID, _ := req.RequireString("message_id")
+			emoji, _ := req.RequireString("emoji")
+			limit := int(req.GetFloat("limit", 25))
+			users, err := dg.MessageReactions(chID, msgID, emoji, limit, "", "")
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			if len(users) == 0 {
+				return mcp.NewToolResultText("No reactions."), nil
+			}
+			var lines []string
+			for _, u := range users {
+				lines = append(lines, fmt.Sprintf("%s (%s)", u.Username, u.ID))
+			}
+			return mcp.NewToolResultText(strings.Join(lines, "\n")), nil
+		},
+	)
+
+	// 21. Edit channel topic
+	s.AddTool(
+		mcp.NewTool("discord_edit_channel_topic",
+			mcp.WithDescription("Edit a channel's topic"),
+			mcp.WithString("channel_id", mcp.Required(), mcp.Description("Channel ID")),
+			mcp.WithString("topic", mcp.Required(), mcp.Description("New topic text (empty string to clear)")),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			if err := ensureDiscord(); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			chID, _ := req.RequireString("channel_id")
+			topic, _ := req.RequireString("topic")
+			_, err := dg.ChannelEdit(chID, &discordgo.ChannelEdit{Topic: topic})
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			return mcp.NewToolResultText(fmt.Sprintf("Updated topic for %s", chID)), nil
+		},
+	)
+
+	// 22. List roles
+	s.AddTool(
+		mcp.NewTool("discord_list_roles",
+			mcp.WithDescription("List roles in a guild"),
+			mcp.WithString("guild_id", mcp.Required(), mcp.Description("Guild/server ID")),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			if err := ensureDiscord(); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			guildID, _ := req.RequireString("guild_id")
+			roles, err := dg.GuildRoles(guildID)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			var lines []string
+			for _, r := range roles {
+				lines = append(lines, fmt.Sprintf("%s (%s) color:#%06x pos:%d", r.Name, r.ID, r.Color, r.Position))
+			}
+			return mcp.NewToolResultText(strings.Join(lines, "\n")), nil
+		},
+	)
+
+	// 23. Get user
+	s.AddTool(
+		mcp.NewTool("discord_get_user",
+			mcp.WithDescription("Get info about a specific user by ID"),
+			mcp.WithString("user_id", mcp.Required(), mcp.Description("User ID")),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			if err := ensureDiscord(); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			userID, _ := req.RequireString("user_id")
+			u, err := dg.User(userID)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			bot := ""
+			if u.Bot {
+				bot = " 🤖"
+			}
+			return mcp.NewToolResultText(fmt.Sprintf("%s#%s (%s)%s", u.Username, u.Discriminator, u.ID, bot)), nil
 		},
 	)
 

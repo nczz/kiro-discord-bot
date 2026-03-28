@@ -313,6 +313,18 @@ The agent will read the guide, build the binary, update `mcp.json`, and prompt y
 | `discord_send_file` | Upload a local file to a channel as an attachment |
 | `discord_list_attachments` | List file attachments from recent messages |
 | `discord_download_attachment` | Download a Discord attachment to a local file |
+| `discord_edit_message` | Edit a message |
+| `discord_delete_message` | Delete a message |
+| `discord_get_message` | Get a single message by ID |
+| `discord_send_embed` | Send a rich embed message |
+| `discord_pin_message` | Pin or unpin a message |
+| `discord_create_thread` | Create a thread from a message |
+| `discord_list_threads` | List active threads in a guild |
+| `discord_remove_reaction` | Remove a reaction from a message |
+| `discord_get_reactions` | Get users who reacted with a specific emoji |
+| `discord_edit_channel_topic` | Edit a channel's topic |
+| `discord_list_roles` | List roles in a guild |
+| `discord_get_user` | Get info about a specific user |
 
 ---
 
@@ -447,3 +459,15 @@ Agent 會自動讀取說明、編譯、更新 mcp.json，並提示你重啟。
 | `discord_send_file` | 上傳本地檔案到頻道作為附件 |
 | `discord_list_attachments` | 列出頻道近期訊息中的附件 |
 | `discord_download_attachment` | 下載 Discord 附件到本地 |
+| `discord_edit_message` | 編輯訊息 |
+| `discord_delete_message` | 刪除訊息 |
+| `discord_get_message` | 以 ID 取得單則訊息 |
+| `discord_send_embed` | 發送 embed 富文本訊息 |
+| `discord_pin_message` | 釘選或取消釘選訊息 |
+| `discord_create_thread` | 從訊息建立 thread |
+| `discord_list_threads` | 列出伺服器中的活躍 threads |
+| `discord_remove_reaction` | 移除訊息上的 reaction |
+| `discord_get_reactions` | 取得對特定 emoji 反應的使用者 |
+| `discord_edit_channel_topic` | 編輯頻道主題 |
+| `discord_list_roles` | 列出伺服器角色 |
+| `discord_get_user` | 查詢特定使用者資訊 |
