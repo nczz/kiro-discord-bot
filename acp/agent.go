@@ -31,6 +31,8 @@ type Agent struct {
 	onExit       func()              // called when child process exits unexpectedly
 	onReadError  func(error)         // called when ReadLoop encounters an error
 
+	contextUsage float64 // latest context usage percentage from metadata
+
 	initResult *InitializeResult
 	stopOnce   sync.Once
 	exited     chan struct{} // closed when child process exits
@@ -150,6 +152,19 @@ func StartAgent(name, kiroCLI, cwd, model string) (*Agent, error) {
 }
 
 func (a *Agent) handleNotification(method string, params json.RawMessage) {
+	// Handle metadata notifications (context usage)
+	if method == "_kiro.dev/metadata" {
+		var meta struct {
+			ContextUsagePercentage float64 `json:"contextUsagePercentage"`
+		}
+		if json.Unmarshal(params, &meta) == nil && meta.ContextUsagePercentage > 0 {
+			a.mu.Lock()
+			a.contextUsage = meta.ContextUsagePercentage
+			a.mu.Unlock()
+		}
+		return
+	}
+
 	if method != NotifUpdate && method != NotifUpdateKiro {
 		return
 	}
@@ -430,6 +445,13 @@ func (a *Agent) IsBusy() bool {
 // CancelPrompt sends a session/cancel request to the agent.
 func (a *Agent) CancelPrompt() {
 	a.transport.Send(MethodCancel, map[string]string{"sessionId": a.SessionID})
+}
+
+// ContextUsage returns the latest context usage percentage (0-100).
+func (a *Agent) ContextUsage() float64 {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.contextUsage
 }
 
 // Stop gracefully stops the agent: SIGTERM → wait 2s → SIGKILL entire process group.
