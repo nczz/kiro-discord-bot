@@ -413,6 +413,11 @@ func (a *Agent) IsBusy() bool {
 	return a.state == "working"
 }
 
+// CancelPrompt sends a session/cancel request to the agent.
+func (a *Agent) CancelPrompt() {
+	a.transport.Send(MethodCancel, map[string]string{"sessionId": a.SessionID})
+}
+
 // Stop gracefully stops the agent: SIGTERM → wait 2s → SIGKILL entire process group.
 // Safe to call multiple times.
 func (a *Agent) Stop() {

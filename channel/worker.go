@@ -32,24 +32,31 @@ type Worker struct {
 	queue           chan *Job
 	askTimeoutSec   int
 	streamUpdateSec int
+	threadArchive   int // auto-archive duration in minutes
 	stopCh          chan struct{}
+	idleCh          chan struct{} // signaled when agent finishes a task
 	stopped         sync.Once
 	started         sync.Once
 	logger          *ChatLogger
 	model           string
 
 	cancelMu sync.Mutex
-	cancelFn context.CancelFunc // cancel the currently running job
+	cancelFn context.CancelFunc
+
+	// Current thread info (protected by cancelMu)
+	currentThreadID string
 }
 
-func NewWorker(channelID string, agent *acp.Agent, bufSize, askTimeoutSec, streamUpdateSec int, logger *ChatLogger, model string) *Worker {
+func NewWorker(channelID string, agent *acp.Agent, bufSize, askTimeoutSec, streamUpdateSec, threadArchive int, logger *ChatLogger, model string) *Worker {
 	return &Worker{
 		channelID:       channelID,
 		agent:           agent,
 		queue:           make(chan *Job, bufSize),
 		askTimeoutSec:   askTimeoutSec,
 		streamUpdateSec: streamUpdateSec,
+		threadArchive:   threadArchive,
 		stopCh:          make(chan struct{}),
+		idleCh:          make(chan struct{}, 1),
 		logger:          logger,
 		model:           model,
 	}
@@ -70,6 +77,11 @@ func (w *Worker) QueueLen() int {
 
 func (w *Worker) Start() {
 	w.started.Do(func() {
+		// Pre-fill idle so first job doesn't wait
+		select {
+		case w.idleCh <- struct{}{}:
+		default:
+		}
 		go w.run()
 	})
 }
@@ -84,9 +96,37 @@ func (w *Worker) Stop() {
 func (w *Worker) CancelCurrent() {
 	w.cancelMu.Lock()
 	fn := w.cancelFn
+	threadID := w.currentThreadID
 	w.cancelMu.Unlock()
 	if fn != nil {
 		fn()
+	}
+	// Signal idle so next job can proceed
+	if threadID != "" {
+		w.signalIdle()
+	}
+}
+
+// CurrentThreadID returns the thread ID of the currently running task.
+func (w *Worker) CurrentThreadID() string {
+	w.cancelMu.Lock()
+	defer w.cancelMu.Unlock()
+	return w.currentThreadID
+}
+
+func (w *Worker) signalIdle() {
+	select {
+	case w.idleCh <- struct{}{}:
+	default:
+	}
+}
+
+func (w *Worker) waitIdle() bool {
+	select {
+	case <-w.idleCh:
+		return true
+	case <-w.stopCh:
+		return false
 	}
 }
 
@@ -96,6 +136,9 @@ func (w *Worker) run() {
 		case <-w.stopCh:
 			return
 		case job := <-w.queue:
+			if !w.waitIdle() {
+				return
+			}
 			w.execute(job)
 		}
 	}
@@ -117,100 +160,159 @@ func (w *Worker) execute(job *Job) {
 
 	swapReaction(ds, job.ChannelID, job.MessageID, "⏳", "🔄")
 
+	// Create thread from user's message
+	threadName := job.Prompt
+	if len(threadName) > 95 {
+		threadName = truncateUTF8(threadName, 92) + "..."
+	}
+	// Strip Discord context prefix for cleaner thread name
+	if idx := strings.Index(threadName, "\n\n"); idx > 0 && idx < 80 {
+		threadName = threadName[idx+2:]
+		if len(threadName) > 95 {
+			threadName = truncateUTF8(threadName, 92) + "..."
+		}
+	}
+	if threadName == "" {
+		threadName = "Task"
+	}
+
+	archiveDur := w.threadArchive
+	if archiveDur <= 0 {
+		archiveDur = 1440
+	}
+	thread, err := ds.MessageThreadStart(job.ChannelID, job.MessageID, threadName, archiveDur)
+	if err != nil {
+		log.Printf("[worker %s] create thread: %v, falling back to sync", w.channelID, err)
+		w.executeFallback(job)
+		return
+	}
+	threadID := thread.ID
+
+	w.cancelMu.Lock()
+	w.currentThreadID = threadID
+	w.cancelMu.Unlock()
+
+	// Post initial status in thread
+	ds.ChannelMessageSend(threadID, "🔄 "+L.Get("worker.processing"))
+
+	// Setup timeout context as safety net
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(w.askTimeoutSec)*time.Second)
+	w.cancelMu.Lock()
+	w.cancelFn = cancel
+	w.cancelMu.Unlock()
+
+	// Async callbacks — all post to thread
+	callbacks := acp.AsyncCallbacks{
+		OnToolCall: func(evt acp.ToolCallEvent) {
+			title := evt.Title
+			if title == "" {
+				title = "tool"
+			}
+			ds.ChannelMessageSend(threadID, "⚙️ "+title)
+			swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "⚙️")
+		},
+		OnToolResult: func(evt acp.ToolCallEvent) {
+			swapReaction(ds, job.ChannelID, job.MessageID, "⚙️", "🔄")
+		},
+		OnComplete: func(response string, askErr error) {
+			cancel() // release timeout context
+
+			w.cancelMu.Lock()
+			w.cancelFn = nil
+			w.currentThreadID = ""
+			w.cancelMu.Unlock()
+
+			if askErr != nil {
+				errMsg := askErr.Error()
+				emoji := "❌"
+				if ctx.Err() == context.DeadlineExceeded {
+					errMsg = L.Getf("worker.timeout", w.askTimeoutSec)
+					emoji = "⚠️"
+				} else if ctx.Err() == context.Canceled {
+					errMsg = L.Get("cancel.success")
+					emoji = "⚠️"
+				}
+				ds.ChannelMessageSend(threadID, "❌ "+errMsg)
+				swapReaction(ds, job.ChannelID, job.MessageID, "🔄", emoji)
+				swapReaction(ds, job.ChannelID, job.MessageID, "⚙️", emoji)
+				if w.logger != nil {
+					w.logger.Log(w.channelID, ChatEntry{Role: "assistant", Content: "❌ " + errMsg, Model: w.model})
+				}
+				w.signalIdle()
+				return
+			}
+
+			if response == "" {
+				response = L.Get("worker.empty_response")
+			}
+
+			// Post full response in thread
+			sendLongThread(ds, threadID, response)
+			// Brief completion notice in main channel
+			ds.ChannelMessageSendReply(job.ChannelID, "✅", &discordgo.MessageReference{
+				MessageID: job.MessageID, ChannelID: job.ChannelID,
+			})
+			swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "✅")
+			swapReaction(ds, job.ChannelID, job.MessageID, "⚙️", "✅")
+
+			if w.logger != nil {
+				w.logger.Log(w.channelID, ChatEntry{Role: "assistant", Content: response, Model: w.model})
+			}
+			w.signalIdle()
+		},
+	}
+
+	// Watch for timeout — send cancel to agent
+	go func() {
+		<-ctx.Done()
+		if ctx.Err() == context.DeadlineExceeded {
+			log.Printf("[worker %s] timeout %ds, sending cancel", w.channelID, w.askTimeoutSec)
+			go w.agent.CancelPrompt()
+		}
+	}()
+
+	w.agent.AskAsync(job.Prompt, callbacks)
+	// Returns immediately — callbacks handle the rest
+}
+
+// executeFallback is the old synchronous path used when thread creation fails.
+func (w *Worker) executeFallback(job *Job) {
+	ds := job.Session
+
 	replyMsg, err := ds.ChannelMessageSendReply(job.ChannelID, L.Get("worker.processing"), &discordgo.MessageReference{
-		MessageID: job.MessageID,
-		ChannelID: job.ChannelID,
+		MessageID: job.MessageID, ChannelID: job.ChannelID,
 	})
 	if err != nil {
-		log.Printf("[worker %s] send placeholder: %v", w.channelID, err)
 		swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "❌")
+		w.signalIdle()
 		return
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(w.askTimeoutSec)*time.Second)
 	defer cancel()
-	w.cancelMu.Lock()
-	w.cancelFn = cancel
-	w.cancelMu.Unlock()
-	defer func() {
-		w.cancelMu.Lock()
-		w.cancelFn = nil
-		w.cancelMu.Unlock()
-	}()
 
-	var mu sync.Mutex
-	accumulated := ""
-	lastUpdate := time.Now()
-	statusLine := L.Get("worker.processing")
+	response, askErr := w.agent.Ask(ctx, job.Prompt, func(chunk string) {})
 
-	w.agent.OnToolUseFunc(func(started bool) {
-		mu.Lock()
-		if started {
-			statusLine = L.Get("worker.tool_running")
-			swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "⚙️")
-		} else {
-			statusLine = L.Get("worker.processing")
-			swapReaction(ds, job.ChannelID, job.MessageID, "⚙️", "🔄")
-		}
-		mu.Unlock()
-	})
-
-	onChunk := func(chunk string) {
-		mu.Lock()
-		accumulated += chunk
-		shouldUpdate := time.Since(lastUpdate) >= time.Duration(w.streamUpdateSec)*time.Second
-		snap := accumulated
-		status := statusLine
-		mu.Unlock()
-
-		if shouldUpdate {
-			mu.Lock()
-			lastUpdate = time.Now()
-			mu.Unlock()
-			editMessage(ds, job.ChannelID, replyMsg.ID, status+"\n\n"+snap)
-		}
-	}
-
-	response, err := w.agent.Ask(ctx, job.Prompt, onChunk)
-
-	if err != nil {
-		errMsg := err.Error()
+	if askErr != nil {
+		errMsg := askErr.Error()
 		if ctx.Err() == context.DeadlineExceeded {
 			errMsg = L.Getf("worker.timeout", w.askTimeoutSec)
-			swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "⚠️")
-		} else if ctx.Err() == context.Canceled {
-			errMsg = L.Get("cancel.success")
-			swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "⚠️")
-		} else {
-			swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "❌")
 		}
 		editMessage(ds, job.ChannelID, replyMsg.ID, "❌ "+errMsg)
-		if w.logger != nil {
-			w.logger.Log(w.channelID, ChatEntry{
-				Role:    "assistant",
-				Content: "❌ " + errMsg,
-				Model:   w.model,
-			})
-		}
-		return
+		swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "❌")
+	} else {
+		swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "✅")
+		sendLong(ds, job.ChannelID, replyMsg.ID, response)
 	}
-
-	if response == "" {
-		mu.Lock()
-		response = accumulated
-		mu.Unlock()
-	}
-
-	swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "✅")
-	sendLong(ds, job.ChannelID, replyMsg.ID, response)
 
 	if w.logger != nil {
-		w.logger.Log(w.channelID, ChatEntry{
-			Role:    "assistant",
-			Content: response,
-			Model:   w.model,
-		})
+		content := response
+		if askErr != nil {
+			content = "❌ " + askErr.Error()
+		}
+		w.logger.Log(w.channelID, ChatEntry{Role: "assistant", Content: content, Model: w.model})
 	}
+	w.signalIdle()
 }
 
 func editMessage(ds *discordgo.Session, channelID, msgID, content string) {
@@ -240,12 +342,19 @@ func sendLong(ds *discordgo.Session, channelID, placeholderID, content string) {
 	}
 }
 
+func sendLongThread(ds *discordgo.Session, threadID, content string) {
+	const limit = 1990
+	parts := splitMessage(content, limit)
+	for _, p := range parts {
+		ds.ChannelMessageSend(threadID, p)
+	}
+}
+
 func splitMessage(s string, limit int) []string {
 	var parts []string
 	for len(s) > limit {
 		idx := strings.LastIndex(s[:limit], "\n")
 		if idx < limit/2 {
-			// No good newline break — find a valid UTF-8 boundary near limit
 			idx = limit
 			for idx > 0 && !utf8.RuneStart(s[idx]) {
 				idx--
@@ -263,7 +372,6 @@ func splitMessage(s string, limit int) []string {
 	return parts
 }
 
-// truncateUTF8 truncates s to at most maxBytes without breaking a multi-byte character.
 func truncateUTF8(s string, maxBytes int) string {
 	if len(s) <= maxBytes {
 		return s
