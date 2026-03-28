@@ -359,6 +359,60 @@ func (a *Agent) Ask(ctx context.Context, prompt string, onChunk func(string)) (s
 	}
 }
 
+// AsyncCallbacks holds callbacks for AskAsync.
+type AsyncCallbacks struct {
+	OnChunk      func(string)
+	OnToolCall   func(ToolCallEvent)
+	OnToolResult func(ToolCallEvent)
+	OnComplete   func(response string, err error)
+}
+
+// AskAsync sends a prompt and returns immediately. Callbacks fire as notifications arrive.
+// OnComplete is called when the prompt finishes (or fails). Caller must not reuse the agent
+// until OnComplete fires or IsBusy() returns false.
+func (a *Agent) AskAsync(prompt string, cb AsyncCallbacks) {
+	a.mu.Lock()
+	a.state = "working"
+	a.currentText.Reset()
+	a.onChunk = cb.OnChunk
+	a.onToolCall = cb.OnToolCall
+	a.onToolResult = cb.OnToolResult
+	a.mu.Unlock()
+
+	go func() {
+		raw, err := a.transport.Send(MethodPrompt, map[string]interface{}{
+			"sessionId": a.SessionID,
+			"prompt":    []map[string]string{{"type": "text", "text": prompt}},
+		})
+
+		a.mu.Lock()
+		text := a.currentText.String()
+		a.state = "idle"
+		a.onChunk = nil
+		a.onToolCall = nil
+		a.onToolResult = nil
+		a.mu.Unlock()
+
+		if err != nil {
+			if cb.OnComplete != nil {
+				cb.OnComplete("", err)
+			}
+			return
+		}
+		_ = raw
+		if cb.OnComplete != nil {
+			cb.OnComplete(text, nil)
+		}
+	}()
+}
+
+// IsBusy returns true if the agent is currently processing a prompt.
+func (a *Agent) IsBusy() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.state == "working"
+}
+
 // Stop gracefully stops the agent: SIGTERM → wait 2s → SIGKILL entire process group.
 // Safe to call multiple times.
 func (a *Agent) Stop() {
