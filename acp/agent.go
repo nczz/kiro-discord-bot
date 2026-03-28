@@ -29,6 +29,7 @@ type Agent struct {
 	onToolCall   func(ToolCallEvent) // called on tool_call notification
 	onToolResult func(ToolCallEvent) // called on tool_call_update notification
 	onExit       func()              // called when child process exits unexpectedly
+	onReadError  func(error)         // called when ReadLoop encounters an error
 
 	initResult *InitializeResult
 	stopOnce   sync.Once
@@ -81,6 +82,12 @@ func StartAgent(name, kiroCLI, cwd, model string) (*Agent, error) {
 	go func() {
 		if err := a.transport.ReadLoop(); err != nil {
 			log.Printf("[agent:%s] read loop: %v", name, err)
+			a.mu.Lock()
+			cb := a.onReadError
+			a.mu.Unlock()
+			if cb != nil {
+				cb(err)
+			}
 		}
 	}()
 
@@ -285,6 +292,13 @@ func (a *Agent) OnToolCallFunc(fn func(ToolCallEvent)) {
 func (a *Agent) OnToolResultFunc(fn func(ToolCallEvent)) {
 	a.mu.Lock()
 	a.onToolResult = fn
+	a.mu.Unlock()
+}
+
+// OnReadErrorFunc sets a callback invoked when the ReadLoop encounters an error (e.g. buffer overflow).
+func (a *Agent) OnReadErrorFunc(fn func(error)) {
+	a.mu.Lock()
+	a.onReadError = fn
 	a.mu.Unlock()
 }
 

@@ -271,6 +271,20 @@ func (w *Worker) execute(job *Job) {
 		}
 	}()
 
+	// Watch for ReadLoop errors (e.g. buffer overflow)
+	w.agent.OnReadErrorFunc(func(err error) {
+		msg := fmt.Sprintf("⚠️ Agent 通訊中斷: %v\n請使用 /reset 重啟", err)
+		ds.ChannelMessageSend(threadID, msg)
+		swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "⚠️")
+		swapReaction(ds, job.ChannelID, job.MessageID, "⚙️", "⚠️")
+		cancel()
+		w.cancelMu.Lock()
+		w.cancelFn = nil
+		w.currentThreadID = ""
+		w.cancelMu.Unlock()
+		w.signalIdle()
+	})
+
 	w.agent.AskAsync(job.Prompt, callbacks)
 	// Returns immediately — callbacks handle the rest
 }
