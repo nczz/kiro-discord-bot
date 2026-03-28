@@ -52,7 +52,7 @@ type Transport struct {
 // NewTransport creates a transport over the given reader/writer (typically stdout/stdin of a child process).
 func NewTransport(r io.Reader, w io.Writer) *Transport {
 	s := bufio.NewScanner(r)
-	s.Buffer(make([]byte, 1024*1024), 1024*1024)
+	s.Buffer(make([]byte, 1024*1024), 10*1024*1024)
 	return &Transport{
 		writer:  w,
 		scanner: s,
