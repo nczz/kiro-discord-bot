@@ -147,9 +147,9 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 			return
 		}
 		if resp == "" {
-			resp = "✅ Compacted"
+			resp = L.Get("compact.success")
 		}
-		ds.ChannelMessageSend(m.ChannelID, resp)
+		ds.ChannelMessageSend(m.ChannelID, "✅ "+resp)
 
 	case content == "!clear":
 		resp, err := b.manager.SendCommand(m.ChannelID, "/clear")
@@ -158,9 +158,9 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 			return
 		}
 		if resp == "" {
-			resp = "✅ Cleared"
+			resp = L.Get("clear.success")
 		}
-		ds.ChannelMessageSend(m.ChannelID, resp)
+		ds.ChannelMessageSend(m.ChannelID, "✅ "+resp)
 
 	case content == "!cwd":
 		ds.ChannelMessageSend(m.ChannelID, b.manager.CWD(m.ChannelID))

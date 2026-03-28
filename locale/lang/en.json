@@ -102,5 +102,7 @@
   "cron.list.item": "%s **%s**\nSchedule: %s | Last: %s | Next: %s\nPrompt: %s",
   "cron.modal.title_edit": "Edit Scheduled Task",
   "cron.btn.edit": "✏️ Edit",
-  "cron.updated": "✅ Task updated\nName: **%s**\nCron: `%s` → %s\nPrompt: %s"
+  "cron.updated": "✅ Task updated\nName: **%s**\nCron: `%s` → %s\nPrompt: %s",
+  "compact.success": "Context compacted.",
+  "clear.success": "Conversation cleared."
 }
