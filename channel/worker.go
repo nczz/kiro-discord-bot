@@ -193,7 +193,7 @@ func (w *Worker) execute(job *Job) {
 	w.cancelMu.Unlock()
 
 	// Post initial status in thread
-	ds.ChannelMessageSend(threadID, L.Get("worker.processing"))
+	ds.ChannelMessageSend(threadID, "🔄 "+L.Get("worker.processing"))
 
 	// Setup timeout context as safety net
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(w.askTimeoutSec)*time.Second)
@@ -293,7 +293,7 @@ func (w *Worker) execute(job *Job) {
 func (w *Worker) executeFallback(job *Job) {
 	ds := job.Session
 
-	replyMsg, err := ds.ChannelMessageSendReply(job.ChannelID, L.Get("worker.processing"), &discordgo.MessageReference{
+	replyMsg, err := ds.ChannelMessageSendReply(job.ChannelID, "🔄 "+L.Get("worker.processing"), &discordgo.MessageReference{
 		MessageID: job.MessageID, ChannelID: job.ChannelID,
 	})
 	if err != nil {
