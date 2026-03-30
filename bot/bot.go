@@ -50,6 +50,8 @@ type BotConfig struct {
 	CronTimezone       string
 	BotVersion         string
 	DownloadTimeoutSec int
+	ThreadAgentMax     int
+	ThreadAgentIdleSec int
 }
 
 func NewFromConfig(cfg BotConfig) (*Bot, error) {
@@ -57,7 +59,7 @@ func NewFromConfig(cfg BotConfig) (*Bot, error) {
 	if err != nil {
 		return nil, err
 	}
-	ds.Identify.Intents = discordgo.IntentsGuildMessages | discordgo.IntentsDirectMessages | discordgo.IntentsGuildMessageReactions | discordgo.IntentsMessageContent
+	ds.Identify.Intents = discordgo.IntentsGuildMessages | discordgo.IntentsDirectMessages | discordgo.IntentsGuildMessageReactions | discordgo.IntentsMessageContent | discordgo.IntentsGuilds
 
 	store, err := channel.NewSessionStore(cfg.DataDir)
 	if err != nil {
@@ -65,17 +67,19 @@ func NewFromConfig(cfg BotConfig) (*Bot, error) {
 	}
 
 	manager := channel.NewManager(channel.ManagerConfig{
-		Store:           store,
-		KiroCLI:         cfg.KiroCLIPath,
-		DefaultCWD:      cfg.DefaultCWD,
-		QueueBufSize:    cfg.QueueBufferSize,
-		AskTimeoutSec:   cfg.AskTimeoutSec,
-		StreamUpdateSec: cfg.StreamUpdateSec,
-		ThreadArchive:   cfg.ThreadAutoArchive,
-		DefaultModel:    cfg.KiroModel,
-		DataDir:         cfg.DataDir,
-		BotVersion:      cfg.BotVersion,
-		GuildID:         cfg.GuildID,
+		Store:              store,
+		KiroCLI:            cfg.KiroCLIPath,
+		DefaultCWD:         cfg.DefaultCWD,
+		QueueBufSize:       cfg.QueueBufferSize,
+		AskTimeoutSec:      cfg.AskTimeoutSec,
+		StreamUpdateSec:    cfg.StreamUpdateSec,
+		ThreadArchive:      cfg.ThreadAutoArchive,
+		DefaultModel:       cfg.KiroModel,
+		DataDir:            cfg.DataDir,
+		BotVersion:         cfg.BotVersion,
+		GuildID:            cfg.GuildID,
+		ThreadAgentMax:     cfg.ThreadAgentMax,
+		ThreadAgentIdleSec: cfg.ThreadAgentIdleSec,
 	})
 
 	b := &Bot{discord: ds, manager: manager, guildID: cfg.GuildID, dataDir: cfg.DataDir, cronTimezone: cfg.CronTimezone, version: cfg.BotVersion,
@@ -92,9 +96,11 @@ func NewFromConfig(cfg BotConfig) (*Bot, error) {
 	hb.Register(heartbeat.NewHealthTask(&healthAdapter{bot: b}))
 	hb.Register(heartbeat.NewCleanupTask(cfg.DataDir, cfg.AttRetainDays))
 	hb.Register(heartbeat.NewCronTask(cronStore, &cronAdapter{bot: b}, cfg.DataDir, cfg.CronTimezone, cfg.GuildID))
+	hb.Register(heartbeat.NewThreadCleanupTask(&threadCleanupAdapter{bot: b}, cfg.ThreadAgentIdleSec, cfg.ThreadAgentMax))
 	b.hb = hb
 	ds.AddHandler(b.handleMessage)
 	ds.AddHandler(b.handleInteraction)
+	ds.AddHandler(b.handleThreadUpdate)
 	return b, nil
 }
 

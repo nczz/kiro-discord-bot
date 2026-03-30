@@ -107,5 +107,9 @@
   "clear.success": "Conversation cleared.",
   "context.usage_warning": "Context usage: %.0f%% — consider `!compact` or `!clear`",
   "cmd.compact.desc": "Compress conversation history to free context",
-  "cmd.clear.desc": "Clear conversation history"
+  "cmd.clear.desc": "Clear conversation history",
+  "thread_agent.closed": "🔒 Thread agent closed.",
+  "thread_agent.idle_closed": "💤 Thread agent closed due to inactivity. Send a message to restart.",
+  "thread_agent.spawning": "🔄 Starting thread agent...",
+  "thread_agent.limit_reached": "⚠️ Thread agent limit reached, closed the least recently used agent."
 }

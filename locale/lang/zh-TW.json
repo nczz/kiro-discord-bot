@@ -100,5 +100,9 @@
   "clear.success": "已清除對話歷史。",
   "context.usage_warning": "Context 使用率: %.0f%% — 建議使用 `!compact` 或 `!clear`",
   "cmd.compact.desc": "壓縮對話歷史以釋放 context",
-  "cmd.clear.desc": "清除對話歷史"
+  "cmd.clear.desc": "清除對話歷史",
+  "thread_agent.closed": "🔒 討論串 agent 已關閉。",
+  "thread_agent.idle_closed": "💤 討論串 agent 已因閒置關閉。再次發訊息可重新啟動。",
+  "thread_agent.spawning": "🔄 正在啟動討論串 agent...",
+  "thread_agent.limit_reached": "⚠️ 已達討論串 agent 上限，已關閉最久未使用的 agent。"
 }

@@ -72,6 +72,8 @@ DATA_DIR=/tmp/kiro-bot-data
 ASK_TIMEOUT_SEC=3600
 STREAM_UPDATE_SEC=3
 THREAD_AUTO_ARCHIVE=1440
+THREAD_AGENT_MAX=5
+THREAD_AGENT_IDLE_SEC=900
 KIRO_MODEL=
 HEARTBEAT_SEC=60
 ATTACHMENT_RETAIN_DAYS=7
@@ -88,6 +90,8 @@ CRON_TIMEZONE=Asia/Taipei
 | `ASK_TIMEOUT_SEC` | Agent response timeout (safety net) in seconds | `3600` |
 | `STREAM_UPDATE_SEC` | Discord message update interval during streaming | `3` |
 | `THREAD_AUTO_ARCHIVE` | Thread auto-archive duration in minutes (60/1440/4320/10080) | `1440` |
+| `THREAD_AGENT_MAX` | Max concurrent thread agents | `5` |
+| `THREAD_AGENT_IDLE_SEC` | Thread agent idle timeout in seconds | `900` |
 | `KIRO_MODEL` | Default model ID for kiro-cli (empty = kiro default) | `` |
 | `HEARTBEAT_SEC` | Agent health check interval in seconds | `60` |
 | `ATTACHMENT_RETAIN_DAYS` | Auto-delete attachments older than N days (0 = keep forever) | `7` |
@@ -168,6 +172,8 @@ All commands also work with `!` prefix (e.g. `!status`, `!reset`).
 **Mention mode (after `/pause`):** Only `@BotName your message` triggers the agent.
 
 **Thread-based progress:** Each task automatically creates a Discord Thread from your message. Tool execution status and the final response are posted in the thread, keeping the main channel clean.
+
+**Thread discussions:** You can continue chatting with the agent inside any thread. A dedicated agent is spawned per thread with the original task context injected. Thread agents are independent from the main channel agent, so both can work in parallel. Thread agents are automatically closed after idle timeout (`THREAD_AGENT_IDLE_SEC`) or when the thread is archived. Use `!close` in a thread to manually close its agent.
 
 ### Status Indicators
 

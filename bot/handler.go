@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
@@ -15,6 +16,44 @@ import (
 )
 
 func usageMessage() string { return L.Get("usage_message") }
+
+// threadParentCache caches thread→parent channel mappings to avoid repeated API calls.
+var (
+	threadParentMu    sync.RWMutex
+	threadParentCache = make(map[string]string) // threadID → parentChannelID, "" = not a thread
+)
+
+// resolveThreadParent returns the parent channel ID if channelID is a thread, or "" if not.
+func resolveThreadParent(ds *discordgo.Session, channelID string) string {
+	threadParentMu.RLock()
+	parent, cached := threadParentCache[channelID]
+	threadParentMu.RUnlock()
+	if cached {
+		return parent
+	}
+
+	ch, err := ds.Channel(channelID)
+	if err != nil {
+		return ""
+	}
+
+	parentID := ""
+	if ch.IsThread() {
+		parentID = ch.ParentID
+	}
+
+	threadParentMu.Lock()
+	threadParentCache[channelID] = parentID
+	threadParentMu.Unlock()
+	return parentID
+}
+
+// registerThreadParent caches a known thread→parent mapping (called when bot creates a thread).
+func registerThreadParent(threadID, parentChannelID string) {
+	threadParentMu.Lock()
+	threadParentCache[threadID] = parentChannelID
+	threadParentMu.Unlock()
+}
 
 
 // downloadAttachments saves message attachments to DATA_DIR/ch-<channelID>/attachments/ and returns local paths.
@@ -100,6 +139,13 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 	// Strip mention prefix if present
 	if isMentioned {
 		content = strings.TrimSpace(strings.ReplaceAll(content, botMention, ""))
+	}
+
+	// Check if message is from a thread — route to thread agent
+	parentChannelID := resolveThreadParent(ds, m.ChannelID)
+	if parentChannelID != "" {
+		b.handleThreadMessage(ds, m, content, parentChannelID)
+		return
 	}
 
 	// Commands
@@ -233,6 +279,53 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 		if err := b.manager.Enqueue(ds, job); err != nil {
 			ds.ChannelMessageSend(m.ChannelID, L.Getf("error.generic", err.Error()))
 		}
+	}
+}
+
+// handleThreadUpdate handles Discord thread archive/unarchive events.
+func (b *Bot) handleThreadUpdate(ds *discordgo.Session, t *discordgo.ThreadUpdate) {
+	if t.ThreadMetadata != nil && t.ThreadMetadata.Archived {
+		if b.manager.HasThreadAgent(t.ID) {
+			log.Printf("[handler] thread %s archived, stopping thread agent", t.ID)
+			b.manager.StopThreadAgent(t.ID)
+		}
+	}
+}
+
+// handleThreadMessage handles messages sent inside a thread, routing to a dedicated thread agent.
+func (b *Bot) handleThreadMessage(ds *discordgo.Session, m *discordgo.MessageCreate, content, parentChannelID string) {
+	threadID := m.ChannelID
+
+	// Thread-specific commands
+	switch content {
+	case "!cancel":
+		if err := b.manager.CancelThreadAgent(threadID); err != nil {
+			ds.ChannelMessageSend(threadID, L.Getf("error.cancel_failed", err.Error()))
+		} else {
+			ds.ChannelMessageSend(threadID, L.Get("cancel.success"))
+		}
+		return
+	case "!close":
+		b.manager.StopThreadAgent(threadID)
+		ds.ChannelMessageSend(threadID, L.Get("thread_agent.closed"))
+		return
+	}
+
+	// Build prompt and enqueue to thread agent
+	localPaths := b.downloadAttachments(threadID, m.Attachments)
+	prompt := buildPrompt(content, localPaths, parentChannelID, m.GuildID)
+
+	job := &channel.Job{
+		ChannelID:   threadID,
+		MessageID:   m.ID,
+		Prompt:      prompt,
+		UserID:      m.Author.ID,
+		Username:    m.Author.Username,
+		Attachments: localPaths,
+		ThreadID:    threadID,
+	}
+	if err := b.manager.EnqueueThread(ds, job, parentChannelID); err != nil {
+		ds.ChannelMessageSend(threadID, L.Getf("error.generic", err.Error()))
 	}
 }
 

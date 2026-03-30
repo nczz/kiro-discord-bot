@@ -25,21 +25,23 @@ func main() {
 	log.Printf("kiro-discord-bot %s starting", Version)
 
 	b, err := bot.NewFromConfig(bot.BotConfig{
-		DiscordToken:    cfg.DiscordToken,
-		KiroCLIPath:     cfg.KiroCLIPath,
-		DefaultCWD:      cfg.DefaultCWD,
-		DataDir:         cfg.DataDir,
-		QueueBufferSize: cfg.QueueBufferSize,
-		AskTimeoutSec:   cfg.AskTimeoutSec,
-		StreamUpdateSec: cfg.StreamUpdateSec,
+		DiscordToken:       cfg.DiscordToken,
+		KiroCLIPath:        cfg.KiroCLIPath,
+		DefaultCWD:         cfg.DefaultCWD,
+		DataDir:            cfg.DataDir,
+		QueueBufferSize:    cfg.QueueBufferSize,
+		AskTimeoutSec:      cfg.AskTimeoutSec,
+		StreamUpdateSec:    cfg.StreamUpdateSec,
 		ThreadAutoArchive:  cfg.ThreadAutoArchive,
-		GuildID:         cfg.DiscordGuildID,
-		KiroModel:       cfg.KiroModel,
-		HeartbeatSec:    cfg.HeartbeatSec,
-		AttRetainDays:   cfg.AttRetainDays,
+		GuildID:            cfg.DiscordGuildID,
+		KiroModel:          cfg.KiroModel,
+		HeartbeatSec:       cfg.HeartbeatSec,
+		AttRetainDays:      cfg.AttRetainDays,
 		CronTimezone:       cfg.CronTimezone,
 		BotVersion:         Version,
 		DownloadTimeoutSec: cfg.DownloadTimeoutSec,
+		ThreadAgentMax:     cfg.ThreadAgentMax,
+		ThreadAgentIdleSec: cfg.ThreadAgentIdleSec,
 	})
 	if err != nil {
 		log.Fatal(err)

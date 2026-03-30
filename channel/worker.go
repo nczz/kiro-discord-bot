@@ -23,6 +23,7 @@ type Job struct {
 	UserID      string
 	Username    string
 	Attachments []string
+	ThreadID    string // non-empty = follow-up in existing thread, skip thread creation
 }
 
 // Worker manages a per-channel job queue and executes jobs sequentially.
@@ -175,33 +176,40 @@ func (w *Worker) execute(job *Job) {
 
 	swapReaction(ds, job.ChannelID, job.MessageID, "⏳", "🔄")
 
-	// Create thread from user's message
-	threadName := job.Prompt
-	if len(threadName) > 95 {
-		threadName = truncateUTF8(threadName, 92) + "..."
-	}
-	// Strip Discord context prefix for cleaner thread name
-	if idx := strings.Index(threadName, "\n\n"); idx > 0 && idx < 80 {
-		threadName = threadName[idx+2:]
+	// Determine thread ID: reuse existing or create new
+	var threadID string
+	if job.ThreadID != "" {
+		// Thread follow-up: post directly to existing thread
+		threadID = job.ThreadID
+	} else {
+		// Create thread from user's message
+		threadName := job.Prompt
 		if len(threadName) > 95 {
 			threadName = truncateUTF8(threadName, 92) + "..."
 		}
-	}
-	if threadName == "" {
-		threadName = "Task"
-	}
+		// Strip Discord context prefix for cleaner thread name
+		if idx := strings.Index(threadName, "\n\n"); idx > 0 && idx < 80 {
+			threadName = threadName[idx+2:]
+			if len(threadName) > 95 {
+				threadName = truncateUTF8(threadName, 92) + "..."
+			}
+		}
+		if threadName == "" {
+			threadName = "Task"
+		}
 
-	archiveDur := w.threadArchive
-	if archiveDur <= 0 {
-		archiveDur = 1440
+		archiveDur := w.threadArchive
+		if archiveDur <= 0 {
+			archiveDur = 1440
+		}
+		thread, err := ds.MessageThreadStart(job.ChannelID, job.MessageID, threadName, archiveDur)
+		if err != nil {
+			log.Printf("[worker %s] create thread: %v, falling back to sync", w.channelID, err)
+			w.executeFallback(job)
+			return
+		}
+		threadID = thread.ID
 	}
-	thread, err := ds.MessageThreadStart(job.ChannelID, job.MessageID, threadName, archiveDur)
-	if err != nil {
-		log.Printf("[worker %s] create thread: %v, falling back to sync", w.channelID, err)
-		w.executeFallback(job)
-		return
-	}
-	threadID := thread.ID
 
 	w.cancelMu.Lock()
 	w.currentThreadID = threadID

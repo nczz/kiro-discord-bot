@@ -32,39 +32,58 @@ type Manager struct {
 	logger          *ChatLogger
 	botVersion      string
 	guildID         string
+
+	// Thread agent management
+	threadAgents      map[string]*threadAgentEntry // threadID → entry
+	threadAgentMax    int
+	threadAgentIdleSec int
+}
+
+// threadAgentEntry tracks a per-thread agent and its metadata.
+type threadAgentEntry struct {
+	agent           *acp.Agent
+	worker          *Worker
+	parentChannelID string
+	threadID        string
+	lastActivity    time.Time
 }
 
 // ManagerConfig holds configuration for creating a Manager.
 type ManagerConfig struct {
-	Store           *SessionStore
-	KiroCLI         string
-	DefaultCWD      string
-	QueueBufSize    int
-	AskTimeoutSec   int
-	StreamUpdateSec int
-	ThreadArchive   int
-	DefaultModel    string
-	DataDir         string
-	BotVersion      string
-	GuildID         string
+	Store              *SessionStore
+	KiroCLI            string
+	DefaultCWD         string
+	QueueBufSize       int
+	AskTimeoutSec      int
+	StreamUpdateSec    int
+	ThreadArchive      int
+	DefaultModel       string
+	DataDir            string
+	BotVersion         string
+	GuildID            string
+	ThreadAgentMax     int
+	ThreadAgentIdleSec int
 }
 
 func NewManager(cfg ManagerConfig) *Manager {
 	return &Manager{
-		workers:         make(map[string]*Worker),
-		agents:          make(map[string]*acp.Agent),
-		paused:          make(map[string]bool),
-		store:           cfg.Store,
-		kiroCLI:         cfg.KiroCLI,
-		defaultCWD:      cfg.DefaultCWD,
-		queueBufSize:    cfg.QueueBufSize,
-		askTimeoutSec:   cfg.AskTimeoutSec,
-		streamUpdateSec: cfg.StreamUpdateSec,
-		threadArchive:   cfg.ThreadArchive,
-		defaultModel:    cfg.DefaultModel,
-		logger:          NewChatLogger(cfg.DataDir),
-		botVersion:      cfg.BotVersion,
-		guildID:         cfg.GuildID,
+		workers:            make(map[string]*Worker),
+		agents:             make(map[string]*acp.Agent),
+		paused:             make(map[string]bool),
+		threadAgents:       make(map[string]*threadAgentEntry),
+		store:              cfg.Store,
+		kiroCLI:            cfg.KiroCLI,
+		defaultCWD:         cfg.DefaultCWD,
+		queueBufSize:       cfg.QueueBufSize,
+		askTimeoutSec:      cfg.AskTimeoutSec,
+		streamUpdateSec:    cfg.StreamUpdateSec,
+		threadArchive:      cfg.ThreadArchive,
+		defaultModel:       cfg.DefaultModel,
+		logger:             NewChatLogger(cfg.DataDir),
+		botVersion:         cfg.BotVersion,
+		guildID:            cfg.GuildID,
+		threadAgentMax:     cfg.ThreadAgentMax,
+		threadAgentIdleSec: cfg.ThreadAgentIdleSec,
 	}
 }
 
@@ -86,6 +105,11 @@ func (m *Manager) StopAll() {
 	defer m.mu.Unlock()
 	for chID := range m.agents {
 		m.stopChannel(chID)
+	}
+	for threadID, entry := range m.threadAgents {
+		entry.worker.Stop()
+		entry.agent.Stop()
+		delete(m.threadAgents, threadID)
 	}
 	m.logger.Close()
 	log.Println("[manager] all agents stopped")
@@ -474,4 +498,190 @@ func (m *Manager) IsPaused(channelID string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.paused[channelID]
+}
+
+// --- Thread Agent Management ---
+
+// EnqueueThread routes a job to the thread's dedicated agent, spawning one if needed.
+func (m *Manager) EnqueueThread(ds *discordgo.Session, job *Job, parentChannelID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	entry, ok := m.threadAgents[job.ThreadID]
+	if ok && !entry.agent.IsAlive() {
+		// Dead agent — clean up and re-spawn
+		entry.worker.Stop()
+		entry.agent.Stop()
+		delete(m.threadAgents, job.ThreadID)
+		ok = false
+	}
+
+	if !ok {
+		// Evict oldest if at capacity
+		if len(m.threadAgents) >= m.threadAgentMax {
+			m.evictOldestThreadAgent()
+		}
+
+		var err error
+		entry, err = m.spawnThreadAgent(job.ThreadID, parentChannelID)
+		if err != nil {
+			return fmt.Errorf("spawn thread agent: %w", err)
+		}
+		m.threadAgents[job.ThreadID] = entry
+	}
+
+	entry.lastActivity = time.Now()
+	job.Session = ds
+	if err := entry.worker.Enqueue(job); err != nil {
+		return fmt.Errorf("thread queue full")
+	}
+
+	_ = ds.MessageReactionAdd(job.ChannelID, job.MessageID, "⏳")
+	return nil
+}
+
+// spawnThreadAgent creates a new agent+worker for a thread. Must be called with m.mu held.
+func (m *Manager) spawnThreadAgent(threadID, parentChannelID string) (*threadAgentEntry, error) {
+	cwd := m.defaultCWD
+	model := m.defaultModel
+	if sess, ok := m.store.Get(parentChannelID); ok {
+		if sess.CWD != "" {
+			cwd = sess.CWD
+		}
+		if sess.Model != "" {
+			model = sess.Model
+		}
+	}
+
+	agentName := "thread-" + threadID
+	agent, err := acp.StartAgent(agentName, m.kiroCLI, cwd, model)
+	if err != nil {
+		return nil, err
+	}
+
+	entry := &threadAgentEntry{
+		agent:           agent,
+		parentChannelID: parentChannelID,
+		threadID:        threadID,
+		lastActivity:    time.Now(),
+	}
+
+	// Watch for unexpected exit
+	agent.OnExitFunc(func() {
+		m.mu.Lock()
+		delete(m.threadAgents, threadID)
+		m.mu.Unlock()
+		log.Printf("[manager] thread agent %s exited unexpectedly", agentName)
+	})
+
+	// Inject conversation history
+	m.injectThreadHistory(agent, parentChannelID, threadID)
+
+	w := NewWorker("thread-"+threadID, agent, m.queueBufSize, m.askTimeoutSec, m.streamUpdateSec, 0, m.logger, model)
+	w.Start()
+	entry.worker = w
+
+	log.Printf("[manager] spawned thread agent %s (parent=%s)", agentName, parentChannelID)
+	return entry, nil
+}
+
+// StopThreadAgent stops a specific thread agent.
+func (m *Manager) StopThreadAgent(threadID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if entry, ok := m.threadAgents[threadID]; ok {
+		entry.worker.Stop()
+		entry.agent.Stop()
+		delete(m.threadAgents, threadID)
+		log.Printf("[manager] stopped thread agent thread-%s", threadID)
+	}
+}
+
+// CancelThreadAgent cancels the current job in a thread agent.
+func (m *Manager) CancelThreadAgent(threadID string) error {
+	m.mu.Lock()
+	entry, ok := m.threadAgents[threadID]
+	m.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("no thread agent")
+	}
+	entry.worker.CancelCurrent()
+	return nil
+}
+
+// ThreadAgentEntries returns a snapshot of all thread agent entries for heartbeat inspection.
+func (m *Manager) ThreadAgentEntries() []struct {
+	ThreadID     string
+	ParentChID   string
+	LastActivity time.Time
+} {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]struct {
+		ThreadID     string
+		ParentChID   string
+		LastActivity time.Time
+	}, 0, len(m.threadAgents))
+	for _, e := range m.threadAgents {
+		out = append(out, struct {
+			ThreadID     string
+			ParentChID   string
+			LastActivity time.Time
+		}{e.threadID, e.parentChannelID, e.lastActivity})
+	}
+	return out
+}
+
+// HasThreadAgent returns true if a thread agent exists for the given threadID.
+func (m *Manager) HasThreadAgent(threadID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, ok := m.threadAgents[threadID]
+	return ok
+}
+
+// evictOldestThreadAgent removes the least recently active thread agent. Must be called with m.mu held.
+func (m *Manager) evictOldestThreadAgent() {
+	var oldestID string
+	var oldestTime time.Time
+	for id, e := range m.threadAgents {
+		if oldestID == "" || e.lastActivity.Before(oldestTime) {
+			oldestID = id
+			oldestTime = e.lastActivity
+		}
+	}
+	if oldestID != "" {
+		if entry, ok := m.threadAgents[oldestID]; ok {
+			entry.worker.Stop()
+			entry.agent.Stop()
+			delete(m.threadAgents, oldestID)
+			log.Printf("[manager] evicted thread agent thread-%s (idle since %s)", oldestID, oldestTime.Format(time.RFC3339))
+		}
+	}
+}
+
+// injectThreadHistory loads conversation history into a thread agent.
+// Tries thread-specific JSONL first, falls back to original task context from parent channel.
+func (m *Manager) injectThreadHistory(agent *acp.Agent, parentChannelID, threadID string) {
+	// Try thread-specific JSONL first
+	ctx := m.logger.BuildContextPrompt("thread-"+threadID, 20)
+	if ctx == "" {
+		// No thread history yet — try to get the original task context from parent channel log
+		// The last assistant response before this thread was created is the seed context
+		ctx = m.logger.BuildContextPrompt(parentChannelID, 4)
+	}
+	if ctx == "" {
+		return
+	}
+
+	// Truncate if too large (rough limit: 80K chars ≈ safe for most models)
+	const maxCtxChars = 80000
+	if len(ctx) > maxCtxChars {
+		ctx = ctx[len(ctx)-maxCtxChars:]
+	}
+
+	askCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	_, _ = agent.Ask(askCtx, ctx+"Please acknowledge you have this context. Reply with: OK", nil)
+	cancel()
+	log.Printf("[manager] injected %d chars of history into thread-%s", len(ctx), threadID)
 }

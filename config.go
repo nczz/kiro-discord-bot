@@ -22,6 +22,8 @@ type Config struct {
 	BotLocale          string
 	DownloadTimeoutSec int
 	ThreadAutoArchive  int
+	ThreadAgentMax     int
+	ThreadAgentIdleSec int
 }
 
 func loadConfig() *Config {
@@ -41,6 +43,8 @@ func loadConfig() *Config {
 		BotLocale:          envOr("BOT_LOCALE", "en"),
 		DownloadTimeoutSec: envInt("DOWNLOAD_TIMEOUT_SEC", 120),
 		ThreadAutoArchive:  envInt("THREAD_AUTO_ARCHIVE", 1440),
+		ThreadAgentMax:     envInt("THREAD_AGENT_MAX", 5),
+		ThreadAgentIdleSec: envInt("THREAD_AGENT_IDLE_SEC", 900),
 	}
 }
 
