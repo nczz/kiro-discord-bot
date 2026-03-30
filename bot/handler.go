@@ -94,8 +94,16 @@ func (b *Bot) downloadAttachments(channelID string, attachments []*discordgo.Mes
 
 // buildPrompt combines user text with attachment paths into an effective prompt.
 func buildPrompt(text string, attachments []string, channelID, guildID string) string {
+	return buildPromptThread(text, attachments, channelID, "", guildID)
+}
+
+func buildPromptThread(text string, attachments []string, channelID, threadID, guildID string) string {
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("[Discord context] channel_id=%s guild_id=%s\n\n", channelID, guildID))
+	if threadID != "" {
+		sb.WriteString(fmt.Sprintf("[Discord context] channel_id=%s thread_id=%s guild_id=%s\n\n", channelID, threadID, guildID))
+	} else {
+		sb.WriteString(fmt.Sprintf("[Discord context] channel_id=%s guild_id=%s\n\n", channelID, guildID))
+	}
 	if len(attachments) > 0 {
 		sb.WriteString("[Attached files]\n")
 		for _, p := range attachments {
@@ -320,7 +328,7 @@ func (b *Bot) handleThreadMessage(ds *discordgo.Session, m *discordgo.MessageCre
 
 	// Build prompt and enqueue to thread agent
 	localPaths := b.downloadAttachments(threadID, m.Attachments)
-	prompt := buildPrompt(content, localPaths, parentChannelID, m.GuildID)
+	prompt := buildPromptThread(content, localPaths, parentChannelID, threadID, m.GuildID)
 
 	job := &channel.Job{
 		ChannelID:   threadID,
