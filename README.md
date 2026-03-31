@@ -97,6 +97,8 @@ CRON_TIMEZONE=Asia/Taipei
 | `ATTACHMENT_RETAIN_DAYS` | Auto-delete attachments older than N days (0 = keep forever) | `7` |
 | `CRON_TIMEZONE` | Timezone for cron schedules (empty = server local) | `` |
 | `BOT_LOCALE` | Bot display language (`en`, `zh-TW`) | `en` |
+| `DOWNLOAD_TIMEOUT_SEC` | Attachment download timeout in seconds | `120` |
+| `QUEUE_BUFFER_SIZE` | Max queued jobs per channel | `20` |
 
 ---
 
