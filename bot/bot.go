@@ -53,6 +53,9 @@ type BotConfig struct {
 	ThreadAgentMax     int
 	ThreadAgentIdleSec int
 	MaxScannerBuffer   int
+	AgentProfile       string
+	TrustAllTools      bool
+	TrustTools         string
 }
 
 func NewFromConfig(cfg BotConfig) (*Bot, error) {
@@ -82,6 +85,9 @@ func NewFromConfig(cfg BotConfig) (*Bot, error) {
 		ThreadAgentMax:     cfg.ThreadAgentMax,
 		ThreadAgentIdleSec: cfg.ThreadAgentIdleSec,
 		MaxScannerBuffer:   cfg.MaxScannerBuffer,
+		AgentProfile:       cfg.AgentProfile,
+		TrustAllTools:      cfg.TrustAllTools,
+		TrustTools:         cfg.TrustTools,
 	})
 
 	b := &Bot{discord: ds, manager: manager, guildID: cfg.GuildID, dataDir: cfg.DataDir, cronTimezone: cfg.CronTimezone, version: cfg.BotVersion,

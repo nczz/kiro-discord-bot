@@ -38,6 +38,9 @@ type Manager struct {
 	threadAgentMax     int
 	threadAgentIdleSec int
 	maxScannerBuffer   int
+	agentProfile       string // --agent flag
+	trustAllTools      bool   // --trust-all-tools
+	trustTools         string // --trust-tools <names>
 }
 
 // threadAgentEntry tracks a per-thread agent and its metadata.
@@ -65,6 +68,9 @@ type ManagerConfig struct {
 	ThreadAgentMax     int
 	ThreadAgentIdleSec int
 	MaxScannerBuffer   int
+	AgentProfile       string
+	TrustAllTools      bool
+	TrustTools         string
 }
 
 func NewManager(cfg ManagerConfig) *Manager {
@@ -87,11 +93,25 @@ func NewManager(cfg ManagerConfig) *Manager {
 		threadAgentMax:     cfg.ThreadAgentMax,
 		threadAgentIdleSec: cfg.ThreadAgentIdleSec,
 		maxScannerBuffer:   cfg.MaxScannerBuffer,
+		agentProfile:       cfg.AgentProfile,
+		trustAllTools:      cfg.TrustAllTools,
+		trustTools:         cfg.TrustTools,
 	}
 }
 
 // MaxScannerBuffer returns the configured scanner buffer limit in bytes.
 func (m *Manager) MaxScannerBuffer() int { return m.maxScannerBuffer }
+
+func (m *Manager) agentOpts() acp.AgentOptions {
+	return acp.AgentOptions{
+		MaxBuffer:     m.maxScannerBuffer,
+		Agent:         m.agentProfile,
+		TrustAllTools: m.trustAllTools,
+		TrustTools:    m.trustTools,
+		BotName:       "kiro-discord-bot",
+		BotVersion:    m.botVersion,
+	}
+}
 
 // stopChannel stops the worker and agent for a channel. Must be called with m.mu held.
 func (m *Manager) stopChannel(channelID string) {
@@ -359,7 +379,7 @@ func (m *Manager) startAgentAndWorker(channelID string) (*Worker, error) {
 		delete(m.agents, channelID)
 	}
 
-	agent, err := acp.StartAgent(agentName, m.kiroCLI, cwd, model, m.maxScannerBuffer)
+	agent, err := acp.StartAgent(agentName, m.kiroCLI, cwd, model, m.agentOpts())
 	if err != nil {
 		return nil, fmt.Errorf("start agent: %w", err)
 	}
@@ -444,7 +464,7 @@ func (m *Manager) CheckAgent(channelID string) error {
 
 // StartTempAgent starts a temporary agent (for cron jobs).
 func (m *Manager) StartTempAgent(name, cwd, model string) (*acp.Agent, error) {
-	return acp.StartAgent(name, m.kiroCLI, cwd, model, m.maxScannerBuffer)
+	return acp.StartAgent(name, m.kiroCLI, cwd, model, m.agentOpts())
 }
 
 // SendCommand sends a slash command (e.g. /compact, /clear) to the channel's agent.
@@ -560,7 +580,7 @@ func (m *Manager) spawnThreadAgent(threadID, parentChannelID string) (*threadAge
 	}
 
 	agentName := "thread-" + threadID
-	agent, err := acp.StartAgent(agentName, m.kiroCLI, cwd, model, m.maxScannerBuffer)
+	agent, err := acp.StartAgent(agentName, m.kiroCLI, cwd, model, m.agentOpts())
 	if err != nil {
 		return nil, err
 	}

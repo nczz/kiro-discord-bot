@@ -43,6 +43,9 @@ func main() {
 		ThreadAgentMax:     cfg.ThreadAgentMax,
 		ThreadAgentIdleSec: cfg.ThreadAgentIdleSec,
 		MaxScannerBuffer:   cfg.MaxScannerBuffer,
+		AgentProfile:       cfg.AgentProfile,
+		TrustAllTools:      cfg.TrustAllTools,
+		TrustTools:         cfg.TrustTools,
 	})
 	if err != nil {
 		log.Fatal(err)

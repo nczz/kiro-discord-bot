@@ -38,9 +38,18 @@ type Agent struct {
 	exited     chan struct{} // closed when child process exits
 }
 
+// AgentOptions configures how an agent is spawned.
+type AgentOptions struct {
+	MaxBuffer     int    // scanner buffer upper limit (bytes); 0 = 64 MiB
+	Agent         string // --agent flag; empty = kiro default
+	TrustAllTools bool   // --trust-all-tools; default true
+	TrustTools    string // --trust-tools <names>; comma-separated, overrides TrustAllTools
+	BotName       string // clientInfo.name
+	BotVersion    string // clientInfo.version
+}
+
 // StartAgent spawns kiro-cli acp and performs the ACP handshake (initialize + session/new).
-// maxBuffer sets the scanner buffer upper limit (bytes); 0 uses the default (64 MiB).
-func StartAgent(name, kiroCLI, cwd, model string, maxBuffer int) (*Agent, error) {
+func StartAgent(name, kiroCLI, cwd, model string, opts AgentOptions) (*Agent, error) {
 	if _, err := os.Stat(kiroCLI); err != nil {
 		return nil, fmt.Errorf("kiro-cli binary not found: %s", kiroCLI)
 	}
@@ -48,9 +57,17 @@ func StartAgent(name, kiroCLI, cwd, model string, maxBuffer int) (*Agent, error)
 		return nil, fmt.Errorf("working directory not found: %s", cwd)
 	}
 
-	args := []string{"acp", "--trust-all-tools"}
+	args := []string{"acp"}
+	if opts.TrustTools != "" {
+		args = append(args, "--trust-tools", opts.TrustTools)
+	} else if opts.TrustAllTools {
+		args = append(args, "--trust-all-tools")
+	}
 	if model != "" {
 		args = append(args, "--model", model)
+	}
+	if opts.Agent != "" {
+		args = append(args, "--agent", opts.Agent)
 	}
 
 	cmd := exec.Command(kiroCLI, args...)
@@ -75,7 +92,7 @@ func StartAgent(name, kiroCLI, cwd, model string, maxBuffer int) (*Agent, error)
 	a := &Agent{
 		Name:      name,
 		cmd:       cmd,
-		transport: NewTransport(stdout, stdin, maxBuffer),
+		transport: NewTransport(stdout, stdin, opts.MaxBuffer),
 		state:     "starting",
 		exited:    make(chan struct{}),
 	}
@@ -114,10 +131,24 @@ func StartAgent(name, kiroCLI, cwd, model string, maxBuffer int) (*Agent, error)
 	}()
 
 	// Handshake: initialize
-	initRaw, err := a.transport.Send(MethodInitialize, map[string]interface{}{
-		"protocolVersion":    ClientProtocolVersion,
-		"clientCapabilities": map[string]interface{}{},
-	})
+	initParams := map[string]interface{}{
+		"protocolVersion": ClientProtocolVersion,
+		"clientCapabilities": map[string]interface{}{
+			"fs":       map[string]interface{}{"readTextFile": true, "writeTextFile": true},
+			"terminal": true,
+		},
+	}
+	if opts.BotName != "" || opts.BotVersion != "" {
+		info := map[string]string{}
+		if opts.BotName != "" {
+			info["name"] = opts.BotName
+		}
+		if opts.BotVersion != "" {
+			info["version"] = opts.BotVersion
+		}
+		initParams["clientInfo"] = info
+	}
+	initRaw, err := a.transport.Send(MethodInitialize, initParams)
 	if err != nil {
 		a.Kill()
 		return nil, fmt.Errorf("initialize: %w", err)
@@ -132,10 +163,9 @@ func StartAgent(name, kiroCLI, cwd, model string, maxBuffer int) (*Agent, error)
 	}
 	log.Printf("[agent:%s] pid=%d protocol=%v kiro=%s", name, cmd.Process.Pid, initResp.ProtocolVersion, version)
 
-	// Handshake: session/new
+	// Handshake: session/new — omit mcpServers so kiro-cli loads its own config
 	sessRaw, err := a.transport.Send(MethodNewSession, map[string]interface{}{
-		"cwd":        cwd,
-		"mcpServers": []interface{}{},
+		"cwd": cwd,
 	})
 	if err != nil {
 		a.Kill()
@@ -498,7 +528,7 @@ func (a *Agent) Kill() {
 
 // PreflightCheck validates the full ACP lifecycle: spawn → handshake → ask → stop.
 func PreflightCheck(kiroCLI string) error {
-	agent, err := StartAgent("preflight", kiroCLI, "/tmp", "", 0)
+	agent, err := StartAgent("preflight", kiroCLI, "/tmp", "", AgentOptions{TrustAllTools: true})
 	if err != nil {
 		return fmt.Errorf("handshake failed: %w", err)
 	}
@@ -518,3 +548,4 @@ func PreflightCheck(kiroCLI string) error {
 	log.Printf("[preflight] kiro-cli v%s, protocol=%v, check passed", agent.AgentVersion(), agent.ProtocolVersion())
 	return nil
 }
+

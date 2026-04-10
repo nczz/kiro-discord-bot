@@ -75,6 +75,9 @@ THREAD_AUTO_ARCHIVE=1440
 THREAD_AGENT_MAX=5
 THREAD_AGENT_IDLE_SEC=900
 MAX_SCANNER_BUFFER_MB=64
+KIRO_AGENT=
+TRUST_ALL_TOOLS=true
+TRUST_TOOLS=
 KIRO_MODEL=
 HEARTBEAT_SEC=60
 ATTACHMENT_RETAIN_DAYS=7
@@ -101,6 +104,9 @@ CRON_TIMEZONE=Asia/Taipei
 | `DOWNLOAD_TIMEOUT_SEC` | Attachment download timeout in seconds | `120` |
 | `QUEUE_BUFFER_SIZE` | Max queued jobs per channel | `20` |
 | `MAX_SCANNER_BUFFER_MB` | Max single-line JSON-RPC buffer from kiro-cli (MB). Increase if agents process many large attachments at once | `64` |
+| `KIRO_AGENT` | Agent profile name for kiro-cli `--agent` flag (empty = kiro default) | `` |
+| `TRUST_ALL_TOOLS` | Auto-approve all tool permission requests (`true`/`false`) | `true` |
+| `TRUST_TOOLS` | Trust only specific tools (comma-separated names). Overrides `TRUST_ALL_TOOLS` when set | `` |
 
 ---
 

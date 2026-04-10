@@ -25,6 +25,9 @@ type Config struct {
 	ThreadAgentMax     int
 	ThreadAgentIdleSec int
 	MaxScannerBuffer   int // bytes, scanner buffer upper limit for kiro-cli stdout
+	AgentProfile       string
+	TrustAllTools      bool
+	TrustTools         string
 }
 
 func loadConfig() *Config {
@@ -47,6 +50,9 @@ func loadConfig() *Config {
 		ThreadAgentMax:     envInt("THREAD_AGENT_MAX", 5),
 		ThreadAgentIdleSec: envInt("THREAD_AGENT_IDLE_SEC", 900),
 		MaxScannerBuffer:   envInt("MAX_SCANNER_BUFFER_MB", 64) * 1024 * 1024,
+		AgentProfile:       envOr("KIRO_AGENT", ""),
+		TrustAllTools:      envOr("TRUST_ALL_TOOLS", "true") == "true",
+		TrustTools:         envOr("TRUST_TOOLS", ""),
 	}
 }
 
