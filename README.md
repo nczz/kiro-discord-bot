@@ -391,12 +391,13 @@ The agent will read the guide, build the binary, update `mcp.json`, and prompt y
 
 ## Notes
 
-- **Session persistence:** Sessions survive as long as the agent process is alive. Bot restart creates a new session (kiro-cli 1.28.1 does not support `session/load`).
-- **MCP servers:** Inherited from `~/.kiro/settings/mcp.json` automatically.
-- **Project steering:** Add `.kiro/steering/*.md` in the project directory to guide agent behavior.
-- **Long responses:** Automatically split into multiple messages with `(1/N)` labels.
+- **Session persistence:** Sessions survive as long as the agent process is alive. Bot restart creates a new session with conversation history injected into the first prompt (budget-based: recent turns kept intact, older turns truncated, 20K char default).
+- **MCP servers:** Inherited from `~/.kiro/settings/mcp.json` automatically. Note: ACP `session/new` mcpServers field is currently ignored by kiro-cli ([#7349](https://github.com/kirodotdev/Kiro/issues/7349)).
+- **Project steering:** Add `.kiro/steering/*.md` in the project directory or `~/.kiro/steering/` globally to guide agent behavior.
+- **Long responses:** Automatically split into multiple messages at 2000 char Discord limit.
 - **Conversation logs:** All user/agent interactions are recorded in `DATA_DIR/ch-<channelID>/chat.jsonl`.
 - **Attachments:** Stored in `DATA_DIR/ch-<channelID>/attachments/` with timestamp prefixes. Auto-cleaned after `ATTACHMENT_RETAIN_DAYS`.
+- **Thread agents:** Idle timeout respects active work — `lastActivity` is updated during tool execution, preventing premature cleanup of long-running tasks.
 - **Cron jobs:** Definitions in `DATA_DIR/cron/cron.json`, execution history in `DATA_DIR/cron/<jobID>/history.jsonl` (includes full agent output).
 
 ---

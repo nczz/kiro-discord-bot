@@ -115,16 +115,17 @@ func (b *Bot) downloadAttachments(channelID string, attachments []*discordgo.Mes
 }
 
 // buildPrompt combines user text with attachment paths into an effective prompt.
-func buildPrompt(text string, attachments []string, channelID, guildID string) string {
-	return buildPromptThread(text, attachments, channelID, "", guildID)
+func buildPrompt(text string, attachments []string, channelID, guildID, username string) string {
+	return buildPromptThread(text, attachments, channelID, "", guildID, username)
 }
 
-func buildPromptThread(text string, attachments []string, channelID, threadID, guildID string) string {
+func buildPromptThread(text string, attachments []string, channelID, threadID, guildID, username string) string {
 	var sb strings.Builder
+	sb.WriteString("[Discord bot environment] Your responses are automatically forwarded to a Discord thread. Each message is split at 2000 chars. Tool execution details are also shown.\n")
 	if threadID != "" {
-		sb.WriteString(fmt.Sprintf("[Discord context] channel_id=%s thread_id=%s guild_id=%s\n\n", channelID, threadID, guildID))
+		sb.WriteString(fmt.Sprintf("[Discord context] channel_id=%s thread_id=%s guild_id=%s user=%s\n\n", channelID, threadID, guildID, username))
 	} else {
-		sb.WriteString(fmt.Sprintf("[Discord context] channel_id=%s guild_id=%s\n\n", channelID, guildID))
+		sb.WriteString(fmt.Sprintf("[Discord context] channel_id=%s guild_id=%s user=%s\n\n", channelID, guildID, username))
 	}
 	if len(attachments) > 0 {
 		sb.WriteString("[Attached files]\n")
@@ -300,7 +301,7 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 		// Download attachments if any
 		localPaths := b.downloadAttachments(m.ChannelID, m.Attachments)
 		b.warnIfAttachmentsLarge(ds, m.ChannelID, localPaths)
-		prompt := buildPrompt(content, localPaths, m.ChannelID, m.GuildID)
+		prompt := buildPrompt(content, localPaths, m.ChannelID, m.GuildID, m.Author.Username)
 
 		job := &channel.Job{
 			ChannelID:   m.ChannelID,
@@ -352,7 +353,7 @@ func (b *Bot) handleThreadMessage(ds *discordgo.Session, m *discordgo.MessageCre
 	// Build prompt and enqueue to thread agent
 	localPaths := b.downloadAttachments(threadID, m.Attachments)
 	b.warnIfAttachmentsLarge(ds, threadID, localPaths)
-	prompt := buildPromptThread(content, localPaths, parentChannelID, threadID, m.GuildID)
+	prompt := buildPromptThread(content, localPaths, parentChannelID, threadID, m.GuildID, m.Author.Username)
 
 	job := &channel.Job{
 		ChannelID:   threadID,

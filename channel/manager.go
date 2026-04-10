@@ -397,12 +397,10 @@ func (m *Manager) startAgentAndWorker(channelID string) (*Worker, error) {
 		log.Printf("[manager] agent %s exited, will restart on next message", agentName)
 	})
 
-	// Inject previous conversation context into new session
-	if ctx := m.logger.BuildContextPrompt(channelID, 10); ctx != "" {
-		askCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		_, _ = agent.Ask(askCtx, ctx+"Please acknowledge you have this context. Reply with: OK", nil)
-		cancel()
-		log.Printf("[manager] injected %d chars of history into %s", len(ctx), agentName)
+	// Prepare conversation history to inject into first prompt (no wasted Ask round)
+	historyCtx := m.logger.BuildContextPrompt(channelID, 10)
+	if historyCtx != "" {
+		log.Printf("[manager] prepared %d chars of history for %s", len(historyCtx), agentName)
 	}
 
 	if err := m.store.Set(channelID, &Session{
@@ -416,6 +414,7 @@ func (m *Manager) startAgentAndWorker(channelID string) (*Worker, error) {
 	}
 
 	w := NewWorker(channelID, agent, m.queueBufSize, m.askTimeoutSec, m.streamUpdateSec, m.threadArchive, m.logger, model)
+	w.SetHistoryPrefix(historyCtx)
 	w.Start()
 	m.workers[channelID] = w
 	return w, nil
@@ -600,15 +599,29 @@ func (m *Manager) spawnThreadAgent(threadID, parentChannelID string) (*threadAge
 		log.Printf("[manager] thread agent %s exited unexpectedly", agentName)
 	})
 
-	// Inject conversation history
-	m.injectThreadHistory(agent, parentChannelID, threadID)
+	// Prepare history to inject into first prompt
+	historyCtx := m.buildThreadHistory(parentChannelID, threadID)
+	if historyCtx != "" {
+		log.Printf("[manager] prepared %d chars of history for thread-%s", len(historyCtx), threadID)
+	}
 
 	w := NewWorker("thread-"+threadID, agent, m.queueBufSize, m.askTimeoutSec, m.streamUpdateSec, 0, m.logger, model)
+	w.SetHistoryPrefix(historyCtx)
+	w.OnActivityFunc(func() { m.TouchThreadAgent(threadID) })
 	w.Start()
 	entry.worker = w
 
 	log.Printf("[manager] spawned thread agent %s (parent=%s)", agentName, parentChannelID)
 	return entry, nil
+}
+
+// TouchThreadAgent updates lastActivity to prevent idle cleanup while agent is working.
+func (m *Manager) TouchThreadAgent(threadID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if entry, ok := m.threadAgents[threadID]; ok {
+		entry.lastActivity = time.Now()
+	}
 }
 
 // StopThreadAgent stops a specific thread agent.
@@ -686,28 +699,18 @@ func (m *Manager) evictOldestThreadAgent() {
 	}
 }
 
-// injectThreadHistory loads conversation history into a thread agent.
-// Tries thread-specific JSONL first, falls back to original task context from parent channel.
-func (m *Manager) injectThreadHistory(agent *acp.Agent, parentChannelID, threadID string) {
-	// Try thread-specific JSONL first
+// buildThreadHistory builds conversation history string for a thread agent.
+func (m *Manager) buildThreadHistory(parentChannelID, threadID string) string {
 	ctx := m.logger.BuildContextPrompt("thread-"+threadID, 20)
 	if ctx == "" {
-		// No thread history yet — try to get the original task context from parent channel log
-		// The last assistant response before this thread was created is the seed context
 		ctx = m.logger.BuildContextPrompt(parentChannelID, 4)
 	}
 	if ctx == "" {
-		return
+		return ""
 	}
-
-	// Truncate if too large (rough limit: 80K chars ≈ safe for most models)
 	const maxCtxChars = 80000
 	if len(ctx) > maxCtxChars {
 		ctx = ctx[len(ctx)-maxCtxChars:]
 	}
-
-	askCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	_, _ = agent.Ask(askCtx, ctx+"Please acknowledge you have this context. Reply with: OK", nil)
-	cancel()
-	log.Printf("[manager] injected %d chars of history into thread-%s", len(ctx), threadID)
+	return ctx
 }

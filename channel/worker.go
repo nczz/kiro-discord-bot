@@ -46,6 +46,10 @@ type Worker struct {
 
 	// Current thread info (protected by cancelMu)
 	currentThreadID string
+
+	onActivity func() // called during work to signal liveness (prevents idle cleanup)
+
+	historyPrefix string // prepended to first job's prompt, then cleared
 }
 
 func NewWorker(channelID string, agent *acp.Agent, bufSize, askTimeoutSec, streamUpdateSec, threadArchive int, logger *ChatLogger, model string) *Worker {
@@ -62,6 +66,12 @@ func NewWorker(channelID string, agent *acp.Agent, bufSize, askTimeoutSec, strea
 		model:           model,
 	}
 }
+
+// OnActivityFunc sets a callback invoked during work to signal liveness.
+func (w *Worker) OnActivityFunc(fn func()) { w.onActivity = fn }
+
+// SetHistoryPrefix sets conversation history to prepend to the first job's prompt.
+func (w *Worker) SetHistoryPrefix(s string) { w.historyPrefix = s }
 
 func (w *Worker) Enqueue(job *Job) error {
 	select {
@@ -227,6 +237,9 @@ func (w *Worker) execute(job *Job) {
 	// Async callbacks — all post to thread
 	callbacks := acp.AsyncCallbacks{
 		OnToolCall: func(evt acp.ToolCallEvent) {
+			if w.onActivity != nil {
+				w.onActivity()
+			}
 			title := evt.Title
 			if title == "" {
 				title = "tool"
@@ -245,6 +258,9 @@ func (w *Worker) execute(job *Job) {
 			swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "⚙️")
 		},
 		OnToolResult: func(evt acp.ToolCallEvent) {
+			if w.onActivity != nil {
+				w.onActivity()
+			}
 			swapReaction(ds, job.ChannelID, job.MessageID, "⚙️", "🔄")
 			// Send tool output to thread if meaningful
 			if evt.RawOutput != "" && evt.Status == "completed" {
@@ -343,7 +359,7 @@ func (w *Worker) execute(job *Job) {
 	w.agent.OnReadErrorFunc(func(err error) {
 		log.Printf("[worker %s] agent read error | user=%s msg=%s elapsed=%s err=%v",
 			w.channelID, job.Username, job.MessageID, time.Since(startTime).Round(time.Millisecond), err)
-		msg := fmt.Sprintf("⚠️ "+L.Getf("error.agent_read", err))
+		msg := L.Getf("error.agent_read", err)
 		ds.ChannelMessageSend(threadID, msg)
 		swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "⚠️")
 		swapReaction(ds, job.ChannelID, job.MessageID, "⚙️", "⚠️")
@@ -357,6 +373,12 @@ func (w *Worker) execute(job *Job) {
 
 	// Inject thread ID into prompt so agent can post directly to thread via MCP
 	prompt := strings.Replace(job.Prompt, "channel_id="+job.ChannelID, "channel_id="+job.ChannelID+" thread_id="+threadID, 1)
+
+	// Prepend conversation history to first prompt (avoids wasting a separate Ask round)
+	if w.historyPrefix != "" {
+		prompt = w.historyPrefix + prompt
+		w.historyPrefix = ""
+	}
 
 	w.agent.AskAsync(prompt, callbacks)
 	// Returns immediately — callbacks handle the rest

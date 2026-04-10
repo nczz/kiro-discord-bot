@@ -103,22 +103,52 @@ func (l *ChatLogger) RecentHistory(channelID string, maxTurns int) []ChatEntry {
 }
 
 // BuildContextPrompt formats recent history as a context preamble for a new session.
-// Returns empty string if no history.
+// Uses budget-based approach: recent turns kept intact, older turns truncated to fit within maxChars.
 func (l *ChatLogger) BuildContextPrompt(channelID string, maxTurns int) string {
+	return l.BuildContextPromptBudget(channelID, maxTurns, 20000)
+}
+
+// BuildContextPromptBudget formats recent history with a total character budget.
+// Recent turns are kept intact; older turns are progressively truncated.
+func (l *ChatLogger) BuildContextPromptBudget(channelID string, maxTurns, maxChars int) string {
 	entries := l.RecentHistory(channelID, maxTurns)
 	if len(entries) == 0 {
 		return ""
 	}
+
+	// Calculate total raw size
+	total := 0
+	for _, e := range entries {
+		total += len(e.Content)
+	}
+
 	var sb strings.Builder
 	sb.WriteString("[Previous conversation context for session continuity]\n")
-	for _, e := range entries {
+
+	budget := maxChars
+	// Process from newest to oldest, reserving budget for recent entries
+	reserved := make([]int, len(entries))
+	for i := len(entries) - 1; i >= 0 && budget > 0; i-- {
+		take := len(entries[i].Content)
+		if take > budget {
+			take = budget
+		}
+		reserved[i] = take
+		budget -= take
+	}
+
+	for i, e := range entries {
 		role := "User"
 		if e.Role == "assistant" {
 			role = "Assistant"
 		}
 		content := e.Content
-		if len(content) > 500 {
-			content = content[:500] + "...(truncated)"
+		if reserved[i] < len(content) {
+			if reserved[i] > 50 {
+				content = content[:reserved[i]] + "…(truncated)"
+			} else {
+				content = "(omitted)"
+			}
 		}
 		sb.WriteString(fmt.Sprintf("[%s] %s\n", role, content))
 	}
