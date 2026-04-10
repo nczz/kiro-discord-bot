@@ -156,10 +156,15 @@ func (w *Worker) run() {
 }
 
 func promptSummary(prompt string, maxLen int) string {
-	// Strip Discord context prefix
-	if idx := strings.Index(prompt, "\n\n"); idx > 0 && idx < 120 {
-		prompt = prompt[idx+2:]
+	// Skip all leading [...] metadata lines
+	for strings.HasPrefix(prompt, "[") {
+		if nl := strings.Index(prompt, "\n"); nl >= 0 {
+			prompt = prompt[nl+1:]
+		} else {
+			break
+		}
 	}
+	prompt = strings.TrimSpace(prompt)
 	if len(prompt) > maxLen {
 		return truncateUTF8(prompt, maxLen-3) + "..."
 	}
@@ -192,17 +197,31 @@ func (w *Worker) execute(job *Job) {
 		// Thread follow-up: post directly to existing thread
 		threadID = job.ThreadID
 	} else {
-		// Create thread from user's message
+		// Create thread from user's message — strip metadata prefix lines
 		threadName := job.Prompt
+		// Skip all leading [...] lines and blank lines to get to user content
+		for {
+			if strings.HasPrefix(threadName, "[") {
+				if nl := strings.Index(threadName, "\n"); nl >= 0 {
+					threadName = threadName[nl+1:]
+					continue
+				}
+			}
+			if strings.HasPrefix(threadName, "\n") {
+				threadName = threadName[1:]
+				continue
+			}
+			break
+		}
+		// Also skip "[Attached files]\n- ...\n\n" block
+		if strings.HasPrefix(threadName, "- /") {
+			if idx := strings.Index(threadName, "\n\n"); idx >= 0 {
+				threadName = threadName[idx+2:]
+			}
+		}
+		threadName = strings.TrimSpace(threadName)
 		if len(threadName) > 95 {
 			threadName = truncateUTF8(threadName, 92) + "..."
-		}
-		// Strip Discord context prefix for cleaner thread name
-		if idx := strings.Index(threadName, "\n\n"); idx > 0 && idx < 80 {
-			threadName = threadName[idx+2:]
-			if len(threadName) > 95 {
-				threadName = truncateUTF8(threadName, 92) + "..."
-			}
 		}
 		if threadName == "" {
 			threadName = "Task"
