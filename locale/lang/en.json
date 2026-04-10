@@ -111,5 +111,6 @@
   "thread_agent.closed": "🔒 Thread agent closed.",
   "thread_agent.idle_closed": "💤 Thread agent closed due to inactivity. Send a message to restart.",
   "thread_agent.spawning": "🔄 Starting thread agent...",
-  "thread_agent.limit_reached": "⚠️ Thread agent limit reached, closed the least recently used agent."
+  "thread_agent.limit_reached": "⚠️ Thread agent limit reached, closed the least recently used agent.",
+  "warn.attachments_large": "⚠️ Total attachment size ~%d MB may exceed processing limit (%d MB). Consider sending files in batches or adjusting MAX_SCANNER_BUFFER_MB."
 }

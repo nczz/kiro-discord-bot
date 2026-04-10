@@ -55,6 +55,28 @@ func registerThreadParent(threadID, parentChannelID string) {
 	threadParentMu.Unlock()
 }
 
+// warnIfAttachmentsLarge checks total attachment size and sends a warning if it may exceed the scanner buffer.
+func (b *Bot) warnIfAttachmentsLarge(ds *discordgo.Session, channelID string, paths []string) {
+	if len(paths) == 0 {
+		return
+	}
+	limit := b.manager.MaxScannerBuffer()
+	if limit <= 0 {
+		return
+	}
+	var total int64
+	for _, p := range paths {
+		if fi, err := os.Stat(p); err == nil {
+			total += fi.Size()
+		}
+	}
+	// base64 expansion ≈ ×1.37, use ×1.5 as safety margin
+	if int64(float64(total)*1.5) > int64(limit) {
+		mb := total / (1024 * 1024)
+		ds.ChannelMessageSend(channelID, L.Getf("warn.attachments_large", mb, limit/(1024*1024)))
+	}
+}
+
 
 // downloadAttachments saves message attachments to DATA_DIR/ch-<channelID>/attachments/ and returns local paths.
 func (b *Bot) downloadAttachments(channelID string, attachments []*discordgo.MessageAttachment) []string {
@@ -277,6 +299,7 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 
 		// Download attachments if any
 		localPaths := b.downloadAttachments(m.ChannelID, m.Attachments)
+		b.warnIfAttachmentsLarge(ds, m.ChannelID, localPaths)
 		prompt := buildPrompt(content, localPaths, m.ChannelID, m.GuildID)
 
 		job := &channel.Job{
@@ -328,6 +351,7 @@ func (b *Bot) handleThreadMessage(ds *discordgo.Session, m *discordgo.MessageCre
 
 	// Build prompt and enqueue to thread agent
 	localPaths := b.downloadAttachments(threadID, m.Attachments)
+	b.warnIfAttachmentsLarge(ds, threadID, localPaths)
 	prompt := buildPromptThread(content, localPaths, parentChannelID, threadID, m.GuildID)
 
 	job := &channel.Job{

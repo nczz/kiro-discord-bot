@@ -42,6 +42,7 @@ func main() {
 		DownloadTimeoutSec: cfg.DownloadTimeoutSec,
 		ThreadAgentMax:     cfg.ThreadAgentMax,
 		ThreadAgentIdleSec: cfg.ThreadAgentIdleSec,
+		MaxScannerBuffer:   cfg.MaxScannerBuffer,
 	})
 	if err != nil {
 		log.Fatal(err)

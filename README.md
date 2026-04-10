@@ -74,6 +74,7 @@ STREAM_UPDATE_SEC=3
 THREAD_AUTO_ARCHIVE=1440
 THREAD_AGENT_MAX=5
 THREAD_AGENT_IDLE_SEC=900
+MAX_SCANNER_BUFFER_MB=64
 KIRO_MODEL=
 HEARTBEAT_SEC=60
 ATTACHMENT_RETAIN_DAYS=7
@@ -99,6 +100,7 @@ CRON_TIMEZONE=Asia/Taipei
 | `BOT_LOCALE` | Bot display language (`en`, `zh-TW`) | `en` |
 | `DOWNLOAD_TIMEOUT_SEC` | Attachment download timeout in seconds | `120` |
 | `QUEUE_BUFFER_SIZE` | Max queued jobs per channel | `20` |
+| `MAX_SCANNER_BUFFER_MB` | Max single-line JSON-RPC buffer from kiro-cli (MB). Increase if agents process many large attachments at once | `64` |
 
 ---
 

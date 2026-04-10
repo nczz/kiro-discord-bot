@@ -45,23 +45,42 @@ type Transport struct {
 	pending   map[int64]chan *rpcResponse
 	pendingMu sync.Mutex
 
+	// done is closed when ReadLoop exits; doneErr holds the reason.
+	done    chan struct{}
+	doneErr error
+
 	// OnNotification is called for incoming notifications.
 	OnNotification func(method string, params json.RawMessage)
 }
 
 // NewTransport creates a transport over the given reader/writer (typically stdout/stdin of a child process).
-func NewTransport(r io.Reader, w io.Writer) *Transport {
+// maxBuffer sets the maximum token size for the line scanner (bytes). If <= 0, defaults to 64 MiB.
+func NewTransport(r io.Reader, w io.Writer, maxBuffer int) *Transport {
+	if maxBuffer <= 0 {
+		maxBuffer = 64 * 1024 * 1024
+	}
 	s := bufio.NewScanner(r)
-	s.Buffer(make([]byte, 1024*1024), 10*1024*1024)
+	s.Buffer(make([]byte, 1024*1024), maxBuffer)
 	return &Transport{
 		writer:  w,
 		scanner: s,
 		pending: make(map[int64]chan *rpcResponse),
+		done:    make(chan struct{}),
 	}
 }
 
-// Send sends a JSON-RPC request and blocks until the response arrives.
+// Send sends a JSON-RPC request and blocks until the response arrives or ReadLoop exits.
 func (t *Transport) Send(method string, params interface{}) (json.RawMessage, error) {
+	// Fast path: if ReadLoop already dead, fail immediately.
+	select {
+	case <-t.done:
+		if t.doneErr != nil {
+			return nil, fmt.Errorf("transport closed: %w", t.doneErr)
+		}
+		return nil, fmt.Errorf("transport closed")
+	default:
+	}
+
 	id := t.nextID.Add(1)
 	ch := make(chan *rpcResponse, 1)
 
@@ -79,14 +98,27 @@ func (t *Transport) Send(method string, params interface{}) (json.RawMessage, er
 	_, err = t.writer.Write(data)
 	t.mu.Unlock()
 	if err != nil {
+		t.pendingMu.Lock()
+		delete(t.pending, id)
+		t.pendingMu.Unlock()
 		return nil, fmt.Errorf("write: %w", err)
 	}
 
-	resp := <-ch
-	if resp.Error != nil {
-		return nil, resp.Error
+	select {
+	case resp := <-ch:
+		if resp.Error != nil {
+			return nil, resp.Error
+		}
+		return resp.Result, nil
+	case <-t.done:
+		t.pendingMu.Lock()
+		delete(t.pending, id)
+		t.pendingMu.Unlock()
+		if t.doneErr != nil {
+			return nil, fmt.Errorf("transport closed: %w", t.doneErr)
+		}
+		return nil, fmt.Errorf("transport closed")
 	}
-	return resp.Result, nil
 }
 
 // ReadLoop reads ndjson lines and dispatches responses and notifications. Blocks until EOF.
@@ -145,7 +177,26 @@ func (t *Transport) ReadLoop() error {
 			})
 		}
 	}
-	return t.scanner.Err()
+
+	err := t.scanner.Err()
+	t.doneErr = err
+	close(t.done)
+	t.failAllPending(err)
+	return err
+}
+
+// failAllPending unblocks all pending Send() calls with an error.
+func (t *Transport) failAllPending(reason error) {
+	msg := "transport closed"
+	if reason != nil {
+		msg = reason.Error()
+	}
+	t.pendingMu.Lock()
+	for id, ch := range t.pending {
+		ch <- &rpcResponse{Error: &RPCError{Code: -1, Message: msg}}
+		delete(t.pending, id)
+	}
+	t.pendingMu.Unlock()
 }
 
 func (t *Transport) respond(id int64, result interface{}) {

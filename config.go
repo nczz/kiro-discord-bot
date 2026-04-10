@@ -24,6 +24,7 @@ type Config struct {
 	ThreadAutoArchive  int
 	ThreadAgentMax     int
 	ThreadAgentIdleSec int
+	MaxScannerBuffer   int // bytes, scanner buffer upper limit for kiro-cli stdout
 }
 
 func loadConfig() *Config {
@@ -45,6 +46,7 @@ func loadConfig() *Config {
 		ThreadAutoArchive:  envInt("THREAD_AUTO_ARCHIVE", 1440),
 		ThreadAgentMax:     envInt("THREAD_AGENT_MAX", 5),
 		ThreadAgentIdleSec: envInt("THREAD_AGENT_IDLE_SEC", 900),
+		MaxScannerBuffer:   envInt("MAX_SCANNER_BUFFER_MB", 64) * 1024 * 1024,
 	}
 }
 

@@ -104,5 +104,6 @@
   "thread_agent.closed": "🔒 討論串 agent 已關閉。",
   "thread_agent.idle_closed": "💤 討論串 agent 已因閒置關閉。再次發訊息可重新啟動。",
   "thread_agent.spawning": "🔄 正在啟動討論串 agent...",
-  "thread_agent.limit_reached": "⚠️ 已達討論串 agent 上限，已關閉最久未使用的 agent。"
+  "thread_agent.limit_reached": "⚠️ 已達討論串 agent 上限，已關閉最久未使用的 agent。",
+  "warn.attachments_large": "⚠️ 附件總大小約 %d MB，可能超過處理上限（%d MB），建議分次傳送或調整 MAX_SCANNER_BUFFER_MB 設定。"
 }

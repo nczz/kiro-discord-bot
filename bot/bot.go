@@ -52,6 +52,7 @@ type BotConfig struct {
 	DownloadTimeoutSec int
 	ThreadAgentMax     int
 	ThreadAgentIdleSec int
+	MaxScannerBuffer   int
 }
 
 func NewFromConfig(cfg BotConfig) (*Bot, error) {
@@ -80,6 +81,7 @@ func NewFromConfig(cfg BotConfig) (*Bot, error) {
 		GuildID:            cfg.GuildID,
 		ThreadAgentMax:     cfg.ThreadAgentMax,
 		ThreadAgentIdleSec: cfg.ThreadAgentIdleSec,
+		MaxScannerBuffer:   cfg.MaxScannerBuffer,
 	})
 
 	b := &Bot{discord: ds, manager: manager, guildID: cfg.GuildID, dataDir: cfg.DataDir, cronTimezone: cfg.CronTimezone, version: cfg.BotVersion,

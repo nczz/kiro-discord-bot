@@ -39,7 +39,8 @@ type Agent struct {
 }
 
 // StartAgent spawns kiro-cli acp and performs the ACP handshake (initialize + session/new).
-func StartAgent(name, kiroCLI, cwd, model string) (*Agent, error) {
+// maxBuffer sets the scanner buffer upper limit (bytes); 0 uses the default (64 MiB).
+func StartAgent(name, kiroCLI, cwd, model string, maxBuffer int) (*Agent, error) {
 	if _, err := os.Stat(kiroCLI); err != nil {
 		return nil, fmt.Errorf("kiro-cli binary not found: %s", kiroCLI)
 	}
@@ -74,7 +75,7 @@ func StartAgent(name, kiroCLI, cwd, model string) (*Agent, error) {
 	a := &Agent{
 		Name:      name,
 		cmd:       cmd,
-		transport: NewTransport(stdout, stdin),
+		transport: NewTransport(stdout, stdin, maxBuffer),
 		state:     "starting",
 		exited:    make(chan struct{}),
 	}
@@ -442,9 +443,9 @@ func (a *Agent) IsBusy() bool {
 	return a.state == "working"
 }
 
-// CancelPrompt sends a session/cancel request to the agent.
+// CancelPrompt sends a session/cancel request to the agent without blocking.
 func (a *Agent) CancelPrompt() {
-	a.transport.Send(MethodCancel, map[string]string{"sessionId": a.SessionID})
+	go a.transport.Send(MethodCancel, map[string]string{"sessionId": a.SessionID})
 }
 
 // ContextUsage returns the latest context usage percentage (0-100).
@@ -497,7 +498,7 @@ func (a *Agent) Kill() {
 
 // PreflightCheck validates the full ACP lifecycle: spawn → handshake → ask → stop.
 func PreflightCheck(kiroCLI string) error {
-	agent, err := StartAgent("preflight", kiroCLI, "/tmp", "")
+	agent, err := StartAgent("preflight", kiroCLI, "/tmp", "", 0)
 	if err != nil {
 		return fmt.Errorf("handshake failed: %w", err)
 	}

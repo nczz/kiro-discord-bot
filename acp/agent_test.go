@@ -20,7 +20,7 @@ func kiroCLI(t *testing.T) string {
 
 func TestStartAndAsk(t *testing.T) {
 	cli := kiroCLI(t)
-	agent, err := acp.StartAgent("test-ask", cli, os.TempDir(), "")
+	agent, err := acp.StartAgent("test-ask", cli, os.TempDir(), "", 0)
 	if err != nil {
 		t.Fatalf("StartAgent: %v", err)
 	}
@@ -50,7 +50,7 @@ func TestStartAndAsk(t *testing.T) {
 
 func TestStreaming(t *testing.T) {
 	cli := kiroCLI(t)
-	agent, err := acp.StartAgent("test-stream", cli, os.TempDir(), "")
+	agent, err := acp.StartAgent("test-stream", cli, os.TempDir(), "", 0)
 	if err != nil {
 		t.Fatalf("StartAgent: %v", err)
 	}
@@ -77,7 +77,7 @@ func TestStreaming(t *testing.T) {
 
 func TestCancel(t *testing.T) {
 	cli := kiroCLI(t)
-	agent, err := acp.StartAgent("test-cancel", cli, os.TempDir(), "")
+	agent, err := acp.StartAgent("test-cancel", cli, os.TempDir(), "", 0)
 	if err != nil {
 		t.Fatalf("StartAgent: %v", err)
 	}
@@ -98,7 +98,7 @@ func TestCancel(t *testing.T) {
 
 func TestStop(t *testing.T) {
 	cli := kiroCLI(t)
-	agent, err := acp.StartAgent("test-stop", cli, os.TempDir(), "")
+	agent, err := acp.StartAgent("test-stop", cli, os.TempDir(), "", 0)
 	if err != nil {
 		t.Fatalf("StartAgent: %v", err)
 	}
@@ -123,7 +123,7 @@ func TestStop(t *testing.T) {
 
 func TestContextMemory(t *testing.T) {
 	cli := kiroCLI(t)
-	agent, err := acp.StartAgent("test-memory", cli, os.TempDir(), "")
+	agent, err := acp.StartAgent("test-memory", cli, os.TempDir(), "", 0)
 	if err != nil {
 		t.Fatalf("StartAgent: %v", err)
 	}
