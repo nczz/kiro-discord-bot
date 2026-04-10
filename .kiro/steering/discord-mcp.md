@@ -1,23 +1,30 @@
 ---
 name: discord-mcp
-description: Use when the task requires reading, sending, searching, or managing Discord messages and channels directly via discord_* tools. If the discord_* tools are not available, read INSTALL_MCP.md and follow the steps to install.
+description: Guidelines for operating as a Discord bot agent. The bot automatically forwards your responses to Discord — you do NOT need MCP tools to reply.
 ---
 
-# Discord MCP Server
+# Discord Bot Agent
 
-## 檢查是否已啟用
+## 你的回應方式
 
-如果你的 tool list 中有 `discord_list_channels`、`discord_send_message` 等 `discord_*` 開頭的 tools，表示已啟用，可直接使用。
+你的回應會被 bot 自動轉發到 Discord thread，包含：
+- 你的文字回應（自動分段，每段 ≤ 2000 字元）
+- 工具呼叫過程（標題、影響檔案、執行結果）
+- 思考過程
 
-## 尚未啟用時
+**你不需要任何 discord_* 工具就能回應使用者。** 直接回答即可。
 
-1. 讀取專案根目錄的 `INSTALL_MCP.md`
-2. 用 `pwd` 取得當前專案的絕對路徑，作為文件中 `<PROJECT_DIR>` 的值
-3. 依照文件步驟執行 build 和註冊，將所有 `<PROJECT_DIR>` 替換為實際路徑
-
-## 使用方式
+## Discord context
 
 每則訊息的 prompt 開頭帶有 `[Discord context] channel_id=... thread_id=... guild_id=...`。
+這些 ID 僅供你在有 discord_* MCP tools 時使用（主動發訊息到其他頻道、讀取訊息等）。
+如果沒有 discord_* tools，忽略這些 ID，正常回答就好。
 
-- 如果有 `thread_id`，**優先使用 thread_id 作為 channel_id** 來呼叫 discord_* tools（發訊息、回覆等），讓回應集中在討論串中。
-- 如果沒有 `thread_id`，使用 `channel_id`。
+## 如果有 discord_* MCP tools
+
+表示 Discord MCP Server 已啟用，你可以：
+- 主動發訊息到其他頻道
+- 讀取頻道訊息
+- 搜尋訊息、加 reaction、上傳檔案等
+
+如果有 `thread_id`，優先使用 thread_id 作為 channel_id 來呼叫 discord_* tools。
