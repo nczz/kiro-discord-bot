@@ -20,7 +20,7 @@ Turn any Discord channel into an AI-powered workspace. This bot connects Discord
 ### Prerequisites
 
 - Go 1.21+
-- [kiro-cli](https://cli.kiro.dev/install) installed and logged in
+- [kiro-cli](https://cli.kiro.dev/install) 1.29+ installed and logged in
 - A Discord bot token with the following:
   - Scopes: `bot`, `applications.commands`
   - Permissions: View Channels, Send Messages, Add Reactions, Read Message History
@@ -409,7 +409,7 @@ The agent will read the guide, build the binary, update `mcp.json`, and prompt y
 ### 前置需求
 
 - Go 1.21+
-- 已安裝並登入 [kiro-cli](https://cli.kiro.dev/install)
+- 已安裝並登入 [kiro-cli](https://cli.kiro.dev/install) 1.29+
 - Discord bot token，需具備：
   - Scopes：`bot`、`applications.commands`
   - 權限：查看頻道、發送訊息、新增反應、讀取訊息歷史
