@@ -292,8 +292,14 @@ kiro-discord-bot/
 ├── stt/
 │   └── stt.go            Speech-to-text client (Groq / OpenAI Whisper)
 ├── cmd/
-│   └── mcp-discord/
-│       └── main.go       Discord MCP server (optional)
+│   ├── mcp-discord/
+│   │   └── main.go       Discord MCP server (optional)
+│   └── mcp-media/
+│       ├── main.go        Media generation MCP server
+│       ├── provider.go    Interfaces and types
+│       ├── registry.go    Model routing
+│       ├── gemini.go      Google Gemini provider
+│       └── openai.go      OpenAI provider
 ├── .kiro/
 │   └── steering/
 │       └── discord-mcp.md  agent steering (install to ~/.kiro/steering/)
@@ -303,6 +309,71 @@ kiro-discord-bot/
 ├── .env.example
 └── README.md
 ```
+
+---
+
+## Optional: Media Generation MCP Server
+
+This project includes a Media Generation MCP Server (`cmd/mcp-media/`) that gives the kiro agent the ability to generate images, videos, music, and speech using Google Gemini and OpenAI APIs.
+
+### Supported Capabilities
+
+| Tool | Description | Providers |
+|------|-------------|-----------|
+| `generate_image` | Text-to-image generation | Gemini (Nano Banana 2/Pro), OpenAI (GPT Image, DALL·E 3) |
+| `edit_image` | Edit images with natural language | Gemini, OpenAI |
+| `generate_video` | Text/image-to-video generation | Gemini (Veo 3.1) |
+| `generate_music` | Text-to-music generation | Gemini (Lyria) |
+| `text_to_speech` | Text-to-speech synthesis | OpenAI (tts-1-hd), Gemini |
+| `list_models` | List all available models | All |
+
+### Quick Install
+
+```bash
+# 1. Build the MCP server binary
+go build -o mcp-media-server ./cmd/mcp-media/
+
+# 2. Register in kiro MCP settings
+# Add the following to ~/.kiro/settings/mcp.json under "mcpServers":
+```
+
+```json
+"mcp-media": {
+  "command": "/absolute/path/to/mcp-media-server",
+  "env": {
+    "GEMINI_API_KEY": "your-gemini-api-key",
+    "OPENAI_API_KEY": "your-openai-api-key"
+  }
+}
+```
+
+Get your API keys:
+- Gemini: [Google AI Studio](https://aistudio.google.com/apikey) (free tier available)
+- OpenAI: [OpenAI Platform](https://platform.openai.com/api-keys)
+
+```bash
+# 3. Restart the agent session
+# Use /reset or !reset in Discord
+```
+
+### Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `GEMINI_API_KEY` | Google Gemini API key | — |
+| `OPENAI_API_KEY` | OpenAI API key | — |
+| `MEDIA_DEFAULT_IMAGE_MODEL` | Default image model | `nano-banana-2` |
+| `MEDIA_DEFAULT_TTS_MODEL` | Default TTS model | first registered |
+| `MEDIA_OUTPUT_DIR` | Directory for generated files | `/tmp/mcp-media` |
+
+### Available Models
+
+**Image:** `nano-banana-2`, `nano-banana-pro`, `nano-banana`, `gpt-image`, `dall-e-3`
+**Video:** `veo-3.1`
+**Music:** `lyria`
+**TTS:** `tts-1-hd`, `tts-1`, `gemini-tts`
+
+Only providers with configured API keys are registered. If only `GEMINI_API_KEY` is set, only Gemini models are available.
 
 ---
 
