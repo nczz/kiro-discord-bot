@@ -335,6 +335,7 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 			ds.ChannelMessageSend(m.ChannelID, L.Getf("error.generic", err.Error()))
 			return
 		}
+		b.manager.ClearHistory(m.ChannelID)
 		if resp == "" {
 			resp = L.Get("clear.success")
 		}
@@ -678,6 +679,7 @@ func (b *Bot) handleSlashCommand(ds *discordgo.Session, i *discordgo.Interaction
 			if err != nil {
 				reply(L.Getf("error.generic", err.Error()))
 			} else {
+				b.manager.ClearHistory(channelID)
 				if resp == "" {
 					resp = L.Get("clear.success")
 				}

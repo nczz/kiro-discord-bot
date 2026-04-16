@@ -58,6 +58,18 @@ func (l *ChatLogger) Close() {
 	l.files = make(map[string]*os.File)
 }
 
+// ClearLog truncates the chat log for a channel.
+func (l *ChatLogger) ClearLog(channelID string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if f, ok := l.files[channelID]; ok {
+		f.Close()
+		delete(l.files, channelID)
+	}
+	path := filepath.Join(l.dataDir, "ch-"+channelID, "chat.jsonl")
+	_ = os.Truncate(path, 0)
+}
+
 func (l *ChatLogger) Log(channelID string, entry ChatEntry) {
 	if entry.Timestamp == "" {
 		entry.Timestamp = time.Now().Format(time.RFC3339)

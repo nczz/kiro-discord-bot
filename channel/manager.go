@@ -371,6 +371,9 @@ func (m *Manager) ListModels(channelID string) (string, error) {
 // --- Memory (persistent) ---
 
 func (m *Manager) MemoryAdd(channelID, entry string) error { return m.memory.Add(channelID, entry) }
+
+// ClearHistory truncates the JSONL conversation log for a channel.
+func (m *Manager) ClearHistory(channelID string) { m.logger.ClearLog(channelID) }
 func (m *Manager) MemoryList(channelID string) []string     { return m.memory.List(channelID) }
 func (m *Manager) MemoryRemove(channelID string, idx int) error {
 	return m.memory.Remove(channelID, idx)
