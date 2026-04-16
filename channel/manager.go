@@ -416,11 +416,10 @@ func (m *Manager) FlashMemoryClear(channelID string) {
 }
 
 // BuildMemoryPrefix returns the memory + flash memory block to prepend to prompts.
+// Must be called with m.mu held.
 func (m *Manager) BuildMemoryPrefix(channelID string) string {
 	mem := m.memory.List(channelID)
-	m.mu.Lock()
 	flash := m.flashMemory[channelID]
-	m.mu.Unlock()
 	if len(mem) == 0 && len(flash) == 0 {
 		return ""
 	}
