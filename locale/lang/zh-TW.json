@@ -1,5 +1,5 @@
 {
-  "usage_message": "🤖 **Agent 已就緒！** 以下是可用指令：\n\n```\n!status   — 查詢 agent 狀態\n!cancel   — 取消目前執行中的任務\n!cwd          — 查詢目前工作目錄\n!cwd <目錄>   — 設定新工作目錄（下次 !reset 生效）\n!reset    — 重啟 agent session\n!start <目錄> — 綁定新的專案目錄\n!pause    — 切換為 @mention 模式（僅回應 @提及）\n!back     — 恢復完整監聽模式\n!resume   — 重新顯示上次被截斷的回應\n!model          — 查詢目前使用的 model\n!model <model>  — 切換 model（會自動重啟 agent）\n!models         — 列出所有可用的 model\n```\n直接在頻道輸入訊息即可與 agent 對話。",
+  "usage_message": "🤖 **Agent 已就緒！** 以下是可用指令：\n\n```\n!status   — 查詢 agent 狀態\n!cancel   — 取消目前執行中的任務\n!cwd          — 查詢目前工作目錄\n!cwd <目錄>   — 設定新工作目錄（下次 !reset 生效）\n!reset    — 重啟 agent session\n!start <目錄> — 綁定新的專案目錄\n!pause    — 切換為 @mention 模式（僅回應 @提及）\n!back     — 恢復完整監聽模式\n!resume   — 重新顯示上次被截斷的回應\n!model          — 查詢目前使用的 model\n!model <model>  — 切換 model（會自動重啟 agent）\n!models         — 列出所有可用的 model\n!memory         — 管理永久記憶規則\n!flashmemory    — 管理 session 閃存記憶\n```\n直接在頻道輸入訊息即可與 agent 對話。",
   "error.no_active_session": "❌ 沒有活躍的 session",
   "error.no_response": "❌ 沒有可恢復的回應",
   "error.reset_failed": "❌ 重啟失敗：%s",
@@ -109,5 +109,23 @@
   "error.agent_read": "⚠️ Agent 通訊中斷：%v\n請使用 /reset 重啟。",
   "tool.output_truncated": "\n…（已截斷）",
   "stt.prefix": "🎤 語音轉錄：\n",
-  "stt.skip_duration": "⏭️ 音訊過長（%.0f 秒 > %d 秒），跳過轉錄。"
+  "stt.skip_duration": "⏭️ 音訊過長（%.0f 秒 > %d 秒），跳過轉錄。",
+  "cmd.memory.desc": "管理永久記憶規則",
+  "cmd.memory.opt.action": "操作：list、add、remove、clear",
+  "cmd.memory.opt.value": "要新增的內容，或要移除的編號",
+  "cmd.flashmemory.desc": "管理 session 閃存記憶",
+  "cmd.flashmemory.opt.action": "操作：list、add、remove、clear",
+  "cmd.flashmemory.opt.value": "要新增的內容，或要移除的編號",
+  "memory.empty": "📭 尚未設定記憶規則。使用 `!memory add <規則>` 新增。",
+  "memory.list_header": "🧠 **永久記憶規則：**\n",
+  "memory.added": "🧠 已新增記憶：%s",
+  "memory.removed": "🧠 已移除記憶 #%d。",
+  "memory.cleared": "🧠 已清除所有記憶規則。",
+  "memory.usage": "用法：`!memory add <規則>` | `!memory list` | `!memory remove <編號>` | `!memory clear`",
+  "flashmemory.empty": "📭 尚未設定閃存記憶。使用 `!flashmemory add <規則>` 新增。",
+  "flashmemory.list_header": "⚡ **閃存記憶（當前 session）：**\n",
+  "flashmemory.added": "⚡ 已新增閃存記憶：%s",
+  "flashmemory.removed": "⚡ 已移除閃存記憶 #%d。",
+  "flashmemory.cleared": "⚡ 已清除所有閃存記憶。",
+  "flashmemory.usage": "用法：`!flashmemory add <規則>` | `!flashmemory list` | `!flashmemory remove <編號>` | `!flashmemory clear`"
 }

@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -388,6 +389,12 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 		}
 		ds.ChannelMessageSend(m.ChannelID, L.Getf("model.switched", model))
 
+	case strings.HasPrefix(content, "!memory"):
+		b.handleMemoryCommand(ds, m.ChannelID, m.ChannelID, strings.TrimSpace(strings.TrimPrefix(content, "!memory")))
+
+	case strings.HasPrefix(content, "!flashmemory"):
+		b.handleFlashMemoryCommand(ds, m.ChannelID, m.ChannelID, strings.TrimSpace(strings.TrimPrefix(content, "!flashmemory")))
+
 	case strings.HasPrefix(content, "!cron"):
 		b.handleCronTextCommand(ds, m.ChannelID, m.GuildID, m.Author.ID, content)
 
@@ -443,17 +450,26 @@ func (b *Bot) handleThreadMessage(ds *discordgo.Session, m *discordgo.MessageCre
 	threadID := m.ChannelID
 
 	// Thread-specific commands
-	switch content {
-	case "!cancel":
+	switch {
+	case content == "!status":
+		ds.ChannelMessageSend(threadID, b.statusWithSTT(parentChannelID))
+		return
+	case content == "!cancel":
 		if err := b.manager.CancelThreadAgent(threadID); err != nil {
 			ds.ChannelMessageSend(threadID, L.Getf("error.cancel_failed", err.Error()))
 		} else {
 			ds.ChannelMessageSend(threadID, L.Get("cancel.success"))
 		}
 		return
-	case "!close":
+	case content == "!close":
 		b.manager.StopThreadAgent(threadID)
 		ds.ChannelMessageSend(threadID, L.Get("thread_agent.closed"))
+		return
+	case strings.HasPrefix(content, "!memory"):
+		b.handleMemoryCommand(ds, threadID, parentChannelID, strings.TrimSpace(strings.TrimPrefix(content, "!memory")))
+		return
+	case strings.HasPrefix(content, "!flashmemory"):
+		b.handleFlashMemoryCommand(ds, threadID, parentChannelID, strings.TrimSpace(strings.TrimPrefix(content, "!flashmemory")))
 		return
 	}
 
@@ -518,6 +534,26 @@ func buildSlashCommands() []*discordgo.ApplicationCommand {
 			{Type: discordgo.ApplicationCommandOptionString, Name: "time", Description: L.Get("cmd.remind.opt.time"), Required: true},
 			{Type: discordgo.ApplicationCommandOptionString, Name: "content", Description: L.Get("cmd.remind.opt.content"), Required: true},
 			{Type: discordgo.ApplicationCommandOptionBoolean, Name: "agent", Description: L.Get("cmd.remind.opt.agent"), Required: false},
+		}},
+		{Name: "memory", Description: L.Get("cmd.memory.desc"), Options: []*discordgo.ApplicationCommandOption{
+			{Type: discordgo.ApplicationCommandOptionString, Name: "action", Description: L.Get("cmd.memory.opt.action"), Required: true,
+				Choices: []*discordgo.ApplicationCommandOptionChoice{
+					{Name: "list", Value: "list"},
+					{Name: "add", Value: "add"},
+					{Name: "remove", Value: "remove"},
+					{Name: "clear", Value: "clear"},
+				}},
+			{Type: discordgo.ApplicationCommandOptionString, Name: "value", Description: L.Get("cmd.memory.opt.value"), Required: false},
+		}},
+		{Name: "flashmemory", Description: L.Get("cmd.flashmemory.desc"), Options: []*discordgo.ApplicationCommandOption{
+			{Type: discordgo.ApplicationCommandOptionString, Name: "action", Description: L.Get("cmd.flashmemory.opt.action"), Required: true,
+				Choices: []*discordgo.ApplicationCommandOptionChoice{
+					{Name: "list", Value: "list"},
+					{Name: "add", Value: "add"},
+					{Name: "remove", Value: "remove"},
+					{Name: "clear", Value: "clear"},
+				}},
+			{Type: discordgo.ApplicationCommandOptionString, Name: "value", Description: L.Get("cmd.flashmemory.opt.value"), Required: false},
 		}},
 	}
 }
@@ -687,6 +723,207 @@ func (b *Bot) handleSlashCommand(ds *discordgo.Session, i *discordgo.Interaction
 			} else {
 				reply(msg)
 			}
+		case "memory":
+			action := data.Options[0].StringValue()
+			value := ""
+			if len(data.Options) > 1 {
+				value = data.Options[1].StringValue()
+			}
+			b.handleMemorySlash(reply, channelID, action, value)
+		case "flashmemory":
+			action := data.Options[0].StringValue()
+			value := ""
+			if len(data.Options) > 1 {
+				value = data.Options[1].StringValue()
+			}
+			b.handleFlashMemorySlash(reply, channelID, action, value)
 		}
 	}()
+}
+
+// handleMemoryCommand dispatches !memory subcommands.
+// replyTo is where to send the response, channelID is the memory key (parent channel).
+func (b *Bot) handleMemoryCommand(ds *discordgo.Session, replyTo, channelID, args string) {
+	switch {
+	case args == "" || args == "list":
+		entries := b.manager.MemoryList(channelID)
+		if len(entries) == 0 {
+			ds.ChannelMessageSend(replyTo, L.Get("memory.empty"))
+			return
+		}
+		var sb strings.Builder
+		sb.WriteString(L.Get("memory.list_header"))
+		for i, e := range entries {
+			sb.WriteString(fmt.Sprintf("`%d.` %s\n", i+1, e))
+		}
+		ds.ChannelMessageSend(replyTo, sb.String())
+
+	case strings.HasPrefix(args, "add "):
+		entry := strings.TrimSpace(strings.TrimPrefix(args, "add "))
+		if entry == "" {
+			ds.ChannelMessageSend(replyTo, L.Get("memory.usage"))
+			return
+		}
+		if err := b.manager.MemoryAdd(channelID, entry); err != nil {
+			ds.ChannelMessageSend(replyTo, L.Getf("error.save_failed", err.Error()))
+			return
+		}
+		ds.ChannelMessageSend(replyTo, L.Getf("memory.added", entry))
+
+	case strings.HasPrefix(args, "remove "):
+		idxStr := strings.TrimSpace(strings.TrimPrefix(args, "remove "))
+		idx, err := strconv.Atoi(idxStr)
+		if err != nil {
+			ds.ChannelMessageSend(replyTo, L.Get("memory.usage"))
+			return
+		}
+		if err := b.manager.MemoryRemove(channelID, idx-1); err != nil {
+			ds.ChannelMessageSend(replyTo, L.Getf("error.generic", err.Error()))
+			return
+		}
+		ds.ChannelMessageSend(replyTo, L.Getf("memory.removed", idx))
+
+	case args == "clear":
+		if err := b.manager.MemoryClear(channelID); err != nil {
+			ds.ChannelMessageSend(replyTo, L.Getf("error.generic", err.Error()))
+			return
+		}
+		ds.ChannelMessageSend(replyTo, L.Get("memory.cleared"))
+
+	default:
+		ds.ChannelMessageSend(replyTo, L.Get("memory.usage"))
+	}
+}
+
+// handleFlashMemoryCommand dispatches !flashmemory subcommands.
+func (b *Bot) handleFlashMemoryCommand(ds *discordgo.Session, replyTo, channelID, args string) {
+	switch {
+	case args == "" || args == "list":
+		entries := b.manager.FlashMemoryList(channelID)
+		if len(entries) == 0 {
+			ds.ChannelMessageSend(replyTo, L.Get("flashmemory.empty"))
+			return
+		}
+		var sb strings.Builder
+		sb.WriteString(L.Get("flashmemory.list_header"))
+		for i, e := range entries {
+			sb.WriteString(fmt.Sprintf("`%d.` %s\n", i+1, e))
+		}
+		ds.ChannelMessageSend(replyTo, sb.String())
+
+	case strings.HasPrefix(args, "add "):
+		entry := strings.TrimSpace(strings.TrimPrefix(args, "add "))
+		if entry == "" {
+			ds.ChannelMessageSend(replyTo, L.Get("flashmemory.usage"))
+			return
+		}
+		b.manager.FlashMemoryAdd(channelID, entry)
+		ds.ChannelMessageSend(replyTo, L.Getf("flashmemory.added", entry))
+
+	case strings.HasPrefix(args, "remove "):
+		idxStr := strings.TrimSpace(strings.TrimPrefix(args, "remove "))
+		idx, err := strconv.Atoi(idxStr)
+		if err != nil {
+			ds.ChannelMessageSend(replyTo, L.Get("flashmemory.usage"))
+			return
+		}
+		if err := b.manager.FlashMemoryRemove(channelID, idx-1); err != nil {
+			ds.ChannelMessageSend(replyTo, L.Getf("error.generic", err.Error()))
+			return
+		}
+		ds.ChannelMessageSend(replyTo, L.Getf("flashmemory.removed", idx))
+
+	case args == "clear":
+		b.manager.FlashMemoryClear(channelID)
+		ds.ChannelMessageSend(replyTo, L.Get("flashmemory.cleared"))
+
+	default:
+		ds.ChannelMessageSend(replyTo, L.Get("flashmemory.usage"))
+	}
+}
+
+// handleMemorySlash handles /memory slash command via reply func.
+func (b *Bot) handleMemorySlash(reply func(string), channelID, action, value string) {
+	value = strings.TrimSpace(value)
+	switch action {
+	case "list":
+		entries := b.manager.MemoryList(channelID)
+		if len(entries) == 0 {
+			reply(L.Get("memory.empty"))
+			return
+		}
+		var sb strings.Builder
+		sb.WriteString(L.Get("memory.list_header"))
+		for i, e := range entries {
+			sb.WriteString(fmt.Sprintf("`%d.` %s\n", i+1, e))
+		}
+		reply(sb.String())
+	case "add":
+		if value == "" {
+			reply(L.Get("memory.usage"))
+			return
+		}
+		if err := b.manager.MemoryAdd(channelID, value); err != nil {
+			reply(L.Getf("error.save_failed", err.Error()))
+			return
+		}
+		reply(L.Getf("memory.added", value))
+	case "remove":
+		idx, err := strconv.Atoi(value)
+		if err != nil {
+			reply(L.Get("memory.usage"))
+			return
+		}
+		if err := b.manager.MemoryRemove(channelID, idx-1); err != nil {
+			reply(L.Getf("error.generic", err.Error()))
+			return
+		}
+		reply(L.Getf("memory.removed", idx))
+	case "clear":
+		if err := b.manager.MemoryClear(channelID); err != nil {
+			reply(L.Getf("error.generic", err.Error()))
+			return
+		}
+		reply(L.Get("memory.cleared"))
+	}
+}
+
+// handleFlashMemorySlash handles /flashmemory slash command via reply func.
+func (b *Bot) handleFlashMemorySlash(reply func(string), channelID, action, value string) {
+	value = strings.TrimSpace(value)
+	switch action {
+	case "list":
+		entries := b.manager.FlashMemoryList(channelID)
+		if len(entries) == 0 {
+			reply(L.Get("flashmemory.empty"))
+			return
+		}
+		var sb strings.Builder
+		sb.WriteString(L.Get("flashmemory.list_header"))
+		for i, e := range entries {
+			sb.WriteString(fmt.Sprintf("`%d.` %s\n", i+1, e))
+		}
+		reply(sb.String())
+	case "add":
+		if value == "" {
+			reply(L.Get("flashmemory.usage"))
+			return
+		}
+		b.manager.FlashMemoryAdd(channelID, value)
+		reply(L.Getf("flashmemory.added", value))
+	case "remove":
+		idx, err := strconv.Atoi(value)
+		if err != nil {
+			reply(L.Get("flashmemory.usage"))
+			return
+		}
+		if err := b.manager.FlashMemoryRemove(channelID, idx-1); err != nil {
+			reply(L.Getf("error.generic", err.Error()))
+			return
+		}
+		reply(L.Getf("flashmemory.removed", idx))
+	case "clear":
+		b.manager.FlashMemoryClear(channelID)
+		reply(L.Get("flashmemory.cleared"))
+	}
 }

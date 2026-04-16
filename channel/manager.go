@@ -32,6 +32,11 @@ type Manager struct {
 	logger          *ChatLogger
 	botVersion      string
 	guildID         string
+	dataDir         string
+
+	// Memory
+	memory      *MemoryStore
+	flashMemory map[string][]string // channelID → session-scoped entries
 
 	// Thread agent management
 	threadAgents       map[string]*threadAgentEntry // threadID → entry
@@ -90,6 +95,9 @@ func NewManager(cfg ManagerConfig) *Manager {
 		logger:             NewChatLogger(cfg.DataDir),
 		botVersion:         cfg.BotVersion,
 		guildID:            cfg.GuildID,
+		dataDir:            cfg.DataDir,
+		memory:             NewMemoryStore(cfg.DataDir),
+		flashMemory:        make(map[string][]string),
 		threadAgentMax:     cfg.ThreadAgentMax,
 		threadAgentIdleSec: cfg.ThreadAgentIdleSec,
 		maxScannerBuffer:   cfg.MaxScannerBuffer,
@@ -146,6 +154,11 @@ func (m *Manager) Enqueue(ds *discordgo.Session, job *Job) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	// Inject memory into prompt
+	if prefix := m.BuildMemoryPrefix(job.ChannelID); prefix != "" {
+		job.Prompt = prefix + job.Prompt
+	}
+
 	worker, err := m.ensureWorker(job.ChannelID)
 	if err != nil {
 		return err
@@ -174,6 +187,7 @@ func (m *Manager) Reset(channelID string) error {
 
 	sess, _ := m.store.Get(channelID)
 	m.stopChannel(channelID)
+	delete(m.flashMemory, channelID)
 
 	if sess != nil {
 		if err := m.store.Set(channelID, &Session{CWD: sess.CWD, Model: sess.Model, GuildID: sess.GuildID}); err != nil {
@@ -357,6 +371,75 @@ func (m *Manager) ListModels(channelID string) (string, error) {
 	}
 	sb.WriteString(L.Get("models.footer"))
 	return sb.String(), nil
+}
+
+// --- Memory (persistent) ---
+
+func (m *Manager) MemoryAdd(channelID, entry string) error { return m.memory.Add(channelID, entry) }
+func (m *Manager) MemoryList(channelID string) []string     { return m.memory.List(channelID) }
+func (m *Manager) MemoryRemove(channelID string, idx int) error {
+	return m.memory.Remove(channelID, idx)
+}
+func (m *Manager) MemoryClear(channelID string) error { return m.memory.Clear(channelID) }
+
+// --- Flash Memory (session-scoped, in-memory only) ---
+
+func (m *Manager) FlashMemoryAdd(channelID, entry string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.flashMemory[channelID] = append(m.flashMemory[channelID], entry)
+}
+
+func (m *Manager) FlashMemoryList(channelID string) []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]string, len(m.flashMemory[channelID]))
+	copy(out, m.flashMemory[channelID])
+	return out
+}
+
+func (m *Manager) FlashMemoryRemove(channelID string, idx int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	entries := m.flashMemory[channelID]
+	if idx < 0 || idx >= len(entries) {
+		return fmt.Errorf("index out of range: %d", idx)
+	}
+	m.flashMemory[channelID] = append(entries[:idx], entries[idx+1:]...)
+	return nil
+}
+
+func (m *Manager) FlashMemoryClear(channelID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.flashMemory, channelID)
+}
+
+// BuildMemoryPrefix returns the memory + flash memory block to prepend to prompts.
+func (m *Manager) BuildMemoryPrefix(channelID string) string {
+	mem := m.memory.List(channelID)
+	m.mu.Lock()
+	flash := m.flashMemory[channelID]
+	m.mu.Unlock()
+	if len(mem) == 0 && len(flash) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	if len(mem) > 0 {
+		sb.WriteString("[Memory Rules — always follow these]\n")
+		for i, e := range mem {
+			sb.WriteString(fmt.Sprintf("%d. %s\n", i+1, e))
+		}
+		sb.WriteString("\n")
+	}
+	if len(flash) > 0 {
+		sb.WriteString("[Flash Memory — current session emphasis]\n")
+		for i, e := range flash {
+			sb.WriteString(fmt.Sprintf("%d. %s\n", i+1, e))
+		}
+		sb.WriteString("\n")
+	}
+	return sb.String()
 }
 
 // ensureWorker returns the worker for a channel, creating agent+worker if needed.
@@ -543,6 +626,11 @@ func (m *Manager) IsPaused(channelID string) bool {
 func (m *Manager) EnqueueThread(ds *discordgo.Session, job *Job, parentChannelID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	// Inject memory from parent channel into prompt
+	if prefix := m.BuildMemoryPrefix(parentChannelID); prefix != "" {
+		job.Prompt = prefix + job.Prompt
+	}
 
 	entry, ok := m.threadAgents[job.ThreadID]
 	if ok && !entry.agent.IsAlive() {

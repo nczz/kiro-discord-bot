@@ -1,5 +1,5 @@
 {
-  "usage_message": "🤖 **Agent is ready!** Available commands:\n\n```\n!status   — Check agent status\n!cancel   — Cancel current task\n!cwd          — Show working directory\n!cwd <dir>    — Set working directory (takes effect on !reset)\n!reset    — Restart agent session\n!start <dir>  — Bind a project directory\n!pause    — Switch to @mention mode\n!back     — Resume full-listen mode\n!resume   — Re-display last truncated response\n!model          — Show current model\n!model <model>  — Switch model (auto-restarts agent)\n!models         — List available models\n```\nSend any message to chat with the agent.",
+  "usage_message": "🤖 **Agent is ready!** Available commands:\n\n```\n!status   — Check agent status\n!cancel   — Cancel current task\n!cwd          — Show working directory\n!cwd <dir>    — Set working directory (takes effect on !reset)\n!reset    — Restart agent session\n!start <dir>  — Bind a project directory\n!pause    — Switch to @mention mode\n!back     — Resume full-listen mode\n!resume   — Re-display last truncated response\n!model          — Show current model\n!model <model>  — Switch model (auto-restarts agent)\n!models         — List available models\n!memory         — Manage persistent memory rules\n!flashmemory    — Manage session flash memory\n```\nSend any message to chat with the agent.",
   "error.generic": "❌ %s",
   "error.no_active_session": "❌ No active session",
   "error.no_response": "❌ No response to resume",
@@ -116,5 +116,23 @@
   "error.agent_read": "⚠️ Agent communication lost: %v\nUse /reset to restart.",
   "tool.output_truncated": "\n…(truncated)",
   "stt.prefix": "🎤 Voice transcription:\n",
-  "stt.skip_duration": "⏭️ Audio too long (%.0fs > %ds), skipping transcription."
+  "stt.skip_duration": "⏭️ Audio too long (%.0fs > %ds), skipping transcription.",
+  "cmd.memory.desc": "Manage persistent memory rules",
+  "cmd.memory.opt.action": "Action: list, add, remove, clear",
+  "cmd.memory.opt.value": "Content to add, or index to remove",
+  "cmd.flashmemory.desc": "Manage session-scoped flash memory",
+  "cmd.flashmemory.opt.action": "Action: list, add, remove, clear",
+  "cmd.flashmemory.opt.value": "Content to add, or index to remove",
+  "memory.empty": "📭 No memory rules set. Use `!memory add <rule>` to add one.",
+  "memory.list_header": "🧠 **Memory Rules (persistent):**\n",
+  "memory.added": "🧠 Memory added: %s",
+  "memory.removed": "🧠 Memory #%d removed.",
+  "memory.cleared": "🧠 All memory rules cleared.",
+  "memory.usage": "Usage: `!memory add <rule>` | `!memory list` | `!memory remove <#>` | `!memory clear`",
+  "flashmemory.empty": "📭 No flash memory set. Use `!flashmemory add <rule>` to add one.",
+  "flashmemory.list_header": "⚡ **Flash Memory (current session):**\n",
+  "flashmemory.added": "⚡ Flash memory added: %s",
+  "flashmemory.removed": "⚡ Flash memory #%d removed.",
+  "flashmemory.cleared": "⚡ All flash memory cleared.",
+  "flashmemory.usage": "Usage: `!flashmemory add <rule>` | `!flashmemory list` | `!flashmemory remove <#>` | `!flashmemory clear`"
 }

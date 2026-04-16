@@ -187,6 +187,8 @@ The bot needs explicit permission in each channel it should respond to:
 | `/remind <time> <content>` | Set a one-time reminder (tags you when due) |
 | `/compact` | Compress conversation history to free context |
 | `/clear` | Clear conversation history |
+| `/memory` | Manage persistent memory rules (add/list/remove/clear) |
+| `/flashmemory` | Manage session-scoped flash memory (add/list/remove/clear) |
 
 All commands also work with `!` prefix (e.g. `!status`, `!reset`).
 
@@ -284,7 +286,8 @@ kiro-discord-bot/
 │   ├── manager.go        per-channel session + worker lifecycle
 │   ├── session.go        session struct + JSON persistence
 │   ├── worker.go         job queue worker goroutine
-│   └── logger.go         JSONL conversation logger
+│   ├── logger.go         JSONL conversation logger
+│   └── memory.go         persistent per-channel memory store
 ├── heartbeat/
 │   ├── heartbeat.go      background task loop
 │   ├── task.go           Task interface
@@ -540,6 +543,8 @@ chmod +x start.sh && ./start.sh
 | `/remind <時間> <內容>` | 預約單次提醒（到期時 tag 你） |
 | `/compact` | 壓縮對話歷史以釋放 context |
 | `/clear` | 清除對話歷史 |
+| `/memory` | 管理永久記憶規則（add/list/remove/clear） |
+| `/flashmemory` | 管理 session 閃存記憶（add/list/remove/clear） |
 
 所有指令也支援 `!` 前綴（如 `!status`、`!reset`）。
 
