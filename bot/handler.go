@@ -368,7 +368,7 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 		ds.ChannelMessageSend(m.ChannelID, b.manager.Model(m.ChannelID))
 
 	case content == "!models":
-		msg, err := b.manager.ListModels()
+		msg, err := b.manager.ListModels(m.ChannelID)
 		if err != nil {
 			ds.ChannelMessageSend(m.ChannelID, L.Getf("error.generic", err.Error()))
 			return
@@ -565,6 +565,9 @@ func (b *Bot) handleSlashCommand(ds *discordgo.Session, i *discordgo.Interaction
 	data := i.ApplicationCommandData()
 	log.Printf("[interaction] /%s from %s", data.Name, i.ChannelID)
 	channelID := i.ChannelID
+	if parent := resolveThreadParent(ds, channelID); parent != "" {
+		channelID = parent
+	}
 
 	// Commands that need their own response type (not deferred)
 	switch data.Name {
@@ -678,7 +681,7 @@ func (b *Bot) handleSlashCommand(ds *discordgo.Session, i *discordgo.Interaction
 				reply(b.manager.Model(channelID))
 			}
 		case "models":
-			msg, err := b.manager.ListModels()
+			msg, err := b.manager.ListModels(channelID)
 			if err != nil {
 				reply(L.Getf("error.generic", err.Error()))
 			} else {

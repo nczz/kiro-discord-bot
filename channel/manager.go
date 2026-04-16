@@ -316,7 +316,8 @@ func (m *Manager) Model(channelID string) string {
 }
 
 // ListModels calls kiro-cli to get available models.
-func (m *Manager) ListModels() (string, error) {
+// If channelID is provided, it marks the channel's current model instead of global default.
+func (m *Manager) ListModels(channelID string) (string, error) {
 	out, err := exec.Command(m.kiroCLI, "chat", "--list-models", "-f", "json").Output()
 	if err != nil {
 		return "", fmt.Errorf("list models: %w", err)
@@ -334,11 +335,22 @@ func (m *Manager) ListModels() (string, error) {
 	if err := json.Unmarshal(out, &result); err != nil {
 		return "", fmt.Errorf("parse models: %w", err)
 	}
+
+	// Determine current model for this channel
+	currentModel := result.Default
+	if channelID != "" {
+		if sess, ok := m.store.Get(channelID); ok && sess.Model != "" {
+			currentModel = sess.Model
+		} else if m.defaultModel != "" {
+			currentModel = m.defaultModel
+		}
+	}
+
 	var sb strings.Builder
 	sb.WriteString(L.Get("models.header"))
 	for _, m := range result.Models {
 		marker := " "
-		if m.ID == result.Default {
+		if m.ID == currentModel {
 			marker = "▸"
 		}
 		sb.WriteString(fmt.Sprintf("%s `%s` — %s (%.2f %s)\n", marker, m.ID, m.Description, m.Rate, m.Unit))
