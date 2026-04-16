@@ -176,6 +176,11 @@ func (w *Worker) execute(job *Job) {
 	ds := job.Session
 	startTime := time.Now()
 
+	// Signal activity at task start
+	if w.onActivity != nil {
+		w.onActivity()
+	}
+
 	log.Printf("[worker %s] job start | user=%s(%s) msg=%s prompt=%q",
 		w.channelID, job.Username, job.UserID, job.MessageID, promptSummary(job.Prompt, 80))
 
@@ -259,6 +264,11 @@ func (w *Worker) execute(job *Job) {
 
 	// Async callbacks — all post to thread
 	callbacks := acp.AsyncCallbacks{
+		OnChunk: func(chunk string) {
+			if w.onActivity != nil {
+				w.onActivity()
+			}
+		},
 		OnToolCall: func(evt acp.ToolCallEvent) {
 			if w.onActivity != nil {
 				w.onActivity()
@@ -305,6 +315,9 @@ func (w *Worker) execute(job *Job) {
 			}
 		},
 		OnThought: func(text string) {
+			if w.onActivity != nil {
+				w.onActivity()
+			}
 			// Accumulate thought chunks — send as a single collapsed block would be ideal,
 			// but Discord doesn't support spoiler streaming. Just prefix with 💭.
 			if len(text) > 1900 {
@@ -313,6 +326,9 @@ func (w *Worker) execute(job *Job) {
 			ds.ChannelMessageSend(threadID, "💭 "+text)
 		},
 		OnComplete: func(response string, askErr error) {
+			if w.onActivity != nil {
+				w.onActivity()
+			}
 			// Capture ctx state BEFORE cancel() — cancel() sets ctx.Err() to Canceled
 			ctxErr := ctx.Err()
 			cancel() // release timeout context
@@ -423,7 +439,11 @@ func (w *Worker) executeFallback(job *Job) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(w.askTimeoutSec)*time.Second)
 	defer cancel()
 
-	response, askErr := w.agent.Ask(ctx, job.Prompt, func(chunk string) {})
+	response, askErr := w.agent.Ask(ctx, job.Prompt, func(chunk string) {
+		if w.onActivity != nil {
+			w.onActivity()
+		}
+	})
 
 	if askErr != nil {
 		errMsg := askErr.Error()
