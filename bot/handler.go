@@ -466,6 +466,63 @@ func (b *Bot) handleThreadMessage(ds *discordgo.Session, m *discordgo.MessageCre
 		b.manager.StopThreadAgent(threadID)
 		ds.ChannelMessageSend(threadID, L.Get("thread_agent.closed"))
 		return
+	case content == "!pause":
+		b.manager.Pause(threadID)
+		ds.ChannelMessageSend(threadID, L.Get("pause.on"))
+		return
+	case content == "!back":
+		b.manager.Back(threadID)
+		ds.ChannelMessageSend(threadID, L.Get("pause.off"))
+		return
+	case content == "!compact":
+		resp, err := b.manager.SendCommandThread(threadID, "/compact")
+		if err != nil {
+			ds.ChannelMessageSend(threadID, L.Getf("error.generic", err.Error()))
+		} else {
+			if resp == "" {
+				resp = L.Get("compact.success")
+			}
+			ds.ChannelMessageSend(threadID, "✅ "+resp)
+		}
+		return
+	case content == "!clear":
+		resp, err := b.manager.SendCommandThread(threadID, "/clear")
+		if err != nil {
+			ds.ChannelMessageSend(threadID, L.Getf("error.generic", err.Error()))
+		} else {
+			if resp == "" {
+				resp = L.Get("clear.success")
+			}
+			ds.ChannelMessageSend(threadID, "✅ "+resp)
+		}
+		return
+	case content == "!reset":
+		if err := b.manager.ResetThreadAgent(threadID); err != nil {
+			ds.ChannelMessageSend(threadID, L.Getf("error.reset_failed", err.Error()))
+		} else {
+			ds.ChannelMessageSend(threadID, L.Get("reset.success"))
+		}
+		return
+	case content == "!model":
+		ds.ChannelMessageSend(threadID, b.manager.ThreadModel(threadID))
+		return
+	case strings.HasPrefix(content, "!model "):
+		model := strings.TrimSpace(strings.TrimPrefix(content, "!model "))
+		ds.ChannelMessageSend(threadID, L.Getf("model.switching", model))
+		if err := b.manager.ResetThreadAgentWithModel(threadID, model); err != nil {
+			ds.ChannelMessageSend(threadID, L.Getf("error.reset_failed", err.Error()))
+		} else {
+			ds.ChannelMessageSend(threadID, L.Getf("model.switched", model))
+		}
+		return
+	case content == "!models":
+		msg, err := b.manager.ListModels("")
+		if err != nil {
+			ds.ChannelMessageSend(threadID, L.Getf("error.generic", err.Error()))
+		} else {
+			ds.ChannelMessageSend(threadID, msg)
+		}
+		return
 	case strings.HasPrefix(content, "!memory"):
 		b.handleMemoryCommand(ds, threadID, parentChannelID, strings.TrimSpace(strings.TrimPrefix(content, "!memory")))
 		return
@@ -601,10 +658,13 @@ func (b *Bot) handleInteraction(ds *discordgo.Session, i *discordgo.InteractionC
 func (b *Bot) handleSlashCommand(ds *discordgo.Session, i *discordgo.InteractionCreate) {
 	data := i.ApplicationCommandData()
 	log.Printf("[interaction] /%s from %s", data.Name, i.ChannelID)
-	channelID := i.ChannelID
-	if parent := resolveThreadParent(ds, channelID); parent != "" {
-		channelID = parent
+	rawChannelID := i.ChannelID
+	threadParent := resolveThreadParent(ds, rawChannelID)
+	channelID := rawChannelID
+	if threadParent != "" {
+		channelID = threadParent
 	}
+	inThread := threadParent != ""
 
 	// Commands that need their own response type (not deferred)
 	switch data.Name {
@@ -649,23 +709,45 @@ func (b *Bot) handleSlashCommand(ds *discordgo.Session, i *discordgo.Interaction
 				reply(usageMessage())
 			}
 		case "reset":
-			reply(L.Get("reset.resetting"))
-			if err := b.manager.Reset(channelID); err != nil {
-				reply(L.Getf("error.generic", err.Error()))
+			if inThread {
+				if err := b.manager.ResetThreadAgent(rawChannelID); err != nil {
+					reply(L.Getf("error.reset_failed", err.Error()))
+				} else {
+					reply(L.Get("reset.success"))
+				}
 			} else {
-				reply(L.Get("reset.success"))
-				reply(usageMessage())
+				reply(L.Get("reset.resetting"))
+				if err := b.manager.Reset(channelID); err != nil {
+					reply(L.Getf("error.generic", err.Error()))
+				} else {
+					reply(L.Get("reset.success"))
+					reply(usageMessage())
+				}
 			}
 		case "status":
 			reply(b.statusWithSTT(channelID))
 		case "cancel":
-			if err := b.manager.Cancel(channelID); err != nil {
-				reply(L.Getf("error.generic", err.Error()))
+			if inThread {
+				if err := b.manager.CancelThreadAgent(rawChannelID); err != nil {
+					reply(L.Getf("error.cancel_failed", err.Error()))
+				} else {
+					reply(L.Get("cancel.success"))
+				}
 			} else {
-				reply(L.Get("cancel.success"))
+				if err := b.manager.Cancel(channelID); err != nil {
+					reply(L.Getf("error.cancel_failed", err.Error()))
+				} else {
+					reply(L.Get("cancel.success"))
+				}
 			}
 		case "compact":
-			resp, err := b.manager.SendCommand(channelID, "/compact")
+			var resp string
+			var err error
+			if inThread {
+				resp, err = b.manager.SendCommandThread(rawChannelID, "/compact")
+			} else {
+				resp, err = b.manager.SendCommand(channelID, "/compact")
+			}
 			if err != nil {
 				reply(L.Getf("error.generic", err.Error()))
 			} else {
@@ -675,11 +757,19 @@ func (b *Bot) handleSlashCommand(ds *discordgo.Session, i *discordgo.Interaction
 				reply("✅ " + resp)
 			}
 		case "clear":
-			resp, err := b.manager.SendCommand(channelID, "/clear")
+			var resp string
+			var err error
+			if inThread {
+				resp, err = b.manager.SendCommandThread(rawChannelID, "/clear")
+			} else {
+				resp, err = b.manager.SendCommand(channelID, "/clear")
+				if err == nil {
+					b.manager.ClearHistory(channelID)
+				}
+			}
 			if err != nil {
 				reply(L.Getf("error.generic", err.Error()))
 			} else {
-				b.manager.ClearHistory(channelID)
 				if resp == "" {
 					resp = L.Get("clear.success")
 				}
@@ -697,26 +787,47 @@ func (b *Bot) handleSlashCommand(ds *discordgo.Session, i *discordgo.Interaction
 				reply(b.manager.CWD(channelID))
 			}
 		case "pause":
-			b.manager.Pause(channelID)
+			target := channelID
+			if inThread {
+				target = rawChannelID
+			}
+			b.manager.Pause(target)
 			reply(L.Get("pause.on"))
 		case "back":
-			b.manager.Back(channelID)
+			target := channelID
+			if inThread {
+				target = rawChannelID
+			}
+			b.manager.Back(target)
 			reply(L.Get("pause.off"))
 		case "model":
 			if len(data.Options) > 0 {
 				model := data.Options[0].StringValue()
-				if err := b.manager.SetModel(channelID, model); err != nil {
-					reply(L.Getf("error.generic", err.Error()))
-					return
-				}
-				reply(L.Getf("model.switching", model))
-				if err := b.manager.Restart(channelID); err != nil {
-					reply(L.Getf("error.reset_failed", err.Error()))
+				if inThread {
+					reply(L.Getf("model.switching", model))
+					if err := b.manager.ResetThreadAgentWithModel(rawChannelID, model); err != nil {
+						reply(L.Getf("error.reset_failed", err.Error()))
+					} else {
+						reply(L.Getf("model.switched", model))
+					}
 				} else {
-					reply(L.Getf("model.switched", model))
+					if err := b.manager.SetModel(channelID, model); err != nil {
+						reply(L.Getf("error.generic", err.Error()))
+						return
+					}
+					reply(L.Getf("model.switching", model))
+					if err := b.manager.Restart(channelID); err != nil {
+						reply(L.Getf("error.reset_failed", err.Error()))
+					} else {
+						reply(L.Getf("model.switched", model))
+					}
 				}
 			} else {
-				reply(b.manager.Model(channelID))
+				if inThread {
+					reply(b.manager.ThreadModel(rawChannelID))
+				} else {
+					reply(b.manager.Model(channelID))
+				}
 			}
 		case "models":
 			msg, err := b.manager.ListModels(channelID)

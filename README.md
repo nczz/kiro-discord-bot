@@ -241,6 +241,16 @@ All commands also work with `!` prefix (e.g. `!status`, `!reset`).
 |---------|-------------|
 | `!close` | Close the thread agent |
 | `!cancel` | Cancel the thread agent's current task |
+| `!reset` | Restart the thread agent |
+| `!pause` | Switch thread to mention-only mode |
+| `!back` | Resume thread full-listen mode |
+| `!compact` | Compress thread agent's conversation history |
+| `!clear` | Clear thread agent's conversation history |
+| `!model` | Show thread agent's current model |
+| `!model <model-id>` | Switch thread agent's model and restart |
+| `!models` | List all available models |
+
+All thread commands also work as `/` slash commands inside a thread.
 
 ### Sending Tasks
 
@@ -640,6 +650,16 @@ chmod +x start.sh && ./start.sh
 |------|------|
 | `!close` | 關閉討論串 agent |
 | `!cancel` | 取消討論串 agent 目前的任務 |
+| `!reset` | 重啟討論串 agent |
+| `!pause` | 切換討論串為 @mention 模式 |
+| `!back` | 恢復討論串完整監聽模式 |
+| `!compact` | 壓縮討論串 agent 的對話歷史 |
+| `!clear` | 清除討論串 agent 的對話歷史 |
+| `!model` | 查詢討論串 agent 目前的 model |
+| `!model <model-id>` | 切換討論串 agent 的 model 並重啟 |
+| `!models` | 列出所有可用的 model |
+
+所有討論串指令也支援 `/` slash command 形式。
 
 ### 注意事項
 

@@ -663,7 +663,7 @@ func (m *Manager) EnqueueThread(ds *discordgo.Session, job *Job, parentChannelID
 }
 
 // spawnThreadAgent creates a new agent+worker for a thread. Must be called with m.mu held.
-func (m *Manager) spawnThreadAgent(threadID, parentChannelID string) (*threadAgentEntry, error) {
+func (m *Manager) spawnThreadAgent(threadID, parentChannelID string, modelOverride ...string) (*threadAgentEntry, error) {
 	cwd := m.defaultCWD
 	model := m.defaultModel
 	if sess, ok := m.store.Get(parentChannelID); ok {
@@ -673,6 +673,9 @@ func (m *Manager) spawnThreadAgent(threadID, parentChannelID string) (*threadAge
 		if sess.Model != "" {
 			model = sess.Model
 		}
+	}
+	if len(modelOverride) > 0 && modelOverride[0] != "" {
+		model = modelOverride[0]
 	}
 
 	agentName := "thread-" + threadID
@@ -779,6 +782,68 @@ func (m *Manager) HasThreadAgent(threadID string) bool {
 	defer m.mu.Unlock()
 	_, ok := m.threadAgents[threadID]
 	return ok
+}
+
+// SendCommandThread sends a slash command (e.g. "/compact", "/clear") to a thread agent.
+func (m *Manager) SendCommandThread(threadID, command string) (string, error) {
+	m.mu.Lock()
+	entry, ok := m.threadAgents[threadID]
+	m.mu.Unlock()
+	if !ok {
+		return "", fmt.Errorf("no thread agent")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return entry.agent.Ask(ctx, command, nil)
+}
+
+// ResetThreadAgent stops and respawns a thread agent, preserving parent binding.
+func (m *Manager) ResetThreadAgent(threadID string) error {
+	return m.resetThreadAgentWithModel(threadID, "")
+}
+
+// ResetThreadAgentWithModel stops and respawns a thread agent with a new model.
+func (m *Manager) ResetThreadAgentWithModel(threadID, model string) error {
+	return m.resetThreadAgentWithModel(threadID, model)
+}
+
+func (m *Manager) resetThreadAgentWithModel(threadID, model string) error {
+	m.mu.Lock()
+	entry, ok := m.threadAgents[threadID]
+	if !ok {
+		m.mu.Unlock()
+		return fmt.Errorf("no thread agent")
+	}
+	parentChannelID := entry.parentChannelID
+	entry.worker.Stop()
+	entry.agent.Stop()
+	delete(m.threadAgents, threadID)
+
+	newEntry, err := m.spawnThreadAgent(threadID, parentChannelID, model)
+	if err != nil {
+		m.mu.Unlock()
+		return fmt.Errorf("respawn thread agent: %w", err)
+	}
+	m.threadAgents[threadID] = newEntry
+	m.mu.Unlock()
+	return nil
+}
+
+// ThreadModel returns the current model display string for a thread agent.
+func (m *Manager) ThreadModel(threadID string) string {
+	m.mu.Lock()
+	entry, ok := m.threadAgents[threadID]
+	m.mu.Unlock()
+	if !ok {
+		return L.Get("model.current_default")
+	}
+	if entry.worker.model != "" {
+		return L.Getf("model.current", entry.worker.model)
+	}
+	if m.defaultModel != "" {
+		return L.Getf("model.current_global", m.defaultModel)
+	}
+	return L.Get("model.current_default")
 }
 
 // evictOldestThreadAgent removes the least recently active thread agent. Must be called with m.mu held.
