@@ -6,7 +6,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -281,130 +280,56 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 	}
 
 	// Commands
+	reply := func(msg string) {
+		ds.ChannelMessageSendReply(m.ChannelID, msg, &discordgo.MessageReference{MessageID: m.ID, ChannelID: m.ChannelID})
+	}
+	ctx := cmdCtx{channelID: m.ChannelID, targetID: m.ChannelID, inThread: false, reply: reply}
+
 	switch {
 	case content == "!resume":
-		sess, ok := b.manager.GetSession(m.ChannelID)
-		if !ok {
-			ds.ChannelMessageSendReply(m.ChannelID, L.Get("error.no_active_session"), &discordgo.MessageReference{MessageID: m.ID, ChannelID: m.ChannelID})
-			return
-		}
-		_ = sess
-		// TODO: resume from agent's last text — requires storing last response in session or agent
-		ds.ChannelMessageSendReply(m.ChannelID, L.Get("error.no_response"), &discordgo.MessageReference{MessageID: m.ID, ChannelID: m.ChannelID})
-
+		b.cmdResume(ctx)
 	case content == "!pause":
-		b.manager.Pause(m.ChannelID)
-		ds.ChannelMessageSendReply(m.ChannelID, L.Get("pause.on"), &discordgo.MessageReference{MessageID: m.ID, ChannelID: m.ChannelID})
-
+		b.cmdPause(ctx)
 	case content == "!back":
-		b.manager.Back(m.ChannelID)
-		ds.ChannelMessageSendReply(m.ChannelID, L.Get("pause.off"), &discordgo.MessageReference{MessageID: m.ID, ChannelID: m.ChannelID})
-
+		b.cmdBack(ctx)
 	case content == "!silent", content == "!silent on", content == "!silent off":
-		b.handleSilentBang(ds, m.ChannelID, m.ID, m.ChannelID, content)
-
+		ctx.args = strings.TrimSpace(strings.TrimPrefix(content, "!silent"))
+		b.cmdSilent(ctx)
 	case content == "!reset":
-		if err := b.manager.Reset(m.ChannelID); err != nil {
-			ds.ChannelMessageSend(m.ChannelID, L.Getf("error.reset_failed", err.Error()))
-			return
-		}
-		ds.ChannelMessageSend(m.ChannelID, L.Get("reset.success"))
-		ds.ChannelMessageSend(m.ChannelID, usageMessage())
-
+		b.cmdReset(ctx)
 	case content == "!status":
-		ds.ChannelMessageSend(m.ChannelID, b.statusWithSTT(m.ChannelID))
-
+		b.cmdStatus(ctx)
 	case content == "!cancel":
-		if err := b.manager.Cancel(m.ChannelID); err != nil {
-			ds.ChannelMessageSend(m.ChannelID, L.Getf("error.cancel_failed", err.Error()))
-			return
-		}
-		ds.ChannelMessageSend(m.ChannelID, L.Get("cancel.success"))
-
+		b.cmdCancel(ctx)
 	case content == "!compact":
-		resp, err := b.manager.SendCommand(m.ChannelID, "/compact")
-		if err != nil {
-			ds.ChannelMessageSend(m.ChannelID, L.Getf("error.generic", err.Error()))
-			return
-		}
-		if resp == "" {
-			resp = L.Get("compact.success")
-		}
-		ds.ChannelMessageSend(m.ChannelID, "✅ "+resp)
-
+		b.cmdCompact(ctx)
 	case content == "!clear":
-		resp, err := b.manager.SendCommand(m.ChannelID, "/clear")
-		if err != nil {
-			ds.ChannelMessageSend(m.ChannelID, L.Getf("error.generic", err.Error()))
-			return
-		}
-		b.manager.ClearHistory(m.ChannelID)
-		if resp == "" {
-			resp = L.Get("clear.success")
-		}
-		ds.ChannelMessageSend(m.ChannelID, "✅ "+resp)
-
+		b.cmdClear(ctx)
 	case content == "!cwd":
-		ds.ChannelMessageSend(m.ChannelID, b.manager.CWD(m.ChannelID))
-
+		b.cmdCwd(ctx)
 	case strings.HasPrefix(content, "!cwd "):
-		newCwd := strings.TrimSpace(strings.TrimPrefix(content, "!cwd "))
-		if err := b.manager.SetCWD(m.ChannelID, newCwd); err != nil {
-			ds.ChannelMessageSend(m.ChannelID, L.Getf("error.generic", err.Error()))
-			return
-		}
-		ds.ChannelMessageSend(m.ChannelID, L.Getf("cwd.set", newCwd))
-
+		ctx.args = strings.TrimSpace(strings.TrimPrefix(content, "!cwd "))
+		b.cmdCwd(ctx)
 	case strings.HasPrefix(content, "!start "):
-		cwd := strings.TrimSpace(strings.TrimPrefix(content, "!start "))
-		if cwd == "" {
-			ds.ChannelMessageSend(m.ChannelID, L.Get("start.usage"))
-			return
-		}
-		ds.ChannelMessageSend(m.ChannelID, L.Getf("start.starting", cwd))
-		if err := b.manager.StartAt(m.ChannelID, cwd); err != nil {
-			ds.ChannelMessageSend(m.ChannelID, L.Getf("error.generic", err.Error()))
-			return
-		}
-		ds.ChannelMessageSend(m.ChannelID, L.Getf("start.success", cwd))
-		ds.ChannelMessageSend(m.ChannelID, usageMessage())
-
+		ctx.args = strings.TrimSpace(strings.TrimPrefix(content, "!start "))
+		b.cmdStart(ctx)
 	case content == "!model":
-		ds.ChannelMessageSend(m.ChannelID, b.manager.Model(m.ChannelID))
-
+		b.cmdModel(ctx)
 	case content == "!models":
-		msg, err := b.manager.ListModels(m.ChannelID)
-		if err != nil {
-			ds.ChannelMessageSend(m.ChannelID, L.Getf("error.generic", err.Error()))
-			return
-		}
-		ds.ChannelMessageSend(m.ChannelID, msg)
-
+		b.cmdModels(ctx)
 	case strings.HasPrefix(content, "!model "):
-		model := strings.TrimSpace(strings.TrimPrefix(content, "!model "))
-		if err := b.manager.SetModel(m.ChannelID, model); err != nil {
-			ds.ChannelMessageSend(m.ChannelID, L.Getf("error.generic", err.Error()))
-			return
-		}
-		ds.ChannelMessageSend(m.ChannelID, L.Getf("model.switching", model))
-		if err := b.manager.Restart(m.ChannelID); err != nil {
-			ds.ChannelMessageSend(m.ChannelID, L.Getf("error.reset_failed", err.Error()))
-			return
-		}
-		ds.ChannelMessageSend(m.ChannelID, L.Getf("model.switched", model))
-
+		ctx.args = strings.TrimSpace(strings.TrimPrefix(content, "!model "))
+		b.cmdModel(ctx)
 	case strings.HasPrefix(content, "!memory"):
-		b.handleMemoryCommand(ds, m.ChannelID, m.ChannelID, strings.TrimSpace(strings.TrimPrefix(content, "!memory")))
-
+		ctx.args = strings.TrimSpace(strings.TrimPrefix(content, "!memory"))
+		b.cmdMemory(ctx)
 	case strings.HasPrefix(content, "!flashmemory"):
-		b.handleFlashMemoryCommand(ds, m.ChannelID, m.ChannelID, strings.TrimSpace(strings.TrimPrefix(content, "!flashmemory")))
-
+		ctx.args = strings.TrimSpace(strings.TrimPrefix(content, "!flashmemory"))
+		b.cmdFlashMemory(ctx)
 	case strings.HasPrefix(content, "!cron"):
 		b.handleCronTextCommand(ds, m.ChannelID, m.GuildID, m.Author.ID, content)
-
 	case strings.HasPrefix(content, "!remind "):
 		b.handleRemindText(ds, m.ChannelID, m.GuildID, m.Author.ID, m.Author.Username, strings.TrimPrefix(content, "!remind "))
-
 	default:
 		// Immediate feedback
 		_ = ds.MessageReactionAdd(m.ChannelID, m.ID, "⏳")
@@ -452,88 +377,56 @@ func (b *Bot) handleThreadUpdate(ds *discordgo.Session, t *discordgo.ThreadUpdat
 // handleThreadMessage handles messages sent inside a thread, routing to a dedicated thread agent.
 func (b *Bot) handleThreadMessage(ds *discordgo.Session, m *discordgo.MessageCreate, content, parentChannelID string) {
 	threadID := m.ChannelID
+	reply := func(msg string) { ds.ChannelMessageSend(threadID, msg) }
+	ctx := cmdCtx{channelID: parentChannelID, targetID: threadID, inThread: true, reply: reply}
 
 	// Thread-specific commands
 	switch {
 	case content == "!status":
-		ds.ChannelMessageSend(threadID, b.statusWithSTT(parentChannelID))
+		b.cmdStatus(ctx)
 		return
 	case content == "!cancel":
-		if err := b.manager.CancelThreadAgent(threadID); err != nil {
-			ds.ChannelMessageSend(threadID, L.Getf("error.cancel_failed", err.Error()))
-		} else {
-			ds.ChannelMessageSend(threadID, L.Get("cancel.success"))
-		}
+		b.cmdCancel(ctx)
 		return
 	case content == "!close":
-		b.manager.StopThreadAgent(threadID)
-		ds.ChannelMessageSend(threadID, L.Get("thread_agent.closed"))
+		b.cmdClose(ctx)
 		return
 	case content == "!pause":
-		b.manager.Pause(threadID)
-		ds.ChannelMessageSend(threadID, L.Get("pause.on"))
+		b.cmdPause(ctx)
 		return
 	case content == "!back":
-		b.manager.Back(threadID)
-		ds.ChannelMessageSend(threadID, L.Get("pause.off"))
+		b.cmdBack(ctx)
 		return
 	case content == "!silent", content == "!silent on", content == "!silent off":
-		b.handleSilentBang(ds, threadID, "", threadID, content)
+		ctx.args = strings.TrimSpace(strings.TrimPrefix(content, "!silent"))
+		b.cmdSilent(ctx)
 		return
 	case content == "!compact":
-		resp, err := b.manager.SendCommandThread(threadID, "/compact")
-		if err != nil {
-			ds.ChannelMessageSend(threadID, L.Getf("error.generic", err.Error()))
-		} else {
-			if resp == "" {
-				resp = L.Get("compact.success")
-			}
-			ds.ChannelMessageSend(threadID, "✅ "+resp)
-		}
+		b.cmdCompact(ctx)
 		return
 	case content == "!clear":
-		resp, err := b.manager.SendCommandThread(threadID, "/clear")
-		if err != nil {
-			ds.ChannelMessageSend(threadID, L.Getf("error.generic", err.Error()))
-		} else {
-			if resp == "" {
-				resp = L.Get("clear.success")
-			}
-			ds.ChannelMessageSend(threadID, "✅ "+resp)
-		}
+		b.cmdClear(ctx)
 		return
 	case content == "!reset":
-		if err := b.manager.ResetThreadAgent(threadID); err != nil {
-			ds.ChannelMessageSend(threadID, L.Getf("error.reset_failed", err.Error()))
-		} else {
-			ds.ChannelMessageSend(threadID, L.Get("reset.success"))
-		}
+		b.cmdReset(ctx)
 		return
 	case content == "!model":
-		ds.ChannelMessageSend(threadID, b.manager.ThreadModel(threadID))
+		b.cmdModel(ctx)
 		return
 	case strings.HasPrefix(content, "!model "):
-		model := strings.TrimSpace(strings.TrimPrefix(content, "!model "))
-		ds.ChannelMessageSend(threadID, L.Getf("model.switching", model))
-		if err := b.manager.ResetThreadAgentWithModel(threadID, model); err != nil {
-			ds.ChannelMessageSend(threadID, L.Getf("error.reset_failed", err.Error()))
-		} else {
-			ds.ChannelMessageSend(threadID, L.Getf("model.switched", model))
-		}
+		ctx.args = strings.TrimSpace(strings.TrimPrefix(content, "!model "))
+		b.cmdModel(ctx)
 		return
 	case content == "!models":
-		msg, err := b.manager.ListModels("")
-		if err != nil {
-			ds.ChannelMessageSend(threadID, L.Getf("error.generic", err.Error()))
-		} else {
-			ds.ChannelMessageSend(threadID, msg)
-		}
+		b.cmdModels(ctx)
 		return
 	case strings.HasPrefix(content, "!memory"):
-		b.handleMemoryCommand(ds, threadID, parentChannelID, strings.TrimSpace(strings.TrimPrefix(content, "!memory")))
+		ctx.args = strings.TrimSpace(strings.TrimPrefix(content, "!memory"))
+		b.cmdMemory(ctx)
 		return
 	case strings.HasPrefix(content, "!flashmemory"):
-		b.handleFlashMemoryCommand(ds, threadID, parentChannelID, strings.TrimSpace(strings.TrimPrefix(content, "!flashmemory")))
+		ctx.args = strings.TrimSpace(strings.TrimPrefix(content, "!flashmemory"))
+		b.cmdFlashMemory(ctx)
 		return
 	}
 
@@ -598,6 +491,8 @@ func buildSlashCommands() []*discordgo.ApplicationCommand {
 		{Name: "cron-list", Description: L.Get("cmd.cron_list.desc")},
 		{Name: "compact", Description: L.Get("cmd.compact.desc")},
 		{Name: "clear", Description: L.Get("cmd.clear.desc")},
+		{Name: "close", Description: L.Get("cmd.close.desc")},
+		{Name: "resume", Description: L.Get("cmd.resume.desc")},
 		{Name: "cron-run", Description: L.Get("cmd.cron_run.desc"), Options: []*discordgo.ApplicationCommandOption{
 			{Type: discordgo.ApplicationCommandOptionString, Name: "name", Description: L.Get("cmd.cron_run.opt.name"), Required: true},
 		}},
@@ -709,396 +604,65 @@ func (b *Bot) handleSlashCommand(ds *discordgo.Session, i *discordgo.Interaction
 	reply := func(msg string) {
 		_, _ = ds.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{Content: msg})
 	}
+	ctx := cmdCtx{channelID: channelID, targetID: rawChannelID, inThread: inThread, reply: reply}
 
 	go func() {
+		// Extract args from slash command options
 		switch data.Name {
 		case "start":
-			cwd := data.Options[0].StringValue()
-			reply(L.Getf("start.starting", cwd))
-			if err := b.manager.StartAt(channelID, cwd); err != nil {
-				reply(L.Getf("error.generic", err.Error()))
-			} else {
-				reply(L.Getf("start.success", cwd))
-				reply(usageMessage())
-			}
+			ctx.args = data.Options[0].StringValue()
+			b.cmdStart(ctx)
 		case "reset":
-			if inThread {
-				if err := b.manager.ResetThreadAgent(rawChannelID); err != nil {
-					reply(L.Getf("error.reset_failed", err.Error()))
-				} else {
-					reply(L.Get("reset.success"))
-				}
-			} else {
-				reply(L.Get("reset.resetting"))
-				if err := b.manager.Reset(channelID); err != nil {
-					reply(L.Getf("error.generic", err.Error()))
-				} else {
-					reply(L.Get("reset.success"))
-					reply(usageMessage())
-				}
-			}
+			b.cmdReset(ctx)
 		case "status":
-			reply(b.statusWithSTT(channelID))
+			b.cmdStatus(ctx)
 		case "cancel":
-			if inThread {
-				if err := b.manager.CancelThreadAgent(rawChannelID); err != nil {
-					reply(L.Getf("error.cancel_failed", err.Error()))
-				} else {
-					reply(L.Get("cancel.success"))
-				}
-			} else {
-				if err := b.manager.Cancel(channelID); err != nil {
-					reply(L.Getf("error.cancel_failed", err.Error()))
-				} else {
-					reply(L.Get("cancel.success"))
-				}
-			}
+			b.cmdCancel(ctx)
 		case "compact":
-			var resp string
-			var err error
-			if inThread {
-				resp, err = b.manager.SendCommandThread(rawChannelID, "/compact")
-			} else {
-				resp, err = b.manager.SendCommand(channelID, "/compact")
-			}
-			if err != nil {
-				reply(L.Getf("error.generic", err.Error()))
-			} else {
-				if resp == "" {
-					resp = L.Get("compact.success")
-				}
-				reply("✅ " + resp)
-			}
+			b.cmdCompact(ctx)
 		case "clear":
-			var resp string
-			var err error
-			if inThread {
-				resp, err = b.manager.SendCommandThread(rawChannelID, "/clear")
-			} else {
-				resp, err = b.manager.SendCommand(channelID, "/clear")
-				if err == nil {
-					b.manager.ClearHistory(channelID)
-				}
-			}
-			if err != nil {
-				reply(L.Getf("error.generic", err.Error()))
-			} else {
-				if resp == "" {
-					resp = L.Get("clear.success")
-				}
-				reply("✅ " + resp)
-			}
+			b.cmdClear(ctx)
 		case "cwd":
 			if len(data.Options) > 0 {
-				newCwd := data.Options[0].StringValue()
-				if err := b.manager.SetCWD(channelID, newCwd); err != nil {
-					reply(L.Getf("error.generic", err.Error()))
-				} else {
-					reply(L.Getf("cwd.set", newCwd))
-				}
-			} else {
-				reply(b.manager.CWD(channelID))
+				ctx.args = data.Options[0].StringValue()
 			}
+			b.cmdCwd(ctx)
 		case "pause":
-			target := channelID
-			if inThread {
-				target = rawChannelID
-			}
-			b.manager.Pause(target)
-			reply(L.Get("pause.on"))
+			b.cmdPause(ctx)
 		case "back":
-			target := channelID
-			if inThread {
-				target = rawChannelID
-			}
-			b.manager.Back(target)
-			reply(L.Get("pause.off"))
+			b.cmdBack(ctx)
 		case "silent":
-			target := channelID
-			if inThread {
-				target = rawChannelID
-			}
 			if len(data.Options) > 0 {
-				switch data.Options[0].StringValue() {
-				case "on":
-					b.manager.SetSilent(target, true)
-					reply(L.Get("silent.on"))
-				case "off":
-					b.manager.SetSilent(target, false)
-					reply(L.Get("silent.off"))
-				}
-			} else {
-				if b.manager.IsSilent(target) {
-					reply(L.Get("silent.status.on"))
-				} else {
-					reply(L.Get("silent.status.off"))
-				}
+				ctx.args = data.Options[0].StringValue()
 			}
+			b.cmdSilent(ctx)
 		case "model":
 			if len(data.Options) > 0 {
-				model := data.Options[0].StringValue()
-				if inThread {
-					reply(L.Getf("model.switching", model))
-					if err := b.manager.ResetThreadAgentWithModel(rawChannelID, model); err != nil {
-						reply(L.Getf("error.reset_failed", err.Error()))
-					} else {
-						reply(L.Getf("model.switched", model))
-					}
-				} else {
-					if err := b.manager.SetModel(channelID, model); err != nil {
-						reply(L.Getf("error.generic", err.Error()))
-						return
-					}
-					reply(L.Getf("model.switching", model))
-					if err := b.manager.Restart(channelID); err != nil {
-						reply(L.Getf("error.reset_failed", err.Error()))
-					} else {
-						reply(L.Getf("model.switched", model))
-					}
-				}
-			} else {
-				if inThread {
-					reply(b.manager.ThreadModel(rawChannelID))
-				} else {
-					reply(b.manager.Model(channelID))
-				}
+				ctx.args = data.Options[0].StringValue()
 			}
+			b.cmdModel(ctx)
 		case "models":
-			msg, err := b.manager.ListModels(channelID)
-			if err != nil {
-				reply(L.Getf("error.generic", err.Error()))
-			} else {
-				reply(msg)
-			}
+			b.cmdModels(ctx)
 		case "memory":
 			action := data.Options[0].StringValue()
 			value := ""
 			if len(data.Options) > 1 {
 				value = data.Options[1].StringValue()
 			}
-			b.handleMemorySlash(reply, channelID, action, value)
+			ctx.args = action + " " + value
+			b.cmdMemory(ctx)
 		case "flashmemory":
 			action := data.Options[0].StringValue()
 			value := ""
 			if len(data.Options) > 1 {
 				value = data.Options[1].StringValue()
 			}
-			b.handleFlashMemorySlash(reply, channelID, action, value)
+			ctx.args = action + " " + value
+			b.cmdFlashMemory(ctx)
+		case "close":
+			b.cmdClose(ctx)
+		case "resume":
+			b.cmdResume(ctx)
 		}
 	}()
-}
-
-// handleMemoryCommand dispatches !memory subcommands.
-// replyTo is where to send the response, channelID is the memory key (parent channel).
-func (b *Bot) handleMemoryCommand(ds *discordgo.Session, replyTo, channelID, args string) {
-	switch {
-	case args == "" || args == "list":
-		entries := b.manager.MemoryList(channelID)
-		if len(entries) == 0 {
-			ds.ChannelMessageSend(replyTo, L.Get("memory.empty"))
-			return
-		}
-		var sb strings.Builder
-		sb.WriteString(L.Get("memory.list_header"))
-		for i, e := range entries {
-			sb.WriteString(fmt.Sprintf("`%d.` %s\n", i+1, e))
-		}
-		ds.ChannelMessageSend(replyTo, sb.String())
-
-	case strings.HasPrefix(args, "add "):
-		entry := strings.TrimSpace(strings.TrimPrefix(args, "add "))
-		if entry == "" {
-			ds.ChannelMessageSend(replyTo, L.Get("memory.usage"))
-			return
-		}
-		if err := b.manager.MemoryAdd(channelID, entry); err != nil {
-			ds.ChannelMessageSend(replyTo, L.Getf("error.save_failed", err.Error()))
-			return
-		}
-		ds.ChannelMessageSend(replyTo, L.Getf("memory.added", entry))
-
-	case strings.HasPrefix(args, "remove "):
-		idxStr := strings.TrimSpace(strings.TrimPrefix(args, "remove "))
-		idx, err := strconv.Atoi(idxStr)
-		if err != nil {
-			ds.ChannelMessageSend(replyTo, L.Get("memory.usage"))
-			return
-		}
-		if err := b.manager.MemoryRemove(channelID, idx-1); err != nil {
-			ds.ChannelMessageSend(replyTo, L.Getf("error.generic", err.Error()))
-			return
-		}
-		ds.ChannelMessageSend(replyTo, L.Getf("memory.removed", idx))
-
-	case args == "clear":
-		if err := b.manager.MemoryClear(channelID); err != nil {
-			ds.ChannelMessageSend(replyTo, L.Getf("error.generic", err.Error()))
-			return
-		}
-		ds.ChannelMessageSend(replyTo, L.Get("memory.cleared"))
-
-	default:
-		ds.ChannelMessageSend(replyTo, L.Get("memory.usage"))
-	}
-}
-
-// handleFlashMemoryCommand dispatches !flashmemory subcommands.
-func (b *Bot) handleFlashMemoryCommand(ds *discordgo.Session, replyTo, channelID, args string) {
-	switch {
-	case args == "" || args == "list":
-		entries := b.manager.FlashMemoryList(channelID)
-		if len(entries) == 0 {
-			ds.ChannelMessageSend(replyTo, L.Get("flashmemory.empty"))
-			return
-		}
-		var sb strings.Builder
-		sb.WriteString(L.Get("flashmemory.list_header"))
-		for i, e := range entries {
-			sb.WriteString(fmt.Sprintf("`%d.` %s\n", i+1, e))
-		}
-		ds.ChannelMessageSend(replyTo, sb.String())
-
-	case strings.HasPrefix(args, "add "):
-		entry := strings.TrimSpace(strings.TrimPrefix(args, "add "))
-		if entry == "" {
-			ds.ChannelMessageSend(replyTo, L.Get("flashmemory.usage"))
-			return
-		}
-		b.manager.FlashMemoryAdd(channelID, entry)
-		ds.ChannelMessageSend(replyTo, L.Getf("flashmemory.added", entry))
-
-	case strings.HasPrefix(args, "remove "):
-		idxStr := strings.TrimSpace(strings.TrimPrefix(args, "remove "))
-		idx, err := strconv.Atoi(idxStr)
-		if err != nil {
-			ds.ChannelMessageSend(replyTo, L.Get("flashmemory.usage"))
-			return
-		}
-		if err := b.manager.FlashMemoryRemove(channelID, idx-1); err != nil {
-			ds.ChannelMessageSend(replyTo, L.Getf("error.generic", err.Error()))
-			return
-		}
-		ds.ChannelMessageSend(replyTo, L.Getf("flashmemory.removed", idx))
-
-	case args == "clear":
-		b.manager.FlashMemoryClear(channelID)
-		ds.ChannelMessageSend(replyTo, L.Get("flashmemory.cleared"))
-
-	default:
-		ds.ChannelMessageSend(replyTo, L.Get("flashmemory.usage"))
-	}
-}
-
-// handleMemorySlash handles /memory slash command via reply func.
-func (b *Bot) handleMemorySlash(reply func(string), channelID, action, value string) {
-	value = strings.TrimSpace(value)
-	switch action {
-	case "list":
-		entries := b.manager.MemoryList(channelID)
-		if len(entries) == 0 {
-			reply(L.Get("memory.empty"))
-			return
-		}
-		var sb strings.Builder
-		sb.WriteString(L.Get("memory.list_header"))
-		for i, e := range entries {
-			sb.WriteString(fmt.Sprintf("`%d.` %s\n", i+1, e))
-		}
-		reply(sb.String())
-	case "add":
-		if value == "" {
-			reply(L.Get("memory.usage"))
-			return
-		}
-		if err := b.manager.MemoryAdd(channelID, value); err != nil {
-			reply(L.Getf("error.save_failed", err.Error()))
-			return
-		}
-		reply(L.Getf("memory.added", value))
-	case "remove":
-		idx, err := strconv.Atoi(value)
-		if err != nil {
-			reply(L.Get("memory.usage"))
-			return
-		}
-		if err := b.manager.MemoryRemove(channelID, idx-1); err != nil {
-			reply(L.Getf("error.generic", err.Error()))
-			return
-		}
-		reply(L.Getf("memory.removed", idx))
-	case "clear":
-		if err := b.manager.MemoryClear(channelID); err != nil {
-			reply(L.Getf("error.generic", err.Error()))
-			return
-		}
-		reply(L.Get("memory.cleared"))
-	}
-}
-
-// handleFlashMemorySlash handles /flashmemory slash command via reply func.
-func (b *Bot) handleFlashMemorySlash(reply func(string), channelID, action, value string) {
-	value = strings.TrimSpace(value)
-	switch action {
-	case "list":
-		entries := b.manager.FlashMemoryList(channelID)
-		if len(entries) == 0 {
-			reply(L.Get("flashmemory.empty"))
-			return
-		}
-		var sb strings.Builder
-		sb.WriteString(L.Get("flashmemory.list_header"))
-		for i, e := range entries {
-			sb.WriteString(fmt.Sprintf("`%d.` %s\n", i+1, e))
-		}
-		reply(sb.String())
-	case "add":
-		if value == "" {
-			reply(L.Get("flashmemory.usage"))
-			return
-		}
-		b.manager.FlashMemoryAdd(channelID, value)
-		reply(L.Getf("flashmemory.added", value))
-	case "remove":
-		idx, err := strconv.Atoi(value)
-		if err != nil {
-			reply(L.Get("flashmemory.usage"))
-			return
-		}
-		if err := b.manager.FlashMemoryRemove(channelID, idx-1); err != nil {
-			reply(L.Getf("error.generic", err.Error()))
-			return
-		}
-		reply(L.Getf("flashmemory.removed", idx))
-	case "clear":
-		b.manager.FlashMemoryClear(channelID)
-		reply(L.Get("flashmemory.cleared"))
-	}
-}
-
-// handleSilentBang handles !silent / !silent on / !silent off.
-// replyChannelID is where to send the reply; targetID is the key for IsSilent/SetSilent.
-// msgID can be empty (thread context uses ChannelMessageSend instead of reply).
-func (b *Bot) handleSilentBang(ds *discordgo.Session, replyChannelID, msgID, targetID, content string) {
-	send := func(text string) {
-		if msgID != "" {
-			ds.ChannelMessageSendReply(replyChannelID, text, &discordgo.MessageReference{MessageID: msgID, ChannelID: replyChannelID})
-		} else {
-			ds.ChannelMessageSend(replyChannelID, text)
-		}
-	}
-	arg := strings.TrimSpace(strings.TrimPrefix(content, "!silent"))
-	switch arg {
-	case "on":
-		b.manager.SetSilent(targetID, true)
-		send(L.Get("silent.on"))
-	case "off":
-		b.manager.SetSilent(targetID, false)
-		send(L.Get("silent.off"))
-	default:
-		if b.manager.IsSilent(targetID) {
-			send(L.Get("silent.status.on"))
-		} else {
-			send(L.Get("silent.status.off"))
-		}
-	}
 }
