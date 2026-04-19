@@ -300,6 +300,9 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 		b.manager.Back(m.ChannelID)
 		ds.ChannelMessageSendReply(m.ChannelID, L.Get("pause.off"), &discordgo.MessageReference{MessageID: m.ID, ChannelID: m.ChannelID})
 
+	case content == "!silent", content == "!silent on", content == "!silent off":
+		b.handleSilentBang(ds, m.ChannelID, m.ID, m.ChannelID, content)
+
 	case content == "!reset":
 		if err := b.manager.Reset(m.ChannelID); err != nil {
 			ds.ChannelMessageSend(m.ChannelID, L.Getf("error.reset_failed", err.Error()))
@@ -474,6 +477,9 @@ func (b *Bot) handleThreadMessage(ds *discordgo.Session, m *discordgo.MessageCre
 		b.manager.Back(threadID)
 		ds.ChannelMessageSend(threadID, L.Get("pause.off"))
 		return
+	case content == "!silent", content == "!silent on", content == "!silent off":
+		b.handleSilentBang(ds, threadID, "", threadID, content)
+		return
 	case content == "!compact":
 		resp, err := b.manager.SendCommandThread(threadID, "/compact")
 		if err != nil {
@@ -577,6 +583,13 @@ func buildSlashCommands() []*discordgo.ApplicationCommand {
 		}},
 		{Name: "pause", Description: L.Get("cmd.pause.desc")},
 		{Name: "back", Description: L.Get("cmd.back.desc")},
+		{Name: "silent", Description: L.Get("cmd.silent.desc"), Options: []*discordgo.ApplicationCommandOption{
+			{Type: discordgo.ApplicationCommandOptionString, Name: "mode", Description: L.Get("cmd.silent.opt.mode"), Required: false,
+				Choices: []*discordgo.ApplicationCommandOptionChoice{
+					{Name: "on", Value: "on"},
+					{Name: "off", Value: "off"},
+				}},
+		}},
 		{Name: "model", Description: L.Get("cmd.model.desc"), Options: []*discordgo.ApplicationCommandOption{
 			{Type: discordgo.ApplicationCommandOptionString, Name: "model", Description: L.Get("cmd.model.opt.model"), Required: false},
 		}},
@@ -800,6 +813,27 @@ func (b *Bot) handleSlashCommand(ds *discordgo.Session, i *discordgo.Interaction
 			}
 			b.manager.Back(target)
 			reply(L.Get("pause.off"))
+		case "silent":
+			target := channelID
+			if inThread {
+				target = rawChannelID
+			}
+			if len(data.Options) > 0 {
+				switch data.Options[0].StringValue() {
+				case "on":
+					b.manager.SetSilent(target, true)
+					reply(L.Get("silent.on"))
+				case "off":
+					b.manager.SetSilent(target, false)
+					reply(L.Get("silent.off"))
+				}
+			} else {
+				if b.manager.IsSilent(target) {
+					reply(L.Get("silent.status.on"))
+				} else {
+					reply(L.Get("silent.status.off"))
+				}
+			}
 		case "model":
 			if len(data.Options) > 0 {
 				model := data.Options[0].StringValue()
@@ -1038,5 +1072,33 @@ func (b *Bot) handleFlashMemorySlash(reply func(string), channelID, action, valu
 	case "clear":
 		b.manager.FlashMemoryClear(channelID)
 		reply(L.Get("flashmemory.cleared"))
+	}
+}
+
+// handleSilentBang handles !silent / !silent on / !silent off.
+// replyChannelID is where to send the reply; targetID is the key for IsSilent/SetSilent.
+// msgID can be empty (thread context uses ChannelMessageSend instead of reply).
+func (b *Bot) handleSilentBang(ds *discordgo.Session, replyChannelID, msgID, targetID, content string) {
+	send := func(text string) {
+		if msgID != "" {
+			ds.ChannelMessageSendReply(replyChannelID, text, &discordgo.MessageReference{MessageID: msgID, ChannelID: replyChannelID})
+		} else {
+			ds.ChannelMessageSend(replyChannelID, text)
+		}
+	}
+	arg := strings.TrimSpace(strings.TrimPrefix(content, "!silent"))
+	switch arg {
+	case "on":
+		b.manager.SetSilent(targetID, true)
+		send(L.Get("silent.on"))
+	case "off":
+		b.manager.SetSilent(targetID, false)
+		send(L.Get("silent.off"))
+	default:
+		if b.manager.IsSilent(targetID) {
+			send(L.Get("silent.status.on"))
+		} else {
+			send(L.Get("silent.status.off"))
+		}
 	}
 }

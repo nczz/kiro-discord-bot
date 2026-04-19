@@ -221,6 +221,7 @@ The bot needs explicit permission in each channel it should respond to:
 | `/cwd` | Show current working directory |
 | `/pause` | Switch to mention-only mode (bot ignores non-mention messages) |
 | `/back` | Resume full-listen mode |
+| `/silent` | Toggle silent mode (compact tool output, default: on) |
 | `/model` | Show current model |
 | `/model <model-id>` | Switch model and restart agent |
 | `/models` | List all available models |
@@ -244,6 +245,7 @@ All commands also work with `!` prefix (e.g. `!status`, `!reset`).
 | `!reset` | Restart the thread agent |
 | `!pause` | Switch thread to mention-only mode |
 | `!back` | Resume thread full-listen mode |
+| `!silent` | Toggle thread silent mode |
 | `!compact` | Compress thread agent's conversation history |
 | `!clear` | Clear thread agent's conversation history |
 | `!model` | Show thread agent's current model |
@@ -284,6 +286,8 @@ Each task runs in a Discord thread. The bot posts the full work process in real-
 | Tool failure | ❌ title + error output |
 | Agent thinking | 💭 thought content |
 | Final response | Complete text, auto-split if > 2000 chars |
+
+**Silent mode** (default: on) shows compact output — tool start shows icon + title only (no file list), tool results and thoughts are hidden, failures show a one-line summary. Use `/silent off` for full detail.
 
 ### Recovery
 
@@ -630,6 +634,7 @@ chmod +x start.sh && ./start.sh
 | `/cwd` | 查詢目前工作目錄 |
 | `/pause` | 切換為 @mention 模式 |
 | `/back` | 恢復完整監聽模式 |
+| `/silent` | 切換安靜模式（精簡工具輸出，預設：開啟） |
 | `/model` | 查詢目前使用的 model |
 | `/model <model-id>` | 切換 model 並重啟 agent |
 | `/models` | 列出所有可用的 model |
@@ -653,6 +658,7 @@ chmod +x start.sh && ./start.sh
 | `!reset` | 重啟討論串 agent |
 | `!pause` | 切換討論串為 @mention 模式 |
 | `!back` | 恢復討論串完整監聽模式 |
+| `!silent` | 切換討論串安靜模式 |
 | `!compact` | 壓縮討論串 agent 的對話歷史 |
 | `!clear` | 清除討論串 agent 的對話歷史 |
 | `!model` | 查詢討論串 agent 目前的 model |

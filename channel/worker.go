@@ -55,6 +55,8 @@ type Worker struct {
 
 	memoryPrefix func() string // returns memory+flash prefix to inject into prompts
 
+	isSilent func() bool // returns true if silent mode is on (compact tool output)
+
 	historyPrefix string // prepended to first job's prompt, then cleared
 }
 
@@ -78,6 +80,9 @@ func (w *Worker) OnActivityFunc(fn func()) { w.onActivity = fn }
 
 // OnMemoryPrefixFunc sets a callback that returns memory rules to prepend to prompts.
 func (w *Worker) OnMemoryPrefixFunc(fn func() string) { w.memoryPrefix = fn }
+
+// OnSilentFunc sets a callback that returns whether silent mode is active.
+func (w *Worker) OnSilentFunc(fn func() bool) { w.isSilent = fn }
 
 // SetHistoryPrefix sets conversation history to prepend to the first job's prompt.
 func (w *Worker) SetHistoryPrefix(s string) { w.historyPrefix = s }
@@ -287,17 +292,23 @@ func (w *Worker) execute(job *Job) {
 			if title == "" {
 				title = "tool"
 			}
-			// Show kind icon + title + affected files
 			icon := toolKindIcon(evt.Kind)
-			msg := icon + " " + title
-			if len(evt.Locations) > 0 {
-				files := make([]string, 0, len(evt.Locations))
-				for _, loc := range evt.Locations {
-					files = append(files, "`"+loc.Path+"`")
+			silent := w.isSilent != nil && w.isSilent()
+			if silent {
+				// Compact: icon + title only
+				ds.ChannelMessageSend(threadID, icon+" "+title)
+			} else {
+				// Full: icon + title + affected files
+				msg := icon + " " + title
+				if len(evt.Locations) > 0 {
+					files := make([]string, 0, len(evt.Locations))
+					for _, loc := range evt.Locations {
+						files = append(files, "`"+loc.Path+"`")
+					}
+					msg += "\n📁 " + strings.Join(files, ", ")
 				}
-				msg += "\n📁 " + strings.Join(files, ", ")
+				ds.ChannelMessageSend(threadID, msg)
 			}
-			ds.ChannelMessageSend(threadID, msg)
 			swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "⚙️")
 		},
 		OnToolResult: func(evt acp.ToolCallEvent) {
@@ -305,7 +316,15 @@ func (w *Worker) execute(job *Job) {
 				w.onActivity()
 			}
 			swapReaction(ds, job.ChannelID, job.MessageID, "⚙️", "🔄")
-			// Send tool output to thread if meaningful
+			silent := w.isSilent != nil && w.isSilent()
+			if silent {
+				// Compact: only show one-line failure
+				if evt.Status == "failed" {
+					ds.ChannelMessageSend(threadID, "❌ "+evt.Title)
+				}
+				return
+			}
+			// Full: send tool output to thread if meaningful
 			if evt.RawOutput != "" && evt.Status == "completed" {
 				out := evt.RawOutput
 				if len(out) > 1900 {
@@ -327,6 +346,9 @@ func (w *Worker) execute(job *Job) {
 		OnThought: func(text string) {
 			if w.onActivity != nil {
 				w.onActivity()
+			}
+			if w.isSilent != nil && w.isSilent() {
+				return // Compact: skip thoughts
 			}
 			// Accumulate thought chunks — send as a single collapsed block would be ideal,
 			// but Discord doesn't support spoiler streaming. Just prefix with 💭.

@@ -21,6 +21,7 @@ type Manager struct {
 	workers         map[string]*Worker
 	agents          map[string]*acp.Agent
 	paused          map[string]bool
+	silent          map[string]bool // channelID → silent mode (default true when absent)
 	store           *SessionStore
 	kiroCLI         string
 	defaultCWD      string
@@ -83,6 +84,7 @@ func NewManager(cfg ManagerConfig) *Manager {
 		workers:            make(map[string]*Worker),
 		agents:             make(map[string]*acp.Agent),
 		paused:             make(map[string]bool),
+		silent:             make(map[string]bool),
 		threadAgents:       make(map[string]*threadAgentEntry),
 		store:              cfg.Store,
 		kiroCLI:            cfg.KiroCLI,
@@ -512,6 +514,7 @@ func (m *Manager) startAgentAndWorker(channelID string) (*Worker, error) {
 		defer m.mu.Unlock()
 		return m.BuildMemoryPrefix(channelID)
 	})
+	w.OnSilentFunc(func() bool { return m.IsSilent(channelID) })
 	w.Start()
 	m.workers[channelID] = w
 	return w, nil
@@ -622,6 +625,25 @@ func (m *Manager) IsPaused(channelID string) bool {
 	return m.paused[channelID]
 }
 
+// SetSilent sets the silent (compact output) mode for a channel.
+func (m *Manager) SetSilent(channelID string, on bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.silent[channelID] = on
+}
+
+// IsSilent returns true if the channel is in silent mode (compact tool output).
+// Default is true (silent) when not explicitly set.
+func (m *Manager) IsSilent(channelID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	v, ok := m.silent[channelID]
+	if !ok {
+		return true
+	}
+	return v
+}
+
 // --- Thread Agent Management ---
 
 // EnqueueThread routes a job to the thread's dedicated agent, spawning one if needed.
@@ -713,6 +735,7 @@ func (m *Manager) spawnThreadAgent(threadID, parentChannelID string, modelOverri
 		defer m.mu.Unlock()
 		return m.BuildMemoryPrefix(parentChannelID)
 	})
+	w.OnSilentFunc(func() bool { return m.IsSilent(threadID) })
 	w.Start()
 	entry.worker = w
 
