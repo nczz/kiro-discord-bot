@@ -11,7 +11,7 @@ description: Use for ANY code change, build, debug, or architecture question in 
 - Build MCP server: `go build -o mcp-discord-server ./cmd/mcp-discord/`
 - Test: `go test ./...`
 - Single package test: `go test ./acp/`
-- Run: `./start.sh` (reads `.env`, auto-restart watchdog)
+- Run: `systemctl start kiro-discord-bot` (systemd, recommended) or `export $(grep -v '^#' .env | xargs) && ./kiro-discord-bot` (manual)
 - Config: all settings from `.env`, see `config.go` `loadConfig()`
 
 ## Architecture Boundaries

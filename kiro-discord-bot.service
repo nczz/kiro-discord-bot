@@ -1,0 +1,15 @@
+[Unit]
+Description=kiro-discord-bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/kiro-discord-bot
+EnvironmentFile=/opt/kiro-discord-bot/.env
+ExecStart=/opt/kiro-discord-bot/kiro-discord-bot
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

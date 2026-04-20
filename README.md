@@ -63,7 +63,10 @@ Day 30 — Extend capabilities with MCP plugins
 ### Prerequisites
 
 - Go 1.21+
-- [kiro-cli](https://cli.kiro.dev/install) 1.29+ installed and logged in
+- [kiro-cli](https://cli.kiro.dev/install) 1.29+ installed
+- kiro-cli authenticated via one of:
+  - `kiro-cli login` (interactive, opens browser)
+  - `KIRO_API_KEY` environment variable (headless / server deployments)
 - A Discord bot token with the following:
   - Scopes: `bot`, `applications.commands`
   - Permissions: View Channels, Send Messages, Add Reactions, Read Message History
@@ -85,12 +88,22 @@ Day 30 — Extend capabilities with MCP plugins
 
 ---
 
-### 2. Install kiro-cli and Log In
+### 2. Install kiro-cli
 
 ```bash
 curl -fsSL https://cli.kiro.dev/install | bash
 export PATH="$HOME/.local/bin:$PATH"
+```
+
+**Authentication** — choose one:
+
+```bash
+# Option A: Interactive login (opens browser)
 kiro-cli login
+
+# Option B: API key (headless / server — set in .env)
+# Get your key from https://kiro.dev/settings → API Keys
+# Then add KIRO_API_KEY=your-key to .env
 ```
 
 ---
@@ -110,6 +123,7 @@ Edit `.env`:
 DISCORD_TOKEN=your-bot-token
 DISCORD_GUILD_ID=your-guild-id
 KIRO_CLI_PATH=/home/user/.local/bin/kiro-cli
+KIRO_API_KEY=
 DEFAULT_CWD=/projects
 DATA_DIR=/tmp/kiro-bot-data
 ASK_TIMEOUT_SEC=3600
@@ -142,6 +156,7 @@ STT_MAX_DURATION_SEC=300
 | `DISCORD_TOKEN` | Discord bot token | required |
 | `DISCORD_GUILD_ID` | Guild ID for instant slash command registration | required |
 | `KIRO_CLI_PATH` | Full path to kiro-cli binary | `kiro-cli` |
+| `KIRO_API_KEY` | Kiro API key for headless auth (alternative to `kiro-cli login`) | — |
 | `DEFAULT_CWD` | Default working directory for agents | `/projects` |
 | `DATA_DIR` | Directory for sessions, logs, and attachments | `./data` |
 | `ASK_TIMEOUT_SEC` | Agent response timeout (safety net) in seconds | `3600` |
@@ -170,27 +185,57 @@ STT_MAX_DURATION_SEC=300
 
 ---
 
-### 5. Start (Local)
+### 4. Build
 
 ```bash
-chmod +x start.sh
-./start.sh
-```
-
-The script:
-- Skips restart if bot is already running
-- Builds and starts the bot with auto-restart watchdog
-- Reads all config from `.env`
-
-To force restart:
-```bash
-pkill -f kiro-discord-bot
-./start.sh
+VERSION=$(git describe --tags --always 2>/dev/null || echo "dev")
+go build -ldflags "-X main.Version=$VERSION" -o kiro-discord-bot .
 ```
 
 ---
 
-### 6. Deploy with Docker
+### 5. Start with systemd (recommended)
+
+Install the service (edit paths in the file to match your setup):
+
+```bash
+# System-level (root)
+sudo cp kiro-discord-bot.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now kiro-discord-bot
+
+# Or user-level (non-root)
+mkdir -p ~/.config/systemd/user
+cp kiro-discord-bot.service ~/.config/systemd/user/
+# Edit WorkingDirectory and EnvironmentFile paths
+systemctl --user daemon-reload
+systemctl --user enable --now kiro-discord-bot
+```
+
+Manage:
+
+```bash
+systemctl status kiro-discord-bot     # check status
+journalctl -u kiro-discord-bot -f     # follow logs
+systemctl restart kiro-discord-bot    # restart
+systemctl stop kiro-discord-bot       # stop
+```
+
+> For user-level services, add `--user` to all `systemctl` and `journalctl` commands.
+
+---
+
+### 6. Start manually
+
+```bash
+# Load .env and run in foreground
+export $(grep -v '^#' .env | xargs)
+./kiro-discord-bot
+```
+
+---
+
+### 7. Deploy with Docker
 
 ```bash
 docker compose up -d --build
@@ -200,7 +245,7 @@ docker compose up -d --build
 
 ---
 
-### 7. Grant Channel Permissions
+### 8. Grant Channel Permissions
 
 The bot needs explicit permission in each channel it should respond to:
 
@@ -333,7 +378,7 @@ kiro-cli acp --trust-all-tools   (one process per channel, stdio JSON-RPC)
 kiro-discord-bot/
 ├── main.go
 ├── config.go
-├── start.sh              local start + watchdog script
+├── kiro-discord-bot.service  systemd service template
 ├── bot/
 │   ├── bot.go            Discord init, Ready handler, slash command registration
 │   ├── handler.go        message routing, slash command handlers
@@ -607,7 +652,10 @@ Day 30 — 擴充能力
 #### 前置需求
 
 - Go 1.21+
-- 已安裝並登入 [kiro-cli](https://cli.kiro.dev/install) 1.29+
+- 已安裝 [kiro-cli](https://cli.kiro.dev/install) 1.29+
+- kiro-cli 驗證方式（擇一）：
+  - `kiro-cli login`（互動式，開啟瀏覽器）
+  - `KIRO_API_KEY` 環境變數（headless / 伺服器部署）
 - Discord bot token，需具備：
   - Scopes：`bot`、`applications.commands`
   - 權限：查看頻道、發送訊息、新增反應、讀取訊息歷史
@@ -618,16 +666,30 @@ Day 30 — 擴充能力
 ### 快速開始
 
 ```bash
-# 1. 安裝並登入 kiro-cli
+# 1. 安裝 kiro-cli
 curl -fsSL https://cli.kiro.dev/install | bash
-kiro-cli login
+
+# 驗證方式擇一：
+kiro-cli login                    # 互動式（開瀏覽器）
+# 或在 .env 中設定 KIRO_API_KEY   # headless（伺服器推薦）
 
 # 2. 設定環境變數
 cp .env.example .env
 # 編輯 .env，填入 DISCORD_TOKEN、DISCORD_GUILD_ID、KIRO_CLI_PATH 等
 
-# 3. 啟動
-chmod +x start.sh && ./start.sh
+# 3. 編譯
+VERSION=$(git describe --tags --always 2>/dev/null || echo "dev")
+go build -ldflags "-X main.Version=$VERSION" -o kiro-discord-bot .
+
+# 4. 啟動（擇一）
+# systemd（推薦）：
+sudo cp kiro-discord-bot.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now kiro-discord-bot
+
+# 手動：
+export $(grep -v '^#' .env | xargs)
+./kiro-discord-bot
 ```
 
 ### 指令說明
