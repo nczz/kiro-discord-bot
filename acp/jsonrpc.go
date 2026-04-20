@@ -27,11 +27,15 @@ type rpcResponse struct {
 
 // RPCError represents a JSON-RPC error.
 type RPCError struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
+	Code    int              `json:"code"`
+	Message string           `json:"message"`
+	Data    json.RawMessage  `json:"data,omitempty"`
 }
 
 func (e *RPCError) Error() string {
+	if len(e.Data) > 0 {
+		return fmt.Sprintf("rpc error %d: %s | data: %s", e.Code, e.Message, string(e.Data))
+	}
 	return fmt.Sprintf("rpc error %d: %s", e.Code, e.Message)
 }
 

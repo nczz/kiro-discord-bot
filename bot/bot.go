@@ -39,27 +39,13 @@ func (b *Bot) isMyGuild(guildID string) bool {
 }
 
 type BotConfig struct {
+	channel.ManagerConfig
+
 	DiscordToken       string
-	KiroCLIPath        string
-	DefaultCWD         string
-	DataDir            string
-	QueueBufferSize    int
-	AskTimeoutSec      int
-	StreamUpdateSec    int
-	ThreadAutoArchive  int
-	GuildID            string
-	KiroModel          string
 	HeartbeatSec       int
 	AttRetainDays      int
 	CronTimezone       string
-	BotVersion         string
 	DownloadTimeoutSec int
-	ThreadAgentMax     int
-	ThreadAgentIdleSec int
-	MaxScannerBuffer   int
-	AgentProfile       string
-	TrustAllTools      bool
-	TrustTools         string
 	STTEnabled         bool
 	STTProvider        string
 	STTAPIKey          string
@@ -80,25 +66,8 @@ func NewFromConfig(cfg BotConfig) (*Bot, error) {
 		return nil, err
 	}
 
-	manager := channel.NewManager(channel.ManagerConfig{
-		Store:              store,
-		KiroCLI:            cfg.KiroCLIPath,
-		DefaultCWD:         cfg.DefaultCWD,
-		QueueBufSize:       cfg.QueueBufferSize,
-		AskTimeoutSec:      cfg.AskTimeoutSec,
-		StreamUpdateSec:    cfg.StreamUpdateSec,
-		ThreadArchive:      cfg.ThreadAutoArchive,
-		DefaultModel:       cfg.KiroModel,
-		DataDir:            cfg.DataDir,
-		BotVersion:         cfg.BotVersion,
-		GuildID:            cfg.GuildID,
-		ThreadAgentMax:     cfg.ThreadAgentMax,
-		ThreadAgentIdleSec: cfg.ThreadAgentIdleSec,
-		MaxScannerBuffer:   cfg.MaxScannerBuffer,
-		AgentProfile:       cfg.AgentProfile,
-		TrustAllTools:      cfg.TrustAllTools,
-		TrustTools:         cfg.TrustTools,
-	})
+	cfg.ManagerConfig.Store = store
+	manager := channel.NewManager(cfg.ManagerConfig)
 
 	b := &Bot{discord: ds, manager: manager, guildID: cfg.GuildID, dataDir: cfg.DataDir, cronTimezone: cfg.CronTimezone, version: cfg.BotVersion,
 		downloadClient: &http.Client{Timeout: time.Duration(cfg.DownloadTimeoutSec) * time.Second},
@@ -117,10 +86,12 @@ func NewFromConfig(cfg BotConfig) (*Bot, error) {
 	b.cronStore = cronStore
 
 	hb := heartbeat.New(cfg.HeartbeatSec)
-	hb.Register(heartbeat.NewHealthTask(&healthAdapter{bot: b}))
+	n := botNotifier{bot: b}
+	hb.Register(heartbeat.NewHealthTask(&healthAdapter{n}))
 	hb.Register(heartbeat.NewCleanupTask(cfg.DataDir, cfg.AttRetainDays))
-	hb.Register(heartbeat.NewCronTask(cronStore, &cronAdapter{bot: b}, cfg.DataDir, cfg.CronTimezone, cfg.GuildID))
-	hb.Register(heartbeat.NewThreadCleanupTask(&threadCleanupAdapter{bot: b}, cfg.ThreadAgentIdleSec, cfg.ThreadAgentMax))
+	hb.Register(heartbeat.NewCronTask(cronStore, &cronAdapter{n}, cfg.DataDir, cfg.CronTimezone, cfg.GuildID))
+	hb.Register(heartbeat.NewThreadCleanupTask(&threadCleanupAdapter{n}, cfg.ThreadAgentIdleSec, cfg.ThreadAgentMax))
+	hb.Register(heartbeat.NewChannelCleanupTask(&channelCleanupAdapter{n}, cfg.ChannelAgentIdleSec))
 	b.hb = hb
 	ds.AddHandler(b.handleMessage)
 	ds.AddHandler(b.handleInteraction)

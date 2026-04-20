@@ -117,6 +117,7 @@ STREAM_UPDATE_SEC=3
 THREAD_AUTO_ARCHIVE=1440
 THREAD_AGENT_MAX=5
 THREAD_AGENT_IDLE_SEC=900
+CHANNEL_AGENT_IDLE_SEC=0
 KIRO_MODEL=
 HEARTBEAT_SEC=60
 ATTACHMENT_RETAIN_DAYS=7
@@ -148,6 +149,7 @@ STT_MAX_DURATION_SEC=300
 | `THREAD_AUTO_ARCHIVE` | Thread auto-archive duration in minutes (60/1440/4320/10080) | `1440` |
 | `THREAD_AGENT_MAX` | Max concurrent thread agents | `5` |
 | `THREAD_AGENT_IDLE_SEC` | Thread agent idle timeout in seconds | `900` |
+| `CHANNEL_AGENT_IDLE_SEC` | Channel agent idle timeout in seconds (0 = disabled) | `0` |
 | `KIRO_MODEL` | Default model ID for kiro-cli (empty = kiro default) | `` |
 | `HEARTBEAT_SEC` | Agent health check interval in seconds | `60` |
 | `ATTACHMENT_RETAIN_DAYS` | Auto-delete attachments older than N days (0 = keep forever) | `7` |
@@ -336,9 +338,11 @@ kiro-discord-bot/
 │   ├── bot.go            Discord init, Ready handler, slash command registration
 │   ├── handler.go        message routing, slash command handlers
 │   ├── handler_cron.go   /cron Modal + /cron-list Button + /remind handlers
+│   ├── notifier.go       shared botNotifier (Notify+IsSilent) for all adapters
 │   ├── health_adapter.go heartbeat ↔ manager bridge
 │   ├── cron_adapter.go   cron task ↔ manager bridge
-│   └── thread_cleanup_adapter.go  thread cleanup ↔ manager bridge
+│   ├── thread_cleanup_adapter.go  thread cleanup ↔ manager bridge
+│   └── channel_cleanup_adapter.go channel idle cleanup ↔ manager bridge
 ├── channel/
 │   ├── manager.go        per-channel session + worker lifecycle
 │   ├── session.go        session struct + JSON persistence
@@ -353,10 +357,12 @@ kiro-discord-bot/
 │   ├── cron.go           cron scheduler + temp agent execution
 │   ├── cron_store.go     cron job persistence (JSON)
 │   ├── schedule.go       natural language → cron/time parser
-│   └── thread_cleanup.go idle thread agent eviction
+│   ├── thread_cleanup.go idle thread agent eviction
+│   └── channel_cleanup.go idle channel agent eviction
 ├── acp/
 │   ├── agent.go          ACP agent process management (spawn, handshake, ask, stop)
 │   ├── jsonrpc.go        JSON-RPC 2.0 ndjson transport
+│   ├── ringbuf.go        thread-safe ring buffer for stderr capture
 │   └── protocol.go       ACP protocol constants and types
 ├── stt/
 │   └── stt.go            Speech-to-text client (Groq / OpenAI Whisper)
@@ -546,6 +552,7 @@ The agent will read the guide, build the binary, update `mcp.json`, and prompt y
 - **Conversation logs:** All user/agent interactions are recorded in `DATA_DIR/ch-<channelID>/chat.jsonl`.
 - **Attachments:** Stored in `DATA_DIR/ch-<channelID>/attachments/` with timestamp prefixes. Auto-cleaned after `ATTACHMENT_RETAIN_DAYS`.
 - **Thread agents:** Idle timeout respects active work — `lastActivity` is updated during tool execution, preventing premature cleanup of long-running tasks.
+- **Channel agent idle:** Set `CHANNEL_AGENT_IDLE_SEC` (default `0` = disabled) to auto-close idle channel agents and free resources. Agents restart automatically on next message.
 - **Cron jobs:** Definitions in `DATA_DIR/cron/cron.json`, execution history in `DATA_DIR/cron/<jobID>/history.jsonl` (includes full agent output).
 
 ---
@@ -674,6 +681,7 @@ chmod +x start.sh && ./start.sh
 - MCP 設定自動繼承 `~/.kiro/settings/mcp.json`
 - 回應被截斷時可用 `!resume` 補完
 - **討論串互動**：在 bot 建立的 thread 中發訊息，會自動啟動獨立的 thread agent 接續討論。閒置超過 `THREAD_AGENT_IDLE_SEC` 或 thread 歸檔時自動關閉，再次發訊息可重新啟動
+- **頻道 agent 閒置回收**：設定 `CHANNEL_AGENT_IDLE_SEC`（預設 `0` = 停用）可讓閒置的頻道 agent 自動關閉以釋放資源，下次發訊息時自動重啟
 
 ---
 

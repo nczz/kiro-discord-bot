@@ -22,8 +22,11 @@ config.go        → .env → Config struct (mustEnv / envOr / envInt)
 bot/             → Discord gateway, slash commands, message routing
   handler.go     → message + slash command dispatch (不放業務邏輯)
   handler_cron.go→ /cron Modal, /cron-list Button, /remind
+  notifier.go    → shared botNotifier (Notify+IsSilent) embedded by all adapters
   health_adapter → heartbeat.HealthDeps bridge
   cron_adapter   → heartbeat.CronDeps bridge
+  thread_cleanup_adapter → heartbeat.ThreadCleanupDeps bridge
+  channel_cleanup_adapter → heartbeat.ChannelCleanupDeps bridge
 channel/         → per-channel lifecycle
   manager.go     → session + worker + agent 生命週期管理中樞
   worker.go      → job queue goroutine, thread-based execution
@@ -32,6 +35,7 @@ channel/         → per-channel lifecycle
 acp/             → kiro-cli ACP child process (JSON-RPC over stdio)
   agent.go       → spawn, handshake, ask, cancel, stop
   jsonrpc.go     → ndjson transport
+  ringbuf.go     → thread-safe ring buffer for stderr capture
   protocol.go    → ACP constants (protocol version 2025-11-16)
 heartbeat/       → background task loop
   health.go      → agent liveness check + auto-restart
@@ -39,11 +43,13 @@ heartbeat/       → background task loop
   cron.go        → cron scheduler + temp agent execution
   cron_store.go  → cron job JSON persistence
   schedule.go    → natural language → cron/time parser
+  thread_cleanup.go → idle thread agent eviction
+  channel_cleanup.go → idle channel agent eviction
 ```
 
 - handler 只做路由和轉發，業務邏輯在 channel/manager
 - acp/ 以外不直接操作 agent process
-- heartbeat/ 透過 interface (HealthDeps, CronDeps) 與 bot 解耦
+- heartbeat/ 透過 interface (HealthDeps, CronDeps, ThreadCleanupDeps, ChannelCleanupDeps) 與 bot 解耦
 
 ## NEVER
 

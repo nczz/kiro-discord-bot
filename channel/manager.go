@@ -47,6 +47,10 @@ type Manager struct {
 	agentProfile       string // --agent flag
 	trustAllTools      bool   // --trust-all-tools
 	trustTools         string // --trust-tools <names>
+
+	// Channel agent idle tracking
+	channelLastActivity map[string]time.Time
+	channelAgentIdleSec int
 }
 
 // threadAgentEntry tracks a per-thread agent and its metadata.
@@ -60,19 +64,20 @@ type threadAgentEntry struct {
 
 // ManagerConfig holds configuration for creating a Manager.
 type ManagerConfig struct {
-	Store              *SessionStore
-	KiroCLI            string
+	Store              *SessionStore // set by bot.go after creation
+	KiroCLIPath        string
 	DefaultCWD         string
-	QueueBufSize       int
+	QueueBufferSize    int
 	AskTimeoutSec      int
 	StreamUpdateSec    int
-	ThreadArchive      int
-	DefaultModel       string
+	ThreadAutoArchive  int
+	KiroModel          string
 	DataDir            string
 	BotVersion         string
 	GuildID            string
 	ThreadAgentMax     int
 	ThreadAgentIdleSec int
+	ChannelAgentIdleSec int
 	MaxScannerBuffer   int
 	AgentProfile       string
 	TrustAllTools      bool
@@ -87,13 +92,13 @@ func NewManager(cfg ManagerConfig) *Manager {
 		silent:             make(map[string]bool),
 		threadAgents:       make(map[string]*threadAgentEntry),
 		store:              cfg.Store,
-		kiroCLI:            cfg.KiroCLI,
+		kiroCLI:            cfg.KiroCLIPath,
 		defaultCWD:         cfg.DefaultCWD,
-		queueBufSize:       cfg.QueueBufSize,
+		queueBufSize:       cfg.QueueBufferSize,
 		askTimeoutSec:      cfg.AskTimeoutSec,
 		streamUpdateSec:    cfg.StreamUpdateSec,
-		threadArchive:      cfg.ThreadArchive,
-		defaultModel:       cfg.DefaultModel,
+		threadArchive:      cfg.ThreadAutoArchive,
+		defaultModel:       cfg.KiroModel,
 		logger:             NewChatLogger(cfg.DataDir),
 		botVersion:         cfg.BotVersion,
 		guildID:            cfg.GuildID,
@@ -102,6 +107,8 @@ func NewManager(cfg ManagerConfig) *Manager {
 		flashMemory:        make(map[string][]string),
 		threadAgentMax:     cfg.ThreadAgentMax,
 		threadAgentIdleSec: cfg.ThreadAgentIdleSec,
+		channelAgentIdleSec: cfg.ChannelAgentIdleSec,
+		channelLastActivity: make(map[string]time.Time),
 		maxScannerBuffer:   cfg.MaxScannerBuffer,
 		agentProfile:       cfg.AgentProfile,
 		trustAllTools:      cfg.TrustAllTools,
@@ -133,6 +140,7 @@ func (m *Manager) stopChannel(channelID string) {
 		agent.Stop()
 		delete(m.agents, channelID)
 	}
+	delete(m.channelLastActivity, channelID)
 }
 
 // StopAll stops all active workers and agents. Called during graceful shutdown.
@@ -165,6 +173,7 @@ func (m *Manager) Enqueue(ds *discordgo.Session, job *Job) error {
 	if err := worker.Enqueue(job); err != nil {
 		return fmt.Errorf("queue full (%d jobs pending)", worker.QueueLen())
 	}
+	m.channelLastActivity[job.ChannelID] = time.Now()
 
 	qLen := worker.QueueLen()
 	_ = ds.MessageReactionAdd(job.ChannelID, job.MessageID, "⏳")
@@ -515,6 +524,11 @@ func (m *Manager) startAgentAndWorker(channelID string) (*Worker, error) {
 		return m.BuildMemoryPrefix(channelID)
 	})
 	w.OnSilentFunc(func() bool { return m.IsSilent(channelID) })
+	w.OnActivityFunc(func() {
+		m.mu.Lock()
+		m.channelLastActivity[channelID] = time.Now()
+		m.mu.Unlock()
+	})
 	w.Start()
 	m.workers[channelID] = w
 	return w, nil
@@ -777,6 +791,35 @@ func (m *Manager) CancelThreadAgent(threadID string) error {
 }
 
 // ThreadAgentEntries returns a snapshot of all thread agent entries for heartbeat inspection.
+// ChannelIdleEntries returns channel agents with their last activity time.
+func (m *Manager) ChannelIdleEntries() []struct {
+	ChannelID    string
+	LastActivity time.Time
+} {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var out []struct {
+		ChannelID    string
+		LastActivity time.Time
+	}
+	for chID := range m.agents {
+		la := m.channelLastActivity[chID]
+		out = append(out, struct {
+			ChannelID    string
+			LastActivity time.Time
+		}{chID, la})
+	}
+	return out
+}
+
+// StopIdleChannel stops a channel agent and its worker (called by idle cleanup).
+func (m *Manager) StopIdleChannel(channelID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.stopChannel(channelID)
+	log.Printf("[manager] stopped idle channel agent ch-%s", channelID)
+}
+
 func (m *Manager) ThreadAgentEntries() []struct {
 	ThreadID     string
 	ParentChID   string

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -37,6 +38,7 @@ type Agent struct {
 	initResult *InitializeResult
 	stopOnce   sync.Once
 	exited     chan struct{} // closed when child process exits
+	stderrBuf  *ringBuffer  // captures recent stderr from kiro-cli
 }
 
 // AgentOptions configures how an agent is spawned.
@@ -84,7 +86,8 @@ func StartAgent(name, kiroCLI, cwd, model string, opts AgentOptions) (*Agent, er
 	if err != nil {
 		return nil, fmt.Errorf("stdout pipe: %w", err)
 	}
-	cmd.Stderr = os.Stderr
+	stderrRing := newRingBuffer(4096)
+	cmd.Stderr = io.MultiWriter(os.Stderr, stderrRing)
 
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start: %w", err)
@@ -96,6 +99,7 @@ func StartAgent(name, kiroCLI, cwd, model string, opts AgentOptions) (*Agent, er
 		transport: NewTransport(stdout, stdin, opts.MaxBuffer),
 		state:     "starting",
 		exited:    make(chan struct{}),
+		stderrBuf: stderrRing,
 	}
 
 	a.transport.OnNotification = a.handleNotification
@@ -315,6 +319,14 @@ func (a *Agent) Pid() int {
 		return a.cmd.Process.Pid
 	}
 	return 0
+}
+
+// RecentStderr returns the most recent stderr output from kiro-cli (up to 4 KB).
+func (a *Agent) RecentStderr() string {
+	if a.stderrBuf == nil {
+		return ""
+	}
+	return strings.TrimSpace(a.stderrBuf.String())
 }
 
 // IsAlive returns true if the child process is still running.

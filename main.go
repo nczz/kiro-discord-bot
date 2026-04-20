@@ -8,6 +8,7 @@ import (
 
 	"github.com/nczz/kiro-discord-bot/acp"
 	"github.com/nczz/kiro-discord-bot/bot"
+	"github.com/nczz/kiro-discord-bot/channel"
 	"github.com/nczz/kiro-discord-bot/locale"
 )
 
@@ -25,27 +26,30 @@ func main() {
 	log.Printf("kiro-discord-bot %s starting", Version)
 
 	b, err := bot.NewFromConfig(bot.BotConfig{
+		ManagerConfig: channel.ManagerConfig{
+			KiroCLIPath:         cfg.KiroCLIPath,
+			DefaultCWD:          cfg.DefaultCWD,
+			DataDir:             cfg.DataDir,
+			QueueBufferSize:     cfg.QueueBufferSize,
+			AskTimeoutSec:       cfg.AskTimeoutSec,
+			StreamUpdateSec:     cfg.StreamUpdateSec,
+			ThreadAutoArchive:   cfg.ThreadAutoArchive,
+			GuildID:             cfg.DiscordGuildID,
+			KiroModel:           cfg.KiroModel,
+			BotVersion:          Version,
+			ThreadAgentMax:      cfg.ThreadAgentMax,
+			ThreadAgentIdleSec:  cfg.ThreadAgentIdleSec,
+			ChannelAgentIdleSec: cfg.ChannelAgentIdleSec,
+			MaxScannerBuffer:    cfg.MaxScannerBuffer,
+			AgentProfile:        cfg.AgentProfile,
+			TrustAllTools:       cfg.TrustAllTools,
+			TrustTools:          cfg.TrustTools,
+		},
 		DiscordToken:       cfg.DiscordToken,
-		KiroCLIPath:        cfg.KiroCLIPath,
-		DefaultCWD:         cfg.DefaultCWD,
-		DataDir:            cfg.DataDir,
-		QueueBufferSize:    cfg.QueueBufferSize,
-		AskTimeoutSec:      cfg.AskTimeoutSec,
-		StreamUpdateSec:    cfg.StreamUpdateSec,
-		ThreadAutoArchive:  cfg.ThreadAutoArchive,
-		GuildID:            cfg.DiscordGuildID,
-		KiroModel:          cfg.KiroModel,
 		HeartbeatSec:       cfg.HeartbeatSec,
 		AttRetainDays:      cfg.AttRetainDays,
 		CronTimezone:       cfg.CronTimezone,
-		BotVersion:         Version,
 		DownloadTimeoutSec: cfg.DownloadTimeoutSec,
-		ThreadAgentMax:     cfg.ThreadAgentMax,
-		ThreadAgentIdleSec: cfg.ThreadAgentIdleSec,
-		MaxScannerBuffer:   cfg.MaxScannerBuffer,
-		AgentProfile:       cfg.AgentProfile,
-		TrustAllTools:      cfg.TrustAllTools,
-		TrustTools:         cfg.TrustTools,
 		STTEnabled:         cfg.STTEnabled,
 		STTProvider:        cfg.STTProvider,
 		STTAPIKey:          cfg.STTAPIKey,

@@ -8,7 +8,7 @@ import (
 )
 
 type cronAdapter struct {
-	bot *Bot
+	botNotifier
 }
 
 var _ heartbeat.CronDeps = (*cronAdapter)(nil)
@@ -23,8 +23,4 @@ func (a *cronAdapter) StopTempAgent(agent *acp.Agent) {
 
 func (a *cronAdapter) AskAgentStream(ctx context.Context, agent *acp.Agent, prompt string) (string, string, error) {
 	return a.bot.manager.AskAgentStream(ctx, agent, prompt)
-}
-
-func (a *cronAdapter) Notify(channelID, msg string) {
-	_, _ = a.bot.discord.ChannelMessageSend(channelID, msg)
 }

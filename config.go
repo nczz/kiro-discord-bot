@@ -23,8 +23,9 @@ type Config struct {
 	DownloadTimeoutSec int
 	ThreadAutoArchive  int
 	ThreadAgentMax     int
-	ThreadAgentIdleSec int
-	MaxScannerBuffer   int // bytes, scanner buffer upper limit for kiro-cli stdout
+	ThreadAgentIdleSec  int
+	ChannelAgentIdleSec int
+	MaxScannerBuffer    int // bytes, scanner buffer upper limit for kiro-cli stdout
 	AgentProfile       string
 	TrustAllTools      bool
 	TrustTools         string
@@ -54,7 +55,8 @@ func loadConfig() *Config {
 		DownloadTimeoutSec: envInt("DOWNLOAD_TIMEOUT_SEC", 120),
 		ThreadAutoArchive:  envInt("THREAD_AUTO_ARCHIVE", 1440),
 		ThreadAgentMax:     envInt("THREAD_AGENT_MAX", 5),
-		ThreadAgentIdleSec: envInt("THREAD_AGENT_IDLE_SEC", 900),
+		ThreadAgentIdleSec:  envInt("THREAD_AGENT_IDLE_SEC", 900),
+		ChannelAgentIdleSec: envInt("CHANNEL_AGENT_IDLE_SEC", 0),
 		MaxScannerBuffer:   envInt("MAX_SCANNER_BUFFER_MB", 64) * 1024 * 1024,
 		AgentProfile:       envOr("KIRO_AGENT", ""),
 		TrustAllTools:      envOr("TRUST_ALL_TOOLS", "true") == "true",

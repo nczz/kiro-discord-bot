@@ -3,7 +3,7 @@ package bot
 import "github.com/nczz/kiro-discord-bot/heartbeat"
 
 type threadCleanupAdapter struct {
-	bot *Bot
+	botNotifier
 }
 
 func (a *threadCleanupAdapter) ThreadAgentEntries() []heartbeat.ThreadAgentInfo {
@@ -17,8 +17,4 @@ func (a *threadCleanupAdapter) ThreadAgentEntries() []heartbeat.ThreadAgentInfo 
 
 func (a *threadCleanupAdapter) StopThreadAgent(threadID string) {
 	a.bot.manager.StopThreadAgent(threadID)
-}
-
-func (a *threadCleanupAdapter) Notify(channelID, msg string) {
-	_, _ = a.bot.discord.ChannelMessageSend(channelID, msg)
 }

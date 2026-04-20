@@ -15,6 +15,8 @@ type ThreadCleanupDeps interface {
 	StopThreadAgent(threadID string)
 	// Notify sends a message to the given channelID (threadID).
 	Notify(channelID, msg string)
+	// IsSilent returns whether the channel has silent mode enabled.
+	IsSilent(channelID string) bool
 }
 
 // ThreadAgentInfo holds metadata about a thread agent for cleanup decisions.
@@ -52,7 +54,9 @@ func (t *ThreadCleanupTask) Run() error {
 		if now.Sub(e.LastActivity) > idleThreshold {
 			log.Printf("[thread-cleanup] killing idle thread agent %s (idle %s)", e.ThreadID, now.Sub(e.LastActivity).Round(time.Second))
 			t.deps.StopThreadAgent(e.ThreadID)
-			t.deps.Notify(e.ThreadID, L.Get("thread_agent.idle_closed"))
+			if !t.deps.IsSilent(e.ParentChID) {
+				t.deps.Notify(e.ThreadID, L.Get("thread_agent.idle_closed"))
+			}
 		}
 	}
 

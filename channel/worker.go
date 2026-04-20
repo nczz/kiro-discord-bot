@@ -379,6 +379,8 @@ func (w *Worker) execute(job *Job) {
 				} else if ctxErr == context.Canceled {
 					errMsg = L.Get("cancel.success")
 					emoji = "⚠️"
+				} else if stderr := w.agent.RecentStderr(); stderr != "" {
+					errMsg += "\n```\n" + stderr + "\n```"
 				}
 				log.Printf("[worker %s] job error | user=%s msg=%s elapsed=%s ctxErr=%v err=%v",
 					w.channelID, job.Username, job.MessageID, time.Since(startTime).Round(time.Millisecond), ctxErr, askErr)
@@ -430,10 +432,12 @@ func (w *Worker) execute(job *Job) {
 	w.agent.OnReadErrorFunc(func(err error) {
 		log.Printf("[worker %s] agent read error | user=%s msg=%s elapsed=%s err=%v",
 			w.channelID, job.Username, job.MessageID, time.Since(startTime).Round(time.Millisecond), err)
-		msg := L.Getf("error.agent_read", err)
-		ds.ChannelMessageSend(threadID, msg)
-		swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "⚠️")
-		swapReaction(ds, job.ChannelID, job.MessageID, "⚙️", "⚠️")
+		if !w.isSilent() {
+			msg := L.Getf("error.agent_read", err)
+			ds.ChannelMessageSend(threadID, msg)
+			swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "⚠️")
+			swapReaction(ds, job.ChannelID, job.MessageID, "⚙️", "⚠️")
+		}
 		cancel()
 		w.cancelMu.Lock()
 		w.cancelFn = nil
@@ -488,6 +492,8 @@ func (w *Worker) executeFallback(job *Job) {
 		errMsg := askErr.Error()
 		if ctx.Err() == context.DeadlineExceeded {
 			errMsg = L.Getf("worker.timeout", w.askTimeoutSec)
+		} else if stderr := w.agent.RecentStderr(); stderr != "" {
+			errMsg += "\n```\n" + stderr + "\n```"
 		}
 		editMessage(ds, job.ChannelID, replyMsg.ID, "❌ "+errMsg)
 		swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "❌")

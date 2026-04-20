@@ -112,6 +112,7 @@
   "cmd.clear.desc": "清除對話歷史",
   "thread_agent.closed": "🔒 討論串 agent 已關閉。",
   "thread_agent.idle_closed": "💤 討論串 agent 已因閒置關閉。再次發訊息可重新啟動。",
+  "channel_agent.idle_closed": "💤 頻道 agent 已因閒置關閉。再次發訊息可重新啟動。",
   "thread_agent.spawning": "🔄 正在啟動討論串 agent...",
   "thread_agent.limit_reached": "⚠️ 已達討論串 agent 上限，已關閉最久未使用的 agent。",
   "warn.attachments_large": "⚠️ 附件總大小約 %d MB，可能超過處理上限（%d MB），建議分次傳送或調整 MAX_SCANNER_BUFFER_MB 設定。",
@@ -136,5 +137,12 @@
   "flashmemory.added": "⚡ 已新增閃存記憶：%s",
   "flashmemory.removed": "⚡ 已移除閃存記憶 #%d。",
   "flashmemory.cleared": "⚡ 已清除所有閃存記憶。",
-  "flashmemory.usage": "用法：`!flashmemory add <規則>` | `!flashmemory list` | `!flashmemory remove <編號>` | `!flashmemory clear`"
+  "flashmemory.usage": "用法：`!flashmemory add <規則>` | `!flashmemory list` | `!flashmemory remove <編號>` | `!flashmemory clear`",
+  "cwd.current": "目前工作目錄：`%s`",
+  "cwd.default": "目前工作目錄：`%s`（預設）",
+  "error.generic": "❌ %s",
+  "models.header": "**可用模型：**\n",
+  "models.footer": "\n用法：`/model <model-id>` 或 `!model <model-id>`",
+  "status.format": "Agent：`%s` | 狀態：`%s` | 佇列：%d | Session：`%s` | Model：`%s` | kiro：`%s` | bot：`%s` | Context：`%.1f%%`",
+  "worker.empty_response": "（空回應）"
 }

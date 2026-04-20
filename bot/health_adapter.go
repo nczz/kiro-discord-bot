@@ -3,7 +3,7 @@ package bot
 import "github.com/nczz/kiro-discord-bot/heartbeat"
 
 type healthAdapter struct {
-	bot *Bot
+	botNotifier
 }
 
 func (a *healthAdapter) ActiveSessions() []heartbeat.SessionInfo {
@@ -21,8 +21,4 @@ func (a *healthAdapter) CheckAgent(channelID string) error {
 
 func (a *healthAdapter) RestartAgent(channelID string) error {
 	return a.bot.manager.Restart(channelID)
-}
-
-func (a *healthAdapter) Notify(channelID, msg string) {
-	_, _ = a.bot.discord.ChannelMessageSend(channelID, msg)
 }
