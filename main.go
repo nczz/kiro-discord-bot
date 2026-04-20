@@ -16,10 +16,10 @@ func main() {
 	cfg := loadConfig()
 	locale.Load(cfg.BotLocale)
 
-	// Preflight check
+	// Preflight check (non-fatal: bot starts regardless, errors surface per-request)
 	if os.Getenv("SKIP_PREFLIGHT") == "" {
 		if err := acp.PreflightCheck(cfg.KiroCLIPath); err != nil {
-			log.Fatalf("[preflight] FATAL: %v — kiro-cli may have updated its ACP protocol", err)
+			log.Printf("[preflight] WARNING: %v — agent may be unavailable, errors will surface per-request", err)
 		}
 	}
 
