@@ -132,7 +132,10 @@ func (g *GeminiProvider) GenerateVideo(ctx context.Context, prompt, model, image
 
 	apiModel := g.apiModel(model)
 	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:predictLongRunning?key=%s", apiModel, g.apiKey)
-	jsonBody, _ := json.Marshal(body)
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("marshal request: %w", err)
+	}
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(jsonBody))
 	if err != nil {
 		return nil, err
@@ -144,7 +147,10 @@ func (g *GeminiProvider) GenerateVideo(ctx context.Context, prompt, model, image
 		return nil, err
 	}
 	defer resp.Body.Close()
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read veo response: %w", err)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("veo submit %d: %s", resp.StatusCode, truncStr(string(respBody), 500))
 	}
@@ -178,8 +184,11 @@ func (g *GeminiProvider) pollVideo(ctx context.Context, opName string) (*MediaRe
 		if err != nil {
 			return nil, err
 		}
-		pBody, _ := io.ReadAll(pResp.Body)
+		pBody, err := io.ReadAll(pResp.Body)
 		pResp.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("read poll response: %w", err)
+		}
 		if pResp.StatusCode != http.StatusOK {
 			return nil, fmt.Errorf("veo poll %d: %s", pResp.StatusCode, truncStr(string(pBody), 500))
 		}
@@ -250,7 +259,7 @@ func (g *GeminiProvider) downloadVideo(ctx context.Context, uri string) (string,
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
+		body, _ := io.ReadAll(resp.Body) // best-effort for error message
 		return "", fmt.Errorf("download video %d: %s", resp.StatusCode, truncStr(string(body), 300))
 	}
 	data, err := io.ReadAll(resp.Body)
@@ -302,7 +311,10 @@ func (g *GeminiProvider) TextToSpeech(ctx context.Context, text, model, voice st
 
 func (g *GeminiProvider) generate(ctx context.Context, model string, body map[string]interface{}) (*MediaResult, error) {
 	url := fmt.Sprintf("https://generativelanguage.googleapis.com/v1beta/models/%s:generateContent?key=%s", model, g.apiKey)
-	jsonBody, _ := json.Marshal(body)
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("marshal request: %w", err)
+	}
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(jsonBody))
 	if err != nil {
 		return nil, err
@@ -314,7 +326,10 @@ func (g *GeminiProvider) generate(ctx context.Context, model string, body map[st
 		return nil, err
 	}
 	defer resp.Body.Close()
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read response: %w", err)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("gemini %d: %s", resp.StatusCode, truncStr(string(respBody), 500))
 	}
