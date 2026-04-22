@@ -53,7 +53,10 @@ func (o *OpenAIProvider) GenerateImage(ctx context.Context, prompt, model, size,
 		"n":      1,
 		"size":   size,
 	}
-	jsonBody, _ := json.Marshal(body)
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("marshal request: %w", err)
+	}
 	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.openai.com/v1/images/generations", bytes.NewReader(jsonBody))
 	if err != nil {
 		return nil, err
@@ -66,7 +69,10 @@ func (o *OpenAIProvider) GenerateImage(ctx context.Context, prompt, model, size,
 		return nil, err
 	}
 	defer resp.Body.Close()
-	respBody, _ := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read response: %w", err)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("openai %d: %s", resp.StatusCode, truncStr(string(respBody), 500))
 	}
@@ -116,7 +122,10 @@ func (o *OpenAIProvider) TextToSpeech(ctx context.Context, text, model, voice st
 		"input": text,
 		"voice": voice,
 	}
-	jsonBody, _ := json.Marshal(body)
+	jsonBody, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("marshal request: %w", err)
+	}
 	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.openai.com/v1/audio/speech", bytes.NewReader(jsonBody))
 	if err != nil {
 		return nil, err
@@ -130,7 +139,7 @@ func (o *OpenAIProvider) TextToSpeech(ctx context.Context, text, model, voice st
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
+		respBody, _ := io.ReadAll(resp.Body) // best-effort for error message
 		return nil, fmt.Errorf("openai tts %d: %s", resp.StatusCode, truncStr(string(respBody), 500))
 	}
 
