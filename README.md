@@ -440,12 +440,12 @@ This project includes a Media Generation MCP Server (`cmd/mcp-media/`) that give
 
 | Tool | Description | Providers |
 |------|-------------|-----------|
-| `generate_image` | Text-to-image generation | Gemini (Nano Banana 2/Pro), OpenAI (GPT Image, DALL·E 3) |
+| `generate_image` | Text-to-image generation | Gemini (Nano Banana 2/Pro), OpenAI (GPT Image 2/1) |
 | `edit_image` | Edit images with natural language | Gemini, OpenAI |
-| `generate_video` | Text/image-to-video generation | Gemini (Veo 3.1) |
-| `generate_music` | Text-to-music generation | Gemini (Lyria) |
-| `text_to_speech` | Text-to-speech synthesis | OpenAI (tts-1-hd), Gemini |
-| `list_models` | List all available models | All |
+| `generate_video` | Text/image-to-video generation | Gemini (Veo 3.1/3.1 Lite) |
+| `generate_music` | Text-to-music generation | Gemini (Lyria 3 Pro/Clip) |
+| `text_to_speech` | Text-to-speech synthesis | OpenAI (tts-1-hd), Gemini (3.1 Flash TTS) |
+| `list_models` | List all available models with descriptions and cost tiers | All |
 
 ### Quick Install
 
@@ -488,9 +488,9 @@ Get your API keys:
 
 ### Available Models
 
-**Image:** `nano-banana-2`, `nano-banana-pro`, `nano-banana`, `gpt-image`, `dall-e-3`
-**Video:** `veo-3.1`
-**Music:** `lyria`
+**Image:** `nano-banana-2`, `nano-banana-pro`, `gpt-image-2`, `gpt-image-1`
+**Video:** `veo-3.1`, `veo-3.1-lite`
+**Music:** `lyria-3-pro`, `lyria-3-clip`
 **TTS:** `tts-1-hd`, `tts-1`, `gemini-tts`
 
 Only providers with configured API keys are registered. If only `GEMINI_API_KEY` is set, only Gemini models are available.

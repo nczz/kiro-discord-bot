@@ -21,15 +21,23 @@ func NewOpenAI(apiKey string) *OpenAIProvider {
 
 func (o *OpenAIProvider) ImageModels() []ModelInfo {
 	return []ModelInfo{
-		{ID: "gpt-image", Provider: "openai", Type: "image", Name: "GPT Image 1"},
-		{ID: "dall-e-3", Provider: "openai", Type: "image", Name: "DALL·E 3"},
+		{ID: "gpt-image-2", Provider: "openai", Type: "image", Name: "GPT Image 2",
+			Description: "State-of-the-art image generation with built-in reasoning, 2K output, multi-image consistency, and multilingual text rendering",
+			CostTier:    "$$$"},
+		{ID: "gpt-image-1", Provider: "openai", Type: "image", Name: "GPT Image 1",
+			Description: "Previous generation image model. Reliable for basic generation and editing",
+			CostTier:    "$$"},
 	}
 }
 
 func (o *OpenAIProvider) TTSModels() []ModelInfo {
 	return []ModelInfo{
-		{ID: "tts-1-hd", Provider: "openai", Type: "tts", Name: "OpenAI TTS HD"},
-		{ID: "tts-1", Provider: "openai", Type: "tts", Name: "OpenAI TTS"},
+		{ID: "tts-1-hd", Provider: "openai", Type: "tts", Name: "OpenAI TTS HD",
+			Description: "High-fidelity text-to-speech, best audio quality",
+			CostTier:    "$$"},
+		{ID: "tts-1", Provider: "openai", Type: "tts", Name: "OpenAI TTS",
+			Description: "Fast text-to-speech optimized for low latency",
+			CostTier:    "$"},
 	}
 }
 
@@ -40,12 +48,9 @@ func (o *OpenAIProvider) GenerateImage(ctx context.Context, prompt, model, size,
 		size = "1024x1024"
 	}
 	if model == "" {
-		model = "gpt-image-1"
+		model = "gpt-image-2"
 	}
 	apiModel := model
-	if model == "gpt-image" {
-		apiModel = "gpt-image-1"
-	}
 
 	body := map[string]interface{}{
 		"model":  apiModel,

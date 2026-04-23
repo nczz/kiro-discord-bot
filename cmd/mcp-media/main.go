@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -119,7 +118,7 @@ func main() {
 		mcp.NewTool("generate_music",
 			mcp.WithDescription("Generate a music track from a text description. Returns the local file path."),
 			mcp.WithString("prompt", mcp.Required(), mcp.Description("Music description (genre, mood, instruments, etc.)")),
-			mcp.WithString("model", mcp.Description("Model ID (default: lyria)")),
+			mcp.WithString("model", mcp.Description("Model ID (default: lyria-3-clip)")),
 			mcp.WithNumber("duration_sec", mcp.Description("Duration in seconds (default: 30)")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -194,13 +193,20 @@ func main() {
 				for _, m := range ms {
 					def := ""
 					if (t == "image" && m.ID == reg.defaultImage) || (t == "tts" && m.ID == reg.defaultTTS) {
-						def = " (default)"
+						def = " ★default"
 					}
-					lines = append(lines, fmt.Sprintf("  %s — %s [%s]%s", m.ID, m.Name, m.Provider, def))
+					cost := ""
+					if m.CostTier != "" {
+						cost = " " + m.CostTier
+					}
+					line := fmt.Sprintf("  %s — %s [%s]%s%s", m.ID, m.Name, m.Provider, cost, def)
+					if m.Description != "" {
+						line += "\n    " + m.Description
+					}
+					lines = append(lines, line)
 				}
 			}
-			b, _ := json.MarshalIndent(models, "", "  ")
-			return mcp.NewToolResultText(strings.Join(lines, "\n") + "\n\n" + string(b)), nil
+			return mcp.NewToolResultText(strings.Join(lines, "\n")), nil
 		},
 	)
 

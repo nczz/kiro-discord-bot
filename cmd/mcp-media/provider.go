@@ -45,10 +45,12 @@ type TTSProvider interface {
 
 // ModelInfo describes an available model.
 type ModelInfo struct {
-	ID       string `json:"id"`
-	Provider string `json:"provider"`
-	Type     string `json:"type"` // image, video, music, tts
-	Name     string `json:"name"`
+	ID          string `json:"id"`
+	Provider    string `json:"provider"`
+	Type        string `json:"type"` // image, video, music, tts
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	CostTier    string `json:"cost_tier,omitempty"` // "$" cheap, "$$" mid, "$$$" premium
 }
 
 // --- helpers ---

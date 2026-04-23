@@ -25,37 +25,53 @@ func NewGemini(apiKey string) *GeminiProvider {
 
 func (g *GeminiProvider) ImageModels() []ModelInfo {
 	return []ModelInfo{
-		{ID: "nano-banana-2", Provider: "gemini", Type: "image", Name: "Nano Banana 2 (Gemini 3.1 Flash Image)"},
-		{ID: "nano-banana-pro", Provider: "gemini", Type: "image", Name: "Nano Banana Pro (Gemini 3 Pro Image)"},
-		{ID: "nano-banana", Provider: "gemini", Type: "image", Name: "Nano Banana (Gemini 2.5 Flash Image)"},
+		{ID: "nano-banana-2", Provider: "gemini", Type: "image", Name: "Nano Banana 2 (Gemini 3.1 Flash Image)",
+			Description: "High-efficiency image generation and editing, optimized for speed and high-volume use cases. #1 on Image Arena",
+			CostTier:    "$$"},
+		{ID: "nano-banana-pro", Provider: "gemini", Type: "image", Name: "Nano Banana Pro (Gemini 3 Pro Image)",
+			Description: "Studio-quality 4K visuals with precise text rendering and complex layouts. Best quality among Gemini image models",
+			CostTier:    "$$$"},
 	}
 }
 
 func (g *GeminiProvider) VideoModels() []ModelInfo {
 	return []ModelInfo{
-		{ID: "veo-3.1", Provider: "gemini", Type: "video", Name: "Veo 3.1"},
+		{ID: "veo-3.1", Provider: "gemini", Type: "video", Name: "Veo 3.1",
+			Description: "State-of-the-art cinematic video with synchronized audio, up to 4K. Best quality",
+			CostTier:    "$$$"},
+		{ID: "veo-3.1-lite", Provider: "gemini", Type: "video", Name: "Veo 3.1 Lite",
+			Description: "High-efficiency video generation at lower cost. Good for prototyping and high-volume use",
+			CostTier:    "$$"},
 	}
 }
 
 func (g *GeminiProvider) MusicModels() []ModelInfo {
 	return []ModelInfo{
-		{ID: "lyria", Provider: "gemini", Type: "music", Name: "Lyria (Gemini Music)"},
+		{ID: "lyria-3-pro", Provider: "gemini", Type: "music", Name: "Lyria 3 Pro",
+			Description: "Full-length songs up to 3 min with verse/chorus/bridge structure, 44.1kHz stereo",
+			CostTier:    "$$"},
+		{ID: "lyria-3-clip", Provider: "gemini", Type: "music", Name: "Lyria 3 Clip",
+			Description: "30-second music clips, loops, and previews. Fast and cost-efficient",
+			CostTier:    "$"},
 	}
 }
 
 func (g *GeminiProvider) TTSModels() []ModelInfo {
 	return []ModelInfo{
-		{ID: "gemini-tts", Provider: "gemini", Type: "tts", Name: "Gemini TTS"},
+		{ID: "gemini-tts", Provider: "gemini", Type: "tts", Name: "Gemini 3.1 Flash TTS",
+			Description: "Low-latency speech generation with natural output and expressive audio tags",
+			CostTier:    "$"},
 	}
 }
 
 var geminiModelMap = map[string]string{
 	"nano-banana-2":   "gemini-3.1-flash-image-preview",
 	"nano-banana-pro": "gemini-3-pro-image-preview",
-	"nano-banana":     "gemini-2.5-flash-image",
 	"veo-3.1":         "veo-3.1-generate-preview",
-	"lyria":           "lyria-realtime-exp",
-	"gemini-tts":      "gemini-2.5-flash",
+	"veo-3.1-lite":    "veo-3.1-lite-generate-preview",
+	"lyria-3-pro":     "lyria-3-pro-preview",
+	"lyria-3-clip":    "lyria-3-clip-preview",
+	"gemini-tts":      "gemini-3.1-flash-tts-preview",
 }
 
 func (g *GeminiProvider) apiModel(id string) string {
