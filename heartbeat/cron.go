@@ -71,7 +71,7 @@ func (c *CronTask) ShouldRun(_ time.Time) bool {
 func (c *CronTask) Run() error {
 	now := time.Now().In(c.location)
 	for _, job := range c.store.All() {
-		if !job.Enabled {
+		if !job.Enabled && !job.RunOnce {
 			continue
 		}
 		if c.guildID != "" && job.GuildID != c.guildID {
@@ -197,6 +197,10 @@ func (c *CronTask) execute(job *CronJob, now time.Time) {
 	c.saveHistory(job.ID, CronHistory{
 		Timestamp: now.Format(time.RFC3339), Prompt: job.Prompt, Response: response, Status: status, DurationSec: duration,
 	})
+	if job.RunOnce {
+		job.RunOnce = false
+		_ = c.store.Update(job)
+	}
 	c.finishJob(job, now)
 }
 

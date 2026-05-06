@@ -32,6 +32,7 @@ type CronJob struct {
 	ThreadID      string `json:"thread_id,omitempty"`
 	NextRun       string `json:"next_run,omitempty"`
 	UseAgent      bool   `json:"use_agent,omitempty"`
+	RunOnce       bool   `json:"run_once,omitempty"`
 }
 
 // CronStore persists cron jobs to a JSON file.
