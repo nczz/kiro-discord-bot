@@ -90,7 +90,7 @@ func (a *cronAdapter) AskAgentInThread(ctx context.Context, agent *acp.Agent, ch
 		}
 		elapsed := int(time.Since(startTime).Seconds())
 		count := toolCount.Load()
-		msg := fmt.Sprintf("🔄 %s (%ds · %d tools)", L.Get("worker.processing"), elapsed, count)
+		msg := L.Getf("cron.progress", L.Get("worker.processing"), elapsed, count)
 		ds.ChannelMessageEdit(threadID, statusMsgID, msg)
 	}
 
@@ -162,8 +162,13 @@ func (a *cronAdapter) AskAgentInThread(ctx context.Context, agent *acp.Agent, ch
 					errMsg = "timeout"
 				}
 				if statusMsgID != "" {
-					ds.ChannelMessageEdit(threadID, statusMsgID, fmt.Sprintf("❌ Failed (%ds · %d tools)", elapsed, count))
+					ds.ChannelMessageEdit(threadID, statusMsgID, L.Getf("cron.progress.failed", elapsed, count))
 				}
+				// Update thread title with last run timestamp
+				ts := time.Now().Format("01/02 15:04")
+				ds.ChannelEditComplex(threadID, &discordgo.ChannelEdit{
+					Name: threadName + " · " + ts,
+				})
 				ds.ChannelMessageSend(threadID, "❌ "+errMsg)
 				done <- result{"", askErr}
 				return
@@ -173,8 +178,13 @@ func (a *cronAdapter) AskAgentInThread(ctx context.Context, agent *acp.Agent, ch
 			}
 			// Update status to done
 			if statusMsgID != "" {
-				ds.ChannelMessageEdit(threadID, statusMsgID, fmt.Sprintf("✅ Done (%ds · %d tools)", elapsed, count))
+				ds.ChannelMessageEdit(threadID, statusMsgID, L.Getf("cron.progress.done", elapsed, count))
 			}
+			// Update thread title with last run timestamp
+			ts := time.Now().Format("01/02 15:04")
+			ds.ChannelEditComplex(threadID, &discordgo.ChannelEdit{
+				Name: threadName + " · " + ts,
+			})
 			// Mention user before response if configured
 			if mentionID != "" {
 				ds.ChannelMessageSend(threadID, fmt.Sprintf("<@%s>", mentionID))
