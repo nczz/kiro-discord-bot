@@ -292,7 +292,7 @@ func (w *Worker) execute(job *Job) {
 			if title == "" {
 				title = "tool"
 			}
-			icon := toolKindIcon(evt.Kind)
+			icon := ToolKindIcon(evt.Kind)
 			silent := w.isSilent != nil && w.isSilent()
 			if silent {
 				// Compact: icon + title only
@@ -399,7 +399,7 @@ func (w *Worker) execute(job *Job) {
 			}
 
 			// Post full response in thread
-			sendLongThread(ds, threadID, response)
+			SendLongThread(ds, threadID, response)
 			swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "✅")
 			swapReaction(ds, job.ChannelID, job.MessageID, "⚙️", "✅")
 
@@ -539,7 +539,8 @@ func sendLong(ds *discordgo.Session, channelID, placeholderID, content string) {
 	}
 }
 
-func sendLongThread(ds *discordgo.Session, threadID, content string) {
+// SendLongThread sends a long message to a thread, auto-splitting at Discord's limit.
+func SendLongThread(ds *discordgo.Session, threadID, content string) {
 	const limit = 1990
 	parts := splitMessage(content, limit)
 	for _, p := range parts {
@@ -550,23 +551,77 @@ func sendLongThread(ds *discordgo.Session, threadID, content string) {
 func splitMessage(s string, limit int) []string {
 	var parts []string
 	for len(s) > limit {
-		idx := strings.LastIndex(s[:limit], "\n")
-		if idx < limit/2 {
-			idx = limit
-			for idx > 0 && !utf8.RuneStart(s[idx]) {
-				idx--
-			}
+		idx := findSplitPoint(s, limit)
+		part := s[:idx]
+
+		// If we're splitting inside a code block, close it and reopen in next part
+		lang, inBlock := codeBlockState(part)
+		if inBlock {
+			part += "\n```"
 		}
-		parts = append(parts, s[:idx])
+		parts = append(parts, part)
+
 		s = s[idx:]
 		if len(s) > 0 && s[0] == '\n' {
 			s = s[1:]
+		}
+		if inBlock {
+			s = "```" + lang + "\n" + s
 		}
 	}
 	if s != "" {
 		parts = append(parts, s)
 	}
 	return parts
+}
+
+// findSplitPoint finds the best split index within limit, preferring paragraph > newline > utf8 boundary.
+func findSplitPoint(s string, limit int) int {
+	chunk := s[:limit]
+
+	// Prefer paragraph boundary (double newline)
+	if idx := strings.LastIndex(chunk, "\n\n"); idx >= limit/3 {
+		return idx
+	}
+	// Then single newline
+	if idx := strings.LastIndex(chunk, "\n"); idx >= limit/3 {
+		return idx
+	}
+	// Fallback: UTF-8 safe boundary
+	idx := limit
+	for idx > 0 && !utf8.RuneStart(s[idx]) {
+		idx--
+	}
+	return idx
+}
+
+// codeBlockState returns whether the text ends inside an unclosed code block,
+// and the language tag if any.
+func codeBlockState(s string) (lang string, inBlock bool) {
+	for {
+		idx := strings.Index(s, "```")
+		if idx < 0 {
+			return lang, inBlock
+		}
+		if !inBlock {
+			inBlock = true
+			// Extract language tag (chars after ``` until newline or end)
+			rest := s[idx+3:]
+			if nl := strings.IndexByte(rest, '\n'); nl >= 0 {
+				lang = rest[:nl]
+			} else {
+				lang = rest
+			}
+			// Clean: lang should be a simple word, no spaces
+			if strings.ContainsAny(lang, " \t`") {
+				lang = ""
+			}
+		} else {
+			inBlock = false
+			lang = ""
+		}
+		s = s[idx+3:]
+	}
 }
 
 func truncateUTF8(s string, maxBytes int) string {
@@ -579,7 +634,8 @@ func truncateUTF8(s string, maxBytes int) string {
 	return s[:maxBytes]
 }
 
-func toolKindIcon(kind string) string {
+// ToolKindIcon returns the emoji icon for a tool kind.
+func ToolKindIcon(kind string) string {
 	switch kind {
 	case "read":
 		return "📖"

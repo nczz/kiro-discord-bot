@@ -69,7 +69,23 @@ func (s *MemoryStore) Add(channelID, entry string) error {
 
 func (s *MemoryStore) List(channelID string) []string {
 	s.mu.RLock()
-	defer s.mu.RUnlock()
+	if entries, ok := s.cache[channelID]; ok {
+		out := make([]string, len(entries))
+		copy(out, entries)
+		s.mu.RUnlock()
+		return out
+	}
+	s.mu.RUnlock()
+
+	// Cache miss — upgrade to write lock and load from disk
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// Double-check after acquiring write lock
+	if entries, ok := s.cache[channelID]; ok {
+		out := make([]string, len(entries))
+		copy(out, entries)
+		return out
+	}
 	entries := s.load(channelID)
 	out := make([]string, len(entries))
 	copy(out, entries)

@@ -32,7 +32,7 @@ type CronHistory struct {
 type CronDeps interface {
 	StartTempAgent(name, cwd, model string) (*acp.Agent, error)
 	StopTempAgent(agent *acp.Agent)
-	AskAgentStream(ctx context.Context, agent *acp.Agent, prompt string) (response string, fullLog string, err error)
+	AskAgentInThread(ctx context.Context, agent *acp.Agent, channelID, threadName, threadID, prompt, mentionID string) (response string, usedThreadID string, err error)
 	Notify(channelID, msg string)
 }
 
@@ -178,29 +178,25 @@ func (c *CronTask) execute(job *CronJob, now time.Time) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	response, fullLog, err := c.deps.AskAgentStream(ctx, agent, prompt)
+	threadName := "⏰ " + job.Name
+	response, usedThreadID, err := c.deps.AskAgentInThread(ctx, agent, job.ChannelID, threadName, job.ThreadID, prompt, job.MentionID)
 	duration := int(time.Since(start).Seconds())
 	status := "ok"
+
+	// Persist thread ID for reuse on next run
+	if usedThreadID != "" && usedThreadID != job.ThreadID {
+		job.ThreadID = usedThreadID
+		_ = c.store.Update(job)
+	}
 
 	if err != nil {
 		response = err.Error()
 		status = "error"
 		c.deps.Notify(job.ChannelID, L.Getf("cron.exec.failed", label, job.Name, err.Error()))
-	} else {
-		// Build response message with optional mention
-		mention := ""
-		if job.MentionID != "" {
-			mention = fmt.Sprintf("<@%s> ", job.MentionID)
-		}
-		display := response
-		if len(display) > 1800 {
-			display = display[:1800] + "\n...(truncated)"
-		}
-		c.deps.Notify(job.ChannelID, L.Getf("cron.exec.done", mention, job.Name, mention, display))
 	}
 
 	c.saveHistory(job.ID, CronHistory{
-		Timestamp: now.Format(time.RFC3339), Prompt: job.Prompt, Response: response, FullLog: fullLog, Status: status, DurationSec: duration,
+		Timestamp: now.Format(time.RFC3339), Prompt: job.Prompt, Response: response, Status: status, DurationSec: duration,
 	})
 	c.finishJob(job, now)
 }

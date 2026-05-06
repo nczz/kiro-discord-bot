@@ -86,7 +86,6 @@
   "cron.exec.running": "⏰ %s執行中：**%s**",
   "cron.exec.failed": "❌ %s **%s** 失敗：%s",
   "cron.exec.start_failed": "❌ %s **%s** 啟動失敗：%s",
-  "cron.exec.done": "⏰ %s**%s** 執行完成：\n%s%s",
   "cron.label.cron": "排程任務",
   "cron.label.reminder": "預約提醒",
   "remind.created": "🔔 已預約提醒\n時間：%s\n內容：%s",

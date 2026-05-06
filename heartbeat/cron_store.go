@@ -28,6 +28,7 @@ type CronJob struct {
 	CreatedBy     string `json:"created_by"`
 	CreatedAt     string `json:"created_at"`
 	LastRun       string `json:"last_run,omitempty"`
+	ThreadID      string `json:"thread_id,omitempty"`
 	NextRun       string `json:"next_run,omitempty"`
 	UseAgent      bool   `json:"use_agent,omitempty"`
 }

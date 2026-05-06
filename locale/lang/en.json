@@ -91,7 +91,6 @@
   "cron.exec.running": "⏰ %s running: **%s**",
   "cron.exec.failed": "❌ %s **%s** failed: %s",
   "cron.exec.start_failed": "❌ %s **%s** start failed: %s",
-  "cron.exec.done": "⏰ %s**%s** completed:\n%s%s",
   "cron.label.cron": "Scheduled task",
   "cron.label.reminder": "Reminder",
   "remind.created": "🔔 Reminder set\nTime: %s\nContent: %s",

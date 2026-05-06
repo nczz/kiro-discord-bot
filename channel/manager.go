@@ -119,6 +119,9 @@ func NewManager(cfg ManagerConfig) *Manager {
 // MaxScannerBuffer returns the configured scanner buffer limit in bytes.
 func (m *Manager) MaxScannerBuffer() int { return m.maxScannerBuffer }
 
+// ThreadArchive returns the configured thread auto-archive duration in minutes.
+func (m *Manager) ThreadArchive() int { return m.threadArchive }
+
 func (m *Manager) agentOpts() acp.AgentOptions {
 	return acp.AgentOptions{
 		MaxBuffer:     m.maxScannerBuffer,

@@ -118,6 +118,7 @@ func (b *Bot) Stop() {
 	if b.hbCancel != nil {
 		b.hbCancel()
 	}
+	b.seen.Stop()
 	b.manager.StopAll()
 	b.discord.Close()
 }

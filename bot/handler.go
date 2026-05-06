@@ -19,9 +19,11 @@ import (
 func usageMessage() string { return L.Get("usage_message") }
 
 // threadParentCache caches thread→parent channel mappings to avoid repeated API calls.
+// Evicts all entries when capacity is reached (simple reset strategy).
 var (
-	threadParentMu    sync.RWMutex
-	threadParentCache = make(map[string]string) // threadID → parentChannelID, "" = not a thread
+	threadParentMu       sync.RWMutex
+	threadParentCache    = make(map[string]string) // threadID → parentChannelID, "" = not a thread
+	threadParentCacheMax = 1000
 )
 
 // seenMessages is a TTL-based set to deduplicate Discord MESSAGE_CREATE events
@@ -29,23 +31,35 @@ var (
 type seenMessages struct {
 	mu      sync.Mutex
 	entries map[string]time.Time
+	stopCh  chan struct{}
 }
 
 func newSeenMessages() *seenMessages {
-	s := &seenMessages{entries: make(map[string]time.Time)}
+	s := &seenMessages{entries: make(map[string]time.Time), stopCh: make(chan struct{})}
+	ticker := time.NewTicker(60 * time.Second)
 	go func() {
-		for range time.Tick(60 * time.Second) {
-			s.mu.Lock()
-			cutoff := time.Now().Add(-5 * time.Minute)
-			for id, t := range s.entries {
-				if t.Before(cutoff) {
-					delete(s.entries, id)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-s.stopCh:
+				return
+			case <-ticker.C:
+				s.mu.Lock()
+				cutoff := time.Now().Add(-5 * time.Minute)
+				for id, t := range s.entries {
+					if t.Before(cutoff) {
+						delete(s.entries, id)
+					}
 				}
+				s.mu.Unlock()
 			}
-			s.mu.Unlock()
 		}
 	}()
 	return s
+}
+
+func (s *seenMessages) Stop() {
+	close(s.stopCh)
 }
 
 // Mark returns true if the message ID was already seen (duplicate).
@@ -79,6 +93,9 @@ func resolveThreadParent(ds *discordgo.Session, channelID string) string {
 	}
 
 	threadParentMu.Lock()
+	if len(threadParentCache) >= threadParentCacheMax {
+		threadParentCache = make(map[string]string)
+	}
 	threadParentCache[channelID] = parentID
 	threadParentMu.Unlock()
 	return parentID
@@ -87,6 +104,9 @@ func resolveThreadParent(ds *discordgo.Session, channelID string) string {
 // registerThreadParent caches a known thread→parent mapping (called when bot creates a thread).
 func registerThreadParent(threadID, parentChannelID string) {
 	threadParentMu.Lock()
+	if len(threadParentCache) >= threadParentCacheMax {
+		threadParentCache = make(map[string]string)
+	}
 	threadParentCache[threadID] = parentChannelID
 	threadParentMu.Unlock()
 }
