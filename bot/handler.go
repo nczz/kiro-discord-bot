@@ -514,7 +514,7 @@ func buildSlashCommands() []*discordgo.ApplicationCommand {
 		{Name: "close", Description: L.Get("cmd.close.desc")},
 		{Name: "resume", Description: L.Get("cmd.resume.desc")},
 		{Name: "cron-run", Description: L.Get("cmd.cron_run.desc"), Options: []*discordgo.ApplicationCommandOption{
-			{Type: discordgo.ApplicationCommandOptionString, Name: "name", Description: L.Get("cmd.cron_run.opt.name"), Required: true},
+			{Type: discordgo.ApplicationCommandOptionString, Name: "name", Description: L.Get("cmd.cron_run.opt.name"), Required: true, Autocomplete: true},
 		}},
 		{Name: "cron-prompt", Description: L.Get("cmd.cron_prompt.desc"), Options: []*discordgo.ApplicationCommandOption{
 			{Type: discordgo.ApplicationCommandOptionString, Name: "description", Description: L.Get("cmd.cron_prompt.opt"), Required: true},
@@ -563,6 +563,38 @@ func (b *Bot) registerSlashCommands() {
 	}
 }
 
+
+func (b *Bot) handleAutocomplete(ds *discordgo.Session, i *discordgo.InteractionCreate) {
+	data := i.ApplicationCommandData()
+	if data.Name != "cron-run" {
+		return
+	}
+	// Get typed value
+	var typed string
+	for _, opt := range data.Options {
+		if opt.Name == "name" && opt.Focused {
+			typed = strings.ToLower(opt.StringValue())
+		}
+	}
+	// List jobs for this channel, filter by typed prefix
+	jobs := b.cronStore.ListByChannel(i.ChannelID)
+	var choices []*discordgo.ApplicationCommandOptionChoice
+	for _, job := range jobs {
+		if typed == "" || strings.Contains(strings.ToLower(job.Name), typed) {
+			choices = append(choices, &discordgo.ApplicationCommandOptionChoice{
+				Name:  job.Name,
+				Value: job.Name,
+			})
+		}
+		if len(choices) >= 25 { // Discord max
+			break
+		}
+	}
+	_ = ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionApplicationCommandAutocompleteResult,
+		Data: &discordgo.InteractionResponseData{Choices: choices},
+	})
+}
 func (b *Bot) handleInteraction(ds *discordgo.Session, i *discordgo.InteractionCreate) {
 	// Ignore interactions from other guilds
 	if !b.isMyGuild(i.GuildID) {
@@ -571,6 +603,8 @@ func (b *Bot) handleInteraction(ds *discordgo.Session, i *discordgo.InteractionC
 	switch i.Type {
 	case discordgo.InteractionApplicationCommand:
 		b.handleSlashCommand(ds, i)
+	case discordgo.InteractionApplicationCommandAutocomplete:
+		b.handleAutocomplete(ds, i)
 	case discordgo.InteractionModalSubmit:
 		customID := i.ModalSubmitData().CustomID
 		if customID == "cron_add_modal" {
