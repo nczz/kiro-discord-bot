@@ -243,6 +243,7 @@ func (b *Bot) handleCronButton(ds *discordgo.Session, i *discordgo.InteractionCr
 		_ = b.cronStore.Update(job)
 		b.updateCronCard(ds, i, job, L.Getf("cron.resumed", job.Name))
 	case "run":
+		job.Enabled = true
 		job.NextRun = time.Now().Add(-time.Minute).Format(time.RFC3339)
 		_ = b.cronStore.Update(job)
 		b.updateCronCard(ds, i, job, L.Getf("cron.running", job.Name))
@@ -384,6 +385,7 @@ func (b *Bot) handleCronRun(ds *discordgo.Session, i *discordgo.InteractionCreat
 		return
 	}
 	respondInteraction(ds, i, L.Getf("cron.running", job.Name))
+	job.Enabled = true
 	job.NextRun = time.Now().Add(-time.Minute).Format(time.RFC3339)
 	_ = b.cronStore.Update(job)
 }
@@ -438,6 +440,7 @@ func (b *Bot) handleCronTextCommand(ds *discordgo.Session, channelID, guildID, u
 			return
 		}
 		ds.ChannelMessageSend(channelID, L.Getf("cron.running", job.Name))
+		job.Enabled = true
 		job.NextRun = time.Now().Add(-time.Minute).Format(time.RFC3339)
 		_ = b.cronStore.Update(job)
 
