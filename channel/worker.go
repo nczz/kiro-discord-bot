@@ -245,7 +245,7 @@ func (w *Worker) execute(job *Job) {
 			threadName = truncateUTF8(threadName, 92) + "..."
 		}
 		if threadName == "" {
-			threadName = "Task"
+			threadName = L.Get("worker.thread_default")
 		}
 
 		archiveDur := w.threadArchive
@@ -290,7 +290,7 @@ func (w *Worker) execute(job *Job) {
 			}
 			title := evt.Title
 			if title == "" {
-				title = "tool"
+				title = L.Get("worker.tool_fallback")
 			}
 			icon := ToolKindIcon(evt.Kind)
 			silent := w.isSilent != nil && w.isSilent()

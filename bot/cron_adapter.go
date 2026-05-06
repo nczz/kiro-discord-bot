@@ -101,7 +101,7 @@ func (a *cronAdapter) AskAgentInThread(ctx context.Context, agent *acp.Agent, ch
 
 			title := evt.Title
 			if title == "" {
-				title = "tool"
+				title = L.Get("worker.tool_fallback")
 			}
 			icon := channel.ToolKindIcon(evt.Kind)
 			if isSilent() {
@@ -159,7 +159,7 @@ func (a *cronAdapter) AskAgentInThread(ctx context.Context, agent *acp.Agent, ch
 			if askErr != nil {
 				errMsg := askErr.Error()
 				if ctx.Err() == context.DeadlineExceeded {
-					errMsg = "timeout"
+					errMsg = L.Get("worker.timeout.short")
 				}
 				if statusMsgID != "" {
 					ds.ChannelMessageEdit(threadID, statusMsgID, L.Getf("cron.progress.failed", elapsed, count))
