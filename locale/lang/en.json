@@ -102,7 +102,7 @@
   "cron.btn.run": "▶️ Run Now",
   "cron.btn.delete": "🗑️ Delete",
   "cron.exec.running": "⏰ %s running: **%s**",
-  "cron.exec.running_link": "⏰ **%s** → <#%s>",
+  "cron.exec.running_link": "**%s** → <#%s>",
   "cron.exec.failed": "❌ %s **%s** failed: %s",
   "cron.exec.start_failed": "❌ %s **%s** start failed: %s",
   "cron.progress": "🔄 %s (%ds · %d tools)",
