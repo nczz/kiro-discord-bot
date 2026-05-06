@@ -544,7 +544,9 @@ func SendLongThread(ds *discordgo.Session, threadID, content string) {
 	const limit = 1990
 	parts := splitMessage(content, limit)
 	for _, p := range parts {
-		ds.ChannelMessageSend(threadID, p)
+		if _, err := ds.ChannelMessageSend(threadID, p); err != nil {
+			log.Printf("[send] thread %s failed: %v (len=%d)", threadID, err, len(p))
+		}
 	}
 }
 
