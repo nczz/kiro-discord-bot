@@ -29,7 +29,7 @@ func (a *cronAdapter) StopTempAgent(agent *acp.Agent) {
 	a.bot.manager.StopTempAgent(agent)
 }
 
-func (a *cronAdapter) AskAgentInThread(ctx context.Context, agent *acp.Agent, channelID, threadName, existingThreadID, prompt, mentionID string) (string, string, error) {
+func (a *cronAdapter) AskAgentInThread(ctx context.Context, agent *acp.Agent, channelID, threadName, existingThreadID, prompt, mentionID, createdByID string) (string, string, error) {
 	ds := a.bot.discord
 	archiveDur := a.bot.manager.ThreadArchive()
 	if archiveDur <= 0 {
@@ -64,6 +64,14 @@ func (a *cronAdapter) AskAgentInThread(ctx context.Context, agent *acp.Agent, ch
 		// Post initial separator for new thread
 		ds.ChannelMessageSend(threadID, fmt.Sprintf("── %s ──", time.Now().Format("01/02 15:04")))
 	}
+
+	// Add creator to thread so they get notifications
+	if createdByID != "" {
+		_ = ds.ThreadMemberAdd(threadID, createdByID)
+	}
+
+	// Notify channel with thread link
+	a.Notify(channelID, L.Getf("cron.exec.running_link", threadName, threadID))
 
 	// Post initial status — save message ID for progress updates
 	statusMsg, _ := ds.ChannelMessageSend(threadID, "🔄 "+L.Get("worker.processing"))

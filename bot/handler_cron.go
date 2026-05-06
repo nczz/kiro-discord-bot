@@ -109,8 +109,10 @@ func (b *Bot) handleCronModalSubmit(ds *discordgo.Session, i *discordgo.Interact
 	}
 
 	username := ""
+	userID := ""
 	if i.Member != nil && i.Member.User != nil {
 		username = i.Member.User.Username
+		userID = i.Member.User.ID
 	}
 	guildID := ""
 	if i.GuildID != "" {
@@ -129,6 +131,7 @@ func (b *Bot) handleCronModalSubmit(ds *discordgo.Session, i *discordgo.Interact
 		HistoryLimit:  10,
 		Enabled:       true,
 		CreatedBy:     username,
+		CreatedByID:   userID,
 	}
 	if err := b.cronStore.Add(job); err != nil {
 		respondInteraction(ds, i, L.Getf("error.save_failed", err.Error()))
@@ -472,6 +475,7 @@ func (b *Bot) handleRemind(ds *discordgo.Session, i *discordgo.InteractionCreate
 		MentionID:     userID,
 		Enabled:       true,
 		CreatedBy:     username,
+		CreatedByID:   userID,
 		NextRun:       target.Format(time.RFC3339),
 		ScheduleHuman: timeStr,
 		HistoryLimit:  0,
@@ -539,6 +543,7 @@ func (b *Bot) handleRemindText(ds *discordgo.Session, channelID, guildID, userID
 		MentionID:     userID,
 		Enabled:       true,
 		CreatedBy:     username,
+		CreatedByID:   userID,
 		NextRun:       target.Format(time.RFC3339),
 		ScheduleHuman: timeStr,
 		HistoryLimit:  0,
@@ -594,12 +599,12 @@ func (b *Bot) handleCronPrompt(ds *discordgo.Session, i *discordgo.InteractionCr
 		Components: []discordgo.MessageComponent{
 			discordgo.ActionsRow{Components: []discordgo.MessageComponent{
 				discordgo.Button{
-					Label:    "✅",
+					Label:    L.Get("cron.prompt.btn.confirm"),
 					Style:    discordgo.SuccessButton,
 					CustomID: confirmID,
 				},
 				discordgo.Button{
-					Label:    "❌",
+					Label:    L.Get("cron.prompt.btn.cancel"),
 					Style:    discordgo.DangerButton,
 					CustomID: cancelID,
 				},
@@ -639,9 +644,11 @@ func (b *Bot) handleCronPromptButton(ds *discordgo.Session, i *discordgo.Interac
 	}
 
 	username := ""
+	userID := ""
 	guildID := ""
 	if i.Member != nil && i.Member.User != nil {
 		username = i.Member.User.Username
+		userID = i.Member.User.ID
 	}
 	if i.GuildID != "" {
 		guildID = i.GuildID
@@ -657,6 +664,7 @@ func (b *Bot) handleCronPromptButton(ds *discordgo.Session, i *discordgo.Interac
 		HistoryLimit:  10,
 		Enabled:       true,
 		CreatedBy:     username,
+		CreatedByID:   userID,
 	}
 	if err := b.cronStore.Add(job); err != nil {
 		respondInteraction(ds, i, L.Getf("error.save_failed", err.Error()))

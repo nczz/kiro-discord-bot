@@ -26,6 +26,7 @@ type CronJob struct {
 	OneShot       bool   `json:"one_shot,omitempty"`
 	MentionID     string `json:"mention_id,omitempty"`
 	CreatedBy     string `json:"created_by"`
+	CreatedByID   string `json:"created_by_id,omitempty"`
 	CreatedAt     string `json:"created_at"`
 	LastRun       string `json:"last_run,omitempty"`
 	ThreadID      string `json:"thread_id,omitempty"`

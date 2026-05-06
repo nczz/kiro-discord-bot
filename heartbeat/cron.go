@@ -32,7 +32,7 @@ type CronHistory struct {
 type CronDeps interface {
 	StartTempAgent(name, cwd, model string) (*acp.Agent, error)
 	StopTempAgent(agent *acp.Agent)
-	AskAgentInThread(ctx context.Context, agent *acp.Agent, channelID, threadName, threadID, prompt, mentionID string) (response string, usedThreadID string, err error)
+	AskAgentInThread(ctx context.Context, agent *acp.Agent, channelID, threadName, threadID, prompt, mentionID, createdByID string) (response string, usedThreadID string, err error)
 	Notify(channelID, msg string)
 }
 
@@ -147,7 +147,6 @@ func (c *CronTask) execute(job *CronJob, now time.Time) {
 		label = L.Get("cron.label.reminder")
 	}
 	log.Printf("[cron] executing job %s (%s)", job.ID, job.Name)
-	c.deps.Notify(job.ChannelID, L.Getf("cron.exec.running", label, job.Name))
 
 	// Load history (skip for one-shot)
 	var history []CronHistory
@@ -179,7 +178,7 @@ func (c *CronTask) execute(job *CronJob, now time.Time) {
 	defer cancel()
 
 	threadName := "⏰ " + job.Name
-	response, usedThreadID, err := c.deps.AskAgentInThread(ctx, agent, job.ChannelID, threadName, job.ThreadID, prompt, job.MentionID)
+	response, usedThreadID, err := c.deps.AskAgentInThread(ctx, agent, job.ChannelID, threadName, job.ThreadID, prompt, job.MentionID, job.CreatedByID)
 	duration := int(time.Since(start).Seconds())
 	status := "ok"
 
