@@ -70,6 +70,12 @@ func (a *cronAdapter) AskAgentInThread(ctx context.Context, agent *acp.Agent, ch
 		_ = ds.ThreadMemberAdd(threadID, createdByID)
 	}
 
+	// Update thread title with execution start timestamp
+	execTS := time.Now().Format("01/02 15:04")
+	ds.ChannelEditComplex(threadID, &discordgo.ChannelEdit{
+		Name: threadName + " · " + execTS,
+	})
+
 	// Notify channel with thread link
 	a.Notify(channelID, L.Getf("cron.exec.running_link", threadName, threadID))
 
@@ -172,11 +178,6 @@ func (a *cronAdapter) AskAgentInThread(ctx context.Context, agent *acp.Agent, ch
 				if statusMsgID != "" {
 					ds.ChannelMessageEdit(threadID, statusMsgID, L.Getf("cron.progress.failed", elapsed, count))
 				}
-				// Update thread title with last run timestamp
-				ts := time.Now().Format("01/02 15:04")
-				ds.ChannelEditComplex(threadID, &discordgo.ChannelEdit{
-					Name: threadName + " · " + ts,
-				})
 				ds.ChannelMessageSend(threadID, "❌ "+errMsg)
 				done <- result{"", askErr}
 				return
@@ -188,11 +189,6 @@ func (a *cronAdapter) AskAgentInThread(ctx context.Context, agent *acp.Agent, ch
 			if statusMsgID != "" {
 				ds.ChannelMessageEdit(threadID, statusMsgID, L.Getf("cron.progress.done", elapsed, count))
 			}
-			// Update thread title with last run timestamp
-			ts := time.Now().Format("01/02 15:04")
-			ds.ChannelEditComplex(threadID, &discordgo.ChannelEdit{
-				Name: threadName + " · " + ts,
-			})
 			// Mention user before response if configured
 			if mentionID != "" {
 				ds.ChannelMessageSend(threadID, fmt.Sprintf("<@%s>", mentionID))
