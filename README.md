@@ -275,6 +275,7 @@ The bot needs explicit permission in each channel it should respond to:
 | `/cron` | Add a scheduled task (opens form) |
 | `/cron-list` | List scheduled tasks with action buttons |
 | `/cron-run <name>` | Manually run a scheduled task |
+| `/cron-prompt <description>` | Create a scheduled task using natural language |
 | `/remind <time> <content>` | Set a one-time reminder (tags you when due) |
 | `/compact` | Compress conversation history to free context |
 | `/clear` | Clear conversation history |
@@ -710,6 +711,7 @@ export $(grep -v '^#' .env | xargs)
 | `/cron` | 新增排程任務（開啟表單） |
 | `/cron-list` | 列出排程任務（含操作按鈕） |
 | `/cron-run <name>` | 手動執行排程任務 |
+| `/cron-prompt <description>` | 用自然語言建立排程任務 |
 | `/remind <時間> <內容>` | 預約單次提醒（到期時 tag 你） |
 | `/compact` | 壓縮對話歷史以釋放 context |
 | `/clear` | 清除對話歷史 |

@@ -1,6 +1,8 @@
 package bot
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"strings"
@@ -547,6 +549,123 @@ func (b *Bot) handleRemindText(ds *discordgo.Session, channelID, guildID, userID
 
 	ds.ChannelMessageSend(channelID, L.Getf("remind.created",
 		target.Format("2006/01/02 15:04"), prompt))
+}
+
+// handleCronPrompt handles /cron-prompt <description>
+func (b *Bot) handleCronPrompt(ds *discordgo.Session, i *discordgo.InteractionCreate, input string) {
+	// Deferred response — parsing takes a few seconds
+	_ = ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	result, err := b.parseCronPrompt(ctx, input)
+	if err != nil {
+		followupInteraction(ds, i, L.Getf("cron.prompt.failed", 3))
+		log.Printf("[cron-prompt] parse failed: %v", err)
+		return
+	}
+
+	// Show parsed result with confirm/cancel buttons
+	desc := heartbeat.DescribeSchedule(result.Schedule)
+	msg := L.Getf("cron.prompt.confirm", result.Name, result.Schedule, desc, result.Prompt)
+
+	// Store parsed data in button custom ID (JSON-encoded, compact)
+	payload, _ := json.Marshal(result)
+	confirmID := "cronp_confirm_" + string(payload)
+	cancelID := "cronp_cancel"
+
+	// Discord custom_id max is 100 chars. If too long, store in memory and use a short key.
+	if len(confirmID) > 100 {
+		key := fmt.Sprintf("%x", time.Now().UnixNano())
+		b.cronPromptCache.Store(key, result)
+		confirmID = "cronp_confirm_" + key
+	}
+
+	_, _ = ds.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{
+		Content: msg,
+		Components: []discordgo.MessageComponent{
+			discordgo.ActionsRow{Components: []discordgo.MessageComponent{
+				discordgo.Button{
+					Label:    "✅",
+					Style:    discordgo.SuccessButton,
+					CustomID: confirmID,
+				},
+				discordgo.Button{
+					Label:    "❌",
+					Style:    discordgo.DangerButton,
+					CustomID: cancelID,
+				},
+			}},
+		},
+	})
+}
+
+// handleCronPromptButton handles confirm/cancel buttons from /cron-prompt.
+func (b *Bot) handleCronPromptButton(ds *discordgo.Session, i *discordgo.InteractionCreate) {
+	customID := i.MessageComponentData().CustomID
+
+	if customID == "cronp_cancel" {
+		_ = ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseUpdateMessage,
+			Data: &discordgo.InteractionResponseData{Content: "❌ " + L.Get("cancel.success"), Components: []discordgo.MessageComponent{}},
+		})
+		return
+	}
+
+	if !strings.HasPrefix(customID, "cronp_confirm_") {
+		return
+	}
+
+	data := strings.TrimPrefix(customID, "cronp_confirm_")
+	var result ParsedCronJob
+
+	// Try JSON parse first (short payloads fit in custom_id)
+	if err := json.Unmarshal([]byte(data), &result); err != nil {
+		// Lookup from cache
+		if cached, ok := b.cronPromptCache.LoadAndDelete(data); ok {
+			result = *cached.(*ParsedCronJob)
+		} else {
+			respondInteraction(ds, i, "❌ "+L.Get("error.expired"))
+			return
+		}
+	}
+
+	username := ""
+	guildID := ""
+	if i.Member != nil && i.Member.User != nil {
+		username = i.Member.User.Username
+	}
+	if i.GuildID != "" {
+		guildID = i.GuildID
+	}
+
+	job := &heartbeat.CronJob{
+		Name:          result.Name,
+		ChannelID:     i.ChannelID,
+		GuildID:       guildID,
+		Schedule:      result.Schedule,
+		ScheduleHuman: result.Schedule,
+		Prompt:        result.Prompt,
+		HistoryLimit:  10,
+		Enabled:       true,
+		CreatedBy:     username,
+	}
+	if err := b.cronStore.Add(job); err != nil {
+		respondInteraction(ds, i, L.Getf("error.save_failed", err.Error()))
+		return
+	}
+
+	desc := heartbeat.DescribeSchedule(result.Schedule)
+	_ = ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseUpdateMessage,
+		Data: &discordgo.InteractionResponseData{
+			Content:    L.Getf("cron.prompt.created", result.Name, result.Schedule, desc),
+			Components: []discordgo.MessageComponent{},
+		},
+	})
 }
 
 func init() {

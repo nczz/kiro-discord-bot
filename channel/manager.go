@@ -122,6 +122,9 @@ func (m *Manager) MaxScannerBuffer() int { return m.maxScannerBuffer }
 // ThreadArchive returns the configured thread auto-archive duration in minutes.
 func (m *Manager) ThreadArchive() int { return m.threadArchive }
 
+// DefaultCWD returns the configured default working directory.
+func (m *Manager) DefaultCWD() string { return m.defaultCWD }
+
 func (m *Manager) agentOpts() acp.AgentOptions {
 	return acp.AgentOptions{
 		MaxBuffer:     m.maxScannerBuffer,

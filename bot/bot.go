@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
@@ -26,6 +27,7 @@ type Bot struct {
 	seen           *seenMessages
 	sttClient      *stt.Client
 	sttMaxDuration int
+	cronPromptCache sync.Map // key → *ParsedCronJob for button callbacks
 }
 
 func New(cfg interface{ GetBotConfig() BotConfig }) (*Bot, error) {

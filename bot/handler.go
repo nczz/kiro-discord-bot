@@ -516,6 +516,9 @@ func buildSlashCommands() []*discordgo.ApplicationCommand {
 		{Name: "cron-run", Description: L.Get("cmd.cron_run.desc"), Options: []*discordgo.ApplicationCommandOption{
 			{Type: discordgo.ApplicationCommandOptionString, Name: "name", Description: L.Get("cmd.cron_run.opt.name"), Required: true},
 		}},
+		{Name: "cron-prompt", Description: L.Get("cmd.cron_prompt.desc"), Options: []*discordgo.ApplicationCommandOption{
+			{Type: discordgo.ApplicationCommandOptionString, Name: "description", Description: L.Get("cmd.cron_prompt.opt"), Required: true},
+		}},
 		{Name: "remind", Description: L.Get("cmd.remind.desc"), Options: []*discordgo.ApplicationCommandOption{
 			{Type: discordgo.ApplicationCommandOptionString, Name: "time", Description: L.Get("cmd.remind.opt.time"), Required: true},
 			{Type: discordgo.ApplicationCommandOptionString, Name: "content", Description: L.Get("cmd.remind.opt.content"), Required: true},
@@ -577,7 +580,9 @@ func (b *Bot) handleInteraction(ds *discordgo.Session, i *discordgo.InteractionC
 		}
 	case discordgo.InteractionMessageComponent:
 		customID := i.MessageComponentData().CustomID
-		if strings.HasPrefix(customID, "cron_") {
+		if strings.HasPrefix(customID, "cronp_") {
+			b.handleCronPromptButton(ds, i)
+		} else if strings.HasPrefix(customID, "cron_") {
 			b.handleCronButton(ds, i)
 		}
 	}
@@ -605,6 +610,10 @@ func (b *Bot) handleSlashCommand(ds *discordgo.Session, i *discordgo.Interaction
 	case "cron-run":
 		name := data.Options[0].StringValue()
 		b.handleCronRun(ds, i, name)
+		return
+	case "cron-prompt":
+		desc := data.Options[0].StringValue()
+		b.handleCronPrompt(ds, i, desc)
 		return
 	case "remind":
 		timeStr := data.Options[0].StringValue()
