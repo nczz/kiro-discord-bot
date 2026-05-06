@@ -71,6 +71,7 @@
   "cron.prompt.confirm": "📋 I parsed your request as:\n**Name:** %s\n**Schedule:** `%s` (%s)\n**Task:** %s",
   "cron.prompt.created": "✅ Scheduled task created: **%s**\nSchedule: `%s` (%s)",
   "cron.prompt.failed": "❌ Could not parse your request after %d attempts. Please try rephrasing or use `/cron` for manual setup.",
+  "cron.prompt.no_schedule": "❓ Your description doesn't include clear schedule/timing information.\nPlease include when you want it to run, e.g.:\n• 每天早上9點...\n• every Monday at 3pm...\n• 每月5號...",
   "cmd.remind.desc": "Set a one-time reminder",
   "cmd.remind.opt.time": "Time (e.g. 5pm, in 30 minutes, tomorrow 9am)",
   "cmd.remind.opt.content": "Reminder content",

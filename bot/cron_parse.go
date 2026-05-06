@@ -3,9 +3,11 @@ package bot
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nczz/kiro-discord-bot/heartbeat"
@@ -18,7 +20,49 @@ type ParsedCronJob struct {
 	Prompt   string `json:"prompt"`
 }
 
+// cronPromptStore is a TTL-based cache for parsed cron jobs awaiting button confirmation.
+type cronPromptStore struct {
+	mu      sync.Mutex
+	entries map[string]cronPromptEntry
+}
+
+type cronPromptEntry struct {
+	job     *ParsedCronJob
+	expires time.Time
+}
+
+func (s *cronPromptStore) Store(key string, job *ParsedCronJob) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.entries == nil {
+		s.entries = make(map[string]cronPromptEntry)
+	}
+	// Evict expired entries opportunistically
+	now := time.Now()
+	for k, e := range s.entries {
+		if now.After(e.expires) {
+			delete(s.entries, k)
+		}
+	}
+	s.entries[key] = cronPromptEntry{job: job, expires: now.Add(10 * time.Minute)}
+}
+
+func (s *cronPromptStore) LoadAndDelete(key string) (*ParsedCronJob, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	e, ok := s.entries[key]
+	if !ok || time.Now().After(e.expires) {
+		delete(s.entries, key)
+		return nil, false
+	}
+	delete(s.entries, key)
+	return e.job, true
+}
+
 var mdCodeBlockRe = regexp.MustCompile("(?s)^```(?:json)?\\s*\n?(.*?)\\s*```$")
+
+// ErrScheduleUncertain indicates the user's input has no clear schedule information.
+var ErrScheduleUncertain = fmt.Errorf("schedule_uncertain")
 
 // parseCronPrompt uses a temp agent to parse natural language into a structured cron job.
 // Retries up to 3 times with specific error feedback on validation failure.
@@ -43,11 +87,16 @@ Return ONLY a JSON object with these fields:
 - "schedule": 5-field cron expression (minute hour day-of-month month day-of-week)
 - "prompt": the actual task instruction for an AI agent to execute
 
+If the user's request does NOT contain clear schedule/timing information, set schedule to "?" to indicate uncertainty. Do NOT guess a schedule.
+
 Example input: "every day at 9am check server health"
 Example output: {"name":"Server Health Check","schedule":"0 9 * * *","prompt":"Check server health status and report any issues"}
 
 Example input: "每個月5號早上10點產生月報"
 Example output: {"name":"月報產生","schedule":"0 10 5 * *","prompt":"產生本月月報"}
+
+Example input: "幫我做一個好看的網站"
+Example output: {"name":"建立網站","schedule":"?","prompt":"建立一個好看的網站"}
 
 IMPORTANT: Return ONLY the JSON object. No markdown, no explanation, no extra text.`, tz)
 
@@ -63,6 +112,11 @@ IMPORTANT: Return ONLY the JSON object. No markdown, no explanation, no extra te
 		result, validationErr := validateCronJSON(resp)
 		if validationErr == nil {
 			return result, nil
+		}
+
+		// Don't retry if the agent explicitly indicated no schedule info
+		if errors.Is(validationErr, ErrScheduleUncertain) {
+			return nil, validationErr
 		}
 
 		if attempt == maxAttempts {
@@ -104,6 +158,9 @@ func validateCronJSON(raw string) (*ParsedCronJob, error) {
 	}
 	if result.Schedule == "" {
 		return nil, fmt.Errorf("missing 'schedule' field")
+	}
+	if result.Schedule == "?" {
+		return nil, ErrScheduleUncertain
 	}
 	if result.Prompt == "" {
 		return nil, fmt.Errorf("missing 'prompt' field")

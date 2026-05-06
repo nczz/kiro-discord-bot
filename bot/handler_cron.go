@@ -3,6 +3,7 @@ package bot
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -563,7 +564,11 @@ func (b *Bot) handleCronPrompt(ds *discordgo.Session, i *discordgo.InteractionCr
 
 	result, err := b.parseCronPrompt(ctx, input)
 	if err != nil {
-		followupInteraction(ds, i, L.Getf("cron.prompt.failed", 3))
+		if errors.Is(err, ErrScheduleUncertain) {
+			followupInteraction(ds, i, L.Get("cron.prompt.no_schedule"))
+		} else {
+			followupInteraction(ds, i, L.Getf("cron.prompt.failed", 3))
+		}
 		log.Printf("[cron-prompt] parse failed: %v", err)
 		return
 	}
@@ -626,7 +631,7 @@ func (b *Bot) handleCronPromptButton(ds *discordgo.Session, i *discordgo.Interac
 	if err := json.Unmarshal([]byte(data), &result); err != nil {
 		// Lookup from cache
 		if cached, ok := b.cronPromptCache.LoadAndDelete(data); ok {
-			result = *cached.(*ParsedCronJob)
+			result = *cached
 		} else {
 			respondInteraction(ds, i, "❌ "+L.Get("error.expired"))
 			return
