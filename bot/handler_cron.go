@@ -202,69 +202,10 @@ func (b *Bot) handleCronList(ds *discordgo.Session, i *discordgo.InteractionCrea
 	}
 
 	for _, job := range jobs {
-		status := "✅"
-		if !job.Enabled {
-			status = "⏸️"
-		}
-		if job.OneShot {
-			status = "🔔"
-		}
-
-		lastRun := L.Get("cron.list.last_run_none")
-		if job.LastRun != "" {
-			if t, err := time.Parse(time.RFC3339, job.LastRun); err == nil {
-				lastRun = t.Format("01/02 15:04")
-			}
-		}
-		nextRun := L.Get("cron.list.next_run_pending")
-		if job.NextRun != "" {
-			if t, err := time.Parse(time.RFC3339, job.NextRun); err == nil {
-				nextRun = t.Format("01/02 15:04")
-			}
-		}
-
-		schedDesc := "`" + job.Schedule + "` " + heartbeat.DescribeSchedule(job.Schedule)
-		content := L.Getf("cron.list.item",
-			status, job.Name, schedDesc, lastRun, nextRun, truncate(job.Prompt, 100))
-
-		// Build buttons
-		var buttons []discordgo.MessageComponent
-		if job.Enabled {
-			buttons = append(buttons, discordgo.Button{
-				Label:    L.Get("cron.btn.pause"),
-				Style:    discordgo.SecondaryButton,
-				CustomID: "cron_pause_" + job.ID,
-			})
-		} else {
-			buttons = append(buttons, discordgo.Button{
-				Label:    L.Get("cron.btn.resume"),
-				Style:    discordgo.SuccessButton,
-				CustomID: "cron_resume_" + job.ID,
-			})
-		}
-		buttons = append(buttons,
-			discordgo.Button{
-				Label:    L.Get("cron.btn.run"),
-				Style:    discordgo.PrimaryButton,
-				CustomID: "cron_run_" + job.ID,
-			},
-			discordgo.Button{
-				Label:    L.Get("cron.btn.edit"),
-				Style:    discordgo.SecondaryButton,
-				CustomID: "cron_edit_" + job.ID,
-			},
-			discordgo.Button{
-				Label:    L.Get("cron.btn.delete"),
-				Style:    discordgo.DangerButton,
-				CustomID: "cron_delete_" + job.ID,
-			},
-		)
-
+		content, components := buildCronCard(job)
 		_, _ = ds.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{
-			Content: content,
-			Components: []discordgo.MessageComponent{
-				discordgo.ActionsRow{Components: buttons},
-			},
+			Content:    content,
+			Components: components,
 		})
 	}
 }
@@ -296,19 +237,24 @@ func (b *Bot) handleCronButton(ds *discordgo.Session, i *discordgo.InteractionCr
 	case "pause":
 		job.Enabled = false
 		_ = b.cronStore.Update(job)
-		respondInteraction(ds, i, L.Getf("cron.paused", job.Name))
+		b.updateCronCard(ds, i, job, L.Getf("cron.paused", job.Name))
 	case "resume":
 		job.Enabled = true
 		_ = b.cronStore.Update(job)
-		respondInteraction(ds, i, L.Getf("cron.resumed", job.Name))
+		b.updateCronCard(ds, i, job, L.Getf("cron.resumed", job.Name))
 	case "run":
-		respondInteraction(ds, i, L.Getf("cron.running", job.Name))
-		// Trigger execution in background — set NextRun to now so next heartbeat picks it up
 		job.NextRun = time.Now().Add(-time.Minute).Format(time.RFC3339)
 		_ = b.cronStore.Update(job)
+		b.updateCronCard(ds, i, job, L.Getf("cron.running", job.Name))
 	case "delete":
 		_ = b.cronStore.Remove(jobID)
-		respondInteraction(ds, i, L.Getf("cron.deleted", job.Name))
+		_ = ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseUpdateMessage,
+			Data: &discordgo.InteractionResponseData{
+				Content:    L.Getf("cron.deleted", job.Name),
+				Components: []discordgo.MessageComponent{},
+			},
+		})
 	case "edit":
 		_ = ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseModal,
@@ -370,6 +316,64 @@ func (b *Bot) handleCronButton(ds *discordgo.Session, i *discordgo.InteractionCr
 			},
 		})
 	}
+}
+
+// buildCronCard renders a job's content and buttons for display.
+func buildCronCard(job *heartbeat.CronJob) (string, []discordgo.MessageComponent) {
+	status := "✅"
+	if !job.Enabled {
+		status = "⏸️"
+	}
+	if job.OneShot {
+		status = "🔔"
+	}
+
+	lastRun := L.Get("cron.list.last_run_none")
+	if job.LastRun != "" {
+		if t, err := time.Parse(time.RFC3339, job.LastRun); err == nil {
+			lastRun = t.Format("01/02 15:04")
+		}
+	}
+	nextRun := L.Get("cron.list.next_run_pending")
+	if job.NextRun != "" {
+		if t, err := time.Parse(time.RFC3339, job.NextRun); err == nil {
+			nextRun = t.Format("01/02 15:04")
+		}
+	}
+
+	schedDesc := "`" + job.Schedule + "` " + heartbeat.DescribeSchedule(job.Schedule)
+	content := L.Getf("cron.list.item", status, job.Name, schedDesc, lastRun, nextRun, truncate(job.Prompt, 100))
+
+	var buttons []discordgo.MessageComponent
+	if job.Enabled {
+		buttons = append(buttons, discordgo.Button{
+			Label: L.Get("cron.btn.pause"), Style: discordgo.SecondaryButton, CustomID: "cron_pause_" + job.ID,
+		})
+	} else {
+		buttons = append(buttons, discordgo.Button{
+			Label: L.Get("cron.btn.resume"), Style: discordgo.SuccessButton, CustomID: "cron_resume_" + job.ID,
+		})
+	}
+	buttons = append(buttons,
+		discordgo.Button{Label: L.Get("cron.btn.run"), Style: discordgo.PrimaryButton, CustomID: "cron_run_" + job.ID},
+		discordgo.Button{Label: L.Get("cron.btn.edit"), Style: discordgo.SecondaryButton, CustomID: "cron_edit_" + job.ID},
+		discordgo.Button{Label: L.Get("cron.btn.delete"), Style: discordgo.DangerButton, CustomID: "cron_delete_" + job.ID},
+	)
+
+	return content, []discordgo.MessageComponent{discordgo.ActionsRow{Components: buttons}}
+}
+
+// updateCronCard updates the button message in-place with refreshed job state + status line.
+func (b *Bot) updateCronCard(ds *discordgo.Session, i *discordgo.InteractionCreate, job *heartbeat.CronJob, statusMsg string) {
+	content, components := buildCronCard(job)
+	content = statusMsg + "\n\n" + content
+	_ = ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseUpdateMessage,
+		Data: &discordgo.InteractionResponseData{
+			Content:    content,
+			Components: components,
+		},
+	})
 }
 
 // handleCronRun handles /cron-run <name>
