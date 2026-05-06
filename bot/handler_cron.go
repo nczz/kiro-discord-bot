@@ -244,8 +244,8 @@ func (b *Bot) handleCronButton(ds *discordgo.Session, i *discordgo.InteractionCr
 		b.updateCronCard(ds, i, job, L.Getf("cron.resumed", job.Name))
 	case "run":
 		job.RunOnce = true
-		job.NextRun = time.Now().Add(-time.Minute).Format(time.RFC3339)
 		_ = b.cronStore.Update(job)
+		b.cronTask.RunNow(job.ID)
 		b.updateCronCard(ds, i, job, L.Getf("cron.running", job.Name))
 	case "delete":
 		_ = b.cronStore.Remove(jobID)
@@ -386,8 +386,8 @@ func (b *Bot) handleCronRun(ds *discordgo.Session, i *discordgo.InteractionCreat
 	}
 	respondInteraction(ds, i, L.Getf("cron.running", job.Name))
 	job.RunOnce = true
-	job.NextRun = time.Now().Add(-time.Minute).Format(time.RFC3339)
 	_ = b.cronStore.Update(job)
+	b.cronTask.RunNow(job.ID)
 }
 
 func respondInteraction(ds *discordgo.Session, i *discordgo.InteractionCreate, msg string) {
@@ -441,8 +441,8 @@ func (b *Bot) handleCronTextCommand(ds *discordgo.Session, channelID, guildID, u
 		}
 		ds.ChannelMessageSend(channelID, L.Getf("cron.running", job.Name))
 		job.RunOnce = true
-		job.NextRun = time.Now().Add(-time.Minute).Format(time.RFC3339)
 		_ = b.cronStore.Update(job)
+		b.cronTask.RunNow(job.ID)
 
 	default:
 		ds.ChannelMessageSend(channelID, L.Get("cron.usage"))

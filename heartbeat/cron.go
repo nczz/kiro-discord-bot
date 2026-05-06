@@ -89,6 +89,18 @@ func (c *CronTask) Run() error {
 	return nil
 }
 
+// RunNow triggers immediate execution of a job by ID. Safe to call concurrently.
+func (c *CronTask) RunNow(jobID string) {
+	job, ok := c.store.Get(jobID)
+	if !ok {
+		return
+	}
+	if _, loaded := c.running.LoadOrStore(job.ID, true); loaded {
+		return // already running
+	}
+	go c.execute(job, time.Now().In(c.location))
+}
+
 func (c *CronTask) isDue(job *CronJob, now time.Time) bool {
 	if job.NextRun == "" && !job.OneShot {
 		// First run — compute next from schedule

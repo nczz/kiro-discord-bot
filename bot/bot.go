@@ -20,6 +20,7 @@ type Bot struct {
 	hb             *heartbeat.Heartbeat
 	hbCancel       context.CancelFunc
 	cronStore      *heartbeat.CronStore
+	cronTask       *heartbeat.CronTask
 	cronTimezone   string
 	version        string
 	downloadClient *http.Client
@@ -90,7 +91,9 @@ func NewFromConfig(cfg BotConfig) (*Bot, error) {
 	n := botNotifier{bot: b}
 	hb.Register(heartbeat.NewHealthTask(&healthAdapter{n}))
 	hb.Register(heartbeat.NewCleanupTask(cfg.DataDir, cfg.AttRetainDays))
-	hb.Register(heartbeat.NewCronTask(cronStore, &cronAdapter{n}, cfg.DataDir, cfg.CronTimezone, cfg.GuildID))
+	cronTask := heartbeat.NewCronTask(cronStore, &cronAdapter{n}, cfg.DataDir, cfg.CronTimezone, cfg.GuildID)
+	hb.Register(cronTask)
+	b.cronTask = cronTask
 	hb.Register(heartbeat.NewThreadCleanupTask(&threadCleanupAdapter{n}, cfg.ThreadAgentIdleSec, cfg.ThreadAgentMax))
 	hb.Register(heartbeat.NewChannelCleanupTask(&channelCleanupAdapter{n}, cfg.ChannelAgentIdleSec))
 	b.hb = hb
