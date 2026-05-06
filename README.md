@@ -383,7 +383,8 @@ kiro-discord-bot/
 ├── bot/
 │   ├── bot.go            Discord init, Ready handler, slash command registration
 │   ├── handler.go        message routing, slash command handlers
-│   ├── handler_cron.go   /cron Modal + /cron-list Button + /remind handlers
+│   ├── handler_cron.go   /cron Modal + /cron-list Button + /cron-prompt + /remind handlers
+│   ├── cron_parse.go     natural language → cron job parser (temp agent + validation loop)
 │   ├── notifier.go       shared botNotifier (Notify+IsSilent) for all adapters
 │   ├── health_adapter.go heartbeat ↔ manager bridge
 │   ├── cron_adapter.go   cron task ↔ manager bridge
