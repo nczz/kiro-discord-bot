@@ -77,7 +77,7 @@ func (b *Bot) cmdResume(ctx cmdCtx) {
 func (b *Bot) cmdDoctor(ctx cmdCtx) {
 	runCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	ctx.reply(truncate(b.doctor(runCtx), 1900))
+	replyLong(ctx.reply, b.doctor(runCtx))
 }
 
 func (b *Bot) doctor(ctx context.Context) string {
