@@ -57,7 +57,7 @@ func (b *Bot) cmdSilent(ctx cmdCtx) {
 func (b *Bot) cmdModels(ctx cmdCtx) {
 	msg, err := b.manager.ListModels(ctx.channelID)
 	if err != nil {
-		ctx.reply(L.Getf("error.generic", err.Error()))
+		ctx.reply(commandError(err))
 	} else {
 		ctx.reply(msg)
 	}
@@ -137,7 +137,7 @@ func doctorEnvLine(label, key, unset string) string {
 func (b *Bot) cmdReset(ctx cmdCtx) {
 	if ctx.inThread {
 		if err := b.manager.ResetThreadAgent(ctx.targetID); err != nil {
-			ctx.reply(L.Getf("error.reset_failed", err.Error()))
+			ctx.reply(L.Getf("error.reset_failed", commandErrorString(err)))
 		} else {
 			ctx.reply(L.Get("reset.success"))
 		}
@@ -145,7 +145,7 @@ func (b *Bot) cmdReset(ctx cmdCtx) {
 	}
 	ctx.reply(L.Get("reset.resetting"))
 	if err := b.manager.Reset(ctx.channelID); err != nil {
-		ctx.reply(L.Getf("error.reset_failed", err.Error()))
+		ctx.reply(L.Getf("error.reset_failed", commandErrorString(err)))
 	} else {
 		ctx.reply(L.Get("reset.success"))
 		ctx.reply(usageMessage())
@@ -155,14 +155,14 @@ func (b *Bot) cmdReset(ctx cmdCtx) {
 func (b *Bot) cmdCancel(ctx cmdCtx) {
 	if ctx.inThread {
 		if err := b.manager.CancelThreadAgent(ctx.targetID); err != nil {
-			ctx.reply(L.Getf("error.cancel_failed", err.Error()))
+			ctx.reply(L.Getf("error.cancel_failed", commandErrorString(err)))
 		} else {
 			ctx.reply(L.Get("cancel.success"))
 		}
 		return
 	}
 	if err := b.manager.Cancel(ctx.channelID); err != nil {
-		ctx.reply(L.Getf("error.cancel_failed", err.Error()))
+		ctx.reply(L.Getf("error.cancel_failed", commandErrorString(err)))
 	} else {
 		ctx.reply(L.Get("cancel.success"))
 	}
@@ -177,7 +177,7 @@ func (b *Bot) cmdCompact(ctx cmdCtx) {
 		resp, err = b.manager.SendCommand(ctx.channelID, "/compact")
 	}
 	if err != nil {
-		ctx.reply(L.Getf("error.generic", err.Error()))
+		ctx.reply(commandError(err))
 	} else {
 		if resp == "" {
 			resp = L.Get("compact.success")
@@ -198,7 +198,7 @@ func (b *Bot) cmdClear(ctx cmdCtx) {
 		}
 	}
 	if err != nil {
-		ctx.reply(L.Getf("error.generic", err.Error()))
+		ctx.reply(commandError(err))
 	} else {
 		if resp == "" {
 			resp = L.Get("clear.success")
@@ -222,19 +222,19 @@ func (b *Bot) cmdModel(ctx cmdCtx) {
 	if ctx.inThread {
 		ctx.reply(L.Getf("model.switching", model))
 		if err := b.manager.ResetThreadAgentWithModel(ctx.targetID, model); err != nil {
-			ctx.reply(L.Getf("error.reset_failed", err.Error()))
+			ctx.reply(L.Getf("error.reset_failed", commandErrorString(err)))
 		} else {
 			ctx.reply(L.Getf("model.switched", model))
 		}
 		return
 	}
 	if err := b.manager.SetModel(ctx.channelID, model); err != nil {
-		ctx.reply(L.Getf("error.generic", err.Error()))
+		ctx.reply(commandError(err))
 		return
 	}
 	ctx.reply(L.Getf("model.switching", model))
 	if err := b.manager.Restart(ctx.channelID); err != nil {
-		ctx.reply(L.Getf("error.reset_failed", err.Error()))
+		ctx.reply(L.Getf("error.reset_failed", commandErrorString(err)))
 	} else {
 		ctx.reply(L.Getf("model.switched", model))
 	}
@@ -261,7 +261,7 @@ func (b *Bot) cmdStart(ctx cmdCtx) {
 	}
 	ctx.reply(L.Getf("start.starting", cwd))
 	if err := b.manager.StartAt(ctx.channelID, cwd); err != nil {
-		ctx.reply(L.Getf("error.generic", err.Error()))
+		ctx.reply(commandError(err))
 	} else {
 		ctx.reply(L.Getf("start.success", cwd))
 		ctx.reply(usageMessage())
@@ -274,7 +274,7 @@ func (b *Bot) cmdCwd(ctx cmdCtx) {
 		return
 	}
 	if err := b.manager.SetCWD(ctx.channelID, ctx.args); err != nil {
-		ctx.reply(L.Getf("error.generic", err.Error()))
+		ctx.reply(commandError(err))
 	} else {
 		ctx.reply(L.Getf("cwd.set", ctx.args))
 	}
@@ -314,13 +314,13 @@ func (b *Bot) cmdMemory(ctx cmdCtx) {
 			return
 		}
 		if err := b.manager.MemoryRemove(ctx.channelID, idx-1); err != nil {
-			ctx.reply(L.Getf("error.generic", err.Error()))
+			ctx.reply(commandError(err))
 			return
 		}
 		ctx.reply(L.Getf("memory.removed", idx))
 	case "clear":
 		if err := b.manager.MemoryClear(ctx.channelID); err != nil {
-			ctx.reply(L.Getf("error.generic", err.Error()))
+			ctx.reply(commandError(err))
 			return
 		}
 		ctx.reply(L.Get("memory.cleared"))
@@ -358,7 +358,7 @@ func (b *Bot) cmdFlashMemory(ctx cmdCtx) {
 			return
 		}
 		if err := b.manager.FlashMemoryRemove(ctx.channelID, idx-1); err != nil {
-			ctx.reply(L.Getf("error.generic", err.Error()))
+			ctx.reply(commandError(err))
 			return
 		}
 		ctx.reply(L.Getf("flashmemory.removed", idx))
