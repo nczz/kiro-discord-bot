@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"mime"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -141,7 +143,6 @@ func (b *Bot) warnIfAttachmentsLarge(ds *discordgo.Session, channelID string, pa
 	}
 }
 
-
 // transcribeAudioFiles detects audio files in paths, transcribes them via STT,
 // and returns (transcribed text, remaining non-audio paths).
 func (b *Bot) transcribeAudioFiles(paths []string, attachments []*discordgo.MessageAttachment) (string, []string) {
@@ -204,29 +205,79 @@ func (b *Bot) downloadAttachments(channelID string, attachments []*discordgo.Mes
 	ts := time.Now().Format("20060102-150405")
 	var paths []string
 	for _, att := range attachments {
+		if b.attachmentMaxBytes > 0 && att.Size > int(b.attachmentMaxBytes) {
+			log.Printf("[attach] skip %s: size %d > max %d", att.Filename, att.Size, b.attachmentMaxBytes)
+			continue
+		}
 		resp, err := b.downloadClient.Get(att.URL)
 		if err != nil {
 			log.Printf("[attach] download %s: %v (url=%s)", att.Filename, err, att.URL)
 			continue
 		}
-		dst := filepath.Join(attDir, ts+"-"+att.Filename)
+		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
+			log.Printf("[attach] download %s: HTTP %d", att.Filename, resp.StatusCode)
+			continue
+		}
+		if b.attachmentMaxBytes > 0 && resp.ContentLength > b.attachmentMaxBytes {
+			resp.Body.Close()
+			log.Printf("[attach] skip %s: content-length %d > max %d", att.Filename, resp.ContentLength, b.attachmentMaxBytes)
+			continue
+		}
+		dst := filepath.Join(attDir, ts+"-"+safeAttachmentFilename(att.Filename))
 		f, err := os.Create(dst)
 		if err != nil {
 			resp.Body.Close()
 			log.Printf("[attach] create %s: %v", dst, err)
 			continue
 		}
-		_, err = io.Copy(f, resp.Body)
+		reader := io.Reader(resp.Body)
+		if b.attachmentMaxBytes > 0 {
+			reader = io.LimitReader(resp.Body, b.attachmentMaxBytes+1)
+		}
+		n, err := io.Copy(f, reader)
 		resp.Body.Close()
 		f.Close()
 		if err != nil {
 			log.Printf("[attach] write %s: %v", dst, err)
 			continue
 		}
+		if b.attachmentMaxBytes > 0 && n > b.attachmentMaxBytes {
+			_ = os.Remove(dst)
+			log.Printf("[attach] skip %s: downloaded %d > max %d", att.Filename, n, b.attachmentMaxBytes)
+			continue
+		}
 		abs, _ := filepath.Abs(dst)
 		paths = append(paths, abs)
 	}
 	return paths
+}
+
+func safeAttachmentFilename(name string) string {
+	decoder := new(mime.WordDecoder)
+	if decoded, err := decoder.DecodeHeader(name); err == nil && decoded != "" {
+		name = decoded
+	}
+	name = filepath.Base(strings.ReplaceAll(name, "\\", "/"))
+	name = strings.Map(func(r rune) rune {
+		switch {
+		case r == '-' || r == '_' || r == '.' || r == ' ':
+			return r
+		case r >= '0' && r <= '9':
+			return r
+		case r >= 'A' && r <= 'Z':
+			return r
+		case r >= 'a' && r <= 'z':
+			return r
+		default:
+			return '_'
+		}
+	}, name)
+	name = strings.Trim(name, ". ")
+	if name == "" {
+		return "attachment"
+	}
+	return name
 }
 
 // buildPrompt combines user text with attachment paths into an effective prompt.
@@ -562,7 +613,6 @@ func (b *Bot) registerSlashCommands() {
 		log.Printf("[slash] registered /%s (id=%s)", cmd.Name, cmd.ID)
 	}
 }
-
 
 func (b *Bot) handleAutocomplete(ds *discordgo.Session, i *discordgo.InteractionCreate) {
 	data := i.ApplicationCommandData()

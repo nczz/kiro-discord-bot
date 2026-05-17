@@ -1,0 +1,10 @@
+.git
+.env
+data/
+kiro-discord-bot
+mcp-discord
+mcp-discord-server
+mcp-media
+mcp-media-server
+*.log
+tmp/

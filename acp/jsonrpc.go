@@ -27,9 +27,9 @@ type rpcResponse struct {
 
 // RPCError represents a JSON-RPC error.
 type RPCError struct {
-	Code    int              `json:"code"`
-	Message string           `json:"message"`
-	Data    json.RawMessage  `json:"data,omitempty"`
+	Code    int             `json:"code"`
+	Message string          `json:"message"`
+	Data    json.RawMessage `json:"data,omitempty"`
 }
 
 func (e *RPCError) Error() string {
@@ -55,6 +55,10 @@ type Transport struct {
 
 	// OnNotification is called for incoming notifications.
 	OnNotification func(method string, params json.RawMessage)
+
+	// OnRequest is called for server-initiated requests, such as tool permission
+	// prompts. The returned value is sent as the JSON-RPC result.
+	OnRequest func(method string, params json.RawMessage) interface{}
 }
 
 // NewTransport creates a transport over the given reader/writer (typically stdout/stdin of a child process).
@@ -169,16 +173,22 @@ func (t *Transport) ReadLoop() error {
 			}
 
 		case peek.ID != nil && peek.Method != "":
-			// Server-initiated request (e.g. permission) — auto-approve
+			// Server-initiated request (e.g. permission).
 			var req struct {
-				ID int64 `json:"id"`
+				ID     int64           `json:"id"`
+				Method string          `json:"method"`
+				Params json.RawMessage `json:"params"`
 			}
 			if json.Unmarshal(line, &req) != nil {
 				continue
 			}
-			t.respond(req.ID, map[string]interface{}{
-				"outcome": map[string]string{"outcome": "approved"},
+			result := interface{}(map[string]interface{}{
+				"outcome": map[string]string{"outcome": "denied"},
 			})
+			if t.OnRequest != nil {
+				result = t.OnRequest(req.Method, req.Params)
+			}
+			t.respond(req.ID, result)
 		}
 	}
 
@@ -187,6 +197,22 @@ func (t *Transport) ReadLoop() error {
 	close(t.done)
 	t.failAllPending(err)
 	return err
+}
+
+// ApproveRequestResult is the ACP result used when a server-initiated request
+// is allowed by local policy.
+func ApproveRequestResult() interface{} {
+	return map[string]interface{}{
+		"outcome": map[string]string{"outcome": "approved"},
+	}
+}
+
+// DenyRequestResult is the ACP result used when a server-initiated request is
+// blocked by local policy.
+func DenyRequestResult() interface{} {
+	return map[string]interface{}{
+		"outcome": map[string]string{"outcome": "denied"},
+	}
 }
 
 // failAllPending unblocks all pending Send() calls with an error.

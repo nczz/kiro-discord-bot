@@ -13,21 +13,22 @@ import (
 )
 
 type Bot struct {
-	discord        *discordgo.Session
-	manager        *channel.Manager
-	guildID        string
-	dataDir        string
-	hb             *heartbeat.Heartbeat
-	hbCancel       context.CancelFunc
-	cronStore      *heartbeat.CronStore
-	cronTask       *heartbeat.CronTask
-	cronTimezone   string
-	version        string
-	downloadClient *http.Client
-	seen           *seenMessages
-	sttClient      *stt.Client
-	sttMaxDuration int
-	cronPromptCache cronPromptStore // parsed cron jobs awaiting button confirmation
+	discord            *discordgo.Session
+	manager            *channel.Manager
+	guildID            string
+	dataDir            string
+	hb                 *heartbeat.Heartbeat
+	hbCancel           context.CancelFunc
+	cronStore          *heartbeat.CronStore
+	cronTask           *heartbeat.CronTask
+	cronTimezone       string
+	version            string
+	downloadClient     *http.Client
+	attachmentMaxBytes int64
+	seen               *seenMessages
+	sttClient          *stt.Client
+	sttMaxDuration     int
+	cronPromptCache    cronPromptStore // parsed cron jobs awaiting button confirmation
 }
 
 func New(cfg interface{ GetBotConfig() BotConfig }) (*Bot, error) {
@@ -46,6 +47,7 @@ type BotConfig struct {
 	DiscordToken       string
 	HeartbeatSec       int
 	AttRetainDays      int
+	AttachmentMaxBytes int64
 	CronTimezone       string
 	DownloadTimeoutSec int
 	STTEnabled         bool
@@ -72,9 +74,10 @@ func NewFromConfig(cfg BotConfig) (*Bot, error) {
 	manager := channel.NewManager(cfg.ManagerConfig)
 
 	b := &Bot{discord: ds, manager: manager, guildID: cfg.GuildID, dataDir: cfg.DataDir, cronTimezone: cfg.CronTimezone, version: cfg.BotVersion,
-		downloadClient: &http.Client{Timeout: time.Duration(cfg.DownloadTimeoutSec) * time.Second},
-		seen:           newSeenMessages(),
-		sttMaxDuration: cfg.STTMaxDurationSec,
+		downloadClient:     &http.Client{Timeout: time.Duration(cfg.DownloadTimeoutSec) * time.Second},
+		attachmentMaxBytes: cfg.AttachmentMaxBytes,
+		seen:               newSeenMessages(),
+		sttMaxDuration:     cfg.STTMaxDurationSec,
 	}
 	if cfg.STTEnabled && cfg.STTAPIKey != "" {
 		b.sttClient = stt.New(cfg.STTProvider, cfg.STTAPIKey, cfg.STTModel, cfg.STTLanguage)

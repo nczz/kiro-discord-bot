@@ -121,14 +121,10 @@ func (w *Worker) Stop() {
 func (w *Worker) CancelCurrent() {
 	w.cancelMu.Lock()
 	fn := w.cancelFn
-	threadID := w.currentThreadID
 	w.cancelMu.Unlock()
 	if fn != nil {
 		fn()
-	}
-	// Signal idle so next job can proceed
-	if threadID != "" {
-		w.signalIdle()
+		w.agent.CancelPrompt()
 	}
 }
 

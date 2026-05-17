@@ -135,6 +135,7 @@ CHANNEL_AGENT_IDLE_SEC=0
 KIRO_MODEL=
 HEARTBEAT_SEC=60
 ATTACHMENT_RETAIN_DAYS=7
+ATTACHMENT_MAX_MB=25
 CRON_TIMEZONE=Asia/Taipei
 BOT_LOCALE=en
 DOWNLOAD_TIMEOUT_SEC=120
@@ -143,6 +144,8 @@ MAX_SCANNER_BUFFER_MB=64
 KIRO_AGENT=
 TRUST_ALL_TOOLS=true
 TRUST_TOOLS=
+PREFLIGHT_MODE=warn
+SKIP_PREFLIGHT=
 STT_ENABLED=false
 STT_PROVIDER=groq
 STT_API_KEY=
@@ -155,7 +158,7 @@ STT_MAX_DURATION_SEC=300
 |----------|-------------|---------|
 | `DISCORD_TOKEN` | Discord bot token | required |
 | `DISCORD_GUILD_ID` | Guild ID for instant slash command registration | required |
-| `KIRO_CLI_PATH` | Full path to kiro-cli binary | `kiro-cli` |
+| `KIRO_CLI_PATH` | kiro-cli binary path or command name resolved from `PATH` | `kiro-cli` |
 | `KIRO_API_KEY` | Kiro API key for headless auth (alternative to `kiro-cli login`) | — |
 | `DEFAULT_CWD` | Default working directory for agents | `/projects` |
 | `DATA_DIR` | Directory for sessions, logs, and attachments | `./data` |
@@ -168,6 +171,7 @@ STT_MAX_DURATION_SEC=300
 | `KIRO_MODEL` | Default model ID for kiro-cli (empty = kiro default) | `` |
 | `HEARTBEAT_SEC` | Agent health check interval in seconds | `60` |
 | `ATTACHMENT_RETAIN_DAYS` | Auto-delete attachments older than N days (0 = keep forever) | `7` |
+| `ATTACHMENT_MAX_MB` | Maximum downloaded attachment size per file in MB (0 = no bot-side limit) | `25` |
 | `CRON_TIMEZONE` | Timezone for cron schedules (empty = server local) | `` |
 | `BOT_LOCALE` | Bot display language (`en`, `zh-TW`) | `en` |
 | `DOWNLOAD_TIMEOUT_SEC` | Attachment download timeout in seconds | `120` |
@@ -176,6 +180,8 @@ STT_MAX_DURATION_SEC=300
 | `KIRO_AGENT` | Agent profile name for kiro-cli `--agent` flag (empty = kiro default) | `` |
 | `TRUST_ALL_TOOLS` | Auto-approve all tool permission requests (`true`/`false`) | `true` |
 | `TRUST_TOOLS` | Trust only specific tools (comma-separated names). Overrides `TRUST_ALL_TOOLS` when set | `` |
+| `PREFLIGHT_MODE` | Startup ACP check behavior: `warn`, `strict`, or `skip` | `warn` |
+| `SKIP_PREFLIGHT` | Legacy override; any non-empty value skips startup preflight | `` |
 | `STT_ENABLED` | Enable voice message / audio attachment transcription (`true`/`false`) | `false` |
 | `STT_PROVIDER` | STT provider (`groq` or `openai`) | `groq` |
 | `STT_API_KEY` | API key for the STT provider (required when `STT_ENABLED=true`) | — |
@@ -242,6 +248,7 @@ docker compose up -d --build
 ```
 
 `docker-compose.yml` uses `network_mode: host` and mounts `~/.kiro` so the bot inherits your kiro login and MCP settings.
+The runtime image installs `kiro-cli` during build and defaults `KIRO_CLI_PATH` to `/root/.local/bin/kiro-cli`. For offline or pinned deployments, build your own runtime image with the desired `kiro-cli` version and keep `KIRO_CLI_PATH` aligned.
 
 ---
 
@@ -597,7 +604,9 @@ The agent will read the guide, build the binary, update `mcp.json`, and prompt y
 - **Project steering:** Add `.kiro/steering/*.md` in the project directory or `~/.kiro/steering/` globally to guide agent behavior.
 - **Long responses:** Automatically split into multiple messages at 2000 char Discord limit.
 - **Conversation logs:** All user/agent interactions are recorded in `DATA_DIR/ch-<channelID>/chat.jsonl`.
-- **Attachments:** Stored in `DATA_DIR/ch-<channelID>/attachments/` with timestamp prefixes. Auto-cleaned after `ATTACHMENT_RETAIN_DAYS`.
+- **Attachments:** Stored in `DATA_DIR/ch-<channelID>/attachments/` with timestamp prefixes. Filenames are sanitized, downloads must return HTTP 200, and each file is capped by `ATTACHMENT_MAX_MB`. Auto-cleaned after `ATTACHMENT_RETAIN_DAYS`.
+- **Tool permissions:** Server-initiated ACP permission requests are approved only when `TRUST_ALL_TOOLS=true` or `TRUST_TOOLS` is set; otherwise they are denied by local policy.
+- **Preflight:** `PREFLIGHT_MODE=warn` keeps the bot online when `kiro-cli` is temporarily unavailable. Use `strict` for fail-fast production startup or `skip` for development.
 - **Thread agents:** Idle timeout respects active work — `lastActivity` is updated during tool execution, preventing premature cleanup of long-running tasks.
 - **Channel agent idle:** Set `CHANNEL_AGENT_IDLE_SEC` (default `0` = disabled) to auto-close idle channel agents and free resources. Agents restart automatically on next message.
 - **Cron jobs:** Definitions in `DATA_DIR/cron/cron.json`, execution history in `DATA_DIR/cron/<jobID>/history.jsonl` (includes full agent output).

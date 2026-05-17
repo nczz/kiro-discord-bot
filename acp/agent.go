@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -38,7 +39,7 @@ type Agent struct {
 	initResult *InitializeResult
 	stopOnce   sync.Once
 	exited     chan struct{} // closed when child process exits
-	stderrBuf  *ringBuffer  // captures recent stderr from kiro-cli
+	stderrBuf  *ringBuffer   // captures recent stderr from kiro-cli
 }
 
 // AgentOptions configures how an agent is spawned.
@@ -53,7 +54,11 @@ type AgentOptions struct {
 
 // StartAgent spawns kiro-cli acp and performs the ACP handshake (initialize + session/new).
 func StartAgent(name, kiroCLI, cwd, model string, opts AgentOptions) (*Agent, error) {
-	if _, err := os.Stat(kiroCLI); err != nil {
+	resolvedCLI, err := ResolveKiroCLI(kiroCLI)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := os.Stat(resolvedCLI); err != nil {
 		return nil, fmt.Errorf("kiro-cli binary not found: %s", kiroCLI)
 	}
 	if _, err := os.Stat(cwd); err != nil {
@@ -73,7 +78,7 @@ func StartAgent(name, kiroCLI, cwd, model string, opts AgentOptions) (*Agent, er
 		args = append(args, "--agent", opts.Agent)
 	}
 
-	cmd := exec.Command(kiroCLI, args...)
+	cmd := exec.Command(resolvedCLI, args...)
 	cmd.Dir = cwd
 	cmd.Env = os.Environ()
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -103,6 +108,14 @@ func StartAgent(name, kiroCLI, cwd, model string, opts AgentOptions) (*Agent, er
 	}
 
 	a.transport.OnNotification = a.handleNotification
+	a.transport.OnRequest = func(method string, params json.RawMessage) interface{} {
+		if opts.TrustAllTools || opts.TrustTools != "" {
+			log.Printf("[agent:%s] approving server request method=%s", name, method)
+			return ApproveRequestResult()
+		}
+		log.Printf("[agent:%s] denying server request method=%s (TRUST_ALL_TOOLS=false)", name, method)
+		return DenyRequestResult()
+	}
 
 	go func() {
 		if err := a.transport.ReadLoop(); err != nil {
@@ -156,7 +169,7 @@ func StartAgent(name, kiroCLI, cwd, model string, opts AgentOptions) (*Agent, er
 	initRaw, err := a.transport.Send(MethodInitialize, initParams)
 	if err != nil {
 		a.Kill()
-		return nil, fmt.Errorf("initialize: %w", err)
+		return nil, a.wrapHandshakeError("initialize", err)
 	}
 	var initResp InitializeResult
 	json.Unmarshal(initRaw, &initResp)
@@ -176,7 +189,7 @@ func StartAgent(name, kiroCLI, cwd, model string, opts AgentOptions) (*Agent, er
 	})
 	if err != nil {
 		a.Kill()
-		return nil, fmt.Errorf("session/new: %w", err)
+		return nil, a.wrapHandshakeError("session/new", err)
 	}
 	var sessResp struct {
 		SessionID string `json:"sessionId"`
@@ -187,6 +200,32 @@ func StartAgent(name, kiroCLI, cwd, model string, opts AgentOptions) (*Agent, er
 
 	log.Printf("[agent:%s] session=%s", name, a.SessionID)
 	return a, nil
+}
+
+func (a *Agent) wrapHandshakeError(stage string, err error) error {
+	if stderr := a.RecentStderr(); stderr != "" {
+		return fmt.Errorf("%s: %w | stderr: %s", stage, err, stderr)
+	}
+	return fmt.Errorf("%s: %w", stage, err)
+}
+
+// ResolveKiroCLI resolves a kiro-cli path. Absolute or path-like values are
+// validated directly; bare command names are resolved through PATH.
+func ResolveKiroCLI(kiroCLI string) (string, error) {
+	if kiroCLI == "" {
+		kiroCLI = "kiro-cli"
+	}
+	if filepath.IsAbs(kiroCLI) || strings.Contains(kiroCLI, string(os.PathSeparator)) {
+		if _, err := os.Stat(kiroCLI); err != nil {
+			return "", fmt.Errorf("kiro-cli binary not found: %s", kiroCLI)
+		}
+		return kiroCLI, nil
+	}
+	resolved, err := exec.LookPath(kiroCLI)
+	if err != nil {
+		return "", fmt.Errorf("kiro-cli binary not found in PATH: %s", kiroCLI)
+	}
+	return resolved, nil
 }
 
 func (a *Agent) handleNotification(method string, params json.RawMessage) {
@@ -584,5 +623,3 @@ func PreflightCheck(kiroCLI string) error {
 	log.Printf("[preflight] kiro-cli v%s, protocol=%v, check passed", agent.AgentVersion(), agent.ProtocolVersion())
 	return nil
 }
-
-

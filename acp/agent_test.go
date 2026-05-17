@@ -18,6 +18,30 @@ func kiroCLI(t *testing.T) string {
 	return cli
 }
 
+func TestResolveKiroCLIAbsolute(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatalf("Executable: %v", err)
+	}
+	resolved, err := acp.ResolveKiroCLI(exe)
+	if err != nil {
+		t.Fatalf("ResolveKiroCLI: %v", err)
+	}
+	if resolved != exe {
+		t.Fatalf("expected %q, got %q", exe, resolved)
+	}
+}
+
+func TestResolveKiroCLIMissing(t *testing.T) {
+	_, err := acp.ResolveKiroCLI("definitely-not-kiro-cli")
+	if err == nil {
+		t.Fatal("expected missing binary error")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("expected not found error, got %v", err)
+	}
+}
+
 func TestStartAndAsk(t *testing.T) {
 	cli := kiroCLI(t)
 	agent, err := acp.StartAgent("test-ask", cli, os.TempDir(), "", acp.AgentOptions{TrustAllTools: true})
