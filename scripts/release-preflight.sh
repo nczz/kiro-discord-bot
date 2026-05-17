@@ -7,8 +7,9 @@ cd "$ROOT_DIR"
 RUN_DOCKER_BUILD="${RUN_DOCKER_BUILD:-1}"
 RUN_ACP_SMOKE="${RUN_ACP_SMOKE:-0}"
 DOCKER_IMAGE="${DOCKER_IMAGE:-kiro-discord-bot:preflight}"
-GOCACHE="${GOCACHE:-/private/tmp/kiro-discord-bot-gocache}"
-GOMODCACHE="${GOMODCACHE:-/private/tmp/kiro-discord-bot-gomodcache}"
+TMP_BASE="${TMPDIR:-/tmp}"
+GOCACHE="${GOCACHE:-$TMP_BASE/kiro-discord-bot-gocache}"
+GOMODCACHE="${GOMODCACHE:-$TMP_BASE/kiro-discord-bot-gomodcache}"
 
 step() {
   printf '\n==> %s\n' "$*"
@@ -19,6 +20,14 @@ need_cmd() {
     printf 'missing required command: %s\n' "$1" >&2
     exit 1
   fi
+}
+
+is_true() {
+  value="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
+  case "$value" in
+    1|true|yes|on) return 0 ;;
+    *) return 1 ;;
+  esac
 }
 
 need_cmd go
@@ -36,7 +45,7 @@ if command -v docker >/dev/null 2>&1; then
   step "docker compose config --quiet"
   docker compose config --quiet
 
-  if [[ "$RUN_DOCKER_BUILD" == "1" ]]; then
+  if is_true "$RUN_DOCKER_BUILD"; then
     step "docker build -t $DOCKER_IMAGE ."
     docker build -t "$DOCKER_IMAGE" .
 
@@ -49,7 +58,7 @@ else
   step "docker unavailable; skipped compose and image checks"
 fi
 
-if [[ "$RUN_ACP_SMOKE" == "1" ]]; then
+if is_true "$RUN_ACP_SMOKE"; then
   if [[ -z "${KIRO_CLI:-}" ]]; then
     printf 'RUN_ACP_SMOKE=1 requires KIRO_CLI=/path/to/kiro-cli\n' >&2
     exit 1

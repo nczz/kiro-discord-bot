@@ -1,0 +1,43 @@
+name: preflight
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      docker_build:
+        description: "Build the Docker image during this manual run"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: preflight-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run release preflight
+        env:
+          RUN_DOCKER_BUILD: ${{ github.event_name == 'workflow_dispatch' && inputs.docker_build || 'false' }}
+          RUN_ACP_SMOKE: "0"
+        run: scripts/release-preflight.sh

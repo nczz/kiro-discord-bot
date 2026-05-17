@@ -24,6 +24,16 @@ To skip the Docker image build on a machine without Docker or without network/ca
 RUN_DOCKER_BUILD=0 scripts/release-preflight.sh
 ```
 
+## GitHub Actions
+
+Pushes to `main` and pull requests run `.github/workflows/preflight.yml`, which executes the same script with:
+
+```bash
+RUN_DOCKER_BUILD=false RUN_ACP_SMOKE=0 scripts/release-preflight.sh
+```
+
+Manual workflow runs can enable Docker image build through the `docker_build` input. ACP smoke is intentionally not run in GitHub Actions because it requires an authenticated local `kiro-cli`.
+
 ## Local ACP Smoke Test
 
 Run this only on a machine where `kiro-cli` is installed and authenticated. It starts a temporary ACP session under the test process and stops it after the check.

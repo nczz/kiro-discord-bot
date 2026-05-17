@@ -51,6 +51,7 @@ heartbeat/       → background task loop
 cmd/mcp-discord/ → optional Discord MCP server, REST tools + guild/channel allowlists
 scripts/         → repeatable local release/preflight checks
 docs/release.md  → release and deployment safety checklist
+.github/         → CI preflight workflow for push/PR checks
 ```
 
 - handler 只做路由和轉發，業務邏輯在 channel/manager
@@ -90,6 +91,7 @@ docs/release.md  → release and deployment safety checklist
 - 修改 struct 欄位時檢查所有 caller 是否同步更新
 - 修改 Docker runtime 或 deployment env 時同步檢查 README、`.env.example`、`docker-compose.yml`
 - 發布或部署前跑 `scripts/release-preflight.sh`；需要真實 ACP 才加 `RUN_ACP_SMOKE=1 KIRO_CLI=...`
+- CI workflow 只跑不需要 secrets 的檢查；ACP smoke 必須留在本機或部署主機執行
 
 ## Completeness Checklist（改動完整性）
 
@@ -101,6 +103,7 @@ docs/release.md  → release and deployment safety checklist
 - [ ] `.kiro/steering/project.md`：架構圖或設計原則有變時同步
 - [ ] `INSTALL_MCP.md` + `.kiro/steering/discord-mcp.md`：Discord MCP 行為或安全邊界改變時同步
 - [ ] `docs/release.md` + `scripts/release-preflight.sh`：發布門檻或部署流程改變時同步
+- [ ] `.github/workflows/preflight.yml`：preflight 腳本或 CI 門檻改變時同步
 - [ ] 新增 env var 路徑：`config.go` → `ManagerConfig`（或 `BotConfig`）→ `main.go` → README → `.env.example`
 - [ ] 新增 Discord MCP-only env var：`cmd/mcp-discord` → README → `.env.example` → `INSTALL_MCP.md`
 
