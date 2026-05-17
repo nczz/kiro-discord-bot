@@ -23,14 +23,20 @@ var dg *discordgo.Session
 var policy discordPolicy
 
 type discordPolicy struct {
-	allowedGuilds   map[string]struct{}
-	allowedChannels map[string]struct{}
+	allowedGuilds     map[string]struct{}
+	allowedChannels   map[string]struct{}
+	readOnly          bool
+	allowedWriteTools map[string]struct{}
+	allowDestructive  bool
 }
 
 func loadDiscordPolicy() discordPolicy {
 	return discordPolicy{
-		allowedGuilds:   parseIDSet(os.Getenv("MCP_DISCORD_ALLOWED_GUILDS")),
-		allowedChannels: parseIDSet(os.Getenv("MCP_DISCORD_ALLOWED_CHANNELS")),
+		allowedGuilds:     parseIDSet(os.Getenv("MCP_DISCORD_ALLOWED_GUILDS")),
+		allowedChannels:   parseIDSet(os.Getenv("MCP_DISCORD_ALLOWED_CHANNELS")),
+		readOnly:          envBool("MCP_DISCORD_READ_ONLY", false),
+		allowedWriteTools: parseIDSet(os.Getenv("MCP_DISCORD_ALLOWED_WRITE_TOOLS")),
+		allowDestructive:  envBool("MCP_DISCORD_ALLOW_DESTRUCTIVE", true),
 	}
 }
 
@@ -62,6 +68,36 @@ func (p discordPolicy) channelIDAllowed(channelID string) bool {
 	return ok
 }
 
+func (p discordPolicy) writeAllowed(tool string, destructive bool) error {
+	if p.readOnly {
+		return fmt.Errorf("%s is blocked because MCP_DISCORD_READ_ONLY=true", tool)
+	}
+	if len(p.allowedWriteTools) > 0 {
+		if _, ok := p.allowedWriteTools[tool]; !ok {
+			return fmt.Errorf("%s is not allowed by MCP_DISCORD_ALLOWED_WRITE_TOOLS", tool)
+		}
+	}
+	if destructive && !p.allowDestructive {
+		return fmt.Errorf("%s is blocked because MCP_DISCORD_ALLOW_DESTRUCTIVE=false", tool)
+	}
+	return nil
+}
+
+func envBool(key string, def bool) bool {
+	v := strings.TrimSpace(strings.ToLower(os.Getenv(key)))
+	if v == "" {
+		return def
+	}
+	switch v {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return def
+	}
+}
+
 func ensureGuildAllowed(guildID string) error {
 	if policy.guildAllowed(guildID) {
 		return nil
@@ -84,6 +120,10 @@ func ensureChannelAllowed(channelID string) error {
 		return fmt.Errorf("channel %s has no guild_id and guild allowlist is enabled", channelID)
 	}
 	return ensureGuildAllowed(ch.GuildID)
+}
+
+func ensureWriteAllowed(tool string, destructive bool) error {
+	return policy.writeAllowed(tool, destructive)
 }
 
 func validateDiscordAttachmentURL(raw string) (*url.URL, error) {
@@ -279,6 +319,9 @@ func main() {
 			if err := ensureChannelAllowed(chID); err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
+			if err := ensureWriteAllowed("discord_send_message", false); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
 			content, _ := req.RequireString("content")
 			msg, err := dg.ChannelMessageSend(chID, content)
 			if err != nil {
@@ -302,6 +345,9 @@ func main() {
 			}
 			chID, _ := req.RequireString("channel_id")
 			if err := ensureChannelAllowed(chID); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			if err := ensureWriteAllowed("discord_reply_message", false); err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			msgID, _ := req.RequireString("message_id")
@@ -330,6 +376,9 @@ func main() {
 			}
 			chID, _ := req.RequireString("channel_id")
 			if err := ensureChannelAllowed(chID); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			if err := ensureWriteAllowed("discord_add_reaction", false); err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			msgID, _ := req.RequireString("message_id")
@@ -457,6 +506,9 @@ func main() {
 			}
 			chID, _ := req.RequireString("channel_id")
 			if err := ensureChannelAllowed(chID); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			if err := ensureWriteAllowed("discord_send_file", false); err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			filePath, _ := req.RequireString("file_path")
@@ -602,6 +654,9 @@ func main() {
 			if err := ensureChannelAllowed(chID); err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
+			if err := ensureWriteAllowed("discord_edit_message", true); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
 			msgID, _ := req.RequireString("message_id")
 			content, _ := req.RequireString("content")
 			_, err := dg.ChannelMessageEdit(chID, msgID, content)
@@ -625,6 +680,9 @@ func main() {
 			}
 			chID, _ := req.RequireString("channel_id")
 			if err := ensureChannelAllowed(chID); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			if err := ensureWriteAllowed("discord_delete_message", true); err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			msgID, _ := req.RequireString("message_id")
@@ -688,6 +746,9 @@ func main() {
 			if err := ensureChannelAllowed(chID); err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
+			if err := ensureWriteAllowed("discord_send_embed", false); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
 			title, _ := req.RequireString("title")
 			embed := &discordgo.MessageEmbed{
 				Title:       title,
@@ -734,6 +795,9 @@ func main() {
 			if err := ensureChannelAllowed(chID); err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
+			if err := ensureWriteAllowed("discord_pin_message", true); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
 			msgID, _ := req.RequireString("message_id")
 			unpin := req.GetBool("unpin", false)
 			if unpin {
@@ -764,6 +828,9 @@ func main() {
 			}
 			chID, _ := req.RequireString("channel_id")
 			if err := ensureChannelAllowed(chID); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			if err := ensureWriteAllowed("discord_create_thread", false); err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			msgID, _ := req.RequireString("message_id")
@@ -821,6 +888,9 @@ func main() {
 			}
 			chID, _ := req.RequireString("channel_id")
 			if err := ensureChannelAllowed(chID); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			if err := ensureWriteAllowed("discord_remove_reaction", true); err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			msgID, _ := req.RequireString("message_id")
@@ -881,6 +951,9 @@ func main() {
 			}
 			chID, _ := req.RequireString("channel_id")
 			if err := ensureChannelAllowed(chID); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			if err := ensureWriteAllowed("discord_edit_channel_topic", true); err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			topic, _ := req.RequireString("topic")

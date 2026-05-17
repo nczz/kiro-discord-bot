@@ -49,6 +49,46 @@ func TestDiscordPolicyChannelAllowed(t *testing.T) {
 	}
 }
 
+func TestDiscordPolicyWriteAllowedDefaultsToLegacyOpen(t *testing.T) {
+	p := discordPolicy{allowDestructive: true}
+	if err := p.writeAllowed("discord_send_message", false); err != nil {
+		t.Fatalf("default send denied: %v", err)
+	}
+	if err := p.writeAllowed("discord_delete_message", true); err != nil {
+		t.Fatalf("default destructive denied: %v", err)
+	}
+}
+
+func TestDiscordPolicyReadOnlyBlocksWrites(t *testing.T) {
+	p := discordPolicy{readOnly: true, allowDestructive: true}
+	if err := p.writeAllowed("discord_send_message", false); err == nil {
+		t.Fatal("read-only policy should block writes")
+	}
+}
+
+func TestDiscordPolicyAllowedWriteTools(t *testing.T) {
+	p := discordPolicy{
+		allowedWriteTools: parseIDSet("discord_send_message"),
+		allowDestructive:  true,
+	}
+	if err := p.writeAllowed("discord_send_message", false); err != nil {
+		t.Fatalf("allowed write denied: %v", err)
+	}
+	if err := p.writeAllowed("discord_reply_message", false); err == nil {
+		t.Fatal("unlisted write should be denied")
+	}
+}
+
+func TestDiscordPolicyDestructiveGuard(t *testing.T) {
+	p := discordPolicy{allowDestructive: false}
+	if err := p.writeAllowed("discord_send_message", false); err != nil {
+		t.Fatalf("non-destructive write denied: %v", err)
+	}
+	if err := p.writeAllowed("discord_delete_message", true); err == nil {
+		t.Fatal("destructive write should be denied")
+	}
+}
+
 func TestValidateDiscordAttachmentURL(t *testing.T) {
 	if _, err := validateDiscordAttachmentURL("https://cdn.discordapp.com/attachments/1/file.txt"); err != nil {
 		t.Fatalf("discord attachment url denied: %v", err)

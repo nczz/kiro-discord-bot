@@ -3,6 +3,7 @@ package bot
 import (
 	"context"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -76,7 +77,59 @@ func (b *Bot) cmdResume(ctx cmdCtx) {
 func (b *Bot) cmdDoctor(ctx cmdCtx) {
 	runCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	ctx.reply(truncate(b.manager.Doctor(runCtx), 1900))
+	ctx.reply(truncate(b.doctor(runCtx), 1900))
+}
+
+func (b *Bot) doctor(ctx context.Context) string {
+	var sb strings.Builder
+	sb.WriteString(b.manager.Doctor(ctx))
+
+	sb.WriteString("\n**Discord**\n")
+	if b.discord == nil {
+		sb.WriteString("❌ session: not initialized\n")
+	} else {
+		if b.discord.State != nil && b.discord.State.User != nil {
+			sb.WriteString("✅ bot user: `" + b.discord.State.User.String() + "`\n")
+		} else if u, err := b.discord.User("@me"); err != nil {
+			sb.WriteString("❌ bot user: " + err.Error() + "\n")
+		} else {
+			sb.WriteString("✅ bot user: `" + u.String() + "`\n")
+		}
+
+		if b.guildID == "" {
+			sb.WriteString("⚠️ guild restriction: not configured\n")
+		} else if b.discord.State != nil {
+			if g, err := b.discord.State.Guild(b.guildID); err == nil && g != nil {
+				sb.WriteString("✅ guild: `" + g.Name + "` (`" + b.guildID + "`)\n")
+			} else if g, err := b.discord.Guild(b.guildID); err != nil {
+				sb.WriteString("❌ guild: " + err.Error() + "\n")
+			} else {
+				sb.WriteString("✅ guild: `" + g.Name + "` (`" + b.guildID + "`)\n")
+			}
+		} else if g, err := b.discord.Guild(b.guildID); err != nil {
+			sb.WriteString("❌ guild: " + err.Error() + "\n")
+		} else {
+			sb.WriteString("✅ guild: `" + g.Name + "` (`" + b.guildID + "`)\n")
+		}
+	}
+
+	sb.WriteString("\n**Discord MCP**\n")
+	sb.WriteString(doctorEnvLine("guild allowlist", "MCP_DISCORD_ALLOWED_GUILDS", "not configured"))
+	sb.WriteString(doctorEnvLine("channel allowlist", "MCP_DISCORD_ALLOWED_CHANNELS", "not configured"))
+	sb.WriteString(doctorEnvLine("download dir", "MCP_DISCORD_DOWNLOAD_DIR", "not restricted"))
+	sb.WriteString(doctorEnvLine("read only", "MCP_DISCORD_READ_ONLY", "false"))
+	sb.WriteString(doctorEnvLine("write tools", "MCP_DISCORD_ALLOWED_WRITE_TOOLS", "unrestricted"))
+	sb.WriteString(doctorEnvLine("destructive writes", "MCP_DISCORD_ALLOW_DESTRUCTIVE", "true"))
+
+	return sb.String()
+}
+
+func doctorEnvLine(label, key, unset string) string {
+	value := strings.TrimSpace(os.Getenv(key))
+	if value == "" {
+		return "⚠️ " + label + ": " + unset + "\n"
+	}
+	return "✅ " + label + ": `" + value + "`\n"
 }
 
 // --- Commands with different channel/thread behavior ---

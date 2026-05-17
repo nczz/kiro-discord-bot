@@ -64,7 +64,7 @@ docs/release.md  → release and deployment safety checklist
 - **Adapter 共用 botNotifier**：所有 heartbeat adapter 嵌入 `botNotifier`，Notify / IsSilent 不重複實作。
 - **CWD policy 在 Manager 層統一執行**：`/start`、`/cwd`、thread agents、cron temp agents 都必須走 `ValidateCWD`，不得在 handler 或 heartbeat 層自行繞過。
 - **ACP tool permission 預設由本地策略決定**：只有 `TRUST_ALL_TOOLS=true` 或 `TRUST_TOOLS` 命中才 approve；未授權 tool permission request 要 deny。
-- **Discord MCP 安全邊界**：MCP guild/channel allowlist 在 `cmd/mcp-discord` 內執行。新增 Discord REST tool 時必須先判斷它是 guild-scoped、channel-scoped 或 global，並套用對應 policy。
+- **Discord MCP 安全邊界**：MCP guild/channel allowlist 與 write guard 在 `cmd/mcp-discord` 內執行。新增 Discord REST tool 時必須先判斷它是 guild-scoped、channel-scoped、global、read-only、write 或 destructive，並套用對應 policy。
 - **Release preflight 不碰 runtime state**：preflight script 只能 build/test/check artifacts，不得停止/啟動 bot、修改 `DATA_DIR`、刪除 Docker volumes、改寫 `.env` 或觸發 Discord side effects。
 
 ## Collaboration（協作方式）

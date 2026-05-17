@@ -61,9 +61,12 @@ Before enabling the server broadly, restrict the Discord surfaces the MCP server
 MCP_DISCORD_ALLOWED_GUILDS=123456789012345678
 MCP_DISCORD_ALLOWED_CHANNELS=234567890123456789,345678901234567890
 MCP_DISCORD_DOWNLOAD_DIR=/tmp/kiro-discord-mcp
+MCP_DISCORD_ALLOW_DESTRUCTIVE=false
 ```
 
 Empty allowlists preserve unrestricted legacy behavior. When a guild allowlist is set, channel tools reject channels outside allowed guilds. When a channel allowlist is set, channel and thread tools only operate on those IDs. Attachment downloads are limited to Discord attachment/CDN hosts, and `MCP_DISCORD_DOWNLOAD_DIR` restricts where downloaded files can be written.
+
+For stricter deployments, set `MCP_DISCORD_READ_ONLY=true` to block every write tool, or set `MCP_DISCORD_ALLOWED_WRITE_TOOLS` to a comma-separated list such as `discord_send_message,discord_reply_message`. Set `MCP_DISCORD_ALLOW_DESTRUCTIVE=false` to block delete/edit/pin/topic/reaction-removal operations while still allowing non-destructive sends.
 
 ### Step 4: Restart the agent session
 

@@ -699,6 +699,20 @@ func (m *Manager) Doctor(ctx context.Context) string {
 		sb.WriteString("✅ cwd allowlist: `" + strings.Join(m.allowedCwdRoots, "`, `") + "`\n")
 	}
 
+	if m.trustTools != "" {
+		sb.WriteString("✅ ACP tool policy: allowlisted tools `" + m.trustTools + "`\n")
+	} else if m.trustAllTools {
+		sb.WriteString("⚠️ ACP tool policy: trust all tools\n")
+	} else {
+		sb.WriteString("✅ ACP tool policy: deny by default\n")
+	}
+
+	m.mu.Lock()
+	activeAgents := len(m.agents)
+	activeThreadAgents := len(m.threadAgents)
+	m.mu.Unlock()
+	sb.WriteString(fmt.Sprintf("✅ agents: channels=%d threads=%d thread_limit=%d\n", activeAgents, activeThreadAgents, m.threadAgentMax))
+
 	if err := os.MkdirAll(m.dataDir, 0755); err != nil {
 		sb.WriteString("❌ data dir: " + err.Error() + "\n")
 	} else {

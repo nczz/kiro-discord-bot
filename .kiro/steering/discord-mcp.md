@@ -33,4 +33,6 @@ description: Guidelines for operating as a Discord bot agent. The bot automatica
 
 Discord MCP server 可能透過 `.env` 設定 `MCP_DISCORD_ALLOWED_GUILDS`、`MCP_DISCORD_ALLOWED_CHANNELS` 和 `MCP_DISCORD_DOWNLOAD_DIR`。如果工具回傳 allowlist 或下載目錄限制錯誤，代表目前環境刻意限制了可操作範圍；不要嘗試改用其他 guild/channel ID 繞過限制。
 
+環境也可能設定 `MCP_DISCORD_READ_ONLY`、`MCP_DISCORD_ALLOWED_WRITE_TOOLS` 或 `MCP_DISCORD_ALLOW_DESTRUCTIVE=false` 來限制寫入工具。若寫入工具被拒絕，直接向使用者說明目前 MCP policy 不允許該操作，不要改用其他工具繞過。
+
 `discord_download_attachment` 只應用於 Discord attachment/CDN URL；下載到本機後，回報實際儲存路徑即可。
