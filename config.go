@@ -10,6 +10,7 @@ type Config struct {
 	DiscordToken        string
 	KiroCLIPath         string
 	DefaultCWD          string
+	AllowedCwdRoots     string
 	AskTimeoutSec       int
 	QueueBufferSize     int
 	DataDir             string
@@ -44,6 +45,7 @@ func loadConfig() *Config {
 		DiscordToken:        mustEnv("DISCORD_TOKEN"),
 		KiroCLIPath:         envOr("KIRO_CLI_PATH", "kiro-cli"),
 		DefaultCWD:          envOr("DEFAULT_CWD", "/projects"),
+		AllowedCwdRoots:     envOr("ALLOWED_CWD_ROOTS", ""),
 		AskTimeoutSec:       envInt("ASK_TIMEOUT_SEC", 3600),
 		QueueBufferSize:     envInt("QUEUE_BUFFER_SIZE", 20),
 		DataDir:             envOr("DATA_DIR", "./data"),

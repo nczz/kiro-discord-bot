@@ -100,6 +100,14 @@ func (b *Bot) handleCronModalSubmit(ds *discordgo.Session, i *discordgo.Interact
 	prompt := fields["cron_prompt"]
 	cwd := fields["cron_cwd"]
 	model := fields["cron_model"]
+	if strings.TrimSpace(cwd) != "" {
+		var err error
+		cwd, err = b.manager.ValidateCWD(cwd)
+		if err != nil {
+			respondInteraction(ds, i, L.Getf("error.generic", err.Error()))
+			return
+		}
+	}
 
 	// Parse schedule
 	cronExpr, err := heartbeat.ParseSchedule(scheduleInput)
@@ -177,7 +185,16 @@ func (b *Bot) handleCronEditSubmit(ds *discordgo.Session, i *discordgo.Interacti
 	job.Schedule = cronExpr
 	job.ScheduleHuman = scheduleInput
 	job.Prompt = fields["cron_prompt"]
-	job.CWD = fields["cron_cwd"]
+	cwd := fields["cron_cwd"]
+	if strings.TrimSpace(cwd) != "" {
+		var err error
+		cwd, err = b.manager.ValidateCWD(cwd)
+		if err != nil {
+			respondInteraction(ds, i, L.Getf("error.generic", err.Error()))
+			return
+		}
+	}
+	job.CWD = cwd
 	job.Model = fields["cron_model"]
 
 	if err := b.cronStore.Update(job); err != nil {

@@ -47,6 +47,7 @@ func main() {
 		ManagerConfig: channel.ManagerConfig{
 			KiroCLIPath:         cfg.KiroCLIPath,
 			DefaultCWD:          cfg.DefaultCWD,
+			AllowedCwdRoots:     cfg.AllowedCwdRoots,
 			DataDir:             cfg.DataDir,
 			QueueBufferSize:     cfg.QueueBufferSize,
 			AskTimeoutSec:       cfg.AskTimeoutSec,

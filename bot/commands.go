@@ -1,9 +1,11 @@
 package bot
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	L "github.com/nczz/kiro-discord-bot/locale"
 )
@@ -69,6 +71,12 @@ func (b *Bot) cmdResume(ctx cmdCtx) {
 	_ = sess
 	// TODO: resume from agent's last text — requires storing last response
 	ctx.reply(L.Get("error.no_response"))
+}
+
+func (b *Bot) cmdDoctor(ctx cmdCtx) {
+	runCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	ctx.reply(truncate(b.manager.Doctor(runCtx), 1900))
 }
 
 // --- Commands with different channel/thread behavior ---

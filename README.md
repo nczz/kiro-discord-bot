@@ -125,6 +125,7 @@ DISCORD_GUILD_ID=your-guild-id
 KIRO_CLI_PATH=/home/user/.local/bin/kiro-cli
 KIRO_API_KEY=
 DEFAULT_CWD=/projects
+ALLOWED_CWD_ROOTS=
 DATA_DIR=/tmp/kiro-bot-data
 ASK_TIMEOUT_SEC=3600
 STREAM_UPDATE_SEC=3
@@ -161,6 +162,7 @@ STT_MAX_DURATION_SEC=300
 | `KIRO_CLI_PATH` | kiro-cli binary path or command name resolved from `PATH` | `kiro-cli` |
 | `KIRO_API_KEY` | Kiro API key for headless auth (alternative to `kiro-cli login`) | — |
 | `DEFAULT_CWD` | Default working directory for agents | `/projects` |
+| `ALLOWED_CWD_ROOTS` | Comma-separated cwd allowlist for `/start`, `/cwd`, thread agents, and cron jobs (empty = unrestricted) | `` |
 | `DATA_DIR` | Directory for sessions, logs, and attachments | `./data` |
 | `ASK_TIMEOUT_SEC` | Agent response timeout (safety net) in seconds | `3600` |
 | `STREAM_UPDATE_SEC` | Discord message update interval during streaming | `3` |
@@ -271,6 +273,7 @@ The bot needs explicit permission in each channel it should respond to:
 | `/start <cwd>` | Bind channel to a project directory and start agent |
 | `/reset` | Restart the agent for this channel |
 | `/status` | Show agent state, queue length, context usage, session ID |
+| `/doctor` | Run deployment diagnostics and ACP preflight |
 | `/cancel` | Cancel the currently running task |
 | `/cwd` | Show current working directory |
 | `/pause` | Switch to mention-only mode (bot ignores non-mention messages) |
@@ -602,6 +605,7 @@ The agent will read the guide, build the binary, update `mcp.json`, and prompt y
 - **Session persistence:** Sessions survive as long as the agent process is alive. Bot restart creates a new session with conversation history injected into the first prompt (budget-based: recent turns kept intact, older turns truncated, 20K char default).
 - **MCP servers:** Inherited from `~/.kiro/settings/mcp.json` automatically. Note: ACP `session/new` mcpServers field is currently ignored by kiro-cli ([#7349](https://github.com/kirodotdev/Kiro/issues/7349)).
 - **Project steering:** Add `.kiro/steering/*.md` in the project directory or `~/.kiro/steering/` globally to guide agent behavior.
+- **CWD allowlist:** Set `ALLOWED_CWD_ROOTS` to restrict all agent working directories to approved roots. Docker defaults this to `/projects`.
 - **Long responses:** Automatically split into multiple messages at 2000 char Discord limit.
 - **Conversation logs:** All user/agent interactions are recorded in `DATA_DIR/ch-<channelID>/chat.jsonl`.
 - **Attachments:** Stored in `DATA_DIR/ch-<channelID>/attachments/` with timestamp prefixes. Filenames are sanitized, downloads must return HTTP 200, and each file is capped by `ATTACHMENT_MAX_MB`. Auto-cleaned after `ATTACHMENT_RETAIN_DAYS`.
@@ -710,6 +714,7 @@ export $(grep -v '^#' .env | xargs)
 | `/start <目錄>` | 綁定專案目錄並啟動 agent |
 | `/reset` | 重啟此 channel 的 agent |
 | `/status` | 查詢 agent 狀態、queue 長度、context 使用率 |
+| `/doctor` | 執行部署診斷與 ACP preflight |
 | `/cancel` | 取消目前執行中的任務 |
 | `/cwd` | 查詢目前工作目錄 |
 | `/pause` | 切換為 @mention 模式 |

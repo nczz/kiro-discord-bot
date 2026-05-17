@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -25,6 +27,7 @@ type Manager struct {
 	store           *SessionStore
 	kiroCLI         string
 	defaultCWD      string
+	allowedCwdRoots []string
 	queueBufSize    int
 	askTimeoutSec   int
 	streamUpdateSec int
@@ -64,55 +67,57 @@ type threadAgentEntry struct {
 
 // ManagerConfig holds configuration for creating a Manager.
 type ManagerConfig struct {
-	Store              *SessionStore // set by bot.go after creation
-	KiroCLIPath        string
-	DefaultCWD         string
-	QueueBufferSize    int
-	AskTimeoutSec      int
-	StreamUpdateSec    int
-	ThreadAutoArchive  int
-	KiroModel          string
-	DataDir            string
-	BotVersion         string
-	GuildID            string
-	ThreadAgentMax     int
-	ThreadAgentIdleSec int
+	Store               *SessionStore // set by bot.go after creation
+	KiroCLIPath         string
+	DefaultCWD          string
+	AllowedCwdRoots     string
+	QueueBufferSize     int
+	AskTimeoutSec       int
+	StreamUpdateSec     int
+	ThreadAutoArchive   int
+	KiroModel           string
+	DataDir             string
+	BotVersion          string
+	GuildID             string
+	ThreadAgentMax      int
+	ThreadAgentIdleSec  int
 	ChannelAgentIdleSec int
-	MaxScannerBuffer   int
-	AgentProfile       string
-	TrustAllTools      bool
-	TrustTools         string
+	MaxScannerBuffer    int
+	AgentProfile        string
+	TrustAllTools       bool
+	TrustTools          string
 }
 
 func NewManager(cfg ManagerConfig) *Manager {
 	return &Manager{
-		workers:            make(map[string]*Worker),
-		agents:             make(map[string]*acp.Agent),
-		paused:             make(map[string]bool),
-		silent:             make(map[string]bool),
-		threadAgents:       make(map[string]*threadAgentEntry),
-		store:              cfg.Store,
-		kiroCLI:            cfg.KiroCLIPath,
-		defaultCWD:         cfg.DefaultCWD,
-		queueBufSize:       cfg.QueueBufferSize,
-		askTimeoutSec:      cfg.AskTimeoutSec,
-		streamUpdateSec:    cfg.StreamUpdateSec,
-		threadArchive:      cfg.ThreadAutoArchive,
-		defaultModel:       cfg.KiroModel,
-		logger:             NewChatLogger(cfg.DataDir),
-		botVersion:         cfg.BotVersion,
-		guildID:            cfg.GuildID,
-		dataDir:            cfg.DataDir,
-		memory:             NewMemoryStore(cfg.DataDir),
-		flashMemory:        make(map[string][]string),
-		threadAgentMax:     cfg.ThreadAgentMax,
-		threadAgentIdleSec: cfg.ThreadAgentIdleSec,
+		workers:             make(map[string]*Worker),
+		agents:              make(map[string]*acp.Agent),
+		paused:              make(map[string]bool),
+		silent:              make(map[string]bool),
+		threadAgents:        make(map[string]*threadAgentEntry),
+		store:               cfg.Store,
+		kiroCLI:             cfg.KiroCLIPath,
+		defaultCWD:          cfg.DefaultCWD,
+		allowedCwdRoots:     parseCwdRoots(cfg.AllowedCwdRoots),
+		queueBufSize:        cfg.QueueBufferSize,
+		askTimeoutSec:       cfg.AskTimeoutSec,
+		streamUpdateSec:     cfg.StreamUpdateSec,
+		threadArchive:       cfg.ThreadAutoArchive,
+		defaultModel:        cfg.KiroModel,
+		logger:              NewChatLogger(cfg.DataDir),
+		botVersion:          cfg.BotVersion,
+		guildID:             cfg.GuildID,
+		dataDir:             cfg.DataDir,
+		memory:              NewMemoryStore(cfg.DataDir),
+		flashMemory:         make(map[string][]string),
+		threadAgentMax:      cfg.ThreadAgentMax,
+		threadAgentIdleSec:  cfg.ThreadAgentIdleSec,
 		channelAgentIdleSec: cfg.ChannelAgentIdleSec,
 		channelLastActivity: make(map[string]time.Time),
-		maxScannerBuffer:   cfg.MaxScannerBuffer,
-		agentProfile:       cfg.AgentProfile,
-		trustAllTools:      cfg.TrustAllTools,
-		trustTools:         cfg.TrustTools,
+		maxScannerBuffer:    cfg.MaxScannerBuffer,
+		agentProfile:        cfg.AgentProfile,
+		trustAllTools:       cfg.TrustAllTools,
+		trustTools:          cfg.TrustTools,
 	}
 }
 
@@ -124,6 +129,76 @@ func (m *Manager) ThreadArchive() int { return m.threadArchive }
 
 // DefaultCWD returns the configured default working directory.
 func (m *Manager) DefaultCWD() string { return m.defaultCWD }
+
+// AllowedCwdRoots returns a copy of configured cwd allowlist roots.
+func (m *Manager) AllowedCwdRoots() []string {
+	out := make([]string, len(m.allowedCwdRoots))
+	copy(out, m.allowedCwdRoots)
+	return out
+}
+
+func parseCwdRoots(raw string) []string {
+	if raw == "" {
+		return nil
+	}
+	var roots []string
+	for _, part := range strings.Split(raw, ",") {
+		root := strings.TrimSpace(part)
+		if root == "" {
+			continue
+		}
+		if abs, err := filepath.Abs(root); err == nil {
+			root = abs
+		}
+		if real, err := filepath.EvalSymlinks(root); err == nil {
+			root = real
+		}
+		roots = append(roots, filepath.Clean(root))
+	}
+	return roots
+}
+
+// ValidateCWD checks whether cwd exists and is inside ALLOWED_CWD_ROOTS when configured.
+func (m *Manager) ValidateCWD(cwd string) (string, error) {
+	if strings.TrimSpace(cwd) == "" {
+		return "", fmt.Errorf("working directory is empty")
+	}
+	abs, err := filepath.Abs(cwd)
+	if err != nil {
+		return "", fmt.Errorf("resolve working directory: %w", err)
+	}
+	real, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return "", fmt.Errorf("working directory not found: %s", cwd)
+	}
+	if fi, err := os.Stat(real); err != nil {
+		return "", fmt.Errorf("working directory not found: %s", cwd)
+	} else if !fi.IsDir() {
+		return "", fmt.Errorf("working directory is not a directory: %s", cwd)
+	}
+	if len(m.allowedCwdRoots) == 0 {
+		return real, nil
+	}
+	for _, root := range m.allowedCwdRoots {
+		if pathWithinRoot(real, root) {
+			return real, nil
+		}
+	}
+	return "", fmt.Errorf("working directory %s is outside ALLOWED_CWD_ROOTS: %s", real, strings.Join(m.allowedCwdRoots, ", "))
+}
+
+func pathWithinRoot(path, root string) bool {
+	path = filepath.Clean(path)
+	root = filepath.Clean(root)
+	if path == root {
+		return true
+	}
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return false
+	}
+	return rel != "." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)) && rel != ".."
+}
 
 func (m *Manager) agentOpts() acp.AgentOptions {
 	return acp.AgentOptions{
@@ -282,6 +357,10 @@ func (m *Manager) StartAt(channelID, cwd string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	cwd, err := m.ValidateCWD(cwd)
+	if err != nil {
+		return err
+	}
 	m.stopChannel(channelID)
 
 	existing, _ := m.store.Get(channelID)
@@ -291,7 +370,7 @@ func (m *Manager) StartAt(channelID, cwd string) error {
 	}
 	_ = m.store.Set(channelID, newSess)
 
-	_, err := m.startAgentAndWorker(channelID)
+	_, err = m.startAgentAndWorker(channelID)
 	return err
 }
 
@@ -305,6 +384,10 @@ func (m *Manager) CWD(channelID string) string {
 
 // SetCWD updates the working directory for a channel (takes effect on next reset).
 func (m *Manager) SetCWD(channelID, cwd string) error {
+	cwd, err := m.ValidateCWD(cwd)
+	if err != nil {
+		return err
+	}
 	sess, ok := m.store.Get(channelID)
 	if !ok {
 		return m.store.Set(channelID, &Session{CWD: cwd})
@@ -390,8 +473,8 @@ func (m *Manager) ListModels(channelID string) (string, error) {
 func (m *Manager) MemoryAdd(channelID, entry string) error { return m.memory.Add(channelID, entry) }
 
 // ClearHistory truncates the JSONL conversation log for a channel.
-func (m *Manager) ClearHistory(channelID string) { m.logger.ClearLog(channelID) }
-func (m *Manager) MemoryList(channelID string) []string     { return m.memory.List(channelID) }
+func (m *Manager) ClearHistory(channelID string)        { m.logger.ClearLog(channelID) }
+func (m *Manager) MemoryList(channelID string) []string { return m.memory.List(channelID) }
 func (m *Manager) MemoryRemove(channelID string, idx int) error {
 	return m.memory.Remove(channelID, idx)
 }
@@ -480,6 +563,11 @@ func (m *Manager) startAgentAndWorker(channelID string) (*Worker, error) {
 		if sess.Model != "" {
 			model = sess.Model
 		}
+	}
+	var err error
+	cwd, err = m.ValidateCWD(cwd)
+	if err != nil {
+		return nil, err
 	}
 
 	// Stop any existing agent with same name
@@ -581,8 +669,67 @@ func (m *Manager) CheckAgent(channelID string) error {
 	return nil
 }
 
+// Doctor runs deployment diagnostics that are useful before accepting live work.
+func (m *Manager) Doctor(ctx context.Context) string {
+	var sb strings.Builder
+	sb.WriteString("**Doctor**\n")
+
+	resolvedCLI, err := acp.ResolveKiroCLI(m.kiroCLI)
+	if err != nil {
+		sb.WriteString("❌ kiro-cli: " + err.Error() + "\n")
+	} else {
+		sb.WriteString("✅ kiro-cli: `" + resolvedCLI + "`")
+		if out, err := exec.CommandContext(ctx, resolvedCLI, "--version").Output(); err == nil {
+			sb.WriteString(" — `" + strings.TrimSpace(string(out)) + "`")
+		} else {
+			sb.WriteString(" — version check failed: `" + err.Error() + "`")
+		}
+		sb.WriteString("\n")
+	}
+
+	if cwd, err := m.ValidateCWD(m.defaultCWD); err != nil {
+		sb.WriteString("❌ default cwd: " + err.Error() + "\n")
+	} else {
+		sb.WriteString("✅ default cwd: `" + cwd + "`\n")
+	}
+
+	if len(m.allowedCwdRoots) == 0 {
+		sb.WriteString("⚠️ cwd allowlist: not configured\n")
+	} else {
+		sb.WriteString("✅ cwd allowlist: `" + strings.Join(m.allowedCwdRoots, "`, `") + "`\n")
+	}
+
+	if err := os.MkdirAll(m.dataDir, 0755); err != nil {
+		sb.WriteString("❌ data dir: " + err.Error() + "\n")
+	} else {
+		probe := filepath.Join(m.dataDir, ".doctor-write-test")
+		if err := os.WriteFile(probe, []byte("ok\n"), 0644); err != nil {
+			sb.WriteString("❌ data dir writable: " + err.Error() + "\n")
+		} else {
+			_ = os.Remove(probe)
+			sb.WriteString("✅ data dir writable: `" + m.dataDir + "`\n")
+		}
+	}
+
+	if err := acp.PreflightCheck(m.kiroCLI); err != nil {
+		sb.WriteString("❌ ACP preflight: " + err.Error() + "\n")
+	} else {
+		sb.WriteString("✅ ACP preflight: passed\n")
+	}
+
+	return sb.String()
+}
+
 // StartTempAgent starts a temporary agent (for cron jobs).
 func (m *Manager) StartTempAgent(name, cwd, model string) (*acp.Agent, error) {
+	if strings.TrimSpace(cwd) == "" {
+		cwd = m.defaultCWD
+	}
+	var err error
+	cwd, err = m.ValidateCWD(cwd)
+	if err != nil {
+		return nil, err
+	}
 	return acp.StartAgent(name, m.kiroCLI, cwd, model, m.agentOpts())
 }
 
@@ -718,6 +865,11 @@ func (m *Manager) spawnThreadAgent(threadID, parentChannelID string, modelOverri
 	}
 	if len(modelOverride) > 0 && modelOverride[0] != "" {
 		model = modelOverride[0]
+	}
+	var err error
+	cwd, err = m.ValidateCWD(cwd)
+	if err != nil {
+		return nil, err
 	}
 
 	agentName := "thread-" + threadID

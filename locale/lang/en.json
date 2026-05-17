@@ -1,5 +1,5 @@
 {
-  "usage_message": "🤖 **Agent is ready!** Available commands:\n\n```\n!status   — Check agent status\n!cancel   — Cancel current task\n!cwd          — Show working directory\n!cwd <dir>    — Set working directory (takes effect on !reset)\n!reset    — Restart agent session\n!start <dir>  — Bind a project directory\n!pause    — Switch to @mention mode\n!back     — Resume full-listen mode\n!resume   — Re-display last truncated response\n!model          — Show current model\n!model <model>  — Switch model (auto-restarts agent)\n!models         — List available models\n!memory         — Manage persistent memory rules\n!flashmemory    — Manage session flash memory\n```\nSend any message to chat with the agent.",
+  "usage_message": "🤖 **Agent is ready!** Available commands:\n\n```\n!status   — Check agent status\n!doctor   — Run deployment diagnostics\n!cancel   — Cancel current task\n!cwd          — Show working directory\n!cwd <dir>    — Set working directory (takes effect on !reset)\n!reset    — Restart agent session\n!start <dir>  — Bind a project directory\n!pause    — Switch to @mention mode\n!back     — Resume full-listen mode\n!resume   — Re-display last truncated response\n!model          — Show current model\n!model <model>  — Switch model (auto-restarts agent)\n!models         — List available models\n!memory         — Manage persistent memory rules\n!flashmemory    — Manage session flash memory\n```\nSend any message to chat with the agent.",
   "error.generic": "❌ %s",
   "error.no_active_session": "❌ No active session",
   "error.thread_only": "❌ This command can only be used inside a thread.",
@@ -51,6 +51,7 @@
   "cmd.start.opt.cwd": "Project directory path",
   "cmd.reset.desc": "Restart the agent",
   "cmd.status.desc": "Check agent status",
+  "cmd.doctor.desc": "Run deployment diagnostics",
   "cmd.cancel.desc": "Cancel current task",
   "cmd.cwd.desc": "Show or set working directory",
   "cmd.cwd.opt.path": "New working directory (leave empty to show current)",

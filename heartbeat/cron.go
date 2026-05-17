@@ -169,9 +169,6 @@ func (c *CronTask) execute(job *CronJob, now time.Time) {
 
 	// Start temp agent with model
 	cwd := job.CWD
-	if cwd == "" {
-		cwd = "/tmp"
-	}
 	agent, err := c.deps.StartTempAgent(agentName, cwd, job.Model)
 	if err != nil {
 		log.Printf("[cron] start agent for %s failed: %v", job.ID, err)
