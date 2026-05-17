@@ -53,6 +53,18 @@ For example, if the project is at `/home/user/kiro-discord-bot`:
 
 This sources `DISCORD_TOKEN` from the project `.env` file at startup — no token duplication needed.
 
+### Step 3.5: Set a safety scope
+
+Before enabling the server broadly, restrict the Discord surfaces the MCP server can touch in `<PROJECT_DIR>/.env`:
+
+```env
+MCP_DISCORD_ALLOWED_GUILDS=123456789012345678
+MCP_DISCORD_ALLOWED_CHANNELS=234567890123456789,345678901234567890
+MCP_DISCORD_DOWNLOAD_DIR=/tmp/kiro-discord-mcp
+```
+
+Empty allowlists preserve unrestricted legacy behavior. When a guild allowlist is set, channel tools reject channels outside allowed guilds. When a channel allowlist is set, channel and thread tools only operate on those IDs. Attachment downloads are limited to Discord attachment/CDN hosts, and `MCP_DISCORD_DOWNLOAD_DIR` restricts where downloaded files can be written.
+
 ### Step 4: Restart the agent session
 
 After completing the steps above, tell the user:

@@ -12,13 +12,14 @@ description: Use for ANY code change, build, debug, or architecture question in 
 - Test: `go test ./...`
 - Single package test: `go test ./acp/`
 - Run: `systemctl start kiro-discord-bot` (systemd, recommended) or `export $(grep -v '^#' .env | xargs) && ./kiro-discord-bot` (manual)
-- Config: all settings from `.env`, see `config.go` `loadConfig()`
+- Config: bot settings from `.env`, see `config.go` `loadConfig()`; Discord MCP-only settings are read in `cmd/mcp-discord/`
+- Diagnostics: `/doctor` or `!doctor` checks `kiro-cli`, default cwd, cwd allowlist, data dir writeability, and ACP preflight
 
 ## Architecture Boundaries
 
 ```
 main.go          → loadConfig + bot.Start + signal wait
-config.go        → .env → Config struct (mustEnv / envOr / envInt)
+config.go        → .env → Config struct (mustEnv / envOr / envInt / envBool)
 bot/             → Discord gateway, slash commands, message routing
   handler.go     → message + slash command dispatch (不放業務邏輯)
   handler_cron.go→ /cron Modal, /cron-list Button, /remind
@@ -28,7 +29,7 @@ bot/             → Discord gateway, slash commands, message routing
   thread_cleanup_adapter → heartbeat.ThreadCleanupDeps bridge
   channel_cleanup_adapter → heartbeat.ChannelCleanupDeps bridge
 channel/         → per-channel lifecycle
-  manager.go     → session + worker + agent 生命週期管理中樞
+  manager.go     → session + worker + agent 生命週期管理中樞、cwd allowlist enforcement
   worker.go      → job queue goroutine, thread-based execution
   session.go     → SessionStore JSON persistence
   logger.go      → JSONL conversation log
@@ -45,6 +46,7 @@ heartbeat/       → background task loop
   schedule.go    → natural language → cron/time parser
   thread_cleanup.go → idle thread agent eviction
   channel_cleanup.go → idle channel agent eviction
+cmd/mcp-discord/ → optional Discord MCP server, REST tools + guild/channel allowlists
 ```
 
 - handler 只做路由和轉發，業務邏輯在 channel/manager
@@ -56,6 +58,9 @@ heartbeat/       → background task loop
 - **Silent mode 是全域設計原則**：所有非使用者主動觸發的通知（idle cleanup、agent 斷線、health restart 等）都必須遵守 silent 設定。silent ON = 靜音，silent OFF = 顯示。
 - **BotConfig 嵌入 ManagerConfig**：新增 Manager 設定只需改 `ManagerConfig` + `main.go` 兩處，不需逐欄位複製。
 - **Adapter 共用 botNotifier**：所有 heartbeat adapter 嵌入 `botNotifier`，Notify / IsSilent 不重複實作。
+- **CWD policy 在 Manager 層統一執行**：`/start`、`/cwd`、thread agents、cron temp agents 都必須走 `ValidateCWD`，不得在 handler 或 heartbeat 層自行繞過。
+- **ACP tool permission 預設由本地策略決定**：只有 `TRUST_ALL_TOOLS=true` 或 `TRUST_TOOLS` 命中才 approve；未授權 tool permission request 要 deny。
+- **Discord MCP 安全邊界**：MCP guild/channel allowlist 在 `cmd/mcp-discord` 內執行。新增 Discord REST tool 時必須先判斷它是 guild-scoped、channel-scoped 或 global，並套用對應 policy。
 
 ## Collaboration（協作方式）
 
@@ -67,6 +72,8 @@ heartbeat/       → background task loop
 ## NEVER
 
 - 在 `acp/` 以外直接 spawn 或管理 kiro-cli process
+- 在 Manager `ValidateCWD` 以外接受使用者提供的 agent cwd
+- 新增 Discord MCP channel/guild 操作但未檢查 allowlist
 - 忽略 Go error return（`err` 必須處理或顯式 `_ =` 標註理由）
 - 在 handler 層放業務邏輯（應透過 manager 操作）
 
@@ -76,6 +83,7 @@ heartbeat/       → background task loop
 - 改 acp/ 時確認 ACP 協議常數與 handshake 流程一致
 - 新增 Discord command 時同步更新 `buildSlashCommands()` 和 handler dispatch
 - 修改 struct 欄位時檢查所有 caller 是否同步更新
+- 修改 Docker runtime 或 deployment env 時同步檢查 README、`.env.example`、`docker-compose.yml`
 
 ## Completeness Checklist（改動完整性）
 
@@ -85,7 +93,9 @@ heartbeat/       → background task loop
 - [ ] README.md：英文段 + 中文段都更新（env 表格、Project Structure、Notes）
 - [ ] `.env.example`：新增 env var 時同步
 - [ ] `.kiro/steering/project.md`：架構圖或設計原則有變時同步
+- [ ] `INSTALL_MCP.md` + `.kiro/steering/discord-mcp.md`：Discord MCP 行為或安全邊界改變時同步
 - [ ] 新增 env var 路徑：`config.go` → `ManagerConfig`（或 `BotConfig`）→ `main.go` → README → `.env.example`
+- [ ] 新增 Discord MCP-only env var：`cmd/mcp-discord` → README → `.env.example` → `INSTALL_MCP.md`
 
 ## Verification（驗證閉環）
 

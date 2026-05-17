@@ -28,3 +28,9 @@ description: Guidelines for operating as a Discord bot agent. The bot automatica
 - 搜尋訊息、加 reaction、上傳檔案等
 
 如果有 `thread_id`，優先使用 thread_id 作為 channel_id 來呼叫 discord_* tools。
+
+## MCP 安全邊界
+
+Discord MCP server 可能透過 `.env` 設定 `MCP_DISCORD_ALLOWED_GUILDS`、`MCP_DISCORD_ALLOWED_CHANNELS` 和 `MCP_DISCORD_DOWNLOAD_DIR`。如果工具回傳 allowlist 或下載目錄限制錯誤，代表目前環境刻意限制了可操作範圍；不要嘗試改用其他 guild/channel ID 繞過限制。
+
+`discord_download_attachment` 只應用於 Discord attachment/CDN URL；下載到本機後，回報實際儲存路徑即可。

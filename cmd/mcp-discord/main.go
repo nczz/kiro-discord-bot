@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -19,6 +20,168 @@ import (
 )
 
 var dg *discordgo.Session
+var policy discordPolicy
+
+type discordPolicy struct {
+	allowedGuilds   map[string]struct{}
+	allowedChannels map[string]struct{}
+}
+
+func loadDiscordPolicy() discordPolicy {
+	return discordPolicy{
+		allowedGuilds:   parseIDSet(os.Getenv("MCP_DISCORD_ALLOWED_GUILDS")),
+		allowedChannels: parseIDSet(os.Getenv("MCP_DISCORD_ALLOWED_CHANNELS")),
+	}
+}
+
+func parseIDSet(raw string) map[string]struct{} {
+	out := make(map[string]struct{})
+	for _, part := range strings.Split(raw, ",") {
+		id := strings.TrimSpace(part)
+		if id == "" {
+			continue
+		}
+		out[id] = struct{}{}
+	}
+	return out
+}
+
+func (p discordPolicy) guildAllowed(guildID string) bool {
+	if len(p.allowedGuilds) == 0 {
+		return true
+	}
+	_, ok := p.allowedGuilds[guildID]
+	return ok
+}
+
+func (p discordPolicy) channelIDAllowed(channelID string) bool {
+	if len(p.allowedChannels) == 0 {
+		return true
+	}
+	_, ok := p.allowedChannels[channelID]
+	return ok
+}
+
+func ensureGuildAllowed(guildID string) error {
+	if policy.guildAllowed(guildID) {
+		return nil
+	}
+	return fmt.Errorf("guild %s is not allowed by MCP_DISCORD_ALLOWED_GUILDS", guildID)
+}
+
+func ensureChannelAllowed(channelID string) error {
+	if !policy.channelIDAllowed(channelID) {
+		return fmt.Errorf("channel %s is not allowed by MCP_DISCORD_ALLOWED_CHANNELS", channelID)
+	}
+	if len(policy.allowedGuilds) == 0 {
+		return nil
+	}
+	ch, err := dg.Channel(channelID)
+	if err != nil {
+		return fmt.Errorf("resolve channel guild: %w", err)
+	}
+	if ch.GuildID == "" {
+		return fmt.Errorf("channel %s has no guild_id and guild allowlist is enabled", channelID)
+	}
+	return ensureGuildAllowed(ch.GuildID)
+}
+
+func validateDiscordAttachmentURL(raw string) (*url.URL, error) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return nil, fmt.Errorf("invalid url: %w", err)
+	}
+	if u.Scheme != "https" {
+		return nil, fmt.Errorf("attachment url must use https")
+	}
+	switch strings.ToLower(u.Hostname()) {
+	case "cdn.discordapp.com", "media.discordapp.net", "attachments.discordapp.net":
+		return u, nil
+	default:
+		return nil, fmt.Errorf("attachment url host %q is not allowed", u.Hostname())
+	}
+}
+
+func resolveDownloadDir(requested string) (string, error) {
+	root := strings.TrimSpace(os.Getenv("MCP_DISCORD_DOWNLOAD_DIR"))
+	if root == "" {
+		return filepath.Abs(requested)
+	}
+	if requested == "" || requested == os.TempDir() {
+		requested = root
+	}
+	absRequested, err := filepath.Abs(requested)
+	if err != nil {
+		return "", err
+	}
+	policyRoot, err := canonicalPathForPolicy(root)
+	if err != nil {
+		return "", err
+	}
+	policyRequested, err := canonicalPathForPolicy(absRequested)
+	if err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(policyRoot, policyRequested)
+	if err != nil {
+		return "", err
+	}
+	if rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator))) {
+		return absRequested, nil
+	}
+	return "", fmt.Errorf("save_dir must be inside MCP_DISCORD_DOWNLOAD_DIR (%s)", policyRoot)
+}
+
+func canonicalPathForPolicy(path string) (string, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		return resolved, nil
+	}
+	parent := abs
+	var missing []string
+	for {
+		next := filepath.Dir(parent)
+		if next == parent {
+			return "", fmt.Errorf("no existing parent for %s", abs)
+		}
+		missing = append([]string{filepath.Base(parent)}, missing...)
+		parent = next
+		resolvedParent, err := filepath.EvalSymlinks(parent)
+		if err == nil {
+			parts := append([]string{resolvedParent}, missing...)
+			return filepath.Join(parts...), nil
+		}
+	}
+}
+
+func safeAttachmentFilename(raw string) string {
+	name := filepath.Base(raw)
+	if idx := strings.Index(name, "?"); idx > 0 {
+		name = name[:idx]
+	}
+	name = strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z':
+			return r
+		case r >= 'A' && r <= 'Z':
+			return r
+		case r >= '0' && r <= '9':
+			return r
+		case r == '.', r == '-', r == '_':
+			return r
+		default:
+			return '-'
+		}
+	}, name)
+	name = strings.Trim(name, ".-")
+	if name == "" {
+		return "attachment"
+	}
+	return name
+}
 
 func ensureDiscord() error {
 	if dg != nil {
@@ -33,6 +196,7 @@ func ensureDiscord() error {
 	if err != nil {
 		return err
 	}
+	policy = loadDiscordPolicy()
 	// Only REST API needed, no Gateway connection
 	return nil
 }
@@ -51,6 +215,9 @@ func main() {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			guildID, _ := req.RequireString("guild_id")
+			if err := ensureGuildAllowed(guildID); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
 			channels, err := dg.GuildChannels(guildID)
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
@@ -77,6 +244,9 @@ func main() {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			chID, _ := req.RequireString("channel_id")
+			if err := ensureChannelAllowed(chID); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
 			limit := int(req.GetFloat("limit", 20))
 			if limit > 100 {
 				limit = 100
@@ -106,6 +276,9 @@ func main() {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			chID, _ := req.RequireString("channel_id")
+			if err := ensureChannelAllowed(chID); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
 			content, _ := req.RequireString("content")
 			msg, err := dg.ChannelMessageSend(chID, content)
 			if err != nil {
@@ -128,6 +301,9 @@ func main() {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			chID, _ := req.RequireString("channel_id")
+			if err := ensureChannelAllowed(chID); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
 			msgID, _ := req.RequireString("message_id")
 			content, _ := req.RequireString("content")
 			msg, err := dg.ChannelMessageSendReply(chID, content, &discordgo.MessageReference{
@@ -153,6 +329,9 @@ func main() {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			chID, _ := req.RequireString("channel_id")
+			if err := ensureChannelAllowed(chID); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
 			msgID, _ := req.RequireString("message_id")
 			emoji, _ := req.RequireString("emoji")
 			if err := dg.MessageReactionAdd(chID, msgID, emoji); err != nil {
@@ -174,6 +353,9 @@ func main() {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			guildID, _ := req.RequireString("guild_id")
+			if err := ensureGuildAllowed(guildID); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
 			limit := int(req.GetFloat("limit", 50))
 			members, err := dg.GuildMembers(guildID, "", limit)
 			if err != nil {
@@ -208,6 +390,9 @@ func main() {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			chID, _ := req.RequireString("channel_id")
+			if err := ensureChannelAllowed(chID); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
 			query, _ := req.RequireString("query")
 			limit := int(req.GetFloat("limit", 50))
 			msgs, err := dg.ChannelMessages(chID, limit, "", "", "")
@@ -241,6 +426,9 @@ func main() {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			chID, _ := req.RequireString("channel_id")
+			if err := ensureChannelAllowed(chID); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
 			ch, err := dg.Channel(chID)
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
@@ -268,6 +456,9 @@ func main() {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			chID, _ := req.RequireString("channel_id")
+			if err := ensureChannelAllowed(chID); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
 			filePath, _ := req.RequireString("file_path")
 			content := req.GetString("content", "")
 
@@ -315,6 +506,9 @@ func main() {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			chID, _ := req.RequireString("channel_id")
+			if err := ensureChannelAllowed(chID); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
 			limit := int(req.GetFloat("limit", 50))
 			if limit > 100 {
 				limit = 100
@@ -352,6 +546,14 @@ func main() {
 			}
 			url, _ := req.RequireString("url")
 			saveDir := req.GetString("save_dir", os.TempDir())
+			parsedURL, err := validateDiscordAttachmentURL(url)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			saveDir, err = resolveDownloadDir(saveDir)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
 
 			if err := os.MkdirAll(saveDir, 0755); err != nil {
 				return mcp.NewToolResultError(fmt.Sprintf("create dir: %v", err)), nil
@@ -366,11 +568,7 @@ func main() {
 				return mcp.NewToolResultError(fmt.Sprintf("download: HTTP %d", resp.StatusCode)), nil
 			}
 
-			// Extract filename from URL path
-			name := filepath.Base(url)
-			if idx := strings.Index(name, "?"); idx > 0 {
-				name = name[:idx]
-			}
+			name := safeAttachmentFilename(parsedURL.Path)
 			ts := time.Now().Format("20060102-150405")
 			dst := filepath.Join(saveDir, ts+"-"+name)
 
@@ -401,6 +599,9 @@ func main() {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			chID, _ := req.RequireString("channel_id")
+			if err := ensureChannelAllowed(chID); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
 			msgID, _ := req.RequireString("message_id")
 			content, _ := req.RequireString("content")
 			_, err := dg.ChannelMessageEdit(chID, msgID, content)
@@ -423,6 +624,9 @@ func main() {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			chID, _ := req.RequireString("channel_id")
+			if err := ensureChannelAllowed(chID); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
 			msgID, _ := req.RequireString("message_id")
 			if err := dg.ChannelMessageDelete(chID, msgID); err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
@@ -443,6 +647,9 @@ func main() {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			chID, _ := req.RequireString("channel_id")
+			if err := ensureChannelAllowed(chID); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
 			msgID, _ := req.RequireString("message_id")
 			m, err := dg.ChannelMessage(chID, msgID)
 			if err != nil {
@@ -478,6 +685,9 @@ func main() {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			chID, _ := req.RequireString("channel_id")
+			if err := ensureChannelAllowed(chID); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
 			title, _ := req.RequireString("title")
 			embed := &discordgo.MessageEmbed{
 				Title:       title,
@@ -521,6 +731,9 @@ func main() {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			chID, _ := req.RequireString("channel_id")
+			if err := ensureChannelAllowed(chID); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
 			msgID, _ := req.RequireString("message_id")
 			unpin := req.GetBool("unpin", false)
 			if unpin {
@@ -550,6 +763,9 @@ func main() {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			chID, _ := req.RequireString("channel_id")
+			if err := ensureChannelAllowed(chID); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
 			msgID, _ := req.RequireString("message_id")
 			name, _ := req.RequireString("name")
 			dur := int(req.GetFloat("auto_archive_duration", 1440))
@@ -572,6 +788,9 @@ func main() {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			guildID, _ := req.RequireString("guild_id")
+			if err := ensureGuildAllowed(guildID); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
 			tl, err := dg.GuildThreadsActive(guildID)
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
@@ -601,6 +820,9 @@ func main() {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			chID, _ := req.RequireString("channel_id")
+			if err := ensureChannelAllowed(chID); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
 			msgID, _ := req.RequireString("message_id")
 			emoji, _ := req.RequireString("emoji")
 			userID := req.GetString("user_id", "@me")
@@ -625,6 +847,9 @@ func main() {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			chID, _ := req.RequireString("channel_id")
+			if err := ensureChannelAllowed(chID); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
 			msgID, _ := req.RequireString("message_id")
 			emoji, _ := req.RequireString("emoji")
 			limit := int(req.GetFloat("limit", 25))
@@ -655,6 +880,9 @@ func main() {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			chID, _ := req.RequireString("channel_id")
+			if err := ensureChannelAllowed(chID); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
 			topic, _ := req.RequireString("topic")
 			_, err := dg.ChannelEdit(chID, &discordgo.ChannelEdit{Topic: topic})
 			if err != nil {
@@ -675,6 +903,9 @@ func main() {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			guildID, _ := req.RequireString("guild_id")
+			if err := ensureGuildAllowed(guildID); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
 			roles, err := dg.GuildRoles(guildID)
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
