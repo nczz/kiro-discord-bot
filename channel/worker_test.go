@@ -1,8 +1,12 @@
 package channel
 
 import (
+	"context"
 	"strings"
+	"sync"
 	"testing"
+
+	"github.com/nczz/kiro-discord-bot/acp"
 )
 
 func TestCodeBlockState(t *testing.T) {
@@ -79,5 +83,79 @@ func TestSplitMessage_NoCodeBlock(t *testing.T) {
 		if strings.Contains(p, "```") {
 			t.Errorf("part[%d] should not contain ```: %q", i, p[:50])
 		}
+	}
+}
+
+type fakeWorkerAgent struct {
+	mu          sync.Mutex
+	cancelCalls int
+}
+
+func (f *fakeWorkerAgent) Ask(context.Context, string, func(string)) (string, error) {
+	return "", nil
+}
+
+func (f *fakeWorkerAgent) AskAsync(string, acp.AsyncCallbacks) {}
+
+func (f *fakeWorkerAgent) CancelPrompt() {
+	f.mu.Lock()
+	f.cancelCalls++
+	f.mu.Unlock()
+}
+
+func (f *fakeWorkerAgent) ContextUsage() float64 { return 0 }
+
+func (f *fakeWorkerAgent) OnReadErrorFunc(func(error)) {}
+
+func (f *fakeWorkerAgent) RecentStderr() string { return "" }
+
+func (f *fakeWorkerAgent) CancelCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.cancelCalls
+}
+
+func TestWorkerCancelCurrentCancelsWithoutSignalingIdle(t *testing.T) {
+	agent := &fakeWorkerAgent{}
+	w := newWorker("ch1", agent, 1, 30, 1, 1440, nil, "")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	w.cancelMu.Lock()
+	w.cancelFn = cancel
+	w.cancelMu.Unlock()
+
+	w.CancelCurrent()
+
+	if err := ctx.Err(); err != context.Canceled {
+		t.Fatalf("ctx err = %v, want context.Canceled", err)
+	}
+	if got := agent.CancelCalls(); got != 1 {
+		t.Fatalf("cancel calls = %d, want 1", got)
+	}
+	select {
+	case <-w.idleCh:
+		t.Fatal("CancelCurrent must not signal idle before OnComplete")
+	default:
+	}
+}
+
+func TestWorkerCancelCurrentNoActiveJob(t *testing.T) {
+	agent := &fakeWorkerAgent{}
+	w := newWorker("ch1", agent, 1, 30, 1, 1440, nil, "")
+
+	w.CancelCurrent()
+
+	if got := agent.CancelCalls(); got != 0 {
+		t.Fatalf("cancel calls = %d, want 0", got)
+	}
+}
+
+func TestWorkerEnqueueFull(t *testing.T) {
+	w := newWorker("ch1", &fakeWorkerAgent{}, 1, 30, 1, 1440, nil, "")
+	if err := w.Enqueue(&Job{MessageID: "m1"}); err != nil {
+		t.Fatalf("first enqueue: %v", err)
+	}
+	if err := w.Enqueue(&Job{MessageID: "m2"}); err == nil {
+		t.Fatal("second enqueue should fail when buffer is full")
 	}
 }

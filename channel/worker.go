@@ -33,7 +33,7 @@ type Job struct {
 // Worker manages a per-channel job queue and executes jobs sequentially.
 type Worker struct {
 	channelID       string
-	agent           *acp.Agent
+	agent           workerAgent
 	queue           chan *Job
 	askTimeoutSec   int
 	streamUpdateSec int
@@ -60,7 +60,20 @@ type Worker struct {
 	historyPrefix string // prepended to first job's prompt, then cleared
 }
 
+type workerAgent interface {
+	Ask(context.Context, string, func(string)) (string, error)
+	AskAsync(string, acp.AsyncCallbacks)
+	CancelPrompt()
+	ContextUsage() float64
+	OnReadErrorFunc(func(error))
+	RecentStderr() string
+}
+
 func NewWorker(channelID string, agent *acp.Agent, bufSize, askTimeoutSec, streamUpdateSec, threadArchive int, logger *ChatLogger, model string) *Worker {
+	return newWorker(channelID, agent, bufSize, askTimeoutSec, streamUpdateSec, threadArchive, logger, model)
+}
+
+func newWorker(channelID string, agent workerAgent, bufSize, askTimeoutSec, streamUpdateSec, threadArchive int, logger *ChatLogger, model string) *Worker {
 	return &Worker{
 		channelID:       channelID,
 		agent:           agent,
