@@ -258,6 +258,20 @@ export $(grep -v '^#' .env | xargs)
 docker compose up -d --build
 ```
 
+Run the release preflight before restarting an existing service:
+
+```bash
+scripts/release-preflight.sh
+```
+
+For a local authenticated ACP smoke test:
+
+```bash
+RUN_ACP_SMOKE=1 KIRO_CLI=/Users/chun/.local/bin/kiro-cli scripts/release-preflight.sh
+```
+
+See `docs/release.md` for the full release and deployment checklist.
+
 `docker-compose.yml` uses `network_mode: host` and mounts `~/.kiro` so the bot inherits your kiro login and MCP settings.
 The runtime image installs `kiro-cli` during build and defaults `KIRO_CLI_PATH` to `/root/.local/bin/kiro-cli`. For offline or pinned deployments, build your own runtime image with the desired `kiro-cli` version and keep `KIRO_CLI_PATH` aligned.
 
@@ -728,6 +742,20 @@ sudo systemctl enable --now kiro-discord-bot
 export $(grep -v '^#' .env | xargs)
 ./kiro-discord-bot
 ```
+
+既有服務重啟前，先跑 release preflight：
+
+```bash
+scripts/release-preflight.sh
+```
+
+若要包含本機已登入的 ACP smoke test：
+
+```bash
+RUN_ACP_SMOKE=1 KIRO_CLI=/Users/chun/.local/bin/kiro-cli scripts/release-preflight.sh
+```
+
+完整升版與部署檢查表見 `docs/release.md`。
 
 ### 指令說明
 

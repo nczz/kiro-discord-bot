@@ -11,6 +11,8 @@ description: Use for ANY code change, build, debug, or architecture question in 
 - Build MCP server: `go build -o mcp-discord-server ./cmd/mcp-discord/`
 - Test: `go test ./...`
 - Single package test: `go test ./acp/`
+- Release preflight: `scripts/release-preflight.sh`
+- Local ACP smoke: `RUN_ACP_SMOKE=1 KIRO_CLI=/Users/chun/.local/bin/kiro-cli scripts/release-preflight.sh`
 - Run: `systemctl start kiro-discord-bot` (systemd, recommended) or `export $(grep -v '^#' .env | xargs) && ./kiro-discord-bot` (manual)
 - Config: bot settings from `.env`, see `config.go` `loadConfig()`; Discord MCP-only settings are read in `cmd/mcp-discord/`
 - Diagnostics: `/doctor` or `!doctor` checks `kiro-cli`, default cwd, cwd allowlist, data dir writeability, and ACP preflight
@@ -47,6 +49,8 @@ heartbeat/       → background task loop
   thread_cleanup.go → idle thread agent eviction
   channel_cleanup.go → idle channel agent eviction
 cmd/mcp-discord/ → optional Discord MCP server, REST tools + guild/channel allowlists
+scripts/         → repeatable local release/preflight checks
+docs/release.md  → release and deployment safety checklist
 ```
 
 - handler 只做路由和轉發，業務邏輯在 channel/manager
@@ -61,6 +65,7 @@ cmd/mcp-discord/ → optional Discord MCP server, REST tools + guild/channel all
 - **CWD policy 在 Manager 層統一執行**：`/start`、`/cwd`、thread agents、cron temp agents 都必須走 `ValidateCWD`，不得在 handler 或 heartbeat 層自行繞過。
 - **ACP tool permission 預設由本地策略決定**：只有 `TRUST_ALL_TOOLS=true` 或 `TRUST_TOOLS` 命中才 approve；未授權 tool permission request 要 deny。
 - **Discord MCP 安全邊界**：MCP guild/channel allowlist 在 `cmd/mcp-discord` 內執行。新增 Discord REST tool 時必須先判斷它是 guild-scoped、channel-scoped 或 global，並套用對應 policy。
+- **Release preflight 不碰 runtime state**：preflight script 只能 build/test/check artifacts，不得停止/啟動 bot、修改 `DATA_DIR`、刪除 Docker volumes、改寫 `.env` 或觸發 Discord side effects。
 
 ## Collaboration（協作方式）
 
@@ -84,6 +89,7 @@ cmd/mcp-discord/ → optional Discord MCP server, REST tools + guild/channel all
 - 新增 Discord command 時同步更新 `buildSlashCommands()` 和 handler dispatch
 - 修改 struct 欄位時檢查所有 caller 是否同步更新
 - 修改 Docker runtime 或 deployment env 時同步檢查 README、`.env.example`、`docker-compose.yml`
+- 發布或部署前跑 `scripts/release-preflight.sh`；需要真實 ACP 才加 `RUN_ACP_SMOKE=1 KIRO_CLI=...`
 
 ## Completeness Checklist（改動完整性）
 
@@ -94,6 +100,7 @@ cmd/mcp-discord/ → optional Discord MCP server, REST tools + guild/channel all
 - [ ] `.env.example`：新增 env var 時同步
 - [ ] `.kiro/steering/project.md`：架構圖或設計原則有變時同步
 - [ ] `INSTALL_MCP.md` + `.kiro/steering/discord-mcp.md`：Discord MCP 行為或安全邊界改變時同步
+- [ ] `docs/release.md` + `scripts/release-preflight.sh`：發布門檻或部署流程改變時同步
 - [ ] 新增 env var 路徑：`config.go` → `ManagerConfig`（或 `BotConfig`）→ `main.go` → README → `.env.example`
 - [ ] 新增 Discord MCP-only env var：`cmd/mcp-discord` → README → `.env.example` → `INSTALL_MCP.md`
 
