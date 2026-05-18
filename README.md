@@ -147,6 +147,7 @@ TRUST_ALL_TOOLS=true
 TRUST_TOOLS=
 PREFLIGHT_MODE=warn
 SKIP_PREFLIGHT=
+BOT_PEERS=
 
 # Discord MCP safety scope (empty allowlists = unrestricted)
 MCP_DISCORD_ALLOWED_GUILDS=
@@ -193,6 +194,7 @@ STT_MAX_DURATION_SEC=300
 | `TRUST_TOOLS` | Trust only specific tools (comma-separated names). Overrides `TRUST_ALL_TOOLS` when set | `` |
 | `PREFLIGHT_MODE` | Startup ACP check behavior: `warn`, `strict`, or `skip` | `warn` |
 | `SKIP_PREFLIGHT` | Legacy override; any non-empty value skips startup preflight | `` |
+| `BOT_PEERS` | Peer bot mention mapping for handoffs, e.g. `M5Bot:1505737846013558834,ChunBot:1495737209616072815` | `` |
 | `MCP_DISCORD_ALLOWED_GUILDS` | Comma-separated guild IDs the Discord MCP server may access (empty = unrestricted) | `` |
 | `MCP_DISCORD_ALLOWED_CHANNELS` | Comma-separated channel/thread IDs the Discord MCP server may access (empty = unrestricted) | `` |
 | `MCP_DISCORD_DOWNLOAD_DIR` | Restrict `discord_download_attachment` writes to this directory (empty = caller-selected directory) | `` |

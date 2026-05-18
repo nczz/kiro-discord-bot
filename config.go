@@ -32,6 +32,7 @@ type Config struct {
 	TrustAllTools       bool
 	TrustTools          string
 	PreflightMode       string
+	BotPeers            string
 	STTEnabled          bool
 	STTProvider         string
 	STTAPIKey           string
@@ -67,6 +68,7 @@ func loadConfig() *Config {
 		TrustAllTools:       envOr("TRUST_ALL_TOOLS", "true") == "true",
 		TrustTools:          envOr("TRUST_TOOLS", ""),
 		PreflightMode:       envOr("PREFLIGHT_MODE", "warn"),
+		BotPeers:            envOr("BOT_PEERS", ""),
 		STTEnabled:          envOr("STT_ENABLED", "false") == "true",
 		STTProvider:         envOr("STT_PROVIDER", "groq"),
 		STTAPIKey:           envOr("STT_API_KEY", ""),

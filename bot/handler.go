@@ -67,17 +67,33 @@ func messageHasReaction(m *discordgo.Message, emoji string) bool {
 	return false
 }
 
+func messageReactionState(m *discordgo.Message) string {
+	switch {
+	case messageHasReaction(m, "✅"):
+		return "done"
+	case messageHasReaction(m, "🔄"), messageHasReaction(m, "⏳"):
+		return "running"
+	case messageHasReaction(m, "❌"), messageHasReaction(m, "⚠️"):
+		return "failed"
+	default:
+		return "unknown"
+	}
+}
+
 func (b *Bot) shouldAcceptBotResultMention(ds *discordgo.Session, m *discordgo.MessageCreate, content, selfID, parentChannelID string) bool {
 	if m.Author == nil || !m.Author.Bot || m.Author.ID == selfID {
 		return false
 	}
 	if !isSelfMentioned(content, selfID) {
+		log.Printf("[bot-gate] ignored bot msg reason=no_mention source=%s channel=%s msg=%s", m.Author.ID, m.ChannelID, m.ID)
 		return false
 	}
 	if parentChannelID == "" {
+		log.Printf("[bot-gate] ignored bot mention reason=not_thread source=%s channel=%s msg=%s", m.Author.ID, m.ChannelID, m.ID)
 		return false
 	}
 	if isBotGeneratedNonResult(stripSelfMentions(content, selfID)) {
+		log.Printf("[bot-gate] ignored bot mention reason=non_result source=%s thread=%s msg=%s", m.Author.ID, m.ChannelID, m.ID)
 		return false
 	}
 
@@ -86,7 +102,16 @@ func (b *Bot) shouldAcceptBotResultMention(ds *discordgo.Session, m *discordgo.M
 		log.Printf("[handler] ignore bot mention: fetch thread origin channel=%s msg=%s: %v", parentChannelID, m.ChannelID, err)
 		return false
 	}
-	return messageHasReaction(origin, "✅")
+	switch state := messageReactionState(origin); state {
+	case "done":
+		log.Printf("[bot-gate] accepted bot result mention source=%s thread=%s msg=%s origin=%s", m.Author.ID, m.ChannelID, m.ID, origin.ID)
+		return true
+	case "running", "failed":
+		log.Printf("[bot-gate] ignored bot mention reason=origin_%s source=%s thread=%s msg=%s origin=%s", state, m.Author.ID, m.ChannelID, m.ID, origin.ID)
+	default:
+		log.Printf("[bot-gate] ignored bot mention reason=origin_not_done source=%s thread=%s msg=%s origin=%s", m.Author.ID, m.ChannelID, m.ID, origin.ID)
+	}
+	return false
 }
 
 // threadParentCache caches thread→parent channel mappings to avoid repeated API calls.
@@ -350,17 +375,21 @@ func safeAttachmentFilename(name string) string {
 }
 
 // buildPrompt combines user text with attachment paths into an effective prompt.
-func buildPrompt(text string, attachments []string, channelID, guildID, username string) string {
-	return buildPromptThread(text, attachments, channelID, "", guildID, username)
+func buildPrompt(text string, attachments []string, channelID, guildID, username, peerContext string) string {
+	return buildPromptThread(text, attachments, channelID, "", guildID, username, peerContext)
 }
 
-func buildPromptThread(text string, attachments []string, channelID, threadID, guildID, username string) string {
+func buildPromptThread(text string, attachments []string, channelID, threadID, guildID, username, peerContext string) string {
 	var sb strings.Builder
 	sb.WriteString("[Discord bot environment] Your responses are automatically forwarded to a Discord thread. Each message is split at 2000 chars. Tool execution details are also shown.\n")
 	if threadID != "" {
 		sb.WriteString(fmt.Sprintf("[Discord context] channel_id=%s thread_id=%s guild_id=%s user=%s\n\n", channelID, threadID, guildID, username))
 	} else {
 		sb.WriteString(fmt.Sprintf("[Discord context] channel_id=%s guild_id=%s user=%s\n\n", channelID, guildID, username))
+	}
+	if peerContext != "" {
+		sb.WriteString(peerContext)
+		sb.WriteString("\n")
 	}
 	if len(attachments) > 0 {
 		sb.WriteString("[Attached files]\n")
@@ -491,7 +520,7 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 			localPaths = rest
 		}
 
-		prompt := buildPrompt(content, localPaths, m.ChannelID, m.GuildID, m.Author.Username)
+		prompt := buildPrompt(content, localPaths, m.ChannelID, m.GuildID, m.Author.Username, b.peerPromptContext())
 
 		job := &channel.Job{
 			ChannelID:   m.ChannelID,
@@ -593,7 +622,7 @@ func (b *Bot) handleThreadMessage(ds *discordgo.Session, m *discordgo.MessageCre
 		localPaths = rest
 	}
 
-	prompt := buildPromptThread(content, localPaths, parentChannelID, threadID, m.GuildID, m.Author.Username)
+	prompt := buildPromptThread(content, localPaths, parentChannelID, threadID, m.GuildID, m.Author.Username, b.peerPromptContext())
 
 	job := &channel.Job{
 		ChannelID:   threadID,

@@ -28,6 +28,7 @@ type Bot struct {
 	seen               *seenMessages
 	sttClient          *stt.Client
 	sttMaxDuration     int
+	peers              []BotPeer
 	cronPromptCache    cronPromptStore // parsed cron jobs awaiting button confirmation
 }
 
@@ -56,6 +57,7 @@ type BotConfig struct {
 	STTModel           string
 	STTLanguage        string
 	STTMaxDurationSec  int
+	BotPeers           string
 }
 
 func NewFromConfig(cfg BotConfig) (*Bot, error) {
@@ -78,6 +80,7 @@ func NewFromConfig(cfg BotConfig) (*Bot, error) {
 		attachmentMaxBytes: cfg.AttachmentMaxBytes,
 		seen:               newSeenMessages(),
 		sttMaxDuration:     cfg.STTMaxDurationSec,
+		peers:              parseBotPeers(cfg.BotPeers),
 	}
 	if cfg.STTEnabled && cfg.STTAPIKey != "" {
 		b.sttClient = stt.New(cfg.STTProvider, cfg.STTAPIKey, cfg.STTModel, cfg.STTLanguage)

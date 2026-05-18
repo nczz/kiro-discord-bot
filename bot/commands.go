@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bwmarrin/discordgo"
 	L "github.com/nczz/kiro-discord-bot/locale"
 )
 
@@ -77,10 +78,10 @@ func (b *Bot) cmdResume(ctx cmdCtx) {
 func (b *Bot) cmdDoctor(ctx cmdCtx) {
 	runCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	replyLong(ctx.reply, b.doctor(runCtx))
+	replyLong(ctx.reply, b.doctor(runCtx, ctx.channelID, ctx.targetID))
 }
 
-func (b *Bot) doctor(ctx context.Context) string {
+func (b *Bot) doctor(ctx context.Context, channelID, targetID string) string {
 	var sb strings.Builder
 	sb.WriteString(b.manager.Doctor(ctx))
 
@@ -113,6 +114,9 @@ func (b *Bot) doctor(ctx context.Context) string {
 		}
 	}
 
+	sb.WriteString(b.doctorDiscordPermissions(channelID, targetID))
+	sb.WriteString(b.doctorBotPeers())
+
 	sb.WriteString("\n**Discord MCP**\n")
 	sb.WriteString(doctorEnvLine("guild allowlist", "MCP_DISCORD_ALLOWED_GUILDS", "not configured"))
 	sb.WriteString(doctorEnvLine("channel allowlist", "MCP_DISCORD_ALLOWED_CHANNELS", "not configured"))
@@ -121,6 +125,74 @@ func (b *Bot) doctor(ctx context.Context) string {
 	sb.WriteString(doctorEnvLine("write tools", "MCP_DISCORD_ALLOWED_WRITE_TOOLS", "unrestricted"))
 	sb.WriteString(doctorEnvLine("destructive writes", "MCP_DISCORD_ALLOW_DESTRUCTIVE", "true"))
 
+	return sb.String()
+}
+
+func (b *Bot) doctorDiscordPermissions(channelID, targetID string) string {
+	var sb strings.Builder
+	if b.discord == nil || b.discord.State == nil || b.discord.State.User == nil {
+		return ""
+	}
+	selfID := b.discord.State.User.ID
+	if targetID == "" {
+		targetID = channelID
+	}
+	if targetID != "" {
+		sb.WriteString("\n**Discord permissions**\n")
+		sb.WriteString(b.doctorPermissionSet("current target", selfID, targetID, []permissionCheck{
+			{name: "view channel", bit: discordgo.PermissionViewChannel},
+			{name: "send messages", bit: discordgo.PermissionSendMessages},
+			{name: "read history", bit: discordgo.PermissionReadMessageHistory},
+			{name: "send in threads", bit: discordgo.PermissionSendMessagesInThreads},
+		}))
+	}
+	if channelID != "" && channelID != targetID {
+		sb.WriteString(b.doctorPermissionSet("parent channel", selfID, channelID, []permissionCheck{
+			{name: "view channel", bit: discordgo.PermissionViewChannel},
+			{name: "send messages", bit: discordgo.PermissionSendMessages},
+			{name: "read history", bit: discordgo.PermissionReadMessageHistory},
+			{name: "create public threads", bit: discordgo.PermissionCreatePublicThreads},
+		}))
+	} else if channelID != "" {
+		sb.WriteString(b.doctorPermissionSet("thread creation", selfID, channelID, []permissionCheck{
+			{name: "create public threads", bit: discordgo.PermissionCreatePublicThreads},
+		}))
+	}
+	return sb.String()
+}
+
+type permissionCheck struct {
+	name string
+	bit  int64
+}
+
+func (b *Bot) doctorPermissionSet(label, userID, channelID string, checks []permissionCheck) string {
+	perms, err := b.discord.UserChannelPermissions(userID, channelID)
+	if err != nil {
+		return "❌ " + label + " permissions `" + channelID + "`: " + err.Error() + "\n"
+	}
+	var missing []string
+	for _, check := range checks {
+		if perms&check.bit == 0 {
+			missing = append(missing, check.name)
+		}
+	}
+	if len(missing) > 0 {
+		return "❌ " + label + " permissions `" + channelID + "` missing: " + strings.Join(missing, ", ") + "\n"
+	}
+	return "✅ " + label + " permissions `" + channelID + "`: ok\n"
+}
+
+func (b *Bot) doctorBotPeers() string {
+	var sb strings.Builder
+	sb.WriteString("\n**Bot peers**\n")
+	if len(b.peers) == 0 {
+		sb.WriteString("⚠️ BOT_PEERS: not configured\n")
+		return sb.String()
+	}
+	for _, p := range b.peers {
+		sb.WriteString("✅ " + p.Name + ": `" + p.Mention() + "` (`" + p.ID + "`)\n")
+	}
 	return sb.String()
 }
 

@@ -70,6 +70,7 @@ func main() {
 		AttachmentMaxBytes: cfg.AttachmentMaxBytes,
 		CronTimezone:       cfg.CronTimezone,
 		DownloadTimeoutSec: cfg.DownloadTimeoutSec,
+		BotPeers:           cfg.BotPeers,
 		STTEnabled:         cfg.STTEnabled,
 		STTProvider:        cfg.STTProvider,
 		STTAPIKey:          cfg.STTAPIKey,

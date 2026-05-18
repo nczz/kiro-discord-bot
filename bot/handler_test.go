@@ -84,4 +84,7 @@ func TestMessageHasReaction(t *testing.T) {
 	if messageHasReaction(msg, "🔄") {
 		t.Fatal("did not expect processing reaction to match")
 	}
+	if got := messageReactionState(msg); got != "done" {
+		t.Fatalf("messageReactionState() = %q, want done", got)
+	}
 }
