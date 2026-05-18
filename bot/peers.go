@@ -32,18 +32,36 @@ func (p BotPeer) Mention() string {
 	return "<@" + p.ID + ">"
 }
 
-func (b *Bot) peerPromptContext() string {
+func (b *Bot) multiBotMode(selfID string) bool {
+	for _, p := range b.peers {
+		if p.ID != "" && p.ID != selfID {
+			return true
+		}
+	}
+	return false
+}
+
+func (b *Bot) peerPromptContext(selfID string) string {
 	if len(b.peers) == 0 {
 		return ""
 	}
 	var sb strings.Builder
 	sb.WriteString("[Discord bot peers]\n")
+	var hasHandoffPeer bool
 	for _, p := range b.peers {
-		sb.WriteString(fmt.Sprintf("- %s id=%s mention=%s\n", p.Name, p.ID, p.Mention()))
+		if p.ID == selfID {
+			sb.WriteString(fmt.Sprintf("- self=%s id=%s mention=%s\n", p.Name, p.ID, p.Mention()))
+			continue
+		}
+		hasHandoffPeer = true
+		sb.WriteString(fmt.Sprintf("- handoff_peer=%s id=%s mention=%s\n", p.Name, p.ID, p.Mention()))
 	}
 	sb.WriteString("[Discord bot handoff rules]\n")
-	sb.WriteString("- Use the peer mention token exactly when explicitly asked to hand off, review, compare, or collaborate with another bot.\n")
-	sb.WriteString("- Put peer bot mentions only in final result messages, after your own work is complete.\n")
+	if hasHandoffPeer {
+		sb.WriteString("- Use handoff_peer mention tokens exactly when explicitly asked to hand off, review, compare, or collaborate with another bot.\n")
+		sb.WriteString("- Put handoff_peer mentions only in final result messages, after your own work is complete.\n")
+	}
+	sb.WriteString("- Never mention yourself for handoff.\n")
 	sb.WriteString("- Do not mention another bot in progress updates, errors, tool output summaries, or casual replies.\n")
 	return sb.String()
 }

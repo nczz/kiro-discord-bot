@@ -435,8 +435,13 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 		return
 	}
 
-	// In pause mode, only respond to commands or mentions
-	if b.manager.IsPaused(m.ChannelID) && !isCommand && !isMentioned {
+	if !m.Author.Bot && b.multiBotMode(selfID) && !isCommand && !isMentioned {
+		log.Printf("[handler] ignored human msg reason=multi_bot_mention_only channel=%s thread=%t msg=%s", m.ChannelID, parentChannelID != "", m.ID)
+		return
+	}
+
+	// In pause mode, only respond to commands or mentions.
+	if !m.Author.Bot && b.manager.IsPaused(m.ChannelID) && !isCommand && !isMentioned {
 		return
 	}
 
@@ -520,7 +525,7 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 			localPaths = rest
 		}
 
-		prompt := buildPrompt(content, localPaths, m.ChannelID, m.GuildID, m.Author.Username, b.peerPromptContext())
+		prompt := buildPrompt(content, localPaths, m.ChannelID, m.GuildID, m.Author.Username, b.peerPromptContext(selfID))
 
 		job := &channel.Job{
 			ChannelID:   m.ChannelID,
@@ -622,7 +627,11 @@ func (b *Bot) handleThreadMessage(ds *discordgo.Session, m *discordgo.MessageCre
 		localPaths = rest
 	}
 
-	prompt := buildPromptThread(content, localPaths, parentChannelID, threadID, m.GuildID, m.Author.Username, b.peerPromptContext())
+	selfID := ""
+	if ds.State != nil && ds.State.User != nil {
+		selfID = ds.State.User.ID
+	}
+	prompt := buildPromptThread(content, localPaths, parentChannelID, threadID, m.GuildID, m.Author.Username, b.peerPromptContext(selfID))
 
 	job := &channel.Job{
 		ChannelID:   threadID,

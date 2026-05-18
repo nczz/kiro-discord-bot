@@ -188,10 +188,20 @@ func (b *Bot) doctorBotPeers() string {
 	sb.WriteString("\n**Bot peers**\n")
 	if len(b.peers) == 0 {
 		sb.WriteString("⚠️ BOT_PEERS: not configured\n")
+		sb.WriteString("✅ channel mode: open\n")
 		return sb.String()
+	}
+	selfID := ""
+	if b.discord != nil && b.discord.State != nil && b.discord.State.User != nil {
+		selfID = b.discord.State.User.ID
 	}
 	for _, p := range b.peers {
 		sb.WriteString("✅ " + p.Name + ": `" + p.Mention() + "` (`" + p.ID + "`)\n")
+	}
+	if b.multiBotMode(selfID) {
+		sb.WriteString("✅ channel/thread mode: mention-only (multi-bot)\n")
+	} else {
+		sb.WriteString("✅ channel/thread mode: open\n")
 	}
 	return sb.String()
 }
