@@ -24,10 +24,69 @@ func shouldIgnoreMessage(m *discordgo.MessageCreate, selfID string) bool {
 	if m == nil || m.Message == nil || m.Author == nil {
 		return true
 	}
-	if m.Author.Bot {
+	return m.Author.ID == selfID
+}
+
+func isSelfMentioned(content, selfID string) bool {
+	return strings.Contains(content, "<@"+selfID+">") || strings.Contains(content, "<@!"+selfID+">")
+}
+
+func stripSelfMentions(content, selfID string) string {
+	content = strings.ReplaceAll(content, "<@"+selfID+">", "")
+	content = strings.ReplaceAll(content, "<@!"+selfID+">", "")
+	return strings.TrimSpace(content)
+}
+
+func isBotGeneratedNonResult(content string) bool {
+	content = strings.TrimSpace(strings.ReplaceAll(content, "\u200b", ""))
+	if content == "" {
 		return true
 	}
-	return m.Author.ID == selfID
+	lower := strings.ToLower(content)
+	nonResultPrefixes := []string{
+		"🔄", "⏳", "❌", "⚠️", "💭",
+		"processing", "bot running", "thread queue full", "transport closed",
+	}
+	for _, prefix := range nonResultPrefixes {
+		if strings.HasPrefix(lower, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func messageHasReaction(m *discordgo.Message, emoji string) bool {
+	if m == nil {
+		return false
+	}
+	for _, r := range m.Reactions {
+		if r != nil && r.Count > 0 && r.Emoji != nil && r.Emoji.Name == emoji {
+			return true
+		}
+	}
+	return false
+}
+
+func (b *Bot) shouldAcceptBotResultMention(ds *discordgo.Session, m *discordgo.MessageCreate, content, selfID, parentChannelID string) bool {
+	if m.Author == nil || !m.Author.Bot || m.Author.ID == selfID {
+		return false
+	}
+	if !isSelfMentioned(content, selfID) {
+		return false
+	}
+	if parentChannelID == "" {
+		return false
+	}
+	if isBotGeneratedNonResult(stripSelfMentions(content, selfID)) {
+		return false
+	}
+
+	origin, err := ds.ChannelMessage(parentChannelID, m.ChannelID)
+	if err != nil {
+		log.Printf("[handler] ignore bot mention: fetch thread origin channel=%s msg=%s: %v", parentChannelID, m.ChannelID, err)
+		return false
+	}
+	return messageHasReaction(origin, "✅")
 }
 
 // threadParentCache caches thread→parent channel mappings to avoid repeated API calls.
@@ -323,8 +382,8 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 	if !b.isMyGuild(m.GuildID) {
 		return
 	}
-	// Ignore bot messages, including other deployed instances, to avoid loops.
-	if shouldIgnoreMessage(m, ds.State.User.ID) {
+	selfID := ds.State.User.ID
+	if shouldIgnoreMessage(m, selfID) {
 		return
 	}
 
@@ -339,9 +398,13 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 		return
 	}
 
-	botMention := "<@" + ds.State.User.ID + ">"
-	isMentioned := strings.Contains(content, botMention)
+	isMentioned := isSelfMentioned(content, selfID)
 	isCommand := strings.HasPrefix(content, "!")
+
+	parentChannelID := resolveThreadParent(ds, m.ChannelID)
+	if m.Author.Bot && !b.shouldAcceptBotResultMention(ds, m, content, selfID, parentChannelID) {
+		return
+	}
 
 	// In pause mode, only respond to commands or mentions
 	if b.manager.IsPaused(m.ChannelID) && !isCommand && !isMentioned {
@@ -350,11 +413,10 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 
 	// Strip mention prefix if present
 	if isMentioned {
-		content = strings.TrimSpace(strings.ReplaceAll(content, botMention, ""))
+		content = stripSelfMentions(content, selfID)
 	}
 
 	// Check if message is from a thread — route to thread agent
-	parentChannelID := resolveThreadParent(ds, m.ChannelID)
 	if parentChannelID != "" {
 		b.handleThreadMessage(ds, m, content, parentChannelID)
 		return
