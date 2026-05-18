@@ -2,10 +2,12 @@ package channel
 
 import (
 	"context"
+	"net/http"
 	"strings"
 	"sync"
 	"testing"
 
+	"github.com/bwmarrin/discordgo"
 	"github.com/nczz/kiro-discord-bot/acp"
 )
 
@@ -136,6 +138,19 @@ func TestWorkerCancelCurrentCancelsWithoutSignalingIdle(t *testing.T) {
 	case <-w.idleCh:
 		t.Fatal("CancelCurrent must not signal idle before OnComplete")
 	default:
+	}
+}
+
+func TestIsThreadAlreadyCreated(t *testing.T) {
+	err := &discordgo.RESTError{
+		Response: &http.Response{StatusCode: http.StatusBadRequest},
+		Message:  &discordgo.APIErrorMessage{Code: discordgo.ErrCodeThreadAlreadyCreatedForThisMessage},
+	}
+	if !isThreadAlreadyCreated(err) {
+		t.Fatal("expected thread already created error")
+	}
+	if isThreadAlreadyCreated(context.Canceled) {
+		t.Fatal("did not expect non-REST error to match")
 	}
 }
 

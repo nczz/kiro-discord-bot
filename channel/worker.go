@@ -257,13 +257,9 @@ func (w *Worker) execute(job *Job) {
 			threadName = L.Get("worker.thread_default")
 		}
 
-		archiveDur := w.threadArchive
-		if archiveDur <= 0 {
-			archiveDur = 1440
-		}
-		thread, err := ds.MessageThreadStart(job.ChannelID, job.MessageID, threadName, archiveDur)
+		thread, err := w.threadForMessage(ds, job, threadName)
 		if err != nil {
-			log.Printf("[worker %s] create thread: %v, falling back to sync", w.channelID, err)
+			log.Printf("[worker %s] get/create thread: %v, falling back to sync", w.channelID, err)
 			w.executeFallback(job)
 			return
 		}
@@ -473,6 +469,34 @@ func (w *Worker) execute(job *Job) {
 
 	w.agent.AskAsync(prompt, callbacks)
 	// Returns immediately — callbacks handle the rest
+}
+
+func (w *Worker) threadForMessage(ds *discordgo.Session, job *Job, threadName string) (*discordgo.Channel, error) {
+	if thread, err := ds.Channel(job.MessageID); err == nil && thread != nil && thread.IsThread() {
+		log.Printf("[worker %s] reusing existing thread %s for msg=%s", w.channelID, thread.ID, job.MessageID)
+		return thread, nil
+	}
+
+	archiveDur := w.threadArchive
+	if archiveDur <= 0 {
+		archiveDur = 1440
+	}
+	thread, err := ds.MessageThreadStart(job.ChannelID, job.MessageID, threadName, archiveDur)
+	if err == nil {
+		return thread, nil
+	}
+	if isThreadAlreadyCreated(err) {
+		if thread, fetchErr := ds.Channel(job.MessageID); fetchErr == nil && thread != nil && thread.IsThread() {
+			log.Printf("[worker %s] reusing raced thread %s for msg=%s", w.channelID, thread.ID, job.MessageID)
+			return thread, nil
+		}
+	}
+	return nil, err
+}
+
+func isThreadAlreadyCreated(err error) bool {
+	restErr, ok := err.(*discordgo.RESTError)
+	return ok && restErr.Message != nil && restErr.Message.Code == discordgo.ErrCodeThreadAlreadyCreatedForThisMessage
 }
 
 // executeFallback is the old synchronous path used when thread creation fails.
