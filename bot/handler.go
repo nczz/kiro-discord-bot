@@ -20,6 +20,16 @@ import (
 
 func usageMessage() string { return L.Get("usage_message") }
 
+func shouldIgnoreMessage(m *discordgo.MessageCreate, selfID string) bool {
+	if m == nil || m.Message == nil || m.Author == nil {
+		return true
+	}
+	if m.Author.Bot {
+		return true
+	}
+	return m.Author.ID == selfID
+}
+
 // threadParentCache caches thread→parent channel mappings to avoid repeated API calls.
 // Evicts all entries when capacity is reached (simple reset strategy).
 var (
@@ -313,8 +323,8 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 	if !b.isMyGuild(m.GuildID) {
 		return
 	}
-	// Ignore bot's own messages
-	if m.Author.ID == ds.State.User.ID {
+	// Ignore bot messages, including other deployed instances, to avoid loops.
+	if shouldIgnoreMessage(m, ds.State.User.ID) {
 		return
 	}
 

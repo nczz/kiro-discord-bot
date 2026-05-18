@@ -1,7 +1,11 @@
 .env
+.env.local
 data/
 /mcp-discord
 /mcp-discord-server
 kiro-discord-bot
+kiro-discord-bot-local
+data-local/
 mcp-media
 mcp-media-server
+logs/
