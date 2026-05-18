@@ -88,6 +88,26 @@ func TestSplitMessage_NoCodeBlock(t *testing.T) {
 	}
 }
 
+func TestPromptVisibleBodySkipsDiscordMetadataBlocks(t *testing.T) {
+	prompt := `[Discord bot environment] Your responses are automatically forwarded.
+[Discord context] channel_id=1 guild_id=2 user=mxp
+
+[Discord bot peers]
+- M5Bot id=1505737846013558834 mention=<@1505737846013558834>
+- ChunBot id=1495737209616072815 mention=<@1495737209616072815>
+[Discord bot handoff rules]
+- Use the peer mention token exactly.
+
+請幫我 review 這段內容`
+
+	if got := promptVisibleBody(prompt); got != "請幫我 review 這段內容" {
+		t.Fatalf("promptVisibleBody() = %q", got)
+	}
+	if got := promptSummary(prompt, 80); got != "請幫我 review 這段內容" {
+		t.Fatalf("promptSummary() = %q", got)
+	}
+}
+
 type fakeWorkerAgent struct {
 	mu          sync.Mutex
 	cancelCalls int

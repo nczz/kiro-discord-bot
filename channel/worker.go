@@ -179,19 +179,28 @@ func (w *Worker) run() {
 }
 
 func promptSummary(prompt string, maxLen int) string {
-	// Skip all leading [...] metadata lines
-	for strings.HasPrefix(prompt, "[") {
-		if nl := strings.Index(prompt, "\n"); nl >= 0 {
-			prompt = prompt[nl+1:]
-		} else {
-			break
-		}
-	}
-	prompt = strings.TrimSpace(prompt)
+	prompt = promptVisibleBody(prompt)
 	if len(prompt) > maxLen {
 		return truncateUTF8(prompt, maxLen-3) + "..."
 	}
 	return prompt
+}
+
+func promptVisibleBody(prompt string) string {
+	prompt = strings.TrimLeft(prompt, "\n")
+	for strings.HasPrefix(prompt, "[") {
+		idx := strings.Index(prompt, "\n\n")
+		if idx < 0 {
+			break
+		}
+		prompt = strings.TrimLeft(prompt[idx+2:], "\n")
+	}
+	if strings.HasPrefix(prompt, "- /") {
+		if idx := strings.Index(prompt, "\n\n"); idx >= 0 {
+			prompt = prompt[idx+2:]
+		}
+	}
+	return strings.TrimSpace(prompt)
 }
 
 func (w *Worker) execute(job *Job) {
@@ -225,29 +234,7 @@ func (w *Worker) execute(job *Job) {
 		// Thread follow-up: post directly to existing thread
 		threadID = job.ThreadID
 	} else {
-		// Create thread from user's message — strip metadata prefix lines
-		threadName := job.Prompt
-		// Skip all leading [...] lines and blank lines to get to user content
-		for {
-			if strings.HasPrefix(threadName, "[") {
-				if nl := strings.Index(threadName, "\n"); nl >= 0 {
-					threadName = threadName[nl+1:]
-					continue
-				}
-			}
-			if strings.HasPrefix(threadName, "\n") {
-				threadName = threadName[1:]
-				continue
-			}
-			break
-		}
-		// Also skip "[Attached files]\n- ...\n\n" block
-		if strings.HasPrefix(threadName, "- /") {
-			if idx := strings.Index(threadName, "\n\n"); idx >= 0 {
-				threadName = threadName[idx+2:]
-			}
-		}
-		threadName = strings.TrimSpace(threadName)
+		threadName := promptVisibleBody(job.Prompt)
 		threadName = reMention.ReplaceAllString(threadName, "")
 		threadName = strings.TrimSpace(threadName)
 		if len(threadName) > 95 {
@@ -403,10 +390,10 @@ func (w *Worker) execute(job *Job) {
 				response = L.Get("worker.empty_response")
 			}
 
-			// Post full response in thread
-			SendLongThread(ds, threadID, response)
 			swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "✅")
 			swapReaction(ds, job.ChannelID, job.MessageID, "⚙️", "✅")
+			// Mark the origin done before final text so tagged peer bots see a completed source.
+			SendLongThread(ds, threadID, response)
 
 			log.Printf("[worker %s] job done | user=%s msg=%s elapsed=%s len=%d",
 				w.channelID, job.Username, job.MessageID, time.Since(startTime).Round(time.Millisecond), len(response))
