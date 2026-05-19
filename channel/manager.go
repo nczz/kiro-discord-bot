@@ -799,6 +799,16 @@ func (m *Manager) Back(channelID string) {
 	m.paused[channelID] = false
 }
 
+// HasFullListenOverride returns true when the channel/thread was explicitly
+// resumed with /back. An absent entry means "use the default mode", which may
+// still be mention-only in multi-bot channels.
+func (m *Manager) HasFullListenOverride(channelID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	paused, ok := m.paused[channelID]
+	return ok && !paused
+}
+
 // IsPaused returns true if the channel is in mention-only mode.
 func (m *Manager) IsPaused(channelID string) bool {
 	m.mu.Lock()

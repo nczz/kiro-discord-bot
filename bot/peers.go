@@ -41,6 +41,16 @@ func (b *Bot) multiBotMode(selfID string) bool {
 	return false
 }
 
+func (b *Bot) requiresHumanMention(targetID, selfID string) bool {
+	if !b.multiBotMode(selfID) {
+		return false
+	}
+	if b.manager != nil && b.manager.HasFullListenOverride(targetID) {
+		return false
+	}
+	return true
+}
+
 func (b *Bot) peerPromptContext(selfID string) string {
 	if len(b.peers) == 0 {
 		return ""

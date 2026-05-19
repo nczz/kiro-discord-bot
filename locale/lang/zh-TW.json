@@ -55,6 +55,7 @@
   "doctor.bot_peers.peer": "✅ %s：`%s` (`%s`)",
   "doctor.bot_peers.channel_mode_open": "✅ 頻道模式：開放",
   "doctor.bot_peers.mode_multi_bot_mention": "✅ 頻道/討論串模式：mention-only（多 bot）",
+  "doctor.bot_peers.mode_open_override": "✅ 頻道/討論串模式：開放（/back override）",
   "doctor.bot_peers.mode_open": "✅ 頻道/討論串模式：開放",
   "status.queued": "⏳ 排隊中（第 %d 位）",
   "reset.resetting": "⏳ 正在重啟...",

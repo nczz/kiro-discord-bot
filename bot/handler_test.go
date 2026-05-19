@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/bwmarrin/discordgo"
+	"github.com/nczz/kiro-discord-bot/channel"
 )
 
 func TestShouldIgnoreMessage(t *testing.T) {
@@ -86,5 +87,26 @@ func TestMessageHasReaction(t *testing.T) {
 	}
 	if got := messageReactionState(msg); got != "done" {
 		t.Fatalf("messageReactionState() = %q, want done", got)
+	}
+}
+
+func TestMultiBotMentionOnlyCanBeOpenedByBack(t *testing.T) {
+	b := &Bot{
+		peers:   parseBotPeers("M5Bot:bot-1,ChunBot:bot-2"),
+		manager: channel.NewManager(channel.ManagerConfig{}),
+	}
+
+	if !b.requiresHumanMention("channel-1", "bot-1") {
+		t.Fatal("multi-bot channel should require mention by default")
+	}
+
+	b.manager.Back("channel-1")
+	if b.requiresHumanMention("channel-1", "bot-1") {
+		t.Fatal("/back should open full-listen mode for the target channel")
+	}
+
+	b.manager.Pause("channel-1")
+	if !b.requiresHumanMention("channel-1", "bot-1") {
+		t.Fatal("/pause should restore mention-only mode")
 	}
 }

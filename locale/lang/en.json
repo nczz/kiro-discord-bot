@@ -59,6 +59,7 @@
   "doctor.bot_peers.peer": "✅ %s: `%s` (`%s`)",
   "doctor.bot_peers.channel_mode_open": "✅ channel mode: open",
   "doctor.bot_peers.mode_multi_bot_mention": "✅ channel/thread mode: mention-only (multi-bot)",
+  "doctor.bot_peers.mode_open_override": "✅ channel/thread mode: open (/back override)",
   "doctor.bot_peers.mode_open": "✅ channel/thread mode: open",
   "status.queued": "⏳ Queued (position %d)",
   "reset.resetting": "⏳ Resetting...",

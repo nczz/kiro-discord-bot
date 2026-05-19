@@ -115,7 +115,7 @@ func (b *Bot) doctor(ctx context.Context, channelID, targetID string) string {
 	}
 
 	sb.WriteString(b.doctorDiscordPermissions(channelID, targetID))
-	sb.WriteString(b.doctorBotPeers())
+	sb.WriteString(b.doctorBotPeers(targetID))
 
 	sb.WriteString("\n**Discord MCP**\n")
 	sb.WriteString(doctorEnvLine("guild allowlist", "MCP_DISCORD_ALLOWED_GUILDS", "not configured"))
@@ -183,7 +183,7 @@ func (b *Bot) doctorPermissionSet(label, userID, channelID string, checks []perm
 	return L.Getf("doctor.discord.permissions.ok", label, channelID) + "\n"
 }
 
-func (b *Bot) doctorBotPeers() string {
+func (b *Bot) doctorBotPeers(targetID string) string {
 	var sb strings.Builder
 	sb.WriteString("\n**" + L.Get("doctor.bot_peers.title") + "**\n")
 	if len(b.peers) == 0 {
@@ -199,6 +199,10 @@ func (b *Bot) doctorBotPeers() string {
 		sb.WriteString(L.Getf("doctor.bot_peers.peer", p.Name, p.Mention(), p.ID) + "\n")
 	}
 	if b.multiBotMode(selfID) {
+		if b.manager != nil && b.manager.HasFullListenOverride(targetID) {
+			sb.WriteString(L.Get("doctor.bot_peers.mode_open_override") + "\n")
+			return sb.String()
+		}
 		sb.WriteString(L.Get("doctor.bot_peers.mode_multi_bot_mention") + "\n")
 	} else {
 		sb.WriteString(L.Get("doctor.bot_peers.mode_open") + "\n")
