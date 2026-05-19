@@ -847,6 +847,10 @@ func (m *Manager) IsSilent(channelID string) bool {
 
 // EnqueueThread routes a job to the thread's dedicated agent, spawning one if needed.
 func (m *Manager) EnqueueThread(ds *discordgo.Session, job *Job, parentChannelID string) error {
+	if discordCtx := m.buildDiscordThreadContext(ds, job.ThreadID, job.MessageID); discordCtx != "" {
+		job.Prompt = discordCtx + job.Prompt
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -866,7 +870,7 @@ func (m *Manager) EnqueueThread(ds *discordgo.Session, job *Job, parentChannelID
 		}
 
 		var err error
-		entry, err = m.spawnThreadAgent(ds, job.ThreadID, parentChannelID, job.MessageID)
+		entry, err = m.spawnThreadAgent(job.ThreadID, parentChannelID)
 		if err != nil {
 			return fmt.Errorf("spawn thread agent: %w", err)
 		}
@@ -884,7 +888,7 @@ func (m *Manager) EnqueueThread(ds *discordgo.Session, job *Job, parentChannelID
 }
 
 // spawnThreadAgent creates a new agent+worker for a thread. Must be called with m.mu held.
-func (m *Manager) spawnThreadAgent(ds *discordgo.Session, threadID, parentChannelID, currentMessageID string, modelOverride ...string) (*threadAgentEntry, error) {
+func (m *Manager) spawnThreadAgent(threadID, parentChannelID string, modelOverride ...string) (*threadAgentEntry, error) {
 	cwd := m.defaultCWD
 	model := m.defaultModel
 	if sess, ok := m.store.Get(parentChannelID); ok {
@@ -926,7 +930,7 @@ func (m *Manager) spawnThreadAgent(ds *discordgo.Session, threadID, parentChanne
 	})
 
 	// Prepare history to inject into first prompt
-	historyCtx := m.buildThreadHistory(ds, parentChannelID, threadID, currentMessageID)
+	historyCtx := m.buildThreadHistory(parentChannelID, threadID)
 	if historyCtx != "" {
 		log.Printf("[manager] prepared %d chars of history for thread-%s", len(historyCtx), threadID)
 	}
@@ -1075,7 +1079,7 @@ func (m *Manager) resetThreadAgentWithModel(threadID, model string) error {
 	entry.agent.Stop()
 	delete(m.threadAgents, threadID)
 
-	newEntry, err := m.spawnThreadAgent(nil, threadID, parentChannelID, "", model)
+	newEntry, err := m.spawnThreadAgent(threadID, parentChannelID, model)
 	if err != nil {
 		m.mu.Unlock()
 		return fmt.Errorf("respawn thread agent: %w", err)
@@ -1123,17 +1127,10 @@ func (m *Manager) evictOldestThreadAgent() {
 }
 
 // buildThreadHistory builds conversation history string for a thread agent.
-func (m *Manager) buildThreadHistory(ds *discordgo.Session, parentChannelID, threadID, currentMessageID string) string {
+func (m *Manager) buildThreadHistory(parentChannelID, threadID string) string {
 	ctx := m.logger.BuildContextPrompt("thread-"+threadID, 20)
 	if ctx == "" {
 		ctx = m.logger.BuildContextPrompt(parentChannelID, 4)
-	}
-	discordCtx := m.buildDiscordThreadContext(ds, threadID, currentMessageID)
-	if discordCtx != "" {
-		if ctx != "" {
-			ctx += "\n"
-		}
-		ctx += discordCtx
 	}
 	if ctx == "" {
 		return ""
