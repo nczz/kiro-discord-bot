@@ -96,17 +96,43 @@ func TestMultiBotMentionOnlyCanBeOpenedByBack(t *testing.T) {
 		manager: channel.NewManager(channel.ManagerConfig{}),
 	}
 
-	if !b.requiresHumanMention("channel-1", "bot-1") {
+	if !b.requiresHumanMention("channel-1", "", "bot-1") {
 		t.Fatal("multi-bot channel should require mention by default")
 	}
 
 	b.manager.Back("channel-1")
-	if b.requiresHumanMention("channel-1", "bot-1") {
+	if b.requiresHumanMention("channel-1", "", "bot-1") {
 		t.Fatal("/back should open full-listen mode for the target channel")
 	}
 
 	b.manager.Pause("channel-1")
-	if !b.requiresHumanMention("channel-1", "bot-1") {
+	if !b.requiresHumanMention("channel-1", "", "bot-1") {
 		t.Fatal("/pause should restore mention-only mode")
+	}
+}
+
+func TestThreadMentionModeInheritsParentBack(t *testing.T) {
+	b := &Bot{
+		peers:   parseBotPeers("M5Bot:bot-1,ChunBot:bot-2"),
+		manager: channel.NewManager(channel.ManagerConfig{}),
+	}
+
+	if !b.requiresHumanMention("thread-1", "channel-1", "bot-1") {
+		t.Fatal("thread should require mention by default in multi-bot mode")
+	}
+
+	b.manager.Back("channel-1")
+	if b.requiresHumanMention("thread-1", "channel-1", "bot-1") {
+		t.Fatal("thread should inherit parent /back full-listen override")
+	}
+
+	b.manager.Pause("thread-1")
+	if !b.requiresHumanMention("thread-1", "channel-1", "bot-1") {
+		t.Fatal("thread /pause should override parent /back")
+	}
+
+	b.manager.Back("thread-1")
+	if b.requiresHumanMention("thread-1", "channel-1", "bot-1") {
+		t.Fatal("thread /back should restore full-listen override")
 	}
 }

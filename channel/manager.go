@@ -809,6 +809,14 @@ func (m *Manager) HasFullListenOverride(channelID string) bool {
 	return ok && !paused
 }
 
+// HasMentionOnlyOverride returns true when the channel/thread was explicitly
+// paused with /pause. This lets a thread override a parent channel's /back.
+func (m *Manager) HasMentionOnlyOverride(channelID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.paused[channelID]
+}
+
 // IsPaused returns true if the channel is in mention-only mode.
 func (m *Manager) IsPaused(channelID string) bool {
 	m.mu.Lock()
@@ -858,7 +866,7 @@ func (m *Manager) EnqueueThread(ds *discordgo.Session, job *Job, parentChannelID
 		}
 
 		var err error
-		entry, err = m.spawnThreadAgent(job.ThreadID, parentChannelID)
+		entry, err = m.spawnThreadAgent(ds, job.ThreadID, parentChannelID, job.MessageID)
 		if err != nil {
 			return fmt.Errorf("spawn thread agent: %w", err)
 		}
@@ -876,7 +884,7 @@ func (m *Manager) EnqueueThread(ds *discordgo.Session, job *Job, parentChannelID
 }
 
 // spawnThreadAgent creates a new agent+worker for a thread. Must be called with m.mu held.
-func (m *Manager) spawnThreadAgent(threadID, parentChannelID string, modelOverride ...string) (*threadAgentEntry, error) {
+func (m *Manager) spawnThreadAgent(ds *discordgo.Session, threadID, parentChannelID, currentMessageID string, modelOverride ...string) (*threadAgentEntry, error) {
 	cwd := m.defaultCWD
 	model := m.defaultModel
 	if sess, ok := m.store.Get(parentChannelID); ok {
@@ -918,7 +926,7 @@ func (m *Manager) spawnThreadAgent(threadID, parentChannelID string, modelOverri
 	})
 
 	// Prepare history to inject into first prompt
-	historyCtx := m.buildThreadHistory(parentChannelID, threadID)
+	historyCtx := m.buildThreadHistory(ds, parentChannelID, threadID, currentMessageID)
 	if historyCtx != "" {
 		log.Printf("[manager] prepared %d chars of history for thread-%s", len(historyCtx), threadID)
 	}
@@ -1067,7 +1075,7 @@ func (m *Manager) resetThreadAgentWithModel(threadID, model string) error {
 	entry.agent.Stop()
 	delete(m.threadAgents, threadID)
 
-	newEntry, err := m.spawnThreadAgent(threadID, parentChannelID, model)
+	newEntry, err := m.spawnThreadAgent(nil, threadID, parentChannelID, "", model)
 	if err != nil {
 		m.mu.Unlock()
 		return fmt.Errorf("respawn thread agent: %w", err)
@@ -1115,10 +1123,17 @@ func (m *Manager) evictOldestThreadAgent() {
 }
 
 // buildThreadHistory builds conversation history string for a thread agent.
-func (m *Manager) buildThreadHistory(parentChannelID, threadID string) string {
+func (m *Manager) buildThreadHistory(ds *discordgo.Session, parentChannelID, threadID, currentMessageID string) string {
 	ctx := m.logger.BuildContextPrompt("thread-"+threadID, 20)
 	if ctx == "" {
 		ctx = m.logger.BuildContextPrompt(parentChannelID, 4)
+	}
+	discordCtx := m.buildDiscordThreadContext(ds, threadID, currentMessageID)
+	if discordCtx != "" {
+		if ctx != "" {
+			ctx += "\n"
+		}
+		ctx += discordCtx
 	}
 	if ctx == "" {
 		return ""
@@ -1128,4 +1143,58 @@ func (m *Manager) buildThreadHistory(parentChannelID, threadID string) string {
 		ctx = ctx[len(ctx)-maxCtxChars:]
 	}
 	return ctx
+}
+
+func (m *Manager) buildDiscordThreadContext(ds *discordgo.Session, threadID, currentMessageID string) string {
+	if ds == nil || threadID == "" {
+		return ""
+	}
+	messages, err := ds.ChannelMessages(threadID, 30, "", "", "")
+	if err != nil {
+		log.Printf("[manager] fetch discord thread history thread=%s: %v", threadID, err)
+		return ""
+	}
+	if len(messages) == 0 {
+		return ""
+	}
+
+	var sb strings.Builder
+	sb.WriteString("[Recent Discord thread context]\n")
+	for i := len(messages) - 1; i >= 0; i-- {
+		msg := messages[i]
+		if msg == nil || msg.ID == currentMessageID {
+			continue
+		}
+		content := strings.TrimSpace(msg.Content)
+		if content == "" && len(msg.Attachments) == 0 {
+			continue
+		}
+		if len(content) > 1500 {
+			content = content[:1500] + "...(truncated)"
+		}
+		author := "unknown"
+		if msg.Author != nil {
+			author = msg.Author.Username
+			if msg.Author.Bot {
+				author += " (bot)"
+			}
+		}
+		sb.WriteString(fmt.Sprintf("[%s] %s\n", author, content))
+		if len(msg.Attachments) > 0 {
+			var names []string
+			for _, attachment := range msg.Attachments {
+				if attachment != nil {
+					names = append(names, attachment.Filename)
+				}
+			}
+			if len(names) > 0 {
+				sb.WriteString(fmt.Sprintf("[attachments] %s\n", strings.Join(names, ", ")))
+			}
+		}
+	}
+	out := sb.String()
+	if out == "[Recent Discord thread context]\n" {
+		return ""
+	}
+	return out + "[End of Discord thread context]\n\n"
 }

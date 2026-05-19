@@ -349,13 +349,13 @@ All thread commands also work as `/` slash commands inside a thread.
 
 **Mention mode (after `/pause` or automatic multi-bot mode):** Only `@BotName your message` triggers the agent. Use a real Discord mention such as `<@1505737846013558834>` or pick the bot from Discord's mention UI; plain text like `@M5Bot` may not trigger the target bot.
 
-Use `/back` or `!back` on the target bot to open full-listen mode for that specific channel or thread, even when multi-bot mode made mention-only the default. Use `/pause` or `!pause` to return that target to mention-only mode.
+Use `/back` or `!back` on the target bot to open full-listen mode for that channel and its threads, even when multi-bot mode made mention-only the default. A thread can still override the parent channel with its own `/pause` or `!pause`, and can return to full-listen with thread-local `/back` or `!back`.
 
 **Thread-based progress:** Each task automatically creates a Discord Thread from your message. Tool execution status and the final response are posted in the thread, keeping the main channel clean.
 
 **Thread discussions:** You can continue chatting with the agent inside any thread. A dedicated agent is spawned per thread with the original task context injected. Thread agents are independent from the main channel agent, so both can work in parallel. Thread agents are automatically closed after idle timeout (`THREAD_AGENT_IDLE_SEC`) or when the thread is archived. Use `!close` in a thread to manually close its agent.
 
-**Multi-bot handoff:** Configure `BOT_PEERS` with each bot's display name and Discord user ID. When more than one bot is known, human messages must mention the intended bot in channels and threads. Bot-authored messages are ignored by default; a peer bot handoff is only accepted inside a thread when the target bot is explicitly mentioned, the original task message already has the done reaction (`✅`), and the message is not just progress, error, timeout, or empty output. This lets one bot ask another bot to continue work after the first bot has finished, without responding to every intermediate status update.
+**Multi-bot handoff:** Configure `BOT_PEERS` with each bot's display name and Discord user ID. When more than one bot is known, human messages must mention the intended bot unless full-listen was opened with `/back`. Bot-authored messages are ignored by default; a peer bot handoff is only accepted inside a thread when the target bot is explicitly mentioned, the original task message already has the done reaction (`✅`), and the message is not just progress, error, timeout, or empty output. When a bot is pulled into an existing thread for the first time, it reads recent Discord thread messages as startup context so it can see what happened before it joined. This lets one bot ask another bot to continue work after the first bot has finished, without responding to every intermediate status update.
 
 Run `/doctor` in the target channel or thread to verify Discord permissions, configured peers, and whether the current context is open, open by `/back` override, or automatic multi-bot mention-only mode.
 
@@ -828,8 +828,8 @@ RUN_ACP_SMOKE=1 KIRO_CLI=/Users/chun/.local/bin/kiro-cli scripts/release-preflig
 - **Discord MCP 範圍**：用 `MCP_DISCORD_ALLOWED_GUILDS`、`MCP_DISCORD_ALLOWED_CHANNELS` 限制可操作的 guild/channel；用 `MCP_DISCORD_READ_ONLY`、`MCP_DISCORD_ALLOWED_WRITE_TOOLS` 或 `MCP_DISCORD_ALLOW_DESTRUCTIVE=false` 限制寫入工具
 - 回應被截斷時可用 `!resume` 補完
 - **討論串互動**：在 bot 建立的 thread 中發訊息，會自動啟動獨立的 thread agent 接續討論。閒置超過 `THREAD_AGENT_IDLE_SEC` 或 thread 歸檔時自動關閉，再次發訊息可重新啟動
-- **多 bot 模式**：用 `BOT_PEERS` 設定同 server 內其他 bot 的名稱與 Discord user ID。當設定中包含另一個 bot，頻道與討論串會自動改成 mention-only，避免互相回應形成 loop；請用真正的 Discord mention（例如 `<@1505737846013558834>` 或 Discord 介面的提及選單），純文字 `@M5Bot` 不一定會觸發。若要讓其中一個 bot 暫時恢復完整監聽，對該 bot 執行 `/back` 或 `!back`；要回到 mention-only 則執行 `/pause` 或 `!pause`
-- **Bot 交接限制**：bot 產生的訊息預設不會觸發另一個 bot。只有在討論串內、明確 tag 目標 bot、原始任務訊息已有完成反應（`✅`），且內容不是進度、錯誤、逾時或空輸出時，才會被視為有效交接
+- **多 bot 模式**：用 `BOT_PEERS` 設定同 server 內其他 bot 的名稱與 Discord user ID。當設定中包含另一個 bot，頻道與討論串會自動改成 mention-only，避免互相回應形成 loop；請用真正的 Discord mention（例如 `<@1505737846013558834>` 或 Discord 介面的提及選單），純文字 `@M5Bot` 不一定會觸發。若要讓其中一個 bot 暫時恢復完整監聽，對該 bot 在主頻道執行 `/back` 或 `!back`，該主頻道底下的討論串也會繼承；若只想讓某條討論串回到 mention-only，可在該討論串執行 `/pause` 或 `!pause`
+- **Bot 交接限制**：bot 產生的訊息預設不會觸發另一個 bot。只有在討論串內、明確 tag 目標 bot、原始任務訊息已有完成反應（`✅`），且內容不是進度、錯誤、逾時或空輸出時，才會被視為有效交接。當 bot 第一次被拉進既有討論串時，會讀取近期 Discord 討論串訊息作為啟動上下文，避免沒有本地記錄時看不到前因後果
 - **部署診斷**：在目標頻道或討論串執行 `/doctor`，可確認 Discord 權限、`BOT_PEERS` 設定，以及目前是開放模式、`/back` override 開放模式，或自動多 bot mention-only 模式
 - **頻道 agent 閒置回收**：設定 `CHANNEL_AGENT_IDLE_SEC`（預設 `0` = 停用）可讓閒置的頻道 agent 自動關閉以釋放資源，下次發訊息時自動重啟
 

@@ -41,12 +41,26 @@ func (b *Bot) multiBotMode(selfID string) bool {
 	return false
 }
 
-func (b *Bot) requiresHumanMention(targetID, selfID string) bool {
+func (b *Bot) requiresHumanMention(targetID, parentChannelID, selfID string) bool {
 	if !b.multiBotMode(selfID) {
 		return false
 	}
-	if b.manager != nil && b.manager.HasFullListenOverride(targetID) {
+	if b.manager == nil {
+		return true
+	}
+	if b.manager.HasMentionOnlyOverride(targetID) {
+		return true
+	}
+	if b.manager.HasFullListenOverride(targetID) {
 		return false
+	}
+	if parentChannelID != "" {
+		if b.manager.HasMentionOnlyOverride(parentChannelID) {
+			return true
+		}
+		if b.manager.HasFullListenOverride(parentChannelID) {
+			return false
+		}
 	}
 	return true
 }
