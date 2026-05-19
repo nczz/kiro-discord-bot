@@ -65,6 +65,7 @@ type workerAgent interface {
 	AskAsync(string, acp.AsyncCallbacks)
 	CancelPrompt()
 	ContextUsage() float64
+	TurnMetrics() acp.TurnMetrics
 	OnReadErrorFunc(func(error))
 	RecentStderr() string
 }
@@ -402,6 +403,11 @@ func (w *Worker) execute(job *Job) {
 				w.logger.Log(w.channelID, ChatEntry{Role: "assistant", Content: response, Model: w.model})
 			}
 
+			// Show turn metrics footer if available
+			if footer := formatMetricsFooter(w.agent.TurnMetrics()); footer != "" {
+				ds.ChannelMessageSend(threadID, footer)
+			}
+
 			// Warn if context usage is high
 			if usage := w.agent.ContextUsage(); usage >= 90 {
 				ds.ChannelMessageSend(threadID, "⚠️ "+L.Getf("context.usage_warning", usage))
@@ -676,4 +682,27 @@ func ToolKindIcon(kind string) string {
 	default:
 		return "⚙️"
 	}
+}
+
+// formatMetricsFooter builds a one-line metrics summary from turn metrics.
+// Returns empty string if no meaningful metrics are available.
+func formatMetricsFooter(m acp.TurnMetrics) string {
+	if m.TurnDurationMs == 0 && len(m.MeteringUsage) == 0 {
+		return ""
+	}
+	var parts []string
+	if len(m.MeteringUsage) > 0 {
+		item := m.MeteringUsage[0]
+		parts = append(parts, fmt.Sprintf("%.2f %s", item.Value, item.Unit))
+	}
+	if m.TurnDurationMs > 0 {
+		parts = append(parts, fmt.Sprintf("%.1fs", float64(m.TurnDurationMs)/1000))
+	}
+	if m.ContextUsage > 0 {
+		parts = append(parts, fmt.Sprintf("ctx %.0f%%", m.ContextUsage))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return L.Getf("metrics.footer", strings.Join(parts, " · "))
 }

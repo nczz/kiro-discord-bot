@@ -34,7 +34,8 @@ type Agent struct {
 	onExit       func()              // called when child process exits unexpectedly
 	onReadError  func(error)         // called when ReadLoop encounters an error
 
-	contextUsage float64 // latest context usage percentage from metadata
+	contextUsage float64      // latest context usage percentage from metadata
+	turnMetrics  TurnMetrics // per-turn metrics from latest metadata
 
 	initResult *InitializeResult
 	stopOnce   sync.Once
@@ -229,14 +230,25 @@ func ResolveKiroCLI(kiroCLI string) (string, error) {
 }
 
 func (a *Agent) handleNotification(method string, params json.RawMessage) {
-	// Handle metadata notifications (context usage)
-	if method == "_kiro.dev/metadata" {
+	// Handle metadata notifications (context usage, metering, duration)
+	if method == NotifMetadata {
 		var meta struct {
-			ContextUsagePercentage float64 `json:"contextUsagePercentage"`
+			ContextUsagePercentage float64        `json:"contextUsagePercentage"`
+			MeteringUsage          []MeteringItem `json:"meteringUsage"`
+			TurnDurationMs         int64          `json:"turnDurationMs"`
 		}
-		if json.Unmarshal(params, &meta) == nil && meta.ContextUsagePercentage > 0 {
+		if json.Unmarshal(params, &meta) == nil {
 			a.mu.Lock()
-			a.contextUsage = meta.ContextUsagePercentage
+			if meta.ContextUsagePercentage > 0 {
+				a.contextUsage = meta.ContextUsagePercentage
+			}
+			if len(meta.MeteringUsage) > 0 {
+				a.turnMetrics.MeteringUsage = meta.MeteringUsage
+			}
+			if meta.TurnDurationMs > 0 {
+				a.turnMetrics.TurnDurationMs = meta.TurnDurationMs
+			}
+			a.turnMetrics.ContextUsage = a.contextUsage
 			a.mu.Unlock()
 		}
 		return
@@ -448,6 +460,7 @@ func (a *Agent) Ask(ctx context.Context, prompt string, onChunk func(string)) (s
 	a.mu.Lock()
 	a.state = "working"
 	a.currentText.Reset()
+	a.turnMetrics = TurnMetrics{}
 	a.onChunk = onChunk
 	a.mu.Unlock()
 
@@ -507,6 +520,7 @@ func (a *Agent) AskAsync(prompt string, cb AsyncCallbacks) {
 	a.mu.Lock()
 	a.state = "working"
 	a.currentText.Reset()
+	a.turnMetrics = TurnMetrics{}
 	a.onChunk = cb.OnChunk
 	a.onToolCall = cb.OnToolCall
 	a.onToolResult = cb.OnToolResult
@@ -558,6 +572,13 @@ func (a *Agent) ContextUsage() float64 {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.contextUsage
+}
+
+// TurnMetrics returns the metrics from the most recent turn.
+func (a *Agent) TurnMetrics() TurnMetrics {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.turnMetrics
 }
 
 // Stop gracefully stops the agent: SIGTERM → wait 2s → SIGKILL entire process group.

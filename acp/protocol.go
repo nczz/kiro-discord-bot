@@ -1,6 +1,6 @@
 package acp
 
-// ACP protocol v1 method names (kiro-cli 1.28.x)
+// ACP protocol v1 method names (kiro-cli 2.3.0)
 const (
 	MethodInitialize = "initialize"
 	MethodNewSession = "session/new"
@@ -8,6 +8,7 @@ const (
 	MethodCancel     = "session/cancel"
 	NotifUpdate      = "session/update"
 	NotifUpdateKiro  = "_kiro.dev/session/update"
+	NotifMetadata    = "_kiro.dev/metadata"
 
 	ClientProtocolVersion = "2025-11-16"
 )
@@ -45,4 +46,17 @@ type InitializeResult struct {
 		Name    string `json:"name"`
 		Version string `json:"version"`
 	} `json:"agentInfo,omitempty"`
+}
+
+// MeteringItem represents a single metering entry from metadata.
+type MeteringItem struct {
+	Value float64 `json:"value"`
+	Unit  string  `json:"unit"`
+}
+
+// TurnMetrics holds per-turn metrics from _kiro.dev/metadata.
+type TurnMetrics struct {
+	ContextUsage   float64
+	MeteringUsage  []MeteringItem
+	TurnDurationMs int64
 }

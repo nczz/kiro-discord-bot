@@ -185,5 +185,6 @@
   "models.header": "**可用模型：**\n",
   "models.footer": "\n用法：`/model <model-id>` 或 `!model <model-id>`",
   "status.format": "Agent：`%s` | 狀態：`%s` | 佇列：%d | Session：`%s` | Model：`%s` | kiro：`%s` | bot：`%s` | Context：`%.1f%%`",
-  "worker.empty_response": "（空回應）"
+  "worker.empty_response": "（空回應）",
+  "metrics.footer": "-# ⚡ %s"
 }

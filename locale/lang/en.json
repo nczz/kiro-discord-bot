@@ -185,5 +185,6 @@
   "flashmemory.added": "⚡ Flash memory added: %s",
   "flashmemory.removed": "⚡ Flash memory #%d removed.",
   "flashmemory.cleared": "⚡ All flash memory cleared.",
-  "flashmemory.usage": "Usage: `!flashmemory add <rule>` | `!flashmemory list` | `!flashmemory remove <#>` | `!flashmemory clear`"
+  "flashmemory.usage": "Usage: `!flashmemory add <rule>` | `!flashmemory list` | `!flashmemory remove <#>` | `!flashmemory clear`",
+  "metrics.footer": "-# ⚡ %s"
 }

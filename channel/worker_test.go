@@ -127,6 +127,8 @@ func (f *fakeWorkerAgent) CancelPrompt() {
 
 func (f *fakeWorkerAgent) ContextUsage() float64 { return 0 }
 
+func (f *fakeWorkerAgent) TurnMetrics() acp.TurnMetrics { return acp.TurnMetrics{} }
+
 func (f *fakeWorkerAgent) OnReadErrorFunc(func(error)) {}
 
 func (f *fakeWorkerAgent) RecentStderr() string { return "" }
