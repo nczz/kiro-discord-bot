@@ -194,7 +194,7 @@ STT_MAX_DURATION_SEC=300
 | `TRUST_TOOLS` | Trust only specific tools (comma-separated names). Overrides `TRUST_ALL_TOOLS` when set | `` |
 | `PREFLIGHT_MODE` | Startup ACP check behavior: `warn`, `strict`, or `skip` | `warn` |
 | `SKIP_PREFLIGHT` | Legacy override; any non-empty value skips startup preflight | `` |
-| `BOT_PEERS` | Peer bot mention mapping for handoffs, e.g. `M5Bot:1505737846013558834,ChunBot:1495737209616072815` | `` |
+| `BOT_PEERS` | Peer bot mention mapping for multi-bot coordination and handoffs, e.g. `M5Bot:1505737846013558834,ChunBot:1495737209616072815` | `` |
 | `MCP_DISCORD_ALLOWED_GUILDS` | Comma-separated guild IDs the Discord MCP server may access (empty = unrestricted) | `` |
 | `MCP_DISCORD_ALLOWED_CHANNELS` | Comma-separated channel/thread IDs the Discord MCP server may access (empty = unrestricted) | `` |
 | `MCP_DISCORD_DOWNLOAD_DIR` | Restrict `discord_download_attachment` writes to this directory (empty = caller-selected directory) | `` |
@@ -345,13 +345,17 @@ All thread commands also work as `/` slash commands inside a thread.
 
 ### Sending Tasks
 
-**Full-listen mode (default):** Any message in the channel is sent to the agent.
+**Full-listen mode (default):** Any message in the channel is sent to the agent. When `BOT_PEERS` includes another bot, the channel and its threads automatically switch to mention-only behavior to prevent bot-to-bot loops.
 
-**Mention mode (after `/pause`):** Only `@BotName your message` triggers the agent.
+**Mention mode (after `/pause` or automatic multi-bot mode):** Only `@BotName your message` triggers the agent. Use a real Discord mention such as `<@1505737846013558834>` or pick the bot from Discord's mention UI; plain text like `@M5Bot` may not trigger the target bot.
 
 **Thread-based progress:** Each task automatically creates a Discord Thread from your message. Tool execution status and the final response are posted in the thread, keeping the main channel clean.
 
 **Thread discussions:** You can continue chatting with the agent inside any thread. A dedicated agent is spawned per thread with the original task context injected. Thread agents are independent from the main channel agent, so both can work in parallel. Thread agents are automatically closed after idle timeout (`THREAD_AGENT_IDLE_SEC`) or when the thread is archived. Use `!close` in a thread to manually close its agent.
+
+**Multi-bot handoff:** Configure `BOT_PEERS` with each bot's display name and Discord user ID. When more than one bot is known, human messages must mention the intended bot in channels and threads. Bot-authored messages are ignored by default; a peer bot handoff is only accepted inside a thread when the target bot is explicitly mentioned, the original task message already has the done reaction (`✅`), and the message is not just progress, error, timeout, or empty output. This lets one bot ask another bot to continue work after the first bot has finished, without responding to every intermediate status update.
+
+Run `/doctor` in the target channel or thread to verify Discord permissions, configured peers, and whether the current context is open or automatic multi-bot mention-only mode.
 
 ### Status Indicators
 
@@ -822,6 +826,9 @@ RUN_ACP_SMOKE=1 KIRO_CLI=/Users/chun/.local/bin/kiro-cli scripts/release-preflig
 - **Discord MCP 範圍**：用 `MCP_DISCORD_ALLOWED_GUILDS`、`MCP_DISCORD_ALLOWED_CHANNELS` 限制可操作的 guild/channel；用 `MCP_DISCORD_READ_ONLY`、`MCP_DISCORD_ALLOWED_WRITE_TOOLS` 或 `MCP_DISCORD_ALLOW_DESTRUCTIVE=false` 限制寫入工具
 - 回應被截斷時可用 `!resume` 補完
 - **討論串互動**：在 bot 建立的 thread 中發訊息，會自動啟動獨立的 thread agent 接續討論。閒置超過 `THREAD_AGENT_IDLE_SEC` 或 thread 歸檔時自動關閉，再次發訊息可重新啟動
+- **多 bot 模式**：用 `BOT_PEERS` 設定同 server 內其他 bot 的名稱與 Discord user ID。當設定中包含另一個 bot，頻道與討論串會自動改成 mention-only，避免互相回應形成 loop；請用真正的 Discord mention（例如 `<@1505737846013558834>` 或 Discord 介面的提及選單），純文字 `@M5Bot` 不一定會觸發
+- **Bot 交接限制**：bot 產生的訊息預設不會觸發另一個 bot。只有在討論串內、明確 tag 目標 bot、原始任務訊息已有完成反應（`✅`），且內容不是進度、錯誤、逾時或空輸出時，才會被視為有效交接
+- **部署診斷**：在目標頻道或討論串執行 `/doctor`，可確認 Discord 權限、`BOT_PEERS` 設定，以及目前是開放模式或自動多 bot mention-only 模式
 - **頻道 agent 閒置回收**：設定 `CHANNEL_AGENT_IDLE_SEC`（預設 `0` = 停用）可讓閒置的頻道 agent 自動關閉以釋放資源，下次發訊息時自動重啟
 
 ---

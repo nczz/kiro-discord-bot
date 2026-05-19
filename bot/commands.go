@@ -138,24 +138,24 @@ func (b *Bot) doctorDiscordPermissions(channelID, targetID string) string {
 		targetID = channelID
 	}
 	if targetID != "" {
-		sb.WriteString("\n**Discord permissions**\n")
-		sb.WriteString(b.doctorPermissionSet("current target", selfID, targetID, []permissionCheck{
-			{name: "view channel", bit: discordgo.PermissionViewChannel},
-			{name: "send messages", bit: discordgo.PermissionSendMessages},
-			{name: "read history", bit: discordgo.PermissionReadMessageHistory},
-			{name: "send in threads", bit: discordgo.PermissionSendMessagesInThreads},
+		sb.WriteString("\n**" + L.Get("doctor.discord.permissions.title") + "**\n")
+		sb.WriteString(b.doctorPermissionSet(L.Get("doctor.discord.permissions.current_target"), selfID, targetID, []permissionCheck{
+			{name: L.Get("doctor.discord.permissions.view_channel"), bit: discordgo.PermissionViewChannel},
+			{name: L.Get("doctor.discord.permissions.send_messages"), bit: discordgo.PermissionSendMessages},
+			{name: L.Get("doctor.discord.permissions.read_history"), bit: discordgo.PermissionReadMessageHistory},
+			{name: L.Get("doctor.discord.permissions.send_in_threads"), bit: discordgo.PermissionSendMessagesInThreads},
 		}))
 	}
 	if channelID != "" && channelID != targetID {
-		sb.WriteString(b.doctorPermissionSet("parent channel", selfID, channelID, []permissionCheck{
-			{name: "view channel", bit: discordgo.PermissionViewChannel},
-			{name: "send messages", bit: discordgo.PermissionSendMessages},
-			{name: "read history", bit: discordgo.PermissionReadMessageHistory},
-			{name: "create public threads", bit: discordgo.PermissionCreatePublicThreads},
+		sb.WriteString(b.doctorPermissionSet(L.Get("doctor.discord.permissions.parent_channel"), selfID, channelID, []permissionCheck{
+			{name: L.Get("doctor.discord.permissions.view_channel"), bit: discordgo.PermissionViewChannel},
+			{name: L.Get("doctor.discord.permissions.send_messages"), bit: discordgo.PermissionSendMessages},
+			{name: L.Get("doctor.discord.permissions.read_history"), bit: discordgo.PermissionReadMessageHistory},
+			{name: L.Get("doctor.discord.permissions.create_public_threads"), bit: discordgo.PermissionCreatePublicThreads},
 		}))
 	} else if channelID != "" {
-		sb.WriteString(b.doctorPermissionSet("thread creation", selfID, channelID, []permissionCheck{
-			{name: "create public threads", bit: discordgo.PermissionCreatePublicThreads},
+		sb.WriteString(b.doctorPermissionSet(L.Get("doctor.discord.permissions.thread_creation"), selfID, channelID, []permissionCheck{
+			{name: L.Get("doctor.discord.permissions.create_public_threads"), bit: discordgo.PermissionCreatePublicThreads},
 		}))
 	}
 	return sb.String()
@@ -169,7 +169,7 @@ type permissionCheck struct {
 func (b *Bot) doctorPermissionSet(label, userID, channelID string, checks []permissionCheck) string {
 	perms, err := b.discord.UserChannelPermissions(userID, channelID)
 	if err != nil {
-		return "❌ " + label + " permissions `" + channelID + "`: " + err.Error() + "\n"
+		return L.Getf("doctor.discord.permissions.error", label, channelID, err.Error()) + "\n"
 	}
 	var missing []string
 	for _, check := range checks {
@@ -178,17 +178,17 @@ func (b *Bot) doctorPermissionSet(label, userID, channelID string, checks []perm
 		}
 	}
 	if len(missing) > 0 {
-		return "❌ " + label + " permissions `" + channelID + "` missing: " + strings.Join(missing, ", ") + "\n"
+		return L.Getf("doctor.discord.permissions.missing", label, channelID, strings.Join(missing, ", ")) + "\n"
 	}
-	return "✅ " + label + " permissions `" + channelID + "`: ok\n"
+	return L.Getf("doctor.discord.permissions.ok", label, channelID) + "\n"
 }
 
 func (b *Bot) doctorBotPeers() string {
 	var sb strings.Builder
-	sb.WriteString("\n**Bot peers**\n")
+	sb.WriteString("\n**" + L.Get("doctor.bot_peers.title") + "**\n")
 	if len(b.peers) == 0 {
-		sb.WriteString("⚠️ BOT_PEERS: not configured\n")
-		sb.WriteString("✅ channel mode: open\n")
+		sb.WriteString(L.Get("doctor.bot_peers.not_configured") + "\n")
+		sb.WriteString(L.Get("doctor.bot_peers.channel_mode_open") + "\n")
 		return sb.String()
 	}
 	selfID := ""
@@ -196,12 +196,12 @@ func (b *Bot) doctorBotPeers() string {
 		selfID = b.discord.State.User.ID
 	}
 	for _, p := range b.peers {
-		sb.WriteString("✅ " + p.Name + ": `" + p.Mention() + "` (`" + p.ID + "`)\n")
+		sb.WriteString(L.Getf("doctor.bot_peers.peer", p.Name, p.Mention(), p.ID) + "\n")
 	}
 	if b.multiBotMode(selfID) {
-		sb.WriteString("✅ channel/thread mode: mention-only (multi-bot)\n")
+		sb.WriteString(L.Get("doctor.bot_peers.mode_multi_bot_mention") + "\n")
 	} else {
-		sb.WriteString("✅ channel/thread mode: open\n")
+		sb.WriteString(L.Get("doctor.bot_peers.mode_open") + "\n")
 	}
 	return sb.String()
 }
