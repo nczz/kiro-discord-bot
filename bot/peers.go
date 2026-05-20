@@ -41,6 +41,18 @@ func (b *Bot) multiBotMode(selfID string) bool {
 	return false
 }
 
+func (b *Bot) mentionsOtherPeer(content, selfID string) bool {
+	for _, p := range b.peers {
+		if p.ID == "" || p.ID == selfID {
+			continue
+		}
+		if isSelfMentioned(content, p.ID) {
+			return true
+		}
+	}
+	return false
+}
+
 func (b *Bot) requiresHumanMention(targetID, parentChannelID, selfID string) bool {
 	if !b.multiBotMode(selfID) {
 		return false

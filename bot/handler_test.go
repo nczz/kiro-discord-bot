@@ -57,6 +57,23 @@ func TestSelfMentionHelpers(t *testing.T) {
 	}
 }
 
+func TestMentionsOtherPeer(t *testing.T) {
+	b := &Bot{peers: parseBotPeers("M5Bot:bot-1,ChunBot:bot-2")}
+
+	if !b.mentionsOtherPeer("<@bot-2> review this", "bot-1") {
+		t.Fatal("expected mention of another configured peer to match")
+	}
+	if !b.mentionsOtherPeer("<@!bot-2> review this", "bot-1") {
+		t.Fatal("expected nickname mention of another configured peer to match")
+	}
+	if b.mentionsOtherPeer("<@bot-1> handle this", "bot-1") {
+		t.Fatal("did not expect self mention to count as other peer")
+	}
+	if b.mentionsOtherPeer("<@unknown> handle this", "bot-1") {
+		t.Fatal("did not expect unknown mention to count as other peer")
+	}
+}
+
 func TestIsBotGeneratedNonResult(t *testing.T) {
 	tests := []struct {
 		content string

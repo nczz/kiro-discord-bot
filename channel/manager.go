@@ -89,7 +89,7 @@ type ManagerConfig struct {
 }
 
 func NewManager(cfg ManagerConfig) *Manager {
-	return &Manager{
+	m := &Manager{
 		workers:             make(map[string]*Worker),
 		agents:              make(map[string]*acp.Agent),
 		paused:              make(map[string]bool),
@@ -119,6 +119,10 @@ func NewManager(cfg ManagerConfig) *Manager {
 		trustAllTools:       cfg.TrustAllTools,
 		trustTools:          cfg.TrustTools,
 	}
+	if err := m.loadListenModes(); err != nil {
+		log.Printf("[manager] load listen modes: %v", err)
+	}
+	return m
 }
 
 // MaxScannerBuffer returns the configured scanner buffer limit in bytes.
@@ -790,6 +794,9 @@ func (m *Manager) Pause(channelID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.paused[channelID] = true
+	if err := m.saveListenModesLocked(); err != nil {
+		log.Printf("[manager] save listen mode for %s: %v", channelID, err)
+	}
 }
 
 // Back sets the channel back to full-listen mode.
@@ -797,6 +804,70 @@ func (m *Manager) Back(channelID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.paused[channelID] = false
+	if err := m.saveListenModesLocked(); err != nil {
+		log.Printf("[manager] save listen mode for %s: %v", channelID, err)
+	}
+}
+
+func (m *Manager) listenModesPath() string {
+	if m.dataDir == "" {
+		return ""
+	}
+	return filepath.Join(m.dataDir, "listen_modes.json")
+}
+
+func (m *Manager) loadListenModes() error {
+	path := m.listenModesPath()
+	if path == "" {
+		return nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	var modes map[string]string
+	if err := json.Unmarshal(data, &modes); err != nil {
+		return err
+	}
+	for channelID, mode := range modes {
+		switch mode {
+		case "mention":
+			m.paused[channelID] = true
+		case "full":
+			m.paused[channelID] = false
+		}
+	}
+	return nil
+}
+
+func (m *Manager) saveListenModesLocked() error {
+	path := m.listenModesPath()
+	if path == "" {
+		return nil
+	}
+	modes := make(map[string]string, len(m.paused))
+	for channelID, paused := range m.paused {
+		if paused {
+			modes[channelID] = "mention"
+		} else {
+			modes[channelID] = "full"
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(modes, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 // HasFullListenOverride returns true when the channel/thread was explicitly
