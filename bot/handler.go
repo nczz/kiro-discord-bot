@@ -31,6 +31,24 @@ func isSelfMentioned(content, selfID string) bool {
 	return strings.Contains(content, "<@"+selfID+">") || strings.Contains(content, "<@!"+selfID+">")
 }
 
+func messageMentionsUser(m *discordgo.MessageCreate, content, userID string) bool {
+	if userID == "" {
+		return false
+	}
+	if isSelfMentioned(content, userID) {
+		return true
+	}
+	if m == nil || m.Message == nil {
+		return false
+	}
+	for _, u := range m.Mentions {
+		if u != nil && u.ID == userID {
+			return true
+		}
+	}
+	return false
+}
+
 func stripSelfMentions(content, selfID string) string {
 	content = strings.ReplaceAll(content, "<@"+selfID+">", "")
 	content = strings.ReplaceAll(content, "<@!"+selfID+">", "")
@@ -84,7 +102,7 @@ func (b *Bot) shouldAcceptBotResultMention(ds *discordgo.Session, m *discordgo.M
 	if m.Author == nil || !m.Author.Bot || m.Author.ID == selfID {
 		return false
 	}
-	if !isSelfMentioned(content, selfID) {
+	if !b.messageMentionsSelf(m, content, selfID) {
 		log.Printf("[bot-gate] ignored bot msg reason=no_mention source=%s channel=%s msg=%s", m.Author.ID, m.ChannelID, m.ID)
 		return false
 	}
@@ -92,7 +110,7 @@ func (b *Bot) shouldAcceptBotResultMention(ds *discordgo.Session, m *discordgo.M
 		log.Printf("[bot-gate] ignored bot mention reason=not_thread source=%s channel=%s msg=%s", m.Author.ID, m.ChannelID, m.ID)
 		return false
 	}
-	if isBotGeneratedNonResult(stripSelfMentions(content, selfID)) {
+	if isBotGeneratedNonResult(b.stripOwnMentions(content, selfID)) {
 		log.Printf("[bot-gate] ignored bot mention reason=non_result source=%s thread=%s msg=%s", m.Author.ID, m.ChannelID, m.ID)
 		return false
 	}
@@ -427,7 +445,7 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 		return
 	}
 
-	isMentioned := isSelfMentioned(content, selfID)
+	isMentioned := b.messageMentionsSelf(m, content, selfID)
 	isCommand := strings.HasPrefix(content, "!")
 
 	parentChannelID := resolveThreadParent(ds, m.ChannelID)
@@ -435,7 +453,7 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 		return
 	}
 
-	if !m.Author.Bot && !isMentioned && b.mentionsOtherPeer(content, selfID) {
+	if !m.Author.Bot && !isMentioned && b.messageMentionsOtherPeer(m, content, selfID) {
 		log.Printf("[handler] ignored human msg reason=other_peer_mentioned channel=%s thread=%t msg=%s", m.ChannelID, parentChannelID != "", m.ID)
 		return
 	}
@@ -452,7 +470,7 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 
 	// Strip mention prefix if present
 	if isMentioned {
-		content = stripSelfMentions(content, selfID)
+		content = b.stripOwnMentions(content, selfID)
 	}
 
 	// Check if message is from a thread — route to thread agent

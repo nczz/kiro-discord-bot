@@ -194,7 +194,7 @@ STT_MAX_DURATION_SEC=300
 | `TRUST_TOOLS` | Trust only specific tools (comma-separated names). Overrides `TRUST_ALL_TOOLS` when set | `` |
 | `PREFLIGHT_MODE` | Startup ACP check behavior: `warn`, `strict`, or `skip` | `warn` |
 | `SKIP_PREFLIGHT` | Legacy override; any non-empty value skips startup preflight | `` |
-| `BOT_PEERS` | Peer bot mention mapping for multi-bot coordination and handoffs, e.g. `M5Bot:1505737846013558834,ChunBot:1495737209616072815` | `` |
+| `BOT_PEERS` | Peer bot mention mapping for multi-bot coordination and handoffs. Format: `Name:userID` or `Name:userID:roleID`, e.g. `M5Bot:1505737846013558834:1505739836949008541,ChunBot:1495737209616072815:1495744143023149100` | `` |
 | `MCP_DISCORD_ALLOWED_GUILDS` | Comma-separated guild IDs the Discord MCP server may access (empty = unrestricted) | `` |
 | `MCP_DISCORD_ALLOWED_CHANNELS` | Comma-separated channel/thread IDs the Discord MCP server may access (empty = unrestricted) | `` |
 | `MCP_DISCORD_DOWNLOAD_DIR` | Restrict `discord_download_attachment` writes to this directory (empty = caller-selected directory) | `` |
@@ -355,7 +355,7 @@ Use `/back` or `!back` on the target bot to open full-listen mode for that chann
 
 **Thread discussions:** You can continue chatting with the agent inside any thread. A dedicated agent is spawned per thread with the original task context injected. Thread agents are independent from the main channel agent, so both can work in parallel. Thread agents are automatically closed after idle timeout (`THREAD_AGENT_IDLE_SEC`) or when the thread is archived. Use `!close` in a thread to manually close its agent.
 
-**Multi-bot handoff:** Configure `BOT_PEERS` with each bot's display name and Discord user ID. When more than one bot is known, human messages must mention the intended bot unless full-listen was opened with `/back`. Bot-authored messages are ignored by default; a peer bot handoff is only accepted inside a thread when the target bot is explicitly mentioned, the original task message already has the done reaction (`✅`), and the message is not just progress, error, timeout, or empty output. Each thread task includes recent Discord thread messages as bounded context, so a bot can see peer-bot replies that happened while it was paused or not directly addressed. This lets one bot ask another bot to continue work after the first bot has finished, without responding to every intermediate status update.
+**Multi-bot handoff:** Configure `BOT_PEERS` with each bot's display name and Discord user ID, optionally followed by the bot role ID. When more than one bot is known, human messages must mention the intended bot unless full-listen was opened with `/back`. User mentions such as `<@1505737846013558834>` and configured role mentions such as `<@&1505739836949008541>` both route to the target bot. Bot-authored messages are ignored by default; a peer bot handoff is only accepted inside a thread when the target bot is explicitly mentioned, the original task message already has the done reaction (`✅`), and the message is not just progress, error, timeout, or empty output. Each thread task includes recent Discord thread messages as bounded context, so a bot can see peer-bot replies that happened while it was paused or not directly addressed. This lets one bot ask another bot to continue work after the first bot has finished, without responding to every intermediate status update.
 
 Run `/doctor` in the target channel or thread to verify Discord permissions, configured peers, and whether the current context is open, open by `/back` override, or automatic multi-bot mention-only mode.
 
@@ -828,7 +828,7 @@ RUN_ACP_SMOKE=1 KIRO_CLI=/Users/chun/.local/bin/kiro-cli scripts/release-preflig
 - **Discord MCP 範圍**：用 `MCP_DISCORD_ALLOWED_GUILDS`、`MCP_DISCORD_ALLOWED_CHANNELS` 限制可操作的 guild/channel；用 `MCP_DISCORD_READ_ONLY`、`MCP_DISCORD_ALLOWED_WRITE_TOOLS` 或 `MCP_DISCORD_ALLOW_DESTRUCTIVE=false` 限制寫入工具
 - 回應被截斷時可用 `!resume` 補完
 - **討論串互動**：在 bot 建立的 thread 中發訊息，會自動啟動獨立的 thread agent 接續討論。閒置超過 `THREAD_AGENT_IDLE_SEC` 或 thread 歸檔時自動關閉，再次發訊息可重新啟動
-- **多 bot 模式**：用 `BOT_PEERS` 設定同 server 內其他 bot 的名稱與 Discord user ID。當設定中包含另一個 bot，頻道與討論串會自動改成 mention-only，避免互相回應形成 loop；請用真正的 Discord mention（例如 `<@1505737846013558834>` 或 Discord 介面的提及選單），純文字 `@M5Bot` 不一定會觸發。若要讓其中一個 bot 暫時恢復完整監聽，對該 bot 在主頻道執行 `/back` 或 `!back`，該主頻道底下的討論串也會繼承；若只想讓某條討論串回到 mention-only，可在該討論串執行 `/pause` 或 `!pause`
+- **多 bot 模式**：用 `BOT_PEERS` 設定同 server 內其他 bot 的名稱與 Discord user ID，可選擇再加 bot role ID，格式為 `Name:userID` 或 `Name:userID:roleID`。當設定中包含另一個 bot，頻道與討論串會自動改成 mention-only，避免互相回應形成 loop；請用真正的 Discord mention（例如 `<@1505737846013558834>` 或 Discord 介面的提及選單），若設定了 role ID，role mention（例如 `<@&1505739836949008541>`）也會路由到目標 bot；純文字 `@M5Bot` 不一定會觸發。若要讓其中一個 bot 暫時恢復完整監聽，對該 bot 在主頻道執行 `/back` 或 `!back`，該主頻道底下的討論串也會繼承；若只想讓某條討論串回到 mention-only，可在該討論串執行 `/pause` 或 `!pause`
 - **Bot 交接限制**：bot 產生的訊息預設不會觸發另一個 bot。只有在討論串內、明確 tag 目標 bot、原始任務訊息已有完成反應（`✅`），且內容不是進度、錯誤、逾時或空輸出時，才會被視為有效交接。每次討論串任務都會帶入近期 Discord 討論串訊息作為 bounded context，讓 bot 看得到自己被 pause 或未被直接 tag 期間，其他 peer bot 在同一討論串說過的內容
 - **部署診斷**：在目標頻道或討論串執行 `/doctor`，可確認 Discord 權限、`BOT_PEERS` 設定，以及目前是開放模式、`/back` override 開放模式，或自動多 bot mention-only 模式
 - **頻道 agent 閒置回收**：設定 `CHANNEL_AGENT_IDLE_SEC`（預設 `0` = 停用）可讓閒置的頻道 agent 自動關閉以釋放資源，下次發訊息時自動重啟

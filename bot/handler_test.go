@@ -55,10 +55,18 @@ func TestSelfMentionHelpers(t *testing.T) {
 	if got := stripSelfMentions("<@self> <@!self> review this", "self"); got != "review this" {
 		t.Fatalf("stripSelfMentions() = %q, want %q", got, "review this")
 	}
+
+	msg := &discordgo.MessageCreate{Message: &discordgo.Message{
+		Content:  "@M5Bot review this",
+		Mentions: []*discordgo.User{{ID: "self"}},
+	}}
+	if !messageMentionsUser(msg, msg.Content, "self") {
+		t.Fatal("expected structured Discord mention to match even without token text")
+	}
 }
 
 func TestMentionsOtherPeer(t *testing.T) {
-	b := &Bot{peers: parseBotPeers("M5Bot:bot-1,ChunBot:bot-2")}
+	b := &Bot{peers: parseBotPeers("M5Bot:bot-1:role-1,ChunBot:bot-2:role-2")}
 
 	if !b.mentionsOtherPeer("<@bot-2> review this", "bot-1") {
 		t.Fatal("expected mention of another configured peer to match")
@@ -71,6 +79,26 @@ func TestMentionsOtherPeer(t *testing.T) {
 	}
 	if b.mentionsOtherPeer("<@unknown> handle this", "bot-1") {
 		t.Fatal("did not expect unknown mention to count as other peer")
+	}
+
+	msg := &discordgo.MessageCreate{Message: &discordgo.Message{
+		Content:  "@ChunBot handle this",
+		Mentions: []*discordgo.User{{ID: "bot-2"}},
+	}}
+	if !b.messageMentionsOtherPeer(msg, msg.Content, "bot-1") {
+		t.Fatal("expected structured peer mention to match")
+	}
+	if b.messageMentionsOtherPeer(msg, msg.Content, "bot-2") {
+		t.Fatal("did not expect self structured mention to count as other peer")
+	}
+	if !b.messageMentionsOtherPeer(nil, "<@&role-2> handle this", "bot-1") {
+		t.Fatal("expected peer role mention to match")
+	}
+	if !b.messageMentionsSelf(nil, "<@&role-1> handle this", "bot-1") {
+		t.Fatal("expected self role mention to match")
+	}
+	if got := b.stripOwnMentions("<@&role-1> handle this", "bot-1"); got != "handle this" {
+		t.Fatalf("stripOwnMentions() = %q, want handle this", got)
 	}
 }
 

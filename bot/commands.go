@@ -196,7 +196,11 @@ func (b *Bot) doctorBotPeers(targetID string) string {
 		selfID = b.discord.State.User.ID
 	}
 	for _, p := range b.peers {
-		sb.WriteString(L.Getf("doctor.bot_peers.peer", p.Name, p.Mention(), p.ID) + "\n")
+		mention := p.Mention()
+		if roleMention := p.RoleMention(); roleMention != "" {
+			mention += " role " + roleMention
+		}
+		sb.WriteString(L.Getf("doctor.bot_peers.peer", p.Name, mention, p.ID) + "\n")
 	}
 	if b.multiBotMode(selfID) {
 		if b.manager != nil && b.manager.HasFullListenOverride(targetID) {

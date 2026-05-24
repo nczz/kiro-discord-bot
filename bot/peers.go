@@ -3,11 +3,14 @@ package bot
 import (
 	"fmt"
 	"strings"
+
+	"github.com/bwmarrin/discordgo"
 )
 
 type BotPeer struct {
-	Name string
-	ID   string
+	Name   string
+	ID     string
+	RoleID string
 }
 
 func parseBotPeers(raw string) []BotPeer {
@@ -17,19 +20,43 @@ func parseBotPeers(raw string) []BotPeer {
 		if item == "" {
 			continue
 		}
-		name, id, ok := strings.Cut(item, ":")
+		name, rest, ok := strings.Cut(item, ":")
 		name = strings.TrimSpace(name)
-		id = strings.TrimSpace(id)
+		id := strings.TrimSpace(rest)
+		roleID := ""
+		if ok {
+			id, roleID, _ = strings.Cut(rest, ":")
+			id = strings.TrimSpace(id)
+			roleID = strings.TrimSpace(roleID)
+		}
 		if !ok || name == "" || id == "" {
 			continue
 		}
-		peers = append(peers, BotPeer{Name: name, ID: id})
+		peers = append(peers, BotPeer{Name: name, ID: id, RoleID: roleID})
 	}
 	return peers
 }
 
 func (p BotPeer) Mention() string {
 	return "<@" + p.ID + ">"
+}
+
+func (p BotPeer) RoleMention() string {
+	if p.RoleID == "" {
+		return ""
+	}
+	return "<@&" + p.RoleID + ">"
+}
+
+func isRoleMentioned(content, roleID string) bool {
+	return roleID != "" && strings.Contains(content, "<@&"+roleID+">")
+}
+
+func stripRoleMention(content, roleID string) string {
+	if roleID == "" {
+		return strings.TrimSpace(content)
+	}
+	return strings.TrimSpace(strings.ReplaceAll(content, "<@&"+roleID+">", ""))
 }
 
 func (b *Bot) multiBotMode(selfID string) bool {
@@ -51,6 +78,40 @@ func (b *Bot) mentionsOtherPeer(content, selfID string) bool {
 		}
 	}
 	return false
+}
+
+func (b *Bot) messageMentionsOtherPeer(m *discordgo.MessageCreate, content, selfID string) bool {
+	for _, p := range b.peers {
+		if p.ID == "" || p.ID == selfID {
+			continue
+		}
+		if messageMentionsUser(m, content, p.ID) || isRoleMentioned(content, p.RoleID) {
+			return true
+		}
+	}
+	return false
+}
+
+func (b *Bot) messageMentionsSelf(m *discordgo.MessageCreate, content, selfID string) bool {
+	if messageMentionsUser(m, content, selfID) {
+		return true
+	}
+	for _, p := range b.peers {
+		if p.ID == selfID && isRoleMentioned(content, p.RoleID) {
+			return true
+		}
+	}
+	return false
+}
+
+func (b *Bot) stripOwnMentions(content, selfID string) string {
+	content = stripSelfMentions(content, selfID)
+	for _, p := range b.peers {
+		if p.ID == selfID {
+			content = stripRoleMention(content, p.RoleID)
+		}
+	}
+	return strings.TrimSpace(content)
 }
 
 func (b *Bot) requiresHumanMention(targetID, parentChannelID, selfID string) bool {
@@ -85,12 +146,16 @@ func (b *Bot) peerPromptContext(selfID string) string {
 	sb.WriteString("[Discord bot peers]\n")
 	var hasHandoffPeer bool
 	for _, p := range b.peers {
+		roleText := ""
+		if roleMention := p.RoleMention(); roleMention != "" {
+			roleText = fmt.Sprintf(" role_mention=%s", roleMention)
+		}
 		if p.ID == selfID {
-			sb.WriteString(fmt.Sprintf("- self=%s id=%s mention=%s\n", p.Name, p.ID, p.Mention()))
+			sb.WriteString(fmt.Sprintf("- self=%s id=%s mention=%s%s\n", p.Name, p.ID, p.Mention(), roleText))
 			continue
 		}
 		hasHandoffPeer = true
-		sb.WriteString(fmt.Sprintf("- handoff_peer=%s id=%s mention=%s\n", p.Name, p.ID, p.Mention()))
+		sb.WriteString(fmt.Sprintf("- handoff_peer=%s id=%s mention=%s%s\n", p.Name, p.ID, p.Mention(), roleText))
 	}
 	sb.WriteString("[Discord bot handoff rules]\n")
 	if hasHandoffPeer {
