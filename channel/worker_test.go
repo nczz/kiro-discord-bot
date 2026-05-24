@@ -93,8 +93,8 @@ func TestPromptVisibleBodySkipsDiscordMetadataBlocks(t *testing.T) {
 [Discord context] channel_id=1 guild_id=2 user=mxp
 
 [Discord bot peers]
-- M5Bot id=1505737846013558834 mention=<@1505737846013558834>
-- ChunBot id=1495737209616072815 mention=<@1495737209616072815>
+- BuildBot id=111111111111111111 mention=<@111111111111111111>
+- ReviewBot id=333333333333333333 mention=<@333333333333333333>
 [Discord bot handoff rules]
 - Use the peer mention token exactly.
 

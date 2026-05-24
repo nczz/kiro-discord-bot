@@ -2,21 +2,31 @@ package bot
 
 import (
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/bwmarrin/discordgo"
 )
 
 type BotPeer struct {
-	Name   string
-	ID     string
-	RoleID string
+	Name    string
+	ID      string
+	RoleID  string
+	Exclude bool
 }
 
 func parseBotPeers(raw string) []BotPeer {
 	var peers []BotPeer
 	for _, item := range strings.Split(raw, ",") {
 		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		exclude := false
+		if strings.HasPrefix(item, "!") || strings.HasPrefix(item, "-") {
+			exclude = true
+			item = strings.TrimSpace(item[1:])
+		}
 		if item == "" {
 			continue
 		}
@@ -29,12 +39,76 @@ func parseBotPeers(raw string) []BotPeer {
 			id = strings.TrimSpace(id)
 			roleID = strings.TrimSpace(roleID)
 		}
-		if !ok || name == "" || id == "" {
+		if !ok && exclude {
+			id = name
+			name = ""
+		} else if !ok {
 			continue
 		}
-		peers = append(peers, BotPeer{Name: name, ID: id, RoleID: roleID})
+		if id == "" {
+			continue
+		}
+		peers = append(peers, BotPeer{Name: name, ID: id, RoleID: roleID, Exclude: exclude})
 	}
 	return peers
+}
+
+func activeBotPeers(peers []BotPeer) []BotPeer {
+	var active []BotPeer
+	for _, p := range peers {
+		if p.ID != "" && !p.Exclude {
+			active = append(active, p)
+		}
+	}
+	return active
+}
+
+func mergeBotPeers(discovered, manual []BotPeer) []BotPeer {
+	merged := make(map[string]BotPeer)
+	order := make([]string, 0, len(discovered)+len(manual))
+	add := func(p BotPeer) {
+		if p.ID == "" {
+			return
+		}
+		if p.Exclude {
+			delete(merged, p.ID)
+			return
+		}
+		if _, ok := merged[p.ID]; !ok {
+			order = append(order, p.ID)
+		}
+		merged[p.ID] = p
+	}
+	for _, p := range discovered {
+		add(p)
+	}
+	for _, p := range manual {
+		add(p)
+	}
+	var peers []BotPeer
+	for _, id := range order {
+		if p, ok := merged[id]; ok {
+			peers = append(peers, p)
+		}
+	}
+	return peers
+}
+
+func (b *Bot) peerSnapshot() []BotPeer {
+	if b == nil {
+		return nil
+	}
+	b.peerMu.RLock()
+	defer b.peerMu.RUnlock()
+	peers := make([]BotPeer, len(b.peers))
+	copy(peers, b.peers)
+	return peers
+}
+
+func (b *Bot) setDiscoveredPeers(discovered []BotPeer) {
+	b.peerMu.Lock()
+	defer b.peerMu.Unlock()
+	b.peers = mergeBotPeers(discovered, b.manualPeers)
 }
 
 func (p BotPeer) Mention() string {
@@ -60,7 +134,7 @@ func stripRoleMention(content, roleID string) string {
 }
 
 func (b *Bot) multiBotMode(selfID string) bool {
-	for _, p := range b.peers {
+	for _, p := range b.peerSnapshot() {
 		if p.ID != "" && p.ID != selfID {
 			return true
 		}
@@ -69,7 +143,7 @@ func (b *Bot) multiBotMode(selfID string) bool {
 }
 
 func (b *Bot) mentionsOtherPeer(content, selfID string) bool {
-	for _, p := range b.peers {
+	for _, p := range b.peerSnapshot() {
 		if p.ID == "" || p.ID == selfID {
 			continue
 		}
@@ -81,7 +155,7 @@ func (b *Bot) mentionsOtherPeer(content, selfID string) bool {
 }
 
 func (b *Bot) messageMentionsOtherPeer(m *discordgo.MessageCreate, content, selfID string) bool {
-	for _, p := range b.peers {
+	for _, p := range b.peerSnapshot() {
 		if p.ID == "" || p.ID == selfID {
 			continue
 		}
@@ -96,7 +170,7 @@ func (b *Bot) messageMentionsSelf(m *discordgo.MessageCreate, content, selfID st
 	if messageMentionsUser(m, content, selfID) {
 		return true
 	}
-	for _, p := range b.peers {
+	for _, p := range b.peerSnapshot() {
 		if p.ID == selfID && isRoleMentioned(content, p.RoleID) {
 			return true
 		}
@@ -106,7 +180,7 @@ func (b *Bot) messageMentionsSelf(m *discordgo.MessageCreate, content, selfID st
 
 func (b *Bot) stripOwnMentions(content, selfID string) string {
 	content = stripSelfMentions(content, selfID)
-	for _, p := range b.peers {
+	for _, p := range b.peerSnapshot() {
 		if p.ID == selfID {
 			content = stripRoleMention(content, p.RoleID)
 		}
@@ -139,13 +213,14 @@ func (b *Bot) requiresHumanMention(targetID, parentChannelID, selfID string) boo
 }
 
 func (b *Bot) peerPromptContext(selfID string) string {
-	if len(b.peers) == 0 {
+	peers := b.peerSnapshot()
+	if len(peers) == 0 {
 		return ""
 	}
 	var sb strings.Builder
 	sb.WriteString("[Discord bot peers]\n")
 	var hasHandoffPeer bool
-	for _, p := range b.peers {
+	for _, p := range peers {
 		roleText := ""
 		if roleMention := p.RoleMention(); roleMention != "" {
 			roleText = fmt.Sprintf(" role_mention=%s", roleMention)
@@ -165,4 +240,136 @@ func (b *Bot) peerPromptContext(selfID string) string {
 	sb.WriteString("- Never mention yourself for handoff.\n")
 	sb.WriteString("- Do not mention another bot in progress updates, errors, tool output summaries, or casual replies.\n")
 	return sb.String()
+}
+
+func (b *Bot) discoverBotPeers(ds *discordgo.Session, ready *discordgo.Ready) {
+	if ds == nil || ready == nil || ready.User == nil {
+		return
+	}
+	guildIDs := b.peerDiscoveryGuildIDs(ready)
+	if len(guildIDs) == 0 {
+		log.Printf("[peers] discovery skipped: no guild available")
+		return
+	}
+
+	var discovered []BotPeer
+	for _, guildID := range guildIDs {
+		roles, err := b.guildRoles(ds, guildID)
+		if err != nil {
+			log.Printf("[peers] discover roles guild=%s: %v", guildID, err)
+		}
+		members, err := b.guildMembers(ds, guildID)
+		if err != nil {
+			log.Printf("[peers] discover members guild=%s: %v", guildID, err)
+			continue
+		}
+		roleByID := make(map[string]*discordgo.Role, len(roles))
+		for _, role := range roles {
+			if role != nil {
+				roleByID[role.ID] = role
+			}
+		}
+		for _, member := range members {
+			if member == nil || member.User == nil || !member.User.Bot {
+				continue
+			}
+			name := member.DisplayName()
+			if name == "" {
+				name = member.User.Username
+			}
+			discovered = append(discovered, BotPeer{
+				Name:   name,
+				ID:     member.User.ID,
+				RoleID: botRoleID(member, roleByID),
+			})
+		}
+	}
+	b.setDiscoveredPeers(discovered)
+	log.Printf("[peers] discovery complete guilds=%d discovered=%d manual=%d active=%d", len(guildIDs), len(discovered), len(b.manualPeers), len(b.peerSnapshot()))
+}
+
+func (b *Bot) peerDiscoveryGuildIDs(ready *discordgo.Ready) []string {
+	if b.guildID != "" {
+		return []string{b.guildID}
+	}
+	seen := make(map[string]bool)
+	var ids []string
+	for _, guild := range ready.Guilds {
+		if guild != nil && guild.ID != "" && !seen[guild.ID] {
+			seen[guild.ID] = true
+			ids = append(ids, guild.ID)
+		}
+	}
+	return ids
+}
+
+func (b *Bot) guildRoles(ds *discordgo.Session, guildID string) ([]*discordgo.Role, error) {
+	if ds.State != nil {
+		if guild, err := ds.State.Guild(guildID); err == nil && guild != nil && len(guild.Roles) > 0 {
+			return guild.Roles, nil
+		}
+	}
+	return ds.GuildRoles(guildID)
+}
+
+func (b *Bot) guildMembers(ds *discordgo.Session, guildID string) ([]*discordgo.Member, error) {
+	if ds.State != nil {
+		if guild, err := ds.State.Guild(guildID); err == nil && guild != nil && len(guild.Members) > 0 {
+			return guild.Members, nil
+		}
+	}
+	var all []*discordgo.Member
+	after := ""
+	for {
+		members, err := ds.GuildMembers(guildID, after, 1000)
+		if err != nil {
+			return all, err
+		}
+		all = append(all, members...)
+		if len(members) < 1000 {
+			break
+		}
+		last := members[len(members)-1]
+		if last == nil || last.User == nil || last.User.ID == "" {
+			break
+		}
+		after = last.User.ID
+	}
+	return all, nil
+}
+
+func botRoleID(member *discordgo.Member, roleByID map[string]*discordgo.Role) string {
+	if member == nil || member.User == nil {
+		return ""
+	}
+	display := strings.ToLower(member.DisplayName())
+	username := strings.ToLower(member.User.Username)
+	var firstManaged string
+	for _, roleID := range member.Roles {
+		role := roleByID[roleID]
+		if role == nil {
+			continue
+		}
+		roleName := strings.ToLower(role.Name)
+		if role.Managed && firstManaged == "" {
+			firstManaged = role.ID
+		}
+		if role.Managed && (roleName == display || roleName == username) {
+			return role.ID
+		}
+	}
+	if firstManaged != "" {
+		return firstManaged
+	}
+	for _, roleID := range member.Roles {
+		role := roleByID[roleID]
+		if role == nil {
+			continue
+		}
+		roleName := strings.ToLower(role.Name)
+		if roleName == display || roleName == username {
+			return role.ID
+		}
+	}
+	return ""
 }

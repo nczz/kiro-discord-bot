@@ -186,7 +186,8 @@ func (b *Bot) doctorPermissionSet(label, userID, channelID string, checks []perm
 func (b *Bot) doctorBotPeers(targetID string) string {
 	var sb strings.Builder
 	sb.WriteString("\n**" + L.Get("doctor.bot_peers.title") + "**\n")
-	if len(b.peers) == 0 {
+	peers := b.peerSnapshot()
+	if len(peers) == 0 {
 		sb.WriteString(L.Get("doctor.bot_peers.not_configured") + "\n")
 		sb.WriteString(L.Get("doctor.bot_peers.channel_mode_open") + "\n")
 		return sb.String()
@@ -195,7 +196,7 @@ func (b *Bot) doctorBotPeers(targetID string) string {
 	if b.discord != nil && b.discord.State != nil && b.discord.State.User != nil {
 		selfID = b.discord.State.User.ID
 	}
-	for _, p := range b.peers {
+	for _, p := range peers {
 		mention := p.Mention()
 		if roleMention := p.RoleMention(); roleMention != "" {
 			mention += " role " + roleMention

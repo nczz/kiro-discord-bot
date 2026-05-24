@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
@@ -28,7 +29,9 @@ type Bot struct {
 	seen               *seenMessages
 	sttClient          *stt.Client
 	sttMaxDuration     int
+	peerMu             sync.RWMutex
 	peers              []BotPeer
+	manualPeers        []BotPeer
 	cronPromptCache    cronPromptStore // parsed cron jobs awaiting button confirmation
 }
 
@@ -75,12 +78,14 @@ func NewFromConfig(cfg BotConfig) (*Bot, error) {
 	cfg.ManagerConfig.Store = store
 	manager := channel.NewManager(cfg.ManagerConfig)
 
+	manualPeers := parseBotPeers(cfg.BotPeers)
 	b := &Bot{discord: ds, manager: manager, guildID: cfg.GuildID, dataDir: cfg.DataDir, cronTimezone: cfg.CronTimezone, version: cfg.BotVersion,
 		downloadClient:     &http.Client{Timeout: time.Duration(cfg.DownloadTimeoutSec) * time.Second},
 		attachmentMaxBytes: cfg.AttachmentMaxBytes,
 		seen:               newSeenMessages(),
 		sttMaxDuration:     cfg.STTMaxDurationSec,
-		peers:              parseBotPeers(cfg.BotPeers),
+		peers:              activeBotPeers(manualPeers),
+		manualPeers:        manualPeers,
 	}
 	if cfg.STTEnabled && cfg.STTAPIKey != "" {
 		b.sttClient = stt.New(cfg.STTProvider, cfg.STTAPIKey, cfg.STTModel, cfg.STTLanguage)
@@ -112,6 +117,7 @@ func NewFromConfig(cfg BotConfig) (*Bot, error) {
 func (b *Bot) Start() error {
 	b.discord.AddHandler(func(ds *discordgo.Session, r *discordgo.Ready) {
 		log.Printf("Bot running as %s#%s", r.User.Username, r.User.Discriminator)
+		b.discoverBotPeers(ds, r)
 		_ = ds.UpdateGameStatus(0, "kiro-cli agent "+b.version)
 		b.registerSlashCommands()
 	})
