@@ -47,12 +47,13 @@ func TestMergeBotPeersManualOverridesDiscovery(t *testing.T) {
 		{Name: "AutoSelf", ID: "bot-1", RoleID: "auto-role-1"},
 		{Name: "AutoPeer", ID: "bot-2", RoleID: "auto-role-2"},
 		{Name: "UnrelatedBot", ID: "bot-3", RoleID: "auto-role-3"},
+		{Name: "RoleOnly", RoleID: "role-only"},
 	}
-	manual := parseBotPeers("ManualPeer:bot-2:manual-role-2,!bot-3,ExtraBot:bot-4:role-4")
+	manual := parseBotPeers("ManualPeer:bot-2:manual-role-2,!bot-3,ExtraBot:bot-4:role-4,ManualRole:bot-5:role-only")
 
 	got := mergeBotPeers(discovered, manual)
-	if len(got) != 3 {
-		t.Fatalf("len = %d, want 3: %#v", len(got), got)
+	if len(got) != 4 {
+		t.Fatalf("len = %d, want 4: %#v", len(got), got)
 	}
 	if got[1].Name != "ManualPeer" || got[1].RoleID != "manual-role-2" {
 		t.Fatalf("manual override not applied: %#v", got[1])
@@ -62,8 +63,28 @@ func TestMergeBotPeersManualOverridesDiscovery(t *testing.T) {
 			t.Fatalf("excluded peer remained: %#v", got)
 		}
 	}
-	if got[2].ID != "bot-4" {
+	if got[2].ID != "bot-5" || got[2].RoleID != "role-only" {
+		t.Fatalf("manual role override missing: %#v", got)
+	}
+	if got[3].ID != "bot-4" {
 		t.Fatalf("manual extra peer missing: %#v", got)
+	}
+}
+
+func TestRoleOnlyPeerTriggersMultiBotAndMentions(t *testing.T) {
+	b := &Bot{peers: []BotPeer{
+		{Name: "SelfBot", ID: "bot-1", RoleID: "role-1"},
+		{Name: "PeerRoleOnly", RoleID: "role-2"},
+	}}
+
+	if !b.multiBotMode("bot-1") {
+		t.Fatal("role-only peer should enable multi-bot mode")
+	}
+	if !b.messageMentionsOtherPeer(nil, "<@&role-2> handle this", "bot-1") {
+		t.Fatal("role-only peer mention should count as another peer")
+	}
+	if b.messageMentionsOtherPeer(nil, "<@&role-1> handle this", "bot-1") {
+		t.Fatal("self role mention should not count as another peer")
 	}
 }
 

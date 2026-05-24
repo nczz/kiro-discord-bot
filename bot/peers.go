@@ -65,19 +65,57 @@ func activeBotPeers(peers []BotPeer) []BotPeer {
 
 func mergeBotPeers(discovered, manual []BotPeer) []BotPeer {
 	merged := make(map[string]BotPeer)
+	keyByID := make(map[string]string)
+	keyByRoleID := make(map[string]string)
 	order := make([]string, 0, len(discovered)+len(manual))
+	keyFor := func(p BotPeer) string {
+		if p.ID != "" {
+			return "id:" + p.ID
+		}
+		if p.RoleID != "" {
+			return "role:" + p.RoleID
+		}
+		return ""
+	}
 	add := func(p BotPeer) {
-		if p.ID == "" {
+		key := keyFor(p)
+		if key == "" {
 			return
 		}
 		if p.Exclude {
-			delete(merged, p.ID)
+			if existing := keyByID[p.ID]; existing != "" {
+				delete(merged, existing)
+			}
+			if existing := keyByRoleID[p.ID]; existing != "" {
+				delete(merged, existing)
+			}
+			if existing := keyByRoleID[p.RoleID]; existing != "" {
+				delete(merged, existing)
+			}
+			delete(merged, key)
 			return
 		}
-		if _, ok := merged[p.ID]; !ok {
-			order = append(order, p.ID)
+		if p.ID != "" {
+			if existing := keyByID[p.ID]; existing != "" {
+				key = existing
+			} else if existing := keyByRoleID[p.RoleID]; existing != "" {
+				key = existing
+			}
+		} else if p.RoleID != "" {
+			if existing := keyByRoleID[p.RoleID]; existing != "" {
+				key = existing
+			}
 		}
-		merged[p.ID] = p
+		if _, ok := merged[key]; !ok {
+			order = append(order, key)
+		}
+		merged[key] = p
+		if p.ID != "" {
+			keyByID[p.ID] = key
+		}
+		if p.RoleID != "" {
+			keyByRoleID[p.RoleID] = key
+		}
 	}
 	for _, p := range discovered {
 		add(p)
@@ -112,6 +150,9 @@ func (b *Bot) setDiscoveredPeers(discovered []BotPeer) {
 }
 
 func (p BotPeer) Mention() string {
+	if p.ID == "" {
+		return ""
+	}
 	return "<@" + p.ID + ">"
 }
 
@@ -134,8 +175,18 @@ func stripRoleMention(content, roleID string) string {
 }
 
 func (b *Bot) multiBotMode(selfID string) bool {
-	for _, p := range b.peerSnapshot() {
+	peers := b.peerSnapshot()
+	selfRoles := make(map[string]bool)
+	for _, p := range peers {
+		if p.ID == selfID && p.RoleID != "" {
+			selfRoles[p.RoleID] = true
+		}
+	}
+	for _, p := range peers {
 		if p.ID != "" && p.ID != selfID {
+			return true
+		}
+		if p.ID == "" && p.RoleID != "" && !selfRoles[p.RoleID] {
 			return true
 		}
 	}
@@ -145,9 +196,12 @@ func (b *Bot) multiBotMode(selfID string) bool {
 func (b *Bot) mentionsOtherPeer(content, selfID string) bool {
 	for _, p := range b.peerSnapshot() {
 		if p.ID == "" || p.ID == selfID {
-			continue
+			if p.ID == selfID || !isRoleMentioned(content, p.RoleID) {
+				continue
+			}
+			return true
 		}
-		if isSelfMentioned(content, p.ID) {
+		if isSelfMentioned(content, p.ID) || isRoleMentioned(content, p.RoleID) {
 			return true
 		}
 	}
@@ -156,11 +210,21 @@ func (b *Bot) mentionsOtherPeer(content, selfID string) bool {
 
 func (b *Bot) messageMentionsOtherPeer(m *discordgo.MessageCreate, content, selfID string) bool {
 	for _, p := range b.peerSnapshot() {
-		if p.ID == "" || p.ID == selfID {
+		if p.ID == selfID {
 			continue
 		}
-		if messageMentionsUser(m, content, p.ID) || isRoleMentioned(content, p.RoleID) {
+		if p.ID != "" && messageMentionsUser(m, content, p.ID) {
 			return true
+		}
+		if isRoleMentioned(content, p.RoleID) {
+			return true
+		}
+	}
+	if m != nil && m.Message != nil {
+		for _, u := range m.Mentions {
+			if u != nil && u.Bot && u.ID != "" && u.ID != selfID {
+				return true
+			}
 		}
 	}
 	return false
@@ -230,6 +294,10 @@ func (b *Bot) peerPromptContext(selfID string) string {
 			continue
 		}
 		hasHandoffPeer = true
+		if p.ID == "" {
+			sb.WriteString(fmt.Sprintf("- handoff_peer=%s%s\n", p.Name, roleText))
+			continue
+		}
 		sb.WriteString(fmt.Sprintf("- handoff_peer=%s id=%s mention=%s%s\n", p.Name, p.ID, p.Mention(), roleText))
 	}
 	sb.WriteString("[Discord bot handoff rules]\n")
@@ -282,6 +350,18 @@ func (b *Bot) discoverBotPeers(ds *discordgo.Session, ready *discordgo.Ready) {
 				ID:     member.User.ID,
 				RoleID: botRoleID(member, roleByID),
 			})
+		}
+		knownRoleIDs := make(map[string]bool)
+		for _, p := range discovered {
+			if p.RoleID != "" {
+				knownRoleIDs[p.RoleID] = true
+			}
+		}
+		for _, role := range roles {
+			if role == nil || !role.Managed || knownRoleIDs[role.ID] {
+				continue
+			}
+			discovered = append(discovered, BotPeer{Name: role.Name, RoleID: role.ID})
 		}
 	}
 	b.setDiscoveredPeers(discovered)

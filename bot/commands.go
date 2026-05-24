@@ -199,7 +199,11 @@ func (b *Bot) doctorBotPeers(targetID string) string {
 	for _, p := range peers {
 		mention := p.Mention()
 		if roleMention := p.RoleMention(); roleMention != "" {
-			mention += " role " + roleMention
+			if mention == "" {
+				mention = roleMention
+			} else {
+				mention += " role " + roleMention
+			}
 		}
 		sb.WriteString(L.Getf("doctor.bot_peers.peer", p.Name, mention, p.ID) + "\n")
 	}
