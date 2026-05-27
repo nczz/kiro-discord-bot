@@ -7,20 +7,24 @@ import (
 	"sync"
 )
 
-// Session holds the mapping between a Discord channel and a kiro-cli agent.
+// Session holds the mapping between a Discord target and a kiro-cli agent.
 type Session struct {
-	AgentName string `json:"agentName"`
-	SessionID string `json:"sessionId"`
-	CWD       string `json:"cwd"`
-	Model     string `json:"model,omitempty"`
-	GuildID   string `json:"guildId,omitempty"`
+	AgentName       string `json:"agentName"`
+	SessionID       string `json:"sessionId"`
+	CWD             string `json:"cwd"`
+	Model           string `json:"model,omitempty"`
+	GuildID         string `json:"guildId,omitempty"`
+	BotID           string `json:"botId,omitempty"`
+	TargetType      string `json:"targetType,omitempty"`
+	TargetID        string `json:"targetId,omitempty"`
+	ParentChannelID string `json:"parentChannelId,omitempty"`
 }
 
-// SessionStore persists channel→session mappings to a JSON file.
+// SessionStore persists Discord target to ACP session mappings to a JSON file.
 type SessionStore struct {
 	mu       sync.RWMutex
 	path     string
-	sessions map[string]*Session // key: channelID
+	sessions map[string]*Session // key: scoped manager session key
 }
 
 func NewSessionStore(dataDir string) (*SessionStore, error) {

@@ -360,7 +360,7 @@ Use `/back` or `!back` on the target bot to open full-listen mode for that chann
 
 **Thread discussions:** You can continue chatting with the agent inside any thread. A dedicated agent is spawned per thread with the original task context injected. Thread agents are independent from the main channel agent, so both can work in parallel. Thread agents are automatically closed after idle timeout (`THREAD_AGENT_IDLE_SEC`) or when the thread is archived. Use `!close` in a thread to manually close its agent.
 
-**Multi-bot handoff:** Peer bots are auto-discovered from Discord guild bot members at startup, including their bot role when available. `BOT_PEERS` is only needed to override a discovered name/role, add a bot that discovery cannot see, or exclude an unrelated bot with `!userID`. When more than one bot is known, human messages must mention the intended bot unless full-listen was opened with `/back`. User mentions such as `<@111111111111111111>` and discovered or configured role mentions such as `<@&222222222222222222>` both route to the target bot. Bot-authored messages are ignored by default; a peer bot handoff is only accepted inside a thread when the target bot is explicitly mentioned, the original task message already has the done reaction (`✅`), and the message is not just progress, error, timeout, or empty output. Each thread task includes recent Discord thread messages as bounded context, so a bot can see peer-bot replies that happened while it was paused or not directly addressed. This lets one bot ask another bot to continue work after the first bot has finished, without responding to every intermediate status update.
+**Multi-bot handoff:** Peer bots are auto-discovered from Discord guild bot members at startup, including their bot role when available. `BOT_PEERS` is only needed to override a discovered name/role, add a bot that discovery cannot see, or exclude an unrelated bot with `!userID`. When more than one bot is known, human messages must mention the intended bot unless full-listen was opened with `/back`. User mentions such as `<@111111111111111111>` and discovered or configured role mentions such as `<@&222222222222222222>` both route to the target bot. Bot-authored messages are ignored by default; a peer bot handoff is only accepted inside a thread when the target bot is explicitly mentioned, the original task message already has the done reaction (`✅`), and the message is not just progress, error, timeout, or empty output. Normal thread tasks include recent Discord thread messages as bounded context. Accepted cross-bot handoffs include a longer thread transcript as handoff context, so the receiving bot can understand the task, prior decisions, files, results, and remaining work before acting. This lets one bot ask another bot to continue work after the first bot has finished, without responding to every intermediate status update.
 
 Run `/doctor` in the target channel or thread to verify Discord permissions, configured peers, and whether the current context is open, open by `/back` override, or automatic multi-bot mention-only mode.
 
@@ -402,7 +402,7 @@ Discord User
     │ message / slash command
     ▼
 Discord Bot (Go)
-    ├── per-channel SessionStore   { agentName, sessionId, cwd }
+    ├── scoped SessionStore        { agentName, sessionId, cwd, botID, channel/thread target }
     ├── per-channel JobQueue       buffered chan, FIFO
     ├── per-channel Worker         goroutine, async thread-based execution
     ├── per-thread Agent (on demand) isolated context, auto-cleanup on idle/archive
@@ -659,7 +659,7 @@ The agent will read the guide, build the binary, update `mcp.json`, and prompt y
 
 ## Notes
 
-- **Session persistence:** When kiro-cli advertises `loadSession`, bot restart first tries `session/load` for the stored ACP session. If loading is unavailable or fails, the bot creates a new session and injects recent JSONL conversation history into the first prompt (budget-based: recent turns kept intact, older turns truncated, 20K char default).
+- **Session persistence:** Channel and thread agents persist ACP session IDs in `DATA_DIR/sessions.json`. When kiro-cli advertises `loadSession`, bot restart first tries `session/load` for the stored ACP session. If loading is unavailable or fails, the bot creates a new session and injects recent JSONL/Discord conversation history into the first prompt. Stored session keys are scoped by guild, bot identity, target type, and target ID; legacy channel-only keys are still read as a migration fallback.
 - **MCP servers:** Inherited from `~/.kiro/settings/mcp.json` automatically. Note: ACP `session/new` mcpServers field is currently ignored by kiro-cli ([#7349](https://github.com/kirodotdev/Kiro/issues/7349)).
 - **Discord MCP scope:** Use `MCP_DISCORD_ALLOWED_GUILDS` and `MCP_DISCORD_ALLOWED_CHANNELS` before exposing tools to broad workspaces. Use `MCP_DISCORD_READ_ONLY`, `MCP_DISCORD_ALLOWED_WRITE_TOOLS`, or `MCP_DISCORD_ALLOW_DESTRUCTIVE=false` to restrict write tools. Empty allowlists preserve unrestricted legacy behavior.
 - **Project steering:** Add `.kiro/steering/*.md` in the project directory or `~/.kiro/steering/` globally to guide agent behavior.
@@ -828,13 +828,13 @@ RUN_ACP_SMOKE=1 KIRO_CLI=/Users/chun/.local/bin/kiro-cli scripts/release-preflig
 ### 注意事項
 
 - Bot 需要在各 channel 的權限設定中明確授予讀寫權限
-- Session 在 agent process 存活期間持續，bot 重啟後建立新 session
+- Session ID 會存到 `DATA_DIR/sessions.json`；當 kiro-cli 宣告支援 `loadSession` 時，頻道與討論串 agent 重啟會優先用 `session/load` 接回既有 ACP session。Session key 會依 guild、bot 身分、目標類型與 channel/thread ID 分開；舊版 channel-only key 仍會作為遷移 fallback 讀取
 - MCP 設定自動繼承 `~/.kiro/settings/mcp.json`
 - **Discord MCP 範圍**：用 `MCP_DISCORD_ALLOWED_GUILDS`、`MCP_DISCORD_ALLOWED_CHANNELS` 限制可操作的 guild/channel；用 `MCP_DISCORD_READ_ONLY`、`MCP_DISCORD_ALLOWED_WRITE_TOOLS` 或 `MCP_DISCORD_ALLOW_DESTRUCTIVE=false` 限制寫入工具
 - 回應被截斷時可用 `!resume` 補完
 - **討論串互動**：在 bot 建立的 thread 中發訊息，會自動啟動獨立的 thread agent 接續討論。閒置超過 `THREAD_AGENT_IDLE_SEC` 或 thread 歸檔時自動關閉，再次發訊息可重新啟動
 - **多 bot 模式**：bot 啟動時會從 Discord guild bot members 自動偵測同 server 內其他 bot，並盡量補上 bot role。`BOT_PEERS` 只需要用來覆蓋偵測結果、補上偵測不到的 bot，或用 `!userID` 排除無關 bot；格式為 `Name:userID`、`Name:userID:roleID` 或 `!userID`。當偵測到另一個 bot，頻道與討論串會自動改成 mention-only，避免互相回應形成 loop；請用真正的 Discord mention（例如 `<@111111111111111111>` 或 Discord 介面的提及選單），若偵測或設定了 role ID，role mention（例如 `<@&222222222222222222>`）也會路由到目標 bot；純文字 `@BuildBot` 不一定會觸發。若要讓其中一個 bot 暫時恢復完整監聽，對該 bot 在主頻道執行 `/back` 或 `!back`，該主頻道底下的討論串也會繼承；若只想讓某條討論串回到 mention-only，可在該討論串執行 `/pause` 或 `!pause`
-- **Bot 交接限制**：bot 產生的訊息預設不會觸發另一個 bot。只有在討論串內、明確 tag 目標 bot、原始任務訊息已有完成反應（`✅`），且內容不是進度、錯誤、逾時或空輸出時，才會被視為有效交接。每次討論串任務都會帶入近期 Discord 討論串訊息作為 bounded context，讓 bot 看得到自己被 pause 或未被直接 tag 期間，其他 peer bot 在同一討論串說過的內容
+- **Bot 交接限制**：bot 產生的訊息預設不會觸發另一個 bot。只有在討論串內、明確 tag 目標 bot、原始任務訊息已有完成反應（`✅`），且內容不是進度、錯誤、逾時或空輸出時，才會被視為有效交接。一般討論串任務會帶入近期 Discord 討論串訊息作為 bounded context；通過 gate 的跨 bot 交接會帶入較長的 thread transcript 作為 handoff context，讓被交辦 bot 先掌握任務、先前決策、相關檔案、結果與剩餘工作
 - **部署診斷**：在目標頻道或討論串執行 `/doctor`，可確認 Discord 權限、`BOT_PEERS` 設定，以及目前是開放模式、`/back` override 開放模式，或自動多 bot mention-only 模式
 - **頻道 agent 閒置回收**：設定 `CHANNEL_AGENT_IDLE_SEC`（預設 `0` = 停用）可讓閒置的頻道 agent 自動關閉以釋放資源，下次發訊息時自動重啟
 

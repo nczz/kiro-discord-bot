@@ -449,8 +449,12 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 	isCommand := strings.HasPrefix(content, "!")
 
 	parentChannelID := resolveThreadParent(ds, m.ChannelID)
-	if m.Author.Bot && !b.shouldAcceptBotResultMention(ds, m, content, selfID, parentChannelID) {
-		return
+	handoff := false
+	if m.Author.Bot {
+		handoff = b.shouldAcceptBotResultMention(ds, m, content, selfID, parentChannelID)
+		if !handoff {
+			return
+		}
 	}
 
 	if !m.Author.Bot && !isMentioned && b.messageMentionsOtherPeer(m, content, selfID) {
@@ -475,7 +479,7 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 
 	// Check if message is from a thread — route to thread agent
 	if parentChannelID != "" {
-		b.handleThreadMessage(ds, m, content, parentChannelID)
+		b.handleThreadMessage(ds, m, content, parentChannelID, handoff)
 		return
 	}
 
@@ -582,7 +586,7 @@ func (b *Bot) handleThreadUpdate(ds *discordgo.Session, t *discordgo.ThreadUpdat
 }
 
 // handleThreadMessage handles messages sent inside a thread, routing to a dedicated thread agent.
-func (b *Bot) handleThreadMessage(ds *discordgo.Session, m *discordgo.MessageCreate, content, parentChannelID string) {
+func (b *Bot) handleThreadMessage(ds *discordgo.Session, m *discordgo.MessageCreate, content, parentChannelID string, handoff bool) {
 	threadID := m.ChannelID
 	reply := func(msg string) { ds.ChannelMessageSend(threadID, msg) }
 	ctx := cmdCtx{channelID: parentChannelID, targetID: threadID, inThread: true, reply: reply}
@@ -670,6 +674,7 @@ func (b *Bot) handleThreadMessage(ds *discordgo.Session, m *discordgo.MessageCre
 		Attachments: localPaths,
 		ThreadID:    threadID,
 		Transcript:  transcript,
+		Handoff:     handoff,
 	}
 	if err := b.manager.EnqueueThread(ds, job, parentChannelID); err != nil {
 		ds.MessageReactionRemove(threadID, m.ID, "⏳", "@me")

@@ -36,6 +36,7 @@ type Manager struct {
 	logger          *ChatLogger
 	botVersion      string
 	guildID         string
+	botID           string
 	dataDir         string
 
 	// Memory
@@ -86,6 +87,7 @@ type ManagerConfig struct {
 	AgentProfile        string
 	TrustAllTools       bool
 	TrustTools          string
+	BotID               string
 }
 
 func NewManager(cfg ManagerConfig) *Manager {
@@ -107,6 +109,7 @@ func NewManager(cfg ManagerConfig) *Manager {
 		logger:              NewChatLogger(cfg.DataDir),
 		botVersion:          cfg.BotVersion,
 		guildID:             cfg.GuildID,
+		botID:               cfg.BotID,
 		dataDir:             cfg.DataDir,
 		memory:              NewMemoryStore(cfg.DataDir),
 		flashMemory:         make(map[string][]string),
@@ -133,6 +136,80 @@ func (m *Manager) ThreadArchive() int { return m.threadArchive }
 
 // DefaultCWD returns the configured default working directory.
 func (m *Manager) DefaultCWD() string { return m.defaultCWD }
+
+// SetBotID scopes persisted ACP sessions to this Discord bot identity.
+func (m *Manager) SetBotID(botID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.botID = strings.TrimSpace(botID)
+}
+
+const (
+	sessionTargetChannel = "channel"
+	sessionTargetThread  = "thread"
+)
+
+func (m *Manager) sessionKey(targetType, targetID string) string {
+	targetID = strings.TrimSpace(targetID)
+	if targetID == "" {
+		return ""
+	}
+	if m.guildID == "" || m.botID == "" {
+		if targetType == sessionTargetChannel {
+			return targetID
+		}
+		return targetType + ":" + targetID
+	}
+	return strings.Join([]string{"g", m.guildID, "b", m.botID, targetType, targetID}, ":")
+}
+
+func (m *Manager) getChannelSession(channelID string) (*Session, bool) {
+	key := m.sessionKey(sessionTargetChannel, channelID)
+	if key != "" {
+		if sess, ok := m.store.Get(key); ok {
+			return sess, true
+		}
+	}
+	if key != channelID {
+		return m.store.Get(channelID)
+	}
+	return nil, false
+}
+
+func (m *Manager) setChannelSession(channelID string, sess *Session) error {
+	key := m.sessionKey(sessionTargetChannel, channelID)
+	if key == "" {
+		return fmt.Errorf("empty channel session key")
+	}
+	if sess == nil {
+		sess = &Session{}
+	}
+	sess.GuildID = m.guildID
+	sess.BotID = m.botID
+	sess.TargetType = sessionTargetChannel
+	sess.TargetID = channelID
+	return m.store.Set(key, sess)
+}
+
+func (m *Manager) getThreadSession(threadID string) (*Session, bool) {
+	return m.store.Get(m.sessionKey(sessionTargetThread, threadID))
+}
+
+func (m *Manager) setThreadSession(threadID, parentChannelID string, sess *Session) error {
+	key := m.sessionKey(sessionTargetThread, threadID)
+	if key == "" {
+		return fmt.Errorf("empty thread session key")
+	}
+	if sess == nil {
+		sess = &Session{}
+	}
+	sess.GuildID = m.guildID
+	sess.BotID = m.botID
+	sess.TargetType = sessionTargetThread
+	sess.TargetID = threadID
+	sess.ParentChannelID = parentChannelID
+	return m.store.Set(key, sess)
+}
 
 // AllowedCwdRoots returns a copy of configured cwd allowlist roots.
 func (m *Manager) AllowedCwdRoots() []string {
@@ -276,12 +353,12 @@ func (m *Manager) Reset(channelID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	sess, _ := m.store.Get(channelID)
+	sess, _ := m.getChannelSession(channelID)
 	m.stopChannel(channelID)
 	delete(m.flashMemory, channelID)
 
 	if sess != nil {
-		if err := m.store.Set(channelID, &Session{CWD: sess.CWD, Model: sess.Model, GuildID: sess.GuildID}); err != nil {
+		if err := m.setChannelSession(channelID, &Session{CWD: sess.CWD, Model: sess.Model}); err != nil {
 			log.Printf("[manager] save session on reset: %v", err)
 		}
 	}
@@ -293,11 +370,11 @@ func (m *Manager) Restart(channelID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	sess, _ := m.store.Get(channelID)
+	sess, _ := m.getChannelSession(channelID)
 	m.stopChannel(channelID)
 
 	if sess != nil {
-		if err := m.store.Set(channelID, &Session{CWD: sess.CWD, Model: sess.Model, GuildID: sess.GuildID}); err != nil {
+		if err := m.setChannelSession(channelID, &Session{CWD: sess.CWD, Model: sess.Model}); err != nil {
 			log.Printf("[manager] save session on restart: %v", err)
 		}
 	}
@@ -310,7 +387,7 @@ func (m *Manager) Status(channelID string) string {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	sess, ok := m.store.Get(channelID)
+	sess, ok := m.getChannelSession(channelID)
 	if !ok || sess.AgentName == "" {
 		return L.Get("status.no_session")
 	}
@@ -367,12 +444,12 @@ func (m *Manager) StartAt(channelID, cwd string) error {
 	}
 	m.stopChannel(channelID)
 
-	existing, _ := m.store.Get(channelID)
+	existing, _ := m.getChannelSession(channelID)
 	newSess := &Session{CWD: cwd}
 	if existing != nil {
 		newSess.Model = existing.Model
 	}
-	_ = m.store.Set(channelID, newSess)
+	_ = m.setChannelSession(channelID, newSess)
 
 	_, err = m.startAgentAndWorker(channelID)
 	return err
@@ -380,7 +457,7 @@ func (m *Manager) StartAt(channelID, cwd string) error {
 
 // CWD returns the current working directory for a channel.
 func (m *Manager) CWD(channelID string) string {
-	if sess, ok := m.store.Get(channelID); ok && sess.CWD != "" {
+	if sess, ok := m.getChannelSession(channelID); ok && sess.CWD != "" {
 		return L.Getf("cwd.current", sess.CWD)
 	}
 	return L.Getf("cwd.default", m.defaultCWD)
@@ -392,22 +469,22 @@ func (m *Manager) SetCWD(channelID, cwd string) error {
 	if err != nil {
 		return err
 	}
-	sess, ok := m.store.Get(channelID)
+	sess, ok := m.getChannelSession(channelID)
 	if !ok {
-		return m.store.Set(channelID, &Session{CWD: cwd})
+		return m.setChannelSession(channelID, &Session{CWD: cwd})
 	}
 	sess.CWD = cwd
-	return m.store.Set(channelID, sess)
+	return m.setChannelSession(channelID, sess)
 }
 
 // SetModel updates the model for a channel.
 func (m *Manager) SetModel(channelID, model string) error {
-	sess, ok := m.store.Get(channelID)
+	sess, ok := m.getChannelSession(channelID)
 	if !ok {
 		sess = &Session{}
 	}
 	sess.Model = model
-	return m.store.Set(channelID, sess)
+	return m.setChannelSession(channelID, sess)
 }
 
 // SwitchModel attempts a dynamic model switch via session/set_model.
@@ -438,7 +515,7 @@ func (m *Manager) SwitchModel(channelID, model string) (bool, error) {
 	if err := m.validateModelID(model); err != nil {
 		return false, err
 	}
-	oldSess, _ := m.store.Get(channelID)
+	oldSess, _ := m.getChannelSession(channelID)
 	var oldCopy *Session
 	if oldSess != nil {
 		cp := *oldSess
@@ -449,7 +526,7 @@ func (m *Manager) SwitchModel(channelID, model string) (bool, error) {
 	}
 	if err := m.Restart(channelID); err != nil {
 		if oldCopy != nil {
-			_ = m.store.Set(channelID, oldCopy)
+			_ = m.setChannelSession(channelID, oldCopy)
 		}
 		return true, err
 	}
@@ -559,7 +636,7 @@ func modelDisplay(model string) string {
 
 // Model returns the current model for a channel.
 func (m *Manager) Model(channelID string) string {
-	if sess, ok := m.store.Get(channelID); ok && sess.Model != "" {
+	if sess, ok := m.getChannelSession(channelID); ok && sess.Model != "" {
 		return L.Getf("model.current", sess.Model)
 	}
 	if m.defaultModel != "" {
@@ -588,7 +665,7 @@ func (m *Manager) ListModels(channelID string) (string, error) {
 
 	currentModel := defaultModel
 	if channelID != "" {
-		if sess, ok := m.store.Get(channelID); ok && sess.Model != "" {
+		if sess, ok := m.getChannelSession(channelID); ok && sess.Model != "" {
 			currentModel = sess.Model
 		} else if m.defaultModel != "" {
 			currentModel = m.defaultModel
@@ -612,7 +689,7 @@ func (m *Manager) ListModels(channelID string) (string, error) {
 func (m *Manager) formatAgentModels(channelID, agentCurrentModel string, models []acp.ModelEntry) string {
 	// Use channel's configured model as current if available
 	currentModel := agentCurrentModel
-	if sess, ok := m.store.Get(channelID); ok && sess.Model != "" {
+	if sess, ok := m.getChannelSession(channelID); ok && sess.Model != "" {
 		currentModel = sess.Model
 	}
 
@@ -717,7 +794,7 @@ func (m *Manager) startAgentAndWorker(channelID string) (*Worker, error) {
 	model := m.defaultModel
 	agentName := "ch-" + channelID
 
-	if sess, ok := m.store.Get(channelID); ok {
+	if sess, ok := m.getChannelSession(channelID); ok {
 		if sess.CWD != "" {
 			cwd = sess.CWD
 		}
@@ -739,7 +816,7 @@ func (m *Manager) startAgentAndWorker(channelID string) (*Worker, error) {
 
 	// Try to load previous session if available
 	opts := m.agentOpts()
-	if sess, ok := m.store.Get(channelID); ok && sess.SessionID != "" {
+	if sess, ok := m.getChannelSession(channelID); ok && sess.SessionID != "" {
 		opts.LoadSessionID = sess.SessionID
 	}
 
@@ -770,12 +847,11 @@ func (m *Manager) startAgentAndWorker(channelID string) (*Worker, error) {
 		}
 	}
 
-	if err := m.store.Set(channelID, &Session{
+	if err := m.setChannelSession(channelID, &Session{
 		AgentName: agentName,
 		SessionID: agent.SessionID,
 		CWD:       cwd,
 		Model:     model,
-		GuildID:   m.guildID,
 	}); err != nil {
 		log.Printf("[manager] save session: %v", err)
 	}
@@ -800,7 +876,7 @@ func (m *Manager) startAgentAndWorker(channelID string) (*Worker, error) {
 
 // GetSession returns the session for a channel.
 func (m *Manager) GetSession(channelID string) (*Session, bool) {
-	return m.store.Get(channelID)
+	return m.getChannelSession(channelID)
 }
 
 // GetAgent returns the agent for a channel.
@@ -817,8 +893,8 @@ func (m *Manager) ActiveSessions() []struct{ ChannelID, AgentName string } {
 	defer m.mu.Unlock()
 	var out []struct{ ChannelID, AgentName string }
 	for chID := range m.agents {
-		sess, ok := m.store.Get(chID)
-		if ok && sess.AgentName != "" && (m.guildID == "" || sess.GuildID == m.guildID) {
+		sess, ok := m.getChannelSession(chID)
+		if ok && sess.AgentName != "" {
 			out = append(out, struct{ ChannelID, AgentName string }{chID, sess.AgentName})
 		}
 	}
@@ -1084,7 +1160,13 @@ func (m *Manager) IsSilent(channelID string) bool {
 
 // EnqueueThread routes a job to the thread's dedicated agent, spawning one if needed.
 func (m *Manager) EnqueueThread(ds *discordgo.Session, job *Job, parentChannelID string) error {
-	if discordCtx := m.buildDiscordThreadContext(ds, job.ThreadID, job.MessageID); discordCtx != "" {
+	var discordCtx string
+	if job.Handoff {
+		discordCtx = m.buildDiscordThreadHandoffContext(ds, job.ThreadID, job.MessageID)
+	} else {
+		discordCtx = m.buildDiscordThreadContext(ds, job.ThreadID, job.MessageID)
+	}
+	if discordCtx != "" {
 		job.Prompt = discordCtx + job.Prompt
 	}
 
@@ -1128,12 +1210,21 @@ func (m *Manager) EnqueueThread(ds *discordgo.Session, job *Job, parentChannelID
 func (m *Manager) spawnThreadAgent(threadID, parentChannelID string, modelOverride ...string) (*threadAgentEntry, error) {
 	cwd := m.defaultCWD
 	model := m.defaultModel
-	if sess, ok := m.store.Get(parentChannelID); ok {
+	if sess, ok := m.getChannelSession(parentChannelID); ok {
 		if sess.CWD != "" {
 			cwd = sess.CWD
 		}
 		if sess.Model != "" {
 			model = sess.Model
+		}
+	}
+	threadSess, hasThreadSession := m.getThreadSession(threadID)
+	if hasThreadSession {
+		if threadSess.CWD != "" {
+			cwd = threadSess.CWD
+		}
+		if threadSess.Model != "" {
+			model = threadSess.Model
 		}
 	}
 	if len(modelOverride) > 0 && modelOverride[0] != "" {
@@ -1146,7 +1237,12 @@ func (m *Manager) spawnThreadAgent(threadID, parentChannelID string, modelOverri
 	}
 
 	agentName := "thread-" + threadID
-	agent, err := acp.StartAgent(agentName, m.kiroCLI, cwd, model, m.agentOpts())
+	opts := m.agentOpts()
+	if hasThreadSession && threadSess.SessionID != "" {
+		opts.LoadSessionID = threadSess.SessionID
+	}
+
+	agent, err := acp.StartAgent(agentName, m.kiroCLI, cwd, model, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -1166,10 +1262,22 @@ func (m *Manager) spawnThreadAgent(threadID, parentChannelID string, modelOverri
 		log.Printf("[manager] thread agent %s exited unexpectedly", agentName)
 	})
 
-	// Prepare history to inject into first prompt
-	historyCtx := m.buildThreadHistory(parentChannelID, threadID)
-	if historyCtx != "" {
-		log.Printf("[manager] prepared %d chars of history for thread-%s", len(historyCtx), threadID)
+	// Prepare history only when ACP did not restore an existing session.
+	var historyCtx string
+	if !agent.LoadedSession() {
+		historyCtx = m.buildThreadHistory(parentChannelID, threadID)
+		if historyCtx != "" {
+			log.Printf("[manager] prepared %d chars of history for thread-%s", len(historyCtx), threadID)
+		}
+	}
+
+	if err := m.setThreadSession(threadID, parentChannelID, &Session{
+		AgentName: agentName,
+		SessionID: agent.SessionID,
+		CWD:       cwd,
+		Model:     model,
+	}); err != nil {
+		log.Printf("[manager] save thread session: %v", err)
 	}
 
 	w := NewWorker("thread-"+threadID, agent, m.queueBufSize, m.askTimeoutSec, m.streamUpdateSec, 0, m.logger, model)
@@ -1319,6 +1427,18 @@ func (m *Manager) resetThreadAgentWithModel(threadID, model string) error {
 	entry.agent.Stop()
 	delete(m.threadAgents, threadID)
 
+	if sess, ok := m.getThreadSession(threadID); ok {
+		cp := *sess
+		cp.AgentName = ""
+		cp.SessionID = ""
+		if model != "" {
+			cp.Model = model
+		}
+		if err := m.setThreadSession(threadID, parentChannelID, &cp); err != nil {
+			log.Printf("[manager] clear thread session on reset: %v", err)
+		}
+	}
+
 	newEntry, err := m.spawnThreadAgent(threadID, parentChannelID, model)
 	if err != nil {
 		m.mu.Unlock()
@@ -1386,17 +1506,37 @@ func (m *Manager) buildDiscordThreadContext(ds *discordgo.Session, threadID, cur
 	if ds == nil || threadID == "" {
 		return ""
 	}
-	messages, err := ds.ChannelMessages(threadID, 30, "", "", "")
+	const messageLimit = 30
+	messages, err := ds.ChannelMessages(threadID, messageLimit, "", "", "")
 	if err != nil {
 		log.Printf("[manager] fetch discord thread history thread=%s: %v", threadID, err)
 		return ""
 	}
+	return formatDiscordThreadContext("[Recent Discord thread context]", messages, currentMessageID, messageLimit, 1500, 80000)
+}
+
+func (m *Manager) buildDiscordThreadHandoffContext(ds *discordgo.Session, threadID, currentMessageID string) string {
+	if ds == nil || threadID == "" {
+		return ""
+	}
+	const messageLimit = 100
+	messages, err := ds.ChannelMessages(threadID, messageLimit, "", "", "")
+	if err != nil {
+		log.Printf("[manager] fetch handoff thread history thread=%s: %v", threadID, err)
+		return ""
+	}
+	return formatDiscordThreadContext("[Cross-bot handoff context]\nA peer bot explicitly handed this thread to this bot. Use this transcript to understand the task, prior decisions, files, results, and remaining work before acting.", messages, currentMessageID, messageLimit, 3000, 120000)
+}
+
+func formatDiscordThreadContext(header string, messages []*discordgo.Message, currentMessageID string, maxMessages, maxMessageChars, maxTotalChars int) string {
 	if len(messages) == 0 {
 		return ""
 	}
 
 	var sb strings.Builder
-	sb.WriteString("[Recent Discord thread context]\n")
+	sb.WriteString(header)
+	sb.WriteString("\n")
+	written := 0
 	for i := len(messages) - 1; i >= 0; i-- {
 		msg := messages[i]
 		if msg == nil || msg.ID == currentMessageID {
@@ -1406,8 +1546,11 @@ func (m *Manager) buildDiscordThreadContext(ds *discordgo.Session, threadID, cur
 		if content == "" && len(msg.Attachments) == 0 {
 			continue
 		}
-		if len(content) > 1500 {
-			content = content[:1500] + "...(truncated)"
+		if maxMessages > 0 && written >= maxMessages {
+			break
+		}
+		if maxMessageChars > 0 && len(content) > maxMessageChars {
+			content = content[:maxMessageChars] + "...(truncated)"
 		}
 		author := "unknown"
 		if msg.Author != nil {
@@ -1428,9 +1571,13 @@ func (m *Manager) buildDiscordThreadContext(ds *discordgo.Session, threadID, cur
 				sb.WriteString(fmt.Sprintf("[attachments] %s\n", strings.Join(names, ", ")))
 			}
 		}
+		written++
+		if maxTotalChars > 0 && sb.Len() >= maxTotalChars {
+			break
+		}
 	}
 	out := sb.String()
-	if out == "[Recent Discord thread context]\n" {
+	if written == 0 {
 		return ""
 	}
 	return out + "[End of Discord thread context]\n\n"

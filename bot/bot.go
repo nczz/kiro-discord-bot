@@ -117,6 +117,7 @@ func NewFromConfig(cfg BotConfig) (*Bot, error) {
 func (b *Bot) Start() error {
 	b.discord.AddHandler(func(ds *discordgo.Session, r *discordgo.Ready) {
 		log.Printf("Bot running as %s#%s", r.User.Username, r.User.Discriminator)
+		b.manager.SetBotID(r.User.ID)
 		b.discoverBotPeers(ds, r)
 		_ = ds.UpdateGameStatus(0, "kiro-cli agent "+b.version)
 		b.registerSlashCommands()

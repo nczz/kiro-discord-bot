@@ -32,6 +32,7 @@ type Job struct {
 	Attachments []string
 	ThreadID    string // non-empty = follow-up in existing thread, skip thread creation
 	Transcript  string // STT transcription result, shown in thread if non-empty
+	Handoff     bool   // true when this job is an accepted cross-bot handoff
 }
 
 // Worker manages a per-channel job queue and executes jobs sequentially.
