@@ -1,16 +1,22 @@
 package acp
 
-// ACP protocol v1 method names (kiro-cli 2.3.0)
+// ACP protocol v1 method names (kiro-cli 2.4.2+)
 const (
-	MethodInitialize = "initialize"
-	MethodNewSession = "session/new"
-	MethodPrompt     = "session/prompt"
-	MethodCancel     = "session/cancel"
-	NotifUpdate      = "session/update"
-	NotifUpdateKiro  = "_kiro.dev/session/update"
-	NotifMetadata    = "_kiro.dev/metadata"
+	MethodInitialize  = "initialize"
+	MethodNewSession  = "session/new"
+	MethodLoadSession = "session/load"
+	MethodPrompt      = "session/prompt"
+	MethodCancel      = "session/cancel"
+	MethodSetModel    = "session/set_model"
+	MethodSetMode     = "session/set_mode"
+	NotifUpdate       = "session/update"
+	NotifUpdateKiro   = "_kiro.dev/session/update"
+	NotifMetadata     = "_kiro.dev/metadata"
+	NotifMcpReady     = "_kiro.dev/mcp/server_initialized"
 
-	ClientProtocolVersion = "2025-11-16"
+	// ClientProtocolVersion is the ACP protocol major version.
+	// Per spec, this is a single integer incremented only on breaking changes.
+	ClientProtocolVersion = 1
 )
 
 // session/update notification types (kiro-cli 1.28.2+)
@@ -41,11 +47,79 @@ type ToolCallEvent struct {
 
 // InitializeResult holds the agent's initialize response.
 type InitializeResult struct {
-	ProtocolVersion interface{} `json:"protocolVersion"` // numeric 1 or string
-	AgentInfo       *struct {
-		Name    string `json:"name"`
-		Version string `json:"version"`
-	} `json:"agentInfo,omitempty"`
+	ProtocolVersion   interface{}        `json:"protocolVersion"` // numeric 1 or string (legacy)
+	AgentCapabilities *AgentCapabilities `json:"agentCapabilities,omitempty"`
+	AgentInfo         *AgentInfo         `json:"agentInfo,omitempty"`
+}
+
+// AgentInfo holds agent implementation metadata from initialize response.
+type AgentInfo struct {
+	Name    string `json:"name"`
+	Title   string `json:"title,omitempty"`
+	Version string `json:"version"`
+}
+
+// AgentCapabilities describes features supported by the agent.
+type AgentCapabilities struct {
+	LoadSession         bool                   `json:"loadSession"`
+	PromptCapabilities  *PromptCapabilities    `json:"promptCapabilities,omitempty"`
+	McpCapabilities     *McpCapabilities       `json:"mcpCapabilities,omitempty"`
+	SessionCapabilities map[string]interface{} `json:"sessionCapabilities,omitempty"`
+}
+
+// PromptCapabilities indicates content types accepted in session/prompt.
+type PromptCapabilities struct {
+	Image           bool `json:"image"`
+	Audio           bool `json:"audio"`
+	EmbeddedContext bool `json:"embeddedContext"`
+}
+
+// McpCapabilities indicates MCP transport types supported by the agent.
+type McpCapabilities struct {
+	HTTP bool `json:"http"`
+	SSE  bool `json:"sse"`
+}
+
+// SessionNewResult holds the agent's session/new (or session/load) response.
+type SessionNewResult struct {
+	SessionID string      `json:"sessionId"`
+	Modes     *ModeState  `json:"modes,omitempty"`
+	Models    *ModelState `json:"models,omitempty"`
+}
+
+// ModeState holds available agent modes from session/new response.
+type ModeState struct {
+	CurrentModeID  string      `json:"currentModeId"`
+	AvailableModes []ModeEntry `json:"availableModes"`
+}
+
+// ModeEntry describes a single agent mode.
+type ModeEntry struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+}
+
+// ModelState holds available models from session/new response.
+type ModelState struct {
+	CurrentModelID  string       `json:"currentModelId"`
+	AvailableModels []ModelEntry `json:"availableModels"`
+}
+
+// ModelEntry describes a single available model.
+type ModelEntry struct {
+	ModelID     string `json:"modelId"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+}
+
+// PromptContent represents a single content block in a session/prompt request.
+type PromptContent struct {
+	Type     string `json:"type"`               // "text" or "image"
+	Text     string `json:"text,omitempty"`     // for type "text"
+	Data     string `json:"data,omitempty"`     // base64 content for type "image"
+	MimeType string `json:"mimeType,omitempty"` // MIME type for type "image"
+	URI      string `json:"uri,omitempty"`      // optional source URI for type "image"
 }
 
 // MeteringItem represents a single metering entry from metadata.

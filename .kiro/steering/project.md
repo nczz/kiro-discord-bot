@@ -36,10 +36,10 @@ channel/         → per-channel lifecycle
   session.go     → SessionStore JSON persistence
   logger.go      → JSONL conversation log
 acp/             → kiro-cli ACP child process (JSON-RPC over stdio)
-  agent.go       → spawn, handshake, ask, cancel, stop
+  agent.go       → spawn, handshake (session/new or session/load), ask, cancel, stop, set_model, set_mode
   jsonrpc.go     → ndjson transport
   ringbuf.go     → thread-safe ring buffer for stderr capture
-  protocol.go    → ACP constants (protocol version 2025-11-16)
+  protocol.go    → ACP constants, capability structs, PromptContent (protocol version 1)
 heartbeat/       → background task loop
   health.go      → agent liveness check + auto-restart
   cleanup.go     → expired attachment removal
@@ -65,6 +65,8 @@ docs/release.md  → release and deployment safety checklist
 - **Adapter 共用 botNotifier**：所有 heartbeat adapter 嵌入 `botNotifier`，Notify / IsSilent 不重複實作。
 - **CWD policy 在 Manager 層統一執行**：`/start`、`/cwd`、thread agents、cron temp agents 都必須走 `ValidateCWD`，不得在 handler 或 heartbeat 層自行繞過。
 - **ACP tool permission 預設由本地策略決定**：只有 `TRUST_ALL_TOOLS=true` 或 `TRUST_TOOLS` 命中才 approve；未授權 tool permission request 要 deny。
+- **ACP feature gating**：`session/load`、image prompt 必須先檢查 agent 的 `agentCapabilities`；`session/set_model`、`session/set_mode` 必須先用 `session/new` 回傳的 available models/modes 驗證 ID。不能只信任 RPC success，kiro-cli 可能在下一個 prompt 才暴露 invalid model。
+- **Session continuity 優先用 session/load**：agent 重啟時，如果 store 中有 SessionID 且 agent 支援 `loadSession`，優先用 `session/load` 恢復完整對話歷史。失敗時 fallback 到 `session/new` + `historyPrefix`。
 - **Discord MCP 安全邊界**：MCP guild/channel allowlist 與 write guard 在 `cmd/mcp-discord` 內執行。新增 Discord REST tool 時必須先判斷它是 guild-scoped、channel-scoped、global、read-only、write 或 destructive，並套用對應 policy。
 - **Release preflight 不碰 runtime state**：preflight script 只能 build/test/check artifacts，不得停止/啟動 bot、修改 `DATA_DIR`、刪除 Docker volumes、改寫 `.env` 或觸發 Discord side effects。
 

@@ -181,3 +181,16 @@ func TestThreadMentionModeInheritsParentBack(t *testing.T) {
 		t.Fatal("thread /back should restore full-listen override")
 	}
 }
+
+func TestSlashCommandsIncludeAgent(t *testing.T) {
+	for _, cmd := range buildSlashCommands() {
+		if cmd.Name != "agent" {
+			continue
+		}
+		if len(cmd.Options) != 1 || cmd.Options[0].Name != "mode" {
+			t.Fatalf("/agent options = %+v, want optional mode", cmd.Options)
+		}
+		return
+	}
+	t.Fatal("expected /agent slash command to be registered")
+}

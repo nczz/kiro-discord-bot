@@ -53,6 +53,9 @@ Day 30 — Extend capabilities with MCP plugins
 - 🩺 Auto-healing — dead agents detected and restarted
 - 📝 Full JSONL conversation logs for audit and analysis
 - 🧵 Thread-based execution with real-time tool visibility
+- 🖼️ Image prompt support — uploaded images sent directly to vision model
+- 🔄 Session continuity — agent restarts restore full conversation history
+- 🎭 Agent modes — switch between modes advertised by kiro-cli
 
 **Created:** 2026-03-21 | **Language:** Go
 
@@ -311,8 +314,10 @@ The bot needs explicit permission in each channel it should respond to:
 | `/back` | Resume full-listen mode |
 | `/silent` | Toggle silent mode (compact tool output, default: on) |
 | `/model` | Show current model |
-| `/model <model-id>` | Switch model and restart agent |
+| `/model <model-id>` | Switch model (dynamic switch, no restart if supported) |
 | `/models` | List all available models |
+| `/agent` | List available agent modes |
+| `/agent <mode-id>` | Switch agent mode (for example `kiro_default`, `kiro_planner`, `kiro_guide`) |
 | `/cron` | Add a scheduled task (opens form) |
 | `/cron-list` | List scheduled tasks with action buttons |
 | `/cron-run <name>` | Manually run a scheduled task |
@@ -338,7 +343,7 @@ All commands also work with `!` prefix (e.g. `!status`, `!reset`).
 | `!compact` | Compress thread agent's conversation history |
 | `!clear` | Clear thread agent's conversation history |
 | `!model` | Show thread agent's current model |
-| `!model <model-id>` | Switch thread agent's model and restart |
+| `!model <model-id>` | Switch thread agent's model |
 | `!models` | List all available models |
 
 All thread commands also work as `/` slash commands inside a thread.
@@ -654,7 +659,7 @@ The agent will read the guide, build the binary, update `mcp.json`, and prompt y
 
 ## Notes
 
-- **Session persistence:** Sessions survive as long as the agent process is alive. Bot restart creates a new session with conversation history injected into the first prompt (budget-based: recent turns kept intact, older turns truncated, 20K char default).
+- **Session persistence:** When kiro-cli advertises `loadSession`, bot restart first tries `session/load` for the stored ACP session. If loading is unavailable or fails, the bot creates a new session and injects recent JSONL conversation history into the first prompt (budget-based: recent turns kept intact, older turns truncated, 20K char default).
 - **MCP servers:** Inherited from `~/.kiro/settings/mcp.json` automatically. Note: ACP `session/new` mcpServers field is currently ignored by kiro-cli ([#7349](https://github.com/kirodotdev/Kiro/issues/7349)).
 - **Discord MCP scope:** Use `MCP_DISCORD_ALLOWED_GUILDS` and `MCP_DISCORD_ALLOWED_CHANNELS` before exposing tools to broad workspaces. Use `MCP_DISCORD_READ_ONLY`, `MCP_DISCORD_ALLOWED_WRITE_TOOLS`, or `MCP_DISCORD_ALLOW_DESTRUCTIVE=false` to restrict write tools. Empty allowlists preserve unrestricted legacy behavior.
 - **Project steering:** Add `.kiro/steering/*.md` in the project directory or `~/.kiro/steering/` globally to guide agent behavior.

@@ -170,6 +170,64 @@ func TestContextMemory(t *testing.T) {
 	}
 }
 
+func TestStartAgentClientInfoDefaultVersion(t *testing.T) {
+	cli := kiroCLI(t)
+	agent, err := acp.StartAgent("test-client-info", cli, os.TempDir(), "", acp.AgentOptions{
+		TrustAllTools: true,
+		BotName:       "kiro-discord-bot-test",
+	})
+	if err != nil {
+		t.Fatalf("StartAgent with clientInfo name only: %v", err)
+	}
+	defer agent.Stop()
+
+	if agent.SessionID == "" {
+		t.Fatal("expected session to start with defaulted clientInfo.version")
+	}
+}
+
+func TestLoadSessionRestoresContext(t *testing.T) {
+	cli := kiroCLI(t)
+	seed, err := acp.StartAgent("test-load-seed", cli, os.TempDir(), "", acp.AgentOptions{TrustAllTools: true})
+	if err != nil {
+		t.Fatalf("StartAgent seed: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	_, err = seed.Ask(ctx, "Remember this exact token for session/load: SESSION_LOAD_FIXTURE_TOKEN. Reply with exactly SAVED.", nil)
+	if err != nil {
+		seed.Stop()
+		t.Fatalf("seed Ask: %v", err)
+	}
+	sessionID := seed.SessionID
+	seed.Stop()
+
+	loaded, err := acp.StartAgent("test-load-restore", cli, os.TempDir(), "", acp.AgentOptions{
+		TrustAllTools: true,
+		LoadSessionID: sessionID,
+	})
+	if err != nil {
+		t.Fatalf("StartAgent load: %v", err)
+	}
+	defer loaded.Stop()
+	if !loaded.LoadedSession() {
+		t.Fatalf("expected session/load to be used for %s, got new session %s", sessionID, loaded.SessionID)
+	}
+	if loaded.SessionID != sessionID {
+		t.Fatalf("loaded session = %s, want %s", loaded.SessionID, sessionID)
+	}
+
+	resp, err := loaded.Ask(ctx, "What exact session/load token did I ask you to remember? Reply with only the token.", nil)
+	if err != nil {
+		t.Fatalf("load recall Ask: %v", err)
+	}
+	if !strings.Contains(resp, "SESSION_LOAD_FIXTURE_TOKEN") {
+		t.Fatalf("expected restored context token, got: %s", resp)
+	}
+}
+
 func TestPreflightCheck(t *testing.T) {
 	cli := kiroCLI(t)
 	if err := acp.PreflightCheck(cli); err != nil {

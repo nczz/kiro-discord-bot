@@ -2,8 +2,12 @@ package channel
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"log"
+	"mime"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -63,11 +67,13 @@ type Worker struct {
 type workerAgent interface {
 	Ask(context.Context, string, func(string)) (string, error)
 	AskAsync(string, acp.AsyncCallbacks)
+	AskAsyncMulti([]acp.PromptContent, acp.AsyncCallbacks)
 	CancelPrompt()
 	ContextUsage() float64
 	TurnMetrics() acp.TurnMetrics
 	OnReadErrorFunc(func(error))
 	RecentStderr() string
+	SupportsImagePrompt() bool
 }
 
 func NewWorker(channelID string, agent *acp.Agent, bufSize, askTimeoutSec, streamUpdateSec, threadArchive int, logger *ChatLogger, model string) *Worker {
@@ -460,8 +466,49 @@ func (w *Worker) execute(job *Job) {
 		}
 	}
 
-	w.agent.AskAsync(prompt, callbacks)
+	// Build multi-content prompt: split image attachments into image blocks
+	promptContent := buildPromptContent(prompt, job.Attachments, w.agent.SupportsImagePrompt())
+	w.agent.AskAsyncMulti(promptContent, callbacks)
 	// Returns immediately — callbacks handle the rest
+}
+
+// isImageFile returns true if the path has an image extension supported by ACP.
+func isImageFile(path string) bool {
+	ext := strings.ToLower(path)
+	for _, suffix := range []string{".png", ".jpg", ".jpeg", ".gif", ".webp"} {
+		if strings.HasSuffix(ext, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+// buildPromptContent constructs []PromptContent from a text prompt and attachments.
+// If imageSupport is true, image files are sent as image content blocks.
+func buildPromptContent(prompt string, attachments []string, imageSupport bool) []acp.PromptContent {
+	var content []acp.PromptContent
+	content = append(content, acp.PromptContent{Type: "text", Text: prompt})
+	if imageSupport {
+		for _, path := range attachments {
+			if isImageFile(path) {
+				data, err := os.ReadFile(path)
+				if err != nil {
+					log.Printf("[worker] read image attachment %s: %v", path, err)
+					continue
+				}
+				mimeType := mime.TypeByExtension(strings.ToLower(filepath.Ext(path)))
+				if mimeType == "" {
+					mimeType = "application/octet-stream"
+				}
+				content = append(content, acp.PromptContent{
+					Type:     "image",
+					Data:     base64.StdEncoding.EncodeToString(data),
+					MimeType: mimeType,
+				})
+			}
+		}
+	}
+	return content
 }
 
 func (w *Worker) threadForMessage(ds *discordgo.Session, job *Job, threadName string) (*discordgo.Channel, error) {

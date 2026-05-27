@@ -2,7 +2,10 @@ package channel
 
 import (
 	"context"
+	"encoding/base64"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -108,6 +111,43 @@ func TestPromptVisibleBodySkipsDiscordMetadataBlocks(t *testing.T) {
 	}
 }
 
+func TestBuildPromptContentEncodesImageData(t *testing.T) {
+	dir := t.TempDir()
+	imagePath := filepath.Join(dir, "sample.png")
+	imageBytes := []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n', 1, 2, 3}
+	if err := os.WriteFile(imagePath, imageBytes, 0644); err != nil {
+		t.Fatalf("write image: %v", err)
+	}
+
+	content := buildPromptContent("hello", []string{imagePath}, true)
+	if len(content) != 2 {
+		t.Fatalf("content len = %d, want 2", len(content))
+	}
+	if content[0].Type != "text" || content[0].Text != "hello" {
+		t.Fatalf("text block = %+v", content[0])
+	}
+	img := content[1]
+	if img.Type != "image" {
+		t.Fatalf("image block type = %q", img.Type)
+	}
+	if img.MimeType != "image/png" {
+		t.Fatalf("mime type = %q, want image/png", img.MimeType)
+	}
+	if img.Data != base64.StdEncoding.EncodeToString(imageBytes) {
+		t.Fatal("image data was not base64 encoded from file bytes")
+	}
+}
+
+func TestBuildPromptContentSkipsImagesWhenUnsupported(t *testing.T) {
+	content := buildPromptContent("hello", []string{"/tmp/sample.png"}, false)
+	if len(content) != 1 {
+		t.Fatalf("content len = %d, want text-only", len(content))
+	}
+	if content[0].Type != "text" || content[0].Text != "hello" {
+		t.Fatalf("text block = %+v", content[0])
+	}
+}
+
 type fakeWorkerAgent struct {
 	mu          sync.Mutex
 	cancelCalls int
@@ -118,6 +158,10 @@ func (f *fakeWorkerAgent) Ask(context.Context, string, func(string)) (string, er
 }
 
 func (f *fakeWorkerAgent) AskAsync(string, acp.AsyncCallbacks) {}
+
+func (f *fakeWorkerAgent) AskAsyncMulti([]acp.PromptContent, acp.AsyncCallbacks) {}
+
+func (f *fakeWorkerAgent) SupportsImagePrompt() bool { return false }
 
 func (f *fakeWorkerAgent) CancelPrompt() {
 	f.mu.Lock()

@@ -302,6 +302,35 @@ func (b *Bot) cmdClear(ctx cmdCtx) {
 	}
 }
 
+func (b *Bot) cmdAgent(ctx cmdCtx) {
+	if ctx.args == "" {
+		// List available modes
+		current, modes := b.manager.AgentModes(ctx.channelID)
+		if modes == nil {
+			ctx.reply(L.Get("agent.no_session"))
+			return
+		}
+		var sb strings.Builder
+		sb.WriteString("**Agent Modes**\n")
+		for _, m := range modes {
+			marker := " "
+			if m.ID == current {
+				marker = "▸"
+			}
+			sb.WriteString(fmt.Sprintf("%s `%s` — %s\n", marker, m.ID, m.Description))
+		}
+		sb.WriteString("\nUsage: `!agent <mode_id>`")
+		ctx.reply(sb.String())
+		return
+	}
+	// Switch mode
+	if err := b.manager.SwitchMode(ctx.channelID, ctx.args); err != nil {
+		ctx.reply(fmt.Sprintf("❌ Mode switch failed: %s", err.Error()))
+	} else {
+		ctx.reply(fmt.Sprintf("✅ Switched to mode: `%s`", ctx.args))
+	}
+}
+
 func (b *Bot) cmdModel(ctx cmdCtx) {
 	if ctx.args == "" {
 		// Show current model
@@ -323,13 +352,12 @@ func (b *Bot) cmdModel(ctx cmdCtx) {
 		}
 		return
 	}
-	if err := b.manager.SetModel(ctx.channelID, model); err != nil {
-		ctx.reply(commandError(err))
-		return
-	}
 	ctx.reply(L.Getf("model.switching", model))
-	if err := b.manager.Restart(ctx.channelID); err != nil {
+	restarted, err := b.manager.SwitchModel(ctx.channelID, model)
+	if err != nil {
 		ctx.reply(L.Getf("error.reset_failed", commandErrorString(err)))
+	} else if restarted {
+		ctx.reply(L.Getf("model.switched", model))
 	} else {
 		ctx.reply(L.Getf("model.switched", model))
 	}

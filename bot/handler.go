@@ -515,6 +515,11 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 	case strings.HasPrefix(content, "!start "):
 		ctx.args = strings.TrimSpace(strings.TrimPrefix(content, "!start "))
 		b.cmdStart(ctx)
+	case content == "!agent":
+		b.cmdAgent(ctx)
+	case strings.HasPrefix(content, "!agent "):
+		ctx.args = strings.TrimSpace(strings.TrimPrefix(content, "!agent "))
+		b.cmdAgent(ctx)
 	case content == "!model":
 		b.cmdModel(ctx)
 	case content == "!models":
@@ -697,6 +702,9 @@ func buildSlashCommands() []*discordgo.ApplicationCommand {
 			{Type: discordgo.ApplicationCommandOptionString, Name: "model", Description: L.Get("cmd.model.opt.model"), Required: false},
 		}},
 		{Name: "models", Description: L.Get("cmd.models.desc")},
+		{Name: "agent", Description: L.Get("cmd.agent.desc"), Options: []*discordgo.ApplicationCommandOption{
+			{Type: discordgo.ApplicationCommandOptionString, Name: "mode", Description: L.Get("cmd.agent.opt.mode"), Required: false},
+		}},
 		{Name: "cron", Description: L.Get("cmd.cron.desc")},
 		{Name: "cron-list", Description: L.Get("cmd.cron_list.desc")},
 		{Name: "compact", Description: L.Get("cmd.compact.desc")},
@@ -897,6 +905,11 @@ func (b *Bot) handleSlashCommand(ds *discordgo.Session, i *discordgo.Interaction
 			b.cmdModel(ctx)
 		case "models":
 			b.cmdModels(ctx)
+		case "agent":
+			if len(data.Options) > 0 {
+				ctx.args = data.Options[0].StringValue()
+			}
+			b.cmdAgent(ctx)
 		case "memory":
 			action := data.Options[0].StringValue()
 			value := ""

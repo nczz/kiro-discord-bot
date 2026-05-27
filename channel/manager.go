@@ -410,6 +410,146 @@ func (m *Manager) SetModel(channelID, model string) error {
 	return m.store.Set(channelID, sess)
 }
 
+// SwitchModel attempts a dynamic model switch via session/set_model.
+// Falls back to Restart if the agent doesn't support it or isn't running.
+// Returns (restarted bool, err).
+func (m *Manager) SwitchModel(channelID, model string) (bool, error) {
+	m.mu.Lock()
+	agent, ok := m.agents[channelID]
+	worker := m.workers[channelID]
+	m.mu.Unlock()
+	if ok && agent.IsAlive() {
+		if err := validateAgentModel(agent, model); err != nil {
+			return false, err
+		}
+		if err := agent.SetModel(model); err == nil {
+			if err := m.SetModel(channelID, model); err != nil {
+				return false, err
+			}
+			if worker != nil {
+				worker.model = model
+			}
+			log.Printf("[manager] dynamic model switch to %s for %s", model, channelID)
+			return false, nil
+		}
+		log.Printf("[manager] dynamic model switch failed, restarting: %v", model)
+	}
+
+	if err := m.validateModelID(model); err != nil {
+		return false, err
+	}
+	oldSess, _ := m.store.Get(channelID)
+	var oldCopy *Session
+	if oldSess != nil {
+		cp := *oldSess
+		oldCopy = &cp
+	}
+	if err := m.SetModel(channelID, model); err != nil {
+		return false, err
+	}
+	if err := m.Restart(channelID); err != nil {
+		if oldCopy != nil {
+			_ = m.store.Set(channelID, oldCopy)
+		}
+		return true, err
+	}
+	return true, nil
+}
+
+func validateAgentModel(agent *acp.Agent, model string) error {
+	if models := agent.AvailableModels(); len(models) > 0 && !agent.HasModel(model) {
+		return fmt.Errorf("unknown model %q; available models: %s", model, modelIDs(models))
+	}
+	return nil
+}
+
+// SwitchMode attempts a dynamic mode switch via session/set_mode.
+// Returns error if agent is not running or mode switch fails.
+func (m *Manager) SwitchMode(channelID, modeID string) error {
+	m.mu.Lock()
+	agent, ok := m.agents[channelID]
+	m.mu.Unlock()
+	if !ok || !agent.IsAlive() {
+		return fmt.Errorf("no active agent")
+	}
+	if modes := agent.AvailableModes(); len(modes) > 0 && !agent.HasMode(modeID) {
+		return fmt.Errorf("unknown mode %q; available modes: %s", modeID, modeIDs(modes))
+	}
+	return agent.SetMode(modeID)
+}
+
+func modelIDs(models []acp.ModelEntry) string {
+	ids := make([]string, 0, len(models))
+	for _, model := range models {
+		ids = append(ids, model.ModelID)
+	}
+	return strings.Join(ids, ", ")
+}
+
+func (m *Manager) validateModelID(model string) error {
+	if model == "" {
+		return nil
+	}
+	models, _, err := m.cliModels()
+	if err != nil {
+		return err
+	}
+	for _, entry := range models {
+		if entry.ModelID == model {
+			return nil
+		}
+	}
+	return fmt.Errorf("unknown model %q; available models: %s", model, modelIDs(models))
+}
+
+func (m *Manager) cliModels() ([]acp.ModelEntry, string, error) {
+	out, err := exec.Command(m.kiroCLI, "chat", "--list-models", "-f", "json").Output()
+	if err != nil {
+		return nil, "", fmt.Errorf("list models: %w", err)
+	}
+	var result struct {
+		Models []struct {
+			Name        string  `json:"model_name"`
+			ID          string  `json:"model_id"`
+			Description string  `json:"description"`
+			Rate        float64 `json:"rate_multiplier"`
+			Unit        string  `json:"rate_unit"`
+		} `json:"models"`
+		Default string `json:"default_model"`
+	}
+	if err := json.Unmarshal(out, &result); err != nil {
+		return nil, "", fmt.Errorf("parse models: %w", err)
+	}
+	models := make([]acp.ModelEntry, 0, len(result.Models))
+	for _, model := range result.Models {
+		models = append(models, acp.ModelEntry{
+			ModelID:     model.ID,
+			Name:        model.Name,
+			Description: model.Description,
+		})
+	}
+	return models, result.Default, nil
+}
+
+func modeIDs(modes []acp.ModeEntry) string {
+	ids := make([]string, 0, len(modes))
+	for _, mode := range modes {
+		ids = append(ids, mode.ID)
+	}
+	return strings.Join(ids, ", ")
+}
+
+// AgentModes returns available modes for a channel's agent.
+func (m *Manager) AgentModes(channelID string) (current string, modes []acp.ModeEntry) {
+	m.mu.Lock()
+	agent, ok := m.agents[channelID]
+	m.mu.Unlock()
+	if !ok || !agent.IsAlive() {
+		return "", nil
+	}
+	return agent.CurrentModeID(), agent.AvailableModes()
+}
+
 func modelDisplay(model string) string {
 	if model == "" {
 		return "default"
@@ -431,26 +571,22 @@ func (m *Manager) Model(channelID string) string {
 // ListModels calls kiro-cli to get available models.
 // If channelID is provided, it marks the channel's current model instead of global default.
 func (m *Manager) ListModels(channelID string) (string, error) {
-	out, err := exec.Command(m.kiroCLI, "chat", "--list-models", "-f", "json").Output()
-	if err != nil {
-		return "", fmt.Errorf("list models: %w", err)
-	}
-	var result struct {
-		Models []struct {
-			Name        string  `json:"model_name"`
-			ID          string  `json:"model_id"`
-			Description string  `json:"description"`
-			Rate        float64 `json:"rate_multiplier"`
-			Unit        string  `json:"rate_unit"`
-		} `json:"models"`
-		Default string `json:"default_model"`
-	}
-	if err := json.Unmarshal(out, &result); err != nil {
-		return "", fmt.Errorf("parse models: %w", err)
+	// Try to get models from active agent's session response (no subprocess needed)
+	m.mu.Lock()
+	agent, agentOk := m.agents[channelID]
+	m.mu.Unlock()
+	if agentOk && agent.IsAlive() {
+		if models := agent.AvailableModels(); len(models) > 0 {
+			return m.formatAgentModels(channelID, agent.CurrentModelID(), models), nil
+		}
 	}
 
-	// Determine current model for this channel
-	currentModel := result.Default
+	models, defaultModel, err := m.cliModels()
+	if err != nil {
+		return "", err
+	}
+
+	currentModel := defaultModel
 	if channelID != "" {
 		if sess, ok := m.store.Get(channelID); ok && sess.Model != "" {
 			currentModel = sess.Model
@@ -461,15 +597,36 @@ func (m *Manager) ListModels(channelID string) (string, error) {
 
 	var sb strings.Builder
 	sb.WriteString(L.Get("models.header"))
-	for _, m := range result.Models {
+	for _, m := range models {
 		marker := " "
-		if m.ID == currentModel {
+		if m.ModelID == currentModel {
 			marker = "▸"
 		}
-		sb.WriteString(fmt.Sprintf("%s `%s` — %s (%.2f %s)\n", marker, m.ID, m.Description, m.Rate, m.Unit))
+		sb.WriteString(fmt.Sprintf("%s `%s` — %s\n", marker, m.ModelID, m.Description))
 	}
 	sb.WriteString(L.Get("models.footer"))
 	return sb.String(), nil
+}
+
+// formatAgentModels formats the model list from agent's session response.
+func (m *Manager) formatAgentModels(channelID, agentCurrentModel string, models []acp.ModelEntry) string {
+	// Use channel's configured model as current if available
+	currentModel := agentCurrentModel
+	if sess, ok := m.store.Get(channelID); ok && sess.Model != "" {
+		currentModel = sess.Model
+	}
+
+	var sb strings.Builder
+	sb.WriteString(L.Get("models.header"))
+	for _, model := range models {
+		marker := " "
+		if model.ModelID == currentModel {
+			marker = "▸"
+		}
+		sb.WriteString(fmt.Sprintf("%s `%s` — %s\n", marker, model.ModelID, model.Description))
+	}
+	sb.WriteString(L.Get("models.footer"))
+	return sb.String()
 }
 
 // --- Memory (persistent) ---
@@ -580,7 +737,13 @@ func (m *Manager) startAgentAndWorker(channelID string) (*Worker, error) {
 		delete(m.agents, channelID)
 	}
 
-	agent, err := acp.StartAgent(agentName, m.kiroCLI, cwd, model, m.agentOpts())
+	// Try to load previous session if available
+	opts := m.agentOpts()
+	if sess, ok := m.store.Get(channelID); ok && sess.SessionID != "" {
+		opts.LoadSessionID = sess.SessionID
+	}
+
+	agent, err := acp.StartAgent(agentName, m.kiroCLI, cwd, model, opts)
 	if err != nil {
 		return nil, fmt.Errorf("start agent: %w", err)
 	}
@@ -598,10 +761,13 @@ func (m *Manager) startAgentAndWorker(channelID string) (*Worker, error) {
 		log.Printf("[manager] agent %s exited, will restart on next message", agentName)
 	})
 
-	// Prepare conversation history to inject into first prompt (no wasted Ask round)
-	historyCtx := m.logger.BuildContextPrompt(channelID, 10)
-	if historyCtx != "" {
-		log.Printf("[manager] prepared %d chars of history for %s", len(historyCtx), agentName)
+	// Prepare conversation history only if session/load was not used
+	var historyCtx string
+	if !agent.LoadedSession() {
+		historyCtx = m.logger.BuildContextPrompt(channelID, 10)
+		if historyCtx != "" {
+			log.Printf("[manager] prepared %d chars of history for %s", len(historyCtx), agentName)
+		}
 	}
 
 	if err := m.store.Set(channelID, &Session{
@@ -1139,6 +1305,9 @@ func (m *Manager) ResetThreadAgentWithModel(threadID, model string) error {
 }
 
 func (m *Manager) resetThreadAgentWithModel(threadID, model string) error {
+	if err := m.validateModelID(model); err != nil {
+		return err
+	}
 	m.mu.Lock()
 	entry, ok := m.threadAgents[threadID]
 	if !ok {

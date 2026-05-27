@@ -34,13 +34,15 @@ type Agent struct {
 	onExit       func()              // called when child process exits unexpectedly
 	onReadError  func(error)         // called when ReadLoop encounters an error
 
-	contextUsage float64      // latest context usage percentage from metadata
+	contextUsage float64     // latest context usage percentage from metadata
 	turnMetrics  TurnMetrics // per-turn metrics from latest metadata
 
-	initResult *InitializeResult
-	stopOnce   sync.Once
-	exited     chan struct{} // closed when child process exits
-	stderrBuf  *ringBuffer   // captures recent stderr from kiro-cli
+	initResult    *InitializeResult
+	sessResult    *SessionNewResult
+	sessionLoaded bool
+	stopOnce      sync.Once
+	exited        chan struct{} // closed when child process exits
+	stderrBuf     *ringBuffer   // captures recent stderr from kiro-cli
 }
 
 // AgentOptions configures how an agent is spawned.
@@ -51,6 +53,7 @@ type AgentOptions struct {
 	TrustTools    string // --trust-tools <names>; comma-separated, overrides TrustAllTools
 	BotName       string // clientInfo.name
 	BotVersion    string // clientInfo.version
+	LoadSessionID string // if non-empty, use session/load instead of session/new
 }
 
 // StartAgent spawns kiro-cli acp and performs the ACP handshake (initialize + session/new).
@@ -158,14 +161,18 @@ func StartAgent(name, kiroCLI, cwd, model string, opts AgentOptions) (*Agent, er
 		},
 	}
 	if opts.BotName != "" || opts.BotVersion != "" {
-		info := map[string]string{}
-		if opts.BotName != "" {
-			info["name"] = opts.BotName
+		name := opts.BotName
+		if name == "" {
+			name = "kiro-discord-bot"
 		}
-		if opts.BotVersion != "" {
-			info["version"] = opts.BotVersion
+		version := opts.BotVersion
+		if version == "" {
+			version = "unknown"
 		}
-		initParams["clientInfo"] = info
+		initParams["clientInfo"] = map[string]string{
+			"name":    name,
+			"version": version,
+		}
 	}
 	initRaw, err := a.transport.Send(MethodInitialize, initParams)
 	if err != nil {
@@ -182,21 +189,44 @@ func StartAgent(name, kiroCLI, cwd, model string, opts AgentOptions) (*Agent, er
 	}
 	log.Printf("[agent:%s] pid=%d protocol=%v kiro=%s", name, cmd.Process.Pid, initResp.ProtocolVersion, version)
 
-	// Handshake: session/new — pass empty mcpServers; kiro-cli loads from
-	// <cwd>/.kiro/settings/mcp.json and ~/.kiro/settings/mcp.json on its own.
-	sessRaw, err := a.transport.Send(MethodNewSession, map[string]interface{}{
-		"cwd":        cwd,
-		"mcpServers": []interface{}{},
-	})
-	if err != nil {
-		a.Kill()
-		return nil, a.wrapHandshakeError("session/new", err)
+	// Handshake: session setup — try session/load if requested, fallback to session/new.
+	var sessResp SessionNewResult
+	if opts.LoadSessionID != "" && a.SupportsLoadSession() {
+		loadRaw, loadErr := a.transport.Send(MethodLoadSession, map[string]interface{}{
+			"sessionId":  opts.LoadSessionID,
+			"cwd":        cwd,
+			"mcpServers": []interface{}{},
+		})
+		if loadErr == nil {
+			json.Unmarshal(loadRaw, &sessResp)
+			if sessResp.SessionID == "" {
+				sessResp.SessionID = opts.LoadSessionID
+			}
+			a.sessionLoaded = true
+			log.Printf("[agent:%s] loaded session=%s", name, sessResp.SessionID)
+		} else {
+			log.Printf("[agent:%s] session/load failed (%v), falling back to session/new", name, loadErr)
+			opts.LoadSessionID = "" // clear to signal fallback happened
+		}
 	}
-	var sessResp struct {
-		SessionID string `json:"sessionId"`
+	if opts.LoadSessionID != "" && !a.SupportsLoadSession() {
+		log.Printf("[agent:%s] session/load requested but unsupported, falling back to session/new", name)
+		opts.LoadSessionID = ""
 	}
-	json.Unmarshal(sessRaw, &sessResp)
+	if opts.LoadSessionID == "" {
+		// Fresh session — kiro-cli loads MCP from <cwd>/.kiro/settings/mcp.json
+		sessRaw, sessErr := a.transport.Send(MethodNewSession, map[string]interface{}{
+			"cwd":        cwd,
+			"mcpServers": []interface{}{},
+		})
+		if sessErr != nil {
+			a.Kill()
+			return nil, a.wrapHandshakeError("session/new", sessErr)
+		}
+		json.Unmarshal(sessRaw, &sessResp)
+	}
 	a.SessionID = sessResp.SessionID
+	a.sessResult = &sessResp
 	a.state = "idle"
 
 	log.Printf("[agent:%s] session=%s", name, a.SessionID)
@@ -250,6 +280,17 @@ func (a *Agent) handleNotification(method string, params json.RawMessage) {
 			}
 			a.turnMetrics.ContextUsage = a.contextUsage
 			a.mu.Unlock()
+		}
+		return
+	}
+
+	// Track MCP server initialization notifications
+	if method == NotifMcpReady {
+		var mcpNotif struct {
+			ServerName string `json:"serverName"`
+		}
+		if json.Unmarshal(params, &mcpNotif) == nil && mcpNotif.ServerName != "" {
+			log.Printf("[agent:%s] mcp server ready: %s", a.Name, mcpNotif.ServerName)
 		}
 		return
 	}
@@ -455,6 +496,87 @@ func (a *Agent) ProtocolVersion() interface{} {
 	return nil
 }
 
+// AvailableModels returns the models from the session/new response, or nil.
+func (a *Agent) AvailableModels() []ModelEntry {
+	if a.sessResult != nil && a.sessResult.Models != nil {
+		return a.sessResult.Models.AvailableModels
+	}
+	return nil
+}
+
+// CurrentModelID returns the active model ID from the session/new response.
+func (a *Agent) CurrentModelID() string {
+	if a.sessResult != nil && a.sessResult.Models != nil {
+		return a.sessResult.Models.CurrentModelID
+	}
+	return ""
+}
+
+// AvailableModes returns the modes from the session/new response, or nil.
+func (a *Agent) AvailableModes() []ModeEntry {
+	if a.sessResult != nil && a.sessResult.Modes != nil {
+		return a.sessResult.Modes.AvailableModes
+	}
+	return nil
+}
+
+// CurrentModeID returns the active mode ID from the session/new response.
+func (a *Agent) CurrentModeID() string {
+	if a.sessResult != nil && a.sessResult.Modes != nil {
+		return a.sessResult.Modes.CurrentModeID
+	}
+	return ""
+}
+
+// LoadedSession returns true when this agent was created via session/load.
+func (a *Agent) LoadedSession() bool {
+	return a.sessionLoaded
+}
+
+// SupportsLoadSession returns true if the agent advertises loadSession capability.
+func (a *Agent) SupportsLoadSession() bool {
+	return a.initResult != nil && a.initResult.AgentCapabilities != nil && a.initResult.AgentCapabilities.LoadSession
+}
+
+// SupportsImagePrompt returns true if the agent accepts image content in prompts.
+func (a *Agent) SupportsImagePrompt() bool {
+	return a.initResult != nil && a.initResult.AgentCapabilities != nil &&
+		a.initResult.AgentCapabilities.PromptCapabilities != nil &&
+		a.initResult.AgentCapabilities.PromptCapabilities.Image
+}
+
+// HasModel returns true if modelID is listed in the session's available models.
+func (a *Agent) HasModel(modelID string) bool {
+	for _, model := range a.AvailableModels() {
+		if model.ModelID == modelID {
+			return true
+		}
+	}
+	return false
+}
+
+// HasMode returns true if modeID is listed in the session's available modes.
+func (a *Agent) HasMode(modeID string) bool {
+	for _, mode := range a.AvailableModes() {
+		if mode.ID == modeID {
+			return true
+		}
+	}
+	return false
+}
+
+func (a *Agent) setCurrentModelID(modelID string) {
+	if a.sessResult != nil && a.sessResult.Models != nil {
+		a.sessResult.Models.CurrentModelID = modelID
+	}
+}
+
+func (a *Agent) setCurrentModeID(modeID string) {
+	if a.sessResult != nil && a.sessResult.Modes != nil {
+		a.sessResult.Modes.CurrentModeID = modeID
+	}
+}
+
 // Ask sends a prompt and waits for the complete response. onChunk is called for each streaming chunk.
 func (a *Agent) Ask(ctx context.Context, prompt string, onChunk func(string)) (string, error) {
 	a.mu.Lock()
@@ -517,6 +639,13 @@ type AsyncCallbacks struct {
 // OnComplete is called when the prompt finishes (or fails). Caller must not reuse the agent
 // until OnComplete fires or IsBusy() returns false.
 func (a *Agent) AskAsync(prompt string, cb AsyncCallbacks) {
+	a.AskAsyncMulti([]PromptContent{{Type: "text", Text: prompt}}, cb)
+}
+
+// AskAsyncMulti sends a multi-content prompt and returns immediately.
+// Supports text and image content blocks. Caller must not reuse the agent
+// until OnComplete fires or IsBusy() returns false.
+func (a *Agent) AskAsyncMulti(content []PromptContent, cb AsyncCallbacks) {
 	a.mu.Lock()
 	a.state = "working"
 	a.currentText.Reset()
@@ -530,7 +659,7 @@ func (a *Agent) AskAsync(prompt string, cb AsyncCallbacks) {
 	go func() {
 		raw, err := a.transport.Send(MethodPrompt, map[string]interface{}{
 			"sessionId": a.SessionID,
-			"prompt":    []map[string]string{{"type": "text", "text": prompt}},
+			"prompt":    content,
 		})
 
 		a.mu.Lock()
@@ -565,6 +694,32 @@ func (a *Agent) IsBusy() bool {
 // CancelPrompt sends a session/cancel request to the agent without blocking.
 func (a *Agent) CancelPrompt() {
 	go a.transport.Send(MethodCancel, map[string]string{"sessionId": a.SessionID})
+}
+
+// SetModel switches the model for the current session via session/set_model.
+// Returns nil on success, or an error (including "Method not found" if unsupported).
+func (a *Agent) SetModel(modelID string) error {
+	_, err := a.transport.Send(MethodSetModel, map[string]interface{}{
+		"sessionId": a.SessionID,
+		"modelId":   modelID,
+	})
+	if err == nil {
+		a.setCurrentModelID(modelID)
+	}
+	return err
+}
+
+// SetMode switches the agent mode for the current session via session/set_mode.
+// Returns nil on success, or an error (including "Method not found" if unsupported).
+func (a *Agent) SetMode(modeID string) error {
+	_, err := a.transport.Send(MethodSetMode, map[string]interface{}{
+		"sessionId": a.SessionID,
+		"modeId":    modeID,
+	})
+	if err == nil {
+		a.setCurrentModeID(modeID)
+	}
+	return err
 }
 
 // ContextUsage returns the latest context usage percentage (0-100).
