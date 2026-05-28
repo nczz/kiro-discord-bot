@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/bwmarrin/discordgo"
+	"github.com/nczz/kiro-discord-bot/channel"
 	L "github.com/nczz/kiro-discord-bot/locale"
 )
 
@@ -20,6 +21,9 @@ type cmdCtx struct {
 	inThread  bool         // true if issued inside a thread
 	reply     func(string) // unified reply function
 	args      string       // optional arguments after the command name
+	guildID   string
+	userID    string
+	username  string
 }
 
 // --- Scope-aware commands ---
@@ -83,6 +87,85 @@ func (b *Bot) cmdModels(ctx cmdCtx) {
 	} else {
 		ctx.reply(msg)
 	}
+}
+
+func (b *Bot) cmdUsage(ctx cmdCtx) {
+	userID := usageUserIDFromArgs(ctx.args, ctx.userID)
+	limit := 10
+	if userID != "" {
+		limit = 0
+	}
+	report, err := b.manager.UsageReport(ctx.guildID, ctx.channelID, userID, limit)
+	if err != nil {
+		ctx.reply(commandError(err))
+		return
+	}
+	ctx.reply(formatUsageReport(report, userID))
+}
+
+func usageUserIDFromArgs(args, selfID string) string {
+	args = strings.TrimSpace(args)
+	if args == "" || strings.EqualFold(args, "top") || strings.EqualFold(args, "all") {
+		return ""
+	}
+	if strings.EqualFold(args, "me") || strings.EqualFold(args, "self") {
+		return selfID
+	}
+	if strings.HasPrefix(args, "<@") && strings.HasSuffix(args, ">") {
+		id := strings.TrimSuffix(strings.TrimPrefix(args, "<@"), ">")
+		id = strings.TrimPrefix(id, "!")
+		if _, err := strconv.ParseUint(id, 10, 64); err == nil {
+			return id
+		}
+	}
+	if _, err := strconv.ParseUint(args, 10, 64); err == nil {
+		return args
+	}
+	return ""
+}
+
+func formatUsageReport(report channel.UsageReport, userID string) string {
+	var sb strings.Builder
+	sb.WriteString(L.Get("usage.report.title") + "\n")
+	sb.WriteString(L.Getf("usage.report.through", report.GeneratedAt.Format("2006-01-02 15:04"), report.Location.String()) + "\n")
+	sb.WriteString(L.Getf("usage.report.range",
+		report.DayStart.Format("01-02 15:04"), report.WeekStart.Format("01-02 15:04"), report.MonthStart.Format("01-02 15:04")))
+	if len(report.Rows) == 0 {
+		if userID != "" {
+			sb.WriteString("\n" + L.Get("usage.report.no_user_records"))
+		} else {
+			sb.WriteString("\n" + L.Get("usage.report.no_records"))
+		}
+		return sb.String()
+	}
+	sb.WriteString("\n")
+	for i, row := range report.Rows {
+		name := row.Username
+		if name == "" {
+			name = row.UserID
+		}
+		if name == "" {
+			name = L.Get("usage.report.unknown_user")
+		}
+		if userID == "" {
+			if row.UserID == "" {
+				sb.WriteString(fmt.Sprintf("`%d.` %s\n", i+1, name))
+			} else {
+				sb.WriteString(fmt.Sprintf("`%d.` <@%s> %s\n", i+1, row.UserID, name))
+			}
+		} else if row.UserID == "" {
+			sb.WriteString(name + "\n")
+		} else {
+			sb.WriteString(fmt.Sprintf("<@%s> %s\n", row.UserID, name))
+		}
+		sb.WriteString(L.Getf("usage.report.row",
+			row.DayCredits, row.DayTurns, row.WeekCredits, row.WeekTurns, row.MonthCredits, row.MonthTurns))
+		sb.WriteString("\n")
+		if row.MonthTurns > row.MeteredMonthTurns {
+			sb.WriteString(L.Getf("usage.report.unmetered", row.MonthTurns-row.MeteredMonthTurns) + "\n")
+		}
+	}
+	return sb.String()
 }
 
 func (b *Bot) cmdResume(ctx cmdCtx) {

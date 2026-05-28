@@ -487,7 +487,15 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 	reply := func(msg string) {
 		ds.ChannelMessageSendReply(m.ChannelID, msg, &discordgo.MessageReference{MessageID: m.ID, ChannelID: m.ChannelID})
 	}
-	ctx := cmdCtx{channelID: m.ChannelID, targetID: m.ChannelID, inThread: false, reply: reply}
+	ctx := cmdCtx{
+		channelID: m.ChannelID,
+		targetID:  m.ChannelID,
+		inThread:  false,
+		reply:     reply,
+		guildID:   m.GuildID,
+		userID:    m.Author.ID,
+		username:  m.Author.Username,
+	}
 
 	switch {
 	case content == "!resume":
@@ -503,6 +511,9 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 		b.cmdReset(ctx)
 	case content == "!status":
 		b.cmdStatus(ctx)
+	case content == "!usage" || strings.HasPrefix(content, "!usage "):
+		ctx.args = strings.TrimSpace(strings.TrimPrefix(content, "!usage"))
+		b.cmdUsage(ctx)
 	case content == "!doctor":
 		b.cmdDoctor(ctx)
 	case content == "!cancel":
@@ -561,12 +572,14 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 
 		job := &channel.Job{
 			ChannelID:   m.ChannelID,
+			GuildID:     m.GuildID,
 			MessageID:   m.ID,
 			Prompt:      prompt,
 			UserID:      m.Author.ID,
 			Username:    m.Author.Username,
 			Attachments: localPaths,
 			Transcript:  transcript,
+			Source:      "message",
 		}
 		if err := b.manager.Enqueue(ds, job); err != nil {
 			ds.MessageReactionRemove(m.ChannelID, m.ID, "⏳", "@me")
@@ -589,12 +602,24 @@ func (b *Bot) handleThreadUpdate(ds *discordgo.Session, t *discordgo.ThreadUpdat
 func (b *Bot) handleThreadMessage(ds *discordgo.Session, m *discordgo.MessageCreate, content, parentChannelID string, handoff bool) {
 	threadID := m.ChannelID
 	reply := func(msg string) { ds.ChannelMessageSend(threadID, msg) }
-	ctx := cmdCtx{channelID: parentChannelID, targetID: threadID, inThread: true, reply: reply}
+	ctx := cmdCtx{
+		channelID: parentChannelID,
+		targetID:  threadID,
+		inThread:  true,
+		reply:     reply,
+		guildID:   m.GuildID,
+		userID:    m.Author.ID,
+		username:  m.Author.Username,
+	}
 
 	// Thread-specific commands
 	switch {
 	case content == "!status":
 		b.cmdStatus(ctx)
+		return
+	case content == "!usage" || strings.HasPrefix(content, "!usage "):
+		ctx.args = strings.TrimSpace(strings.TrimPrefix(content, "!usage"))
+		b.cmdUsage(ctx)
 		return
 	case content == "!doctor":
 		b.cmdDoctor(ctx)
@@ -684,15 +709,18 @@ func (b *Bot) handleThreadMessage(ds *discordgo.Session, m *discordgo.MessageCre
 	prompt := buildPromptThread(content, localPaths, parentChannelID, threadID, m.GuildID, m.Author.Username, b.peerPromptContext(selfID))
 
 	job := &channel.Job{
-		ChannelID:   threadID,
-		MessageID:   m.ID,
-		Prompt:      prompt,
-		UserID:      m.Author.ID,
-		Username:    m.Author.Username,
-		Attachments: localPaths,
-		ThreadID:    threadID,
-		Transcript:  transcript,
-		Handoff:     handoff,
+		ChannelID:       threadID,
+		ParentChannelID: parentChannelID,
+		GuildID:         m.GuildID,
+		MessageID:       m.ID,
+		Prompt:          prompt,
+		UserID:          m.Author.ID,
+		Username:        m.Author.Username,
+		Attachments:     localPaths,
+		ThreadID:        threadID,
+		Transcript:      transcript,
+		Handoff:         handoff,
+		Source:          "thread",
 	}
 	if err := b.manager.EnqueueThread(ds, job, parentChannelID); err != nil {
 		ds.MessageReactionRemove(threadID, m.ID, "⏳", "@me")
@@ -707,6 +735,9 @@ func buildSlashCommands() []*discordgo.ApplicationCommand {
 		}},
 		{Name: "reset", Description: L.Get("cmd.reset.desc")},
 		{Name: "status", Description: L.Get("cmd.status.desc")},
+		{Name: "usage", Description: L.Get("cmd.usage.desc"), Options: []*discordgo.ApplicationCommandOption{
+			{Type: discordgo.ApplicationCommandOptionUser, Name: "user", Description: L.Get("cmd.usage.opt.user"), Required: false},
+		}},
 		{Name: "doctor", Description: L.Get("cmd.doctor.desc")},
 		{Name: "cancel", Description: L.Get("cmd.cancel.desc")},
 		{Name: "cwd", Description: L.Get("cmd.cwd.desc"), Options: []*discordgo.ApplicationCommandOption{
@@ -842,6 +873,19 @@ func (b *Bot) handleInteraction(ds *discordgo.Session, i *discordgo.InteractionC
 	}
 }
 
+func interactionUser(i *discordgo.InteractionCreate) (string, string) {
+	if i == nil || i.Interaction == nil {
+		return "", ""
+	}
+	if i.Member != nil && i.Member.User != nil {
+		return i.Member.User.ID, i.Member.User.Username
+	}
+	if i.User != nil {
+		return i.User.ID, i.User.Username
+	}
+	return "", ""
+}
+
 func (b *Bot) handleSlashCommand(ds *discordgo.Session, i *discordgo.InteractionCreate) {
 	data := i.ApplicationCommandData()
 	log.Printf("[interaction] /%s from %s", data.Name, i.ChannelID)
@@ -895,7 +939,8 @@ func (b *Bot) handleSlashCommand(ds *discordgo.Session, i *discordgo.Interaction
 	reply := func(msg string) {
 		_, _ = ds.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{Content: msg})
 	}
-	ctx := cmdCtx{channelID: channelID, targetID: rawChannelID, inThread: inThread, reply: reply}
+	userID, username := interactionUser(i)
+	ctx := cmdCtx{channelID: channelID, targetID: rawChannelID, inThread: inThread, reply: reply, guildID: i.GuildID, userID: userID, username: username}
 
 	go func() {
 		// Extract args from slash command options
@@ -907,6 +952,13 @@ func (b *Bot) handleSlashCommand(ds *discordgo.Session, i *discordgo.Interaction
 			b.cmdReset(ctx)
 		case "status":
 			b.cmdStatus(ctx)
+		case "usage":
+			if len(data.Options) > 0 {
+				if u := data.Options[0].UserValue(ds); u != nil {
+					ctx.args = u.ID
+				}
+			}
+			b.cmdUsage(ctx)
 		case "doctor":
 			b.cmdDoctor(ctx)
 		case "cancel":

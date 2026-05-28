@@ -34,6 +34,7 @@ type Manager struct {
 	threadArchive   int
 	defaultModel    string
 	logger          *ChatLogger
+	usage           *UsageStore
 	botVersion      string
 	guildID         string
 	botID           string
@@ -68,26 +69,28 @@ type threadAgentEntry struct {
 
 // ManagerConfig holds configuration for creating a Manager.
 type ManagerConfig struct {
-	Store               *SessionStore // set by bot.go after creation
-	KiroCLIPath         string
-	DefaultCWD          string
-	AllowedCwdRoots     string
-	QueueBufferSize     int
-	AskTimeoutSec       int
-	StreamUpdateSec     int
-	ThreadAutoArchive   int
-	KiroModel           string
-	DataDir             string
-	BotVersion          string
-	GuildID             string
-	ThreadAgentMax      int
-	ThreadAgentIdleSec  int
-	ChannelAgentIdleSec int
-	MaxScannerBuffer    int
-	AgentProfile        string
-	TrustAllTools       bool
-	TrustTools          string
-	BotID               string
+	Store                *SessionStore // set by bot.go after creation
+	KiroCLIPath          string
+	DefaultCWD           string
+	AllowedCwdRoots      string
+	QueueBufferSize      int
+	AskTimeoutSec        int
+	StreamUpdateSec      int
+	ThreadAutoArchive    int
+	KiroModel            string
+	DataDir              string
+	BotVersion           string
+	GuildID              string
+	ThreadAgentMax       int
+	ThreadAgentIdleSec   int
+	ChannelAgentIdleSec  int
+	MaxScannerBuffer     int
+	AgentProfile         string
+	TrustAllTools        bool
+	TrustTools           string
+	BotID                string
+	UsageTimezone        string
+	UsageRetentionMonths int
 }
 
 func NewManager(cfg ManagerConfig) *Manager {
@@ -107,6 +110,7 @@ func NewManager(cfg ManagerConfig) *Manager {
 		threadArchive:       cfg.ThreadAutoArchive,
 		defaultModel:        cfg.KiroModel,
 		logger:              NewChatLogger(cfg.DataDir),
+		usage:               NewUsageStore(cfg.DataDir, cfg.UsageTimezone, cfg.UsageRetentionMonths),
 		botVersion:          cfg.BotVersion,
 		guildID:             cfg.GuildID,
 		botID:               cfg.BotID,
@@ -886,6 +890,7 @@ func (m *Manager) startAgentAndWorker(channelID string) (*Worker, error) {
 	}
 
 	w := NewWorker(channelID, agent, m.queueBufSize, m.askTimeoutSec, m.streamUpdateSec, m.threadArchive, m.logger, model)
+	w.SetUsageStore(m.usage)
 	w.SetHistoryPrefix(historyCtx)
 	w.OnMemoryPrefixFunc(func() string {
 		m.mu.Lock()
@@ -906,6 +911,22 @@ func (m *Manager) startAgentAndWorker(channelID string) (*Worker, error) {
 // GetSession returns the session for a channel.
 func (m *Manager) GetSession(channelID string) (*Session, bool) {
 	return m.getChannelSession(channelID)
+}
+
+// UsageReport returns credit usage aggregated for the current day, week, and month.
+func (m *Manager) UsageReport(guildID, channelID, userID string, limit int) (UsageReport, error) {
+	if m.usage == nil {
+		return UsageReport{}, fmt.Errorf("usage store not configured")
+	}
+	return m.usage.Report(guildID, channelID, userID, limit, time.Now())
+}
+
+// RecordUsage appends one usage record to the usage ledger.
+func (m *Manager) RecordUsage(record UsageRecord) error {
+	if m.usage == nil {
+		return fmt.Errorf("usage store not configured")
+	}
+	return m.usage.Append(record)
 }
 
 // GetAgent returns the agent for a channel.
@@ -1310,6 +1331,7 @@ func (m *Manager) spawnThreadAgent(threadID, parentChannelID string, modelOverri
 	}
 
 	w := NewWorker("thread-"+threadID, agent, m.queueBufSize, m.askTimeoutSec, m.streamUpdateSec, 0, m.logger, model)
+	w.SetUsageStore(m.usage)
 	w.SetHistoryPrefix(historyCtx)
 	w.OnActivityFunc(func() { m.TouchThreadAgent(threadID) })
 	w.OnMemoryPrefixFunc(func() string {

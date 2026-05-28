@@ -141,6 +141,8 @@ HEARTBEAT_SEC=60
 ATTACHMENT_RETAIN_DAYS=7
 ATTACHMENT_MAX_MB=25
 CRON_TIMEZONE=Asia/Taipei
+USAGE_TIMEZONE=
+USAGE_RETENTION_MONTHS=0
 BOT_LOCALE=en
 DOWNLOAD_TIMEOUT_SEC=120
 QUEUE_BUFFER_SIZE=20
@@ -188,6 +190,8 @@ STT_MAX_DURATION_SEC=300
 | `ATTACHMENT_RETAIN_DAYS` | Auto-delete attachments older than N days (0 = keep forever) | `7` |
 | `ATTACHMENT_MAX_MB` | Maximum downloaded attachment size per file in MB (0 = no bot-side limit) | `25` |
 | `CRON_TIMEZONE` | Timezone for cron schedules (empty = server local) | `` |
+| `USAGE_TIMEZONE` | Timezone for `/usage` day/week/month boundaries (empty = `CRON_TIMEZONE`, then server local) | `` |
+| `USAGE_RETENTION_MONTHS` | Months of usage ledger files to keep (0 = keep forever) | `0` |
 | `BOT_LOCALE` | Bot display language (`en`, `zh-TW`) | `en` |
 | `DOWNLOAD_TIMEOUT_SEC` | Attachment download timeout in seconds | `120` |
 | `QUEUE_BUFFER_SIZE` | Max queued jobs per channel | `20` |
@@ -307,6 +311,7 @@ The bot needs explicit permission in each channel it should respond to:
 | `/start <cwd>` | Bind channel to a project directory and start agent |
 | `/reset` | Restart the agent for this channel |
 | `/status` | Show agent state, queue length, context usage, session ID |
+| `/usage [user]` | Show credit usage for today, this week, and month-to-date |
 | `/doctor` | Run deployment diagnostics and ACP preflight |
 | `/cancel` | Cancel the currently running task |
 | `/cwd` | Show current working directory |
@@ -790,6 +795,7 @@ RUN_ACP_SMOKE=1 KIRO_CLI=/Users/chun/.local/bin/kiro-cli scripts/release-preflig
 | `/start <目錄>` | 綁定專案目錄並啟動 agent |
 | `/reset` | 重啟此 channel 的 agent |
 | `/status` | 查詢 agent 狀態、queue 長度、context 使用率 |
+| `/usage [user]` | 查詢今天、本周、本月至今 credits 用量 |
 | `/doctor` | 執行部署診斷與 ACP preflight |
 | `/cancel` | 取消目前執行中的任務 |
 | `/cwd` | 查詢目前工作目錄 |

@@ -33,6 +33,7 @@ type CronDeps interface {
 	StartTempAgent(name, cwd, model string) (*acp.Agent, error)
 	StopTempAgent(agent *acp.Agent)
 	AskAgentInThread(ctx context.Context, agent *acp.Agent, channelID, threadName, threadID, prompt, mentionID, createdByID string) (response string, usedThreadID string, err error)
+	RecordAgentUsage(agent *acp.Agent, job *CronJob, threadID, status string)
 	Notify(channelID, msg string)
 }
 
@@ -202,6 +203,7 @@ func (c *CronTask) execute(job *CronJob, now time.Time) {
 		status = "error"
 		c.deps.Notify(job.ChannelID, L.Getf("cron.exec.failed", label, job.Name, err.Error()))
 	}
+	c.deps.RecordAgentUsage(agent, job, usedThreadID, status)
 
 	c.saveHistory(job.ID, CronHistory{
 		Timestamp: now.Format(time.RFC3339), Prompt: job.Prompt, Response: response, Status: status, DurationSec: duration,

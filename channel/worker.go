@@ -23,16 +23,19 @@ var reMention = regexp.MustCompile(`<@!?\d+>`)
 
 // Job represents a single user message to be processed.
 type Job struct {
-	ChannelID   string
-	MessageID   string
-	Prompt      string
-	Session     *discordgo.Session
-	UserID      string
-	Username    string
-	Attachments []string
-	ThreadID    string // non-empty = follow-up in existing thread, skip thread creation
-	Transcript  string // STT transcription result, shown in thread if non-empty
-	Handoff     bool   // true when this job is an accepted cross-bot handoff
+	ChannelID       string
+	ParentChannelID string
+	GuildID         string
+	MessageID       string
+	Prompt          string
+	Session         *discordgo.Session
+	UserID          string
+	Username        string
+	Attachments     []string
+	ThreadID        string // non-empty = follow-up in existing thread, skip thread creation
+	Transcript      string // STT transcription result, shown in thread if non-empty
+	Handoff         bool   // true when this job is an accepted cross-bot handoff
+	Source          string // message, thread, cron, etc.
 }
 
 // Worker manages a per-channel job queue and executes jobs sequentially.
@@ -48,6 +51,7 @@ type Worker struct {
 	stopped         sync.Once
 	started         sync.Once
 	logger          *ChatLogger
+	usage           *UsageStore
 	model           string
 
 	cancelMu sync.Mutex
@@ -101,6 +105,9 @@ func (w *Worker) OnActivityFunc(fn func()) { w.onActivity = fn }
 
 // OnMemoryPrefixFunc sets a callback that returns memory rules to prepend to prompts.
 func (w *Worker) OnMemoryPrefixFunc(fn func() string) { w.memoryPrefix = fn }
+
+// SetUsageStore sets the append-only usage ledger used for report commands.
+func (w *Worker) SetUsageStore(store *UsageStore) { w.usage = store }
 
 // OnSilentFunc sets a callback that returns whether silent mode is active.
 func (w *Worker) OnSilentFunc(fn func() bool) { w.isSilent = fn }
@@ -390,6 +397,7 @@ func (w *Worker) execute(job *Job) {
 				if w.logger != nil {
 					w.logger.Log(w.channelID, ChatEntry{Role: "assistant", Content: "❌ " + errMsg, Model: w.model})
 				}
+				w.recordUsage(job, threadID, "error")
 				w.signalIdle()
 				return
 			}
@@ -414,6 +422,7 @@ func (w *Worker) execute(job *Job) {
 			if footer := formatMetricsFooter(w.agent.TurnMetrics()); footer != "" {
 				ds.ChannelMessageSend(threadID, footer)
 			}
+			w.recordUsage(job, threadID, "success")
 
 			// Warn if context usage is high
 			if usage := w.agent.ContextUsage(); usage >= 90 {
@@ -471,6 +480,41 @@ func (w *Worker) execute(job *Job) {
 	promptContent := buildPromptContent(prompt, job.Attachments, w.agent.SupportsImagePrompt())
 	w.agent.AskAsyncMulti(promptContent, callbacks)
 	// Returns immediately — callbacks handle the rest
+}
+
+func (w *Worker) recordUsage(job *Job, threadID, status string) {
+	if w.usage == nil || job == nil {
+		return
+	}
+	metrics := w.agent.TurnMetrics()
+	channelID := job.ChannelID
+	if job.ParentChannelID != "" {
+		channelID = job.ParentChannelID
+	}
+	source := job.Source
+	if source == "" {
+		if job.ThreadID != "" {
+			source = "thread"
+		} else {
+			source = "message"
+		}
+	}
+	if err := w.usage.Append(UsageRecord{
+		GuildID:       job.GuildID,
+		ChannelID:     channelID,
+		ThreadID:      threadID,
+		UserID:        job.UserID,
+		Username:      job.Username,
+		MessageID:     job.MessageID,
+		Model:         w.model,
+		Source:        source,
+		Status:        status,
+		MeteringUsage: metrics.MeteringUsage,
+		DurationMs:    metrics.TurnDurationMs,
+		ContextUsage:  metrics.ContextUsage,
+	}); err != nil {
+		log.Printf("[usage] append failed | user=%s msg=%s err=%v", job.UserID, job.MessageID, err)
+	}
 }
 
 // isImageFile returns true if the path has an image extension supported by ACP.

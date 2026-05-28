@@ -29,6 +29,41 @@ func (a *cronAdapter) StopTempAgent(agent *acp.Agent) {
 	a.bot.manager.StopTempAgent(agent)
 }
 
+func (a *cronAdapter) RecordAgentUsage(agent *acp.Agent, job *heartbeat.CronJob, threadID, status string) {
+	if agent == nil || job == nil {
+		return
+	}
+	metrics := agent.TurnMetrics()
+	source := "cron"
+	if job.OneShot {
+		source = "reminder"
+	}
+	model := job.Model
+	if model == "" {
+		model = agent.CurrentModelID()
+	}
+	userID := job.CreatedByID
+	if userID == "" {
+		userID = job.MentionID
+	}
+	if err := a.bot.manager.RecordUsage(channel.UsageRecord{
+		GuildID:       job.GuildID,
+		ChannelID:     job.ChannelID,
+		ThreadID:      threadID,
+		UserID:        userID,
+		Username:      job.CreatedBy,
+		MessageID:     job.ID,
+		Model:         model,
+		Source:        source,
+		Status:        status,
+		MeteringUsage: metrics.MeteringUsage,
+		DurationMs:    metrics.TurnDurationMs,
+		ContextUsage:  metrics.ContextUsage,
+	}); err != nil {
+		log.Printf("[usage] append cron failed | job=%s user=%s err=%v", job.ID, userID, err)
+	}
+}
+
 func (a *cronAdapter) AskAgentInThread(ctx context.Context, agent *acp.Agent, channelID, threadName, existingThreadID, prompt, mentionID, createdByID string) (string, string, error) {
 	ds := a.bot.discord
 	archiveDur := a.bot.manager.ThreadArchive()

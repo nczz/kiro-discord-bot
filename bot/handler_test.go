@@ -183,17 +183,28 @@ func TestThreadMentionModeInheritsParentBack(t *testing.T) {
 	}
 }
 
-func TestSlashCommandsIncludeAgent(t *testing.T) {
+func TestSlashCommandsIncludeAgentAndUsage(t *testing.T) {
+	foundAgent := false
+	foundUsage := false
 	for _, cmd := range buildSlashCommands() {
+		if cmd.Name == "usage" {
+			foundUsage = true
+			if len(cmd.Options) != 1 || cmd.Options[0].Name != "user" {
+				t.Fatalf("/usage options = %+v, want optional user", cmd.Options)
+			}
+			continue
+		}
 		if cmd.Name != "agent" {
 			continue
 		}
+		foundAgent = true
 		if len(cmd.Options) != 1 || cmd.Options[0].Name != "mode" {
 			t.Fatalf("/agent options = %+v, want optional mode", cmd.Options)
 		}
-		return
 	}
-	t.Fatal("expected /agent slash command to be registered")
+	if !foundAgent || !foundUsage {
+		t.Fatal("expected /agent and /usage slash commands to be registered")
+	}
 }
 
 func TestChannelOnlySlashCommands(t *testing.T) {
@@ -202,7 +213,7 @@ func TestChannelOnlySlashCommands(t *testing.T) {
 			t.Fatalf("expected /%s to be channel-only", name)
 		}
 	}
-	for _, name := range []string{"status", "reset", "cancel", "compact", "clear", "model", "models", "memory", "flashmemory", "close"} {
+	for _, name := range []string{"status", "usage", "reset", "cancel", "compact", "clear", "model", "models", "memory", "flashmemory", "close"} {
 		if isChannelOnlySlashCommand(name) {
 			t.Fatalf("did not expect /%s to be channel-only", name)
 		}
