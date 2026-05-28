@@ -518,6 +518,8 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 		b.cmdDoctor(ctx)
 	case content == "!cancel":
 		b.cmdCancel(ctx)
+	case content == "!interrupt":
+		b.cmdInterrupt(ctx)
 	case content == "!compact":
 		b.cmdCompact(ctx)
 	case content == "!clear":
@@ -626,6 +628,9 @@ func (b *Bot) handleThreadMessage(ds *discordgo.Session, m *discordgo.MessageCre
 		return
 	case content == "!cancel":
 		b.cmdCancel(ctx)
+		return
+	case content == "!interrupt":
+		b.cmdInterrupt(ctx)
 		return
 	case content == "!close":
 		b.cmdClose(ctx)
@@ -740,6 +745,7 @@ func buildSlashCommands() []*discordgo.ApplicationCommand {
 		}},
 		{Name: "doctor", Description: L.Get("cmd.doctor.desc")},
 		{Name: "cancel", Description: L.Get("cmd.cancel.desc")},
+		{Name: "interrupt", Description: L.Get("cmd.interrupt.desc")},
 		{Name: "cwd", Description: L.Get("cmd.cwd.desc"), Options: []*discordgo.ApplicationCommandOption{
 			{Type: discordgo.ApplicationCommandOptionString, Name: "path", Description: L.Get("cmd.cwd.opt.path"), Required: false},
 		}},
@@ -981,6 +987,8 @@ func (b *Bot) handleSlashCommand(ds *discordgo.Session, i *discordgo.Interaction
 			b.cmdDoctor(ctx)
 		case "cancel":
 			b.cmdCancel(ctx)
+		case "interrupt":
+			b.cmdInterrupt(ctx)
 		case "compact":
 			b.cmdCompact(ctx)
 		case "clear":

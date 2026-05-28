@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/nczz/kiro-discord-bot/acp"
@@ -197,8 +198,9 @@ func TestBuildPromptContentSkipsImagesWhenUnsupported(t *testing.T) {
 }
 
 type fakeWorkerAgent struct {
-	mu          sync.Mutex
-	cancelCalls int
+	mu             sync.Mutex
+	cancelCalls    int
+	interruptCalls int
 }
 
 func (f *fakeWorkerAgent) Ask(context.Context, string, func(string)) (string, error) {
@@ -217,6 +219,13 @@ func (f *fakeWorkerAgent) CancelPrompt() {
 	f.mu.Unlock()
 }
 
+func (f *fakeWorkerAgent) Interrupt() error {
+	f.mu.Lock()
+	f.interruptCalls++
+	f.mu.Unlock()
+	return nil
+}
+
 func (f *fakeWorkerAgent) ContextUsage() float64 { return 0 }
 
 func (f *fakeWorkerAgent) TurnMetrics() acp.TurnMetrics { return acp.TurnMetrics{} }
@@ -229,6 +238,12 @@ func (f *fakeWorkerAgent) CancelCalls() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.cancelCalls
+}
+
+func (f *fakeWorkerAgent) InterruptCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.interruptCalls
 }
 
 func TestWorkerCancelCurrentCancelsWithoutSignalingIdle(t *testing.T) {
@@ -276,6 +291,139 @@ func TestWorkerCancelCurrentNoActiveJob(t *testing.T) {
 
 	if got := agent.CancelCalls(); got != 0 {
 		t.Fatalf("cancel calls = %d, want 0", got)
+	}
+}
+
+func TestWorkerInterruptCurrentEscalatesWhenSameJobStillActive(t *testing.T) {
+	agent := &fakeWorkerAgent{}
+	w := newWorker("ch1", agent, 1, 30, 1, 1440, nil, "")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	w.cancelMu.Lock()
+	w.cancelFn = cancel
+	w.currentJobID = "m1"
+	w.currentJobSeq = 1
+	w.cancelMu.Unlock()
+
+	if !w.InterruptCurrent(5 * time.Millisecond) {
+		t.Fatal("InterruptCurrent returned false for active job")
+	}
+	if err := ctx.Err(); err != context.Canceled {
+		t.Fatalf("ctx err = %v, want context.Canceled", err)
+	}
+	if got := agent.CancelCalls(); got != 1 {
+		t.Fatalf("cancel calls = %d, want 1", got)
+	}
+
+	deadline := time.After(200 * time.Millisecond)
+	for {
+		if got := agent.InterruptCalls(); got == 1 {
+			return
+		} else if got > 1 {
+			t.Fatalf("interrupt calls = %d, want 1", got)
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("interrupt calls = %d, want 1", agent.InterruptCalls())
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+}
+
+func TestWorkerInterruptCurrentDeduplicatesPendingEscalation(t *testing.T) {
+	agent := &fakeWorkerAgent{}
+	w := newWorker("ch1", agent, 1, 30, 1, 1440, nil, "")
+
+	_, cancel := context.WithCancel(context.Background())
+	w.cancelMu.Lock()
+	w.cancelFn = cancel
+	w.currentJobID = "m1"
+	w.currentJobSeq = 1
+	w.cancelMu.Unlock()
+
+	if !w.InterruptCurrent(10 * time.Millisecond) {
+		t.Fatal("first InterruptCurrent returned false for active job")
+	}
+	if !w.InterruptCurrent(10 * time.Millisecond) {
+		t.Fatal("second InterruptCurrent returned false for active job")
+	}
+	if got := agent.CancelCalls(); got != 2 {
+		t.Fatalf("cancel calls = %d, want 2", got)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	if got := agent.InterruptCalls(); got != 1 {
+		t.Fatalf("interrupt calls = %d, want 1", got)
+	}
+}
+
+func TestWorkerInterruptCurrentDoesNotEscalateAfterJobClears(t *testing.T) {
+	agent := &fakeWorkerAgent{}
+	w := newWorker("ch1", agent, 1, 30, 1, 1440, nil, "")
+
+	_, cancel := context.WithCancel(context.Background())
+	w.cancelMu.Lock()
+	w.cancelFn = cancel
+	w.currentJobID = "m1"
+	w.currentJobSeq = 1
+	w.cancelMu.Unlock()
+
+	if !w.InterruptCurrent(20 * time.Millisecond) {
+		t.Fatal("InterruptCurrent returned false for active job")
+	}
+
+	w.cancelMu.Lock()
+	w.cancelFn = nil
+	w.currentJobID = ""
+	w.cancelMu.Unlock()
+
+	time.Sleep(50 * time.Millisecond)
+	if got := agent.InterruptCalls(); got != 0 {
+		t.Fatalf("interrupt calls = %d, want 0", got)
+	}
+}
+
+func TestWorkerInterruptCurrentDoesNotEscalateDifferentJob(t *testing.T) {
+	agent := &fakeWorkerAgent{}
+	w := newWorker("ch1", agent, 1, 30, 1, 1440, nil, "")
+
+	_, cancel := context.WithCancel(context.Background())
+	w.cancelMu.Lock()
+	w.cancelFn = cancel
+	w.currentJobID = "m1"
+	w.currentJobSeq = 1
+	w.cancelMu.Unlock()
+
+	if !w.InterruptCurrent(20 * time.Millisecond) {
+		t.Fatal("InterruptCurrent returned false for active job")
+	}
+
+	_, nextCancel := context.WithCancel(context.Background())
+	w.cancelMu.Lock()
+	w.cancelFn = nextCancel
+	w.currentJobID = "m2"
+	w.currentJobSeq = 2
+	w.cancelMu.Unlock()
+
+	time.Sleep(50 * time.Millisecond)
+	if got := agent.InterruptCalls(); got != 0 {
+		t.Fatalf("interrupt calls = %d, want 0", got)
+	}
+}
+
+func TestWorkerInterruptCurrentNoActiveJob(t *testing.T) {
+	agent := &fakeWorkerAgent{}
+	w := newWorker("ch1", agent, 1, 30, 1, 1440, nil, "")
+
+	if w.InterruptCurrent(0) {
+		t.Fatal("InterruptCurrent returned true without active job")
+	}
+	if got := agent.CancelCalls(); got != 0 {
+		t.Fatalf("cancel calls = %d, want 0", got)
+	}
+	if got := agent.InterruptCalls(); got != 0 {
+		t.Fatalf("interrupt calls = %d, want 0", got)
 	}
 }
 

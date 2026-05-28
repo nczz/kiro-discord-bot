@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/bwmarrin/discordgo"
@@ -40,6 +41,30 @@ func testPeerPermissionSession(t *testing.T, channelOneOverwrites []*discordgo.P
 		}
 	}
 	return ds
+}
+
+func botMemberAllowOverwrite(botID string) *discordgo.PermissionOverwrite {
+	return &discordgo.PermissionOverwrite{
+		ID:    botID,
+		Type:  discordgo.PermissionOverwriteTypeMember,
+		Allow: discordgo.PermissionViewChannel | discordgo.PermissionSendMessages | discordgo.PermissionSendMessagesInThreads,
+	}
+}
+
+func botMemberViewOverwrite(botID string) *discordgo.PermissionOverwrite {
+	return &discordgo.PermissionOverwrite{
+		ID:    botID,
+		Type:  discordgo.PermissionOverwriteTypeMember,
+		Allow: discordgo.PermissionViewChannel,
+	}
+}
+
+func botRoleAllowOverwrite(roleID string) *discordgo.PermissionOverwrite {
+	return &discordgo.PermissionOverwrite{
+		ID:    roleID,
+		Type:  discordgo.PermissionOverwriteTypeRole,
+		Allow: discordgo.PermissionViewChannel | discordgo.PermissionSendMessages | discordgo.PermissionSendMessagesInThreads,
+	}
 }
 
 func TestShouldIgnoreMessage(t *testing.T) {
@@ -175,10 +200,10 @@ func TestMultiBotMentionOnlyCanBeOpenedByBack(t *testing.T) {
 		peers:   parseBotPeers("M5Bot:bot-1,ChunBot:bot-2"),
 		manager: channel.NewManager(channel.ManagerConfig{}),
 	}
-	ds := testPeerPermissionSession(t, nil)
+	ds := testPeerPermissionSession(t, []*discordgo.PermissionOverwrite{botMemberAllowOverwrite("bot-2")})
 
 	if !b.requiresHumanMention(ds, "channel-1", "", "bot-1") {
-		t.Fatal("multi-bot channel should require mention by default")
+		t.Fatal("explicit multi-bot channel should require mention by default")
 	}
 
 	b.manager.Back("channel-1")
@@ -197,10 +222,10 @@ func TestThreadMentionModeInheritsParentBack(t *testing.T) {
 		peers:   parseBotPeers("M5Bot:bot-1,ChunBot:bot-2"),
 		manager: channel.NewManager(channel.ManagerConfig{}),
 	}
-	ds := testPeerPermissionSession(t, nil)
+	ds := testPeerPermissionSession(t, []*discordgo.PermissionOverwrite{botMemberAllowOverwrite("bot-2")})
 
 	if !b.requiresHumanMention(ds, "thread-1", "channel-1", "bot-1") {
-		t.Fatal("thread should require mention by default in multi-bot mode")
+		t.Fatal("thread should require mention by default when parent channel explicitly allows a peer bot")
 	}
 
 	b.manager.Back("channel-1")
@@ -224,34 +249,104 @@ func TestMultiBotMentionOnlyIsChannelScoped(t *testing.T) {
 		peers:   parseBotPeers("M5Bot:bot-1,ChunBot:bot-2"),
 		manager: channel.NewManager(channel.ManagerConfig{}),
 	}
-	ds := testPeerPermissionSession(t, []*discordgo.PermissionOverwrite{
-		{
-			ID:   "bot-2",
-			Type: discordgo.PermissionOverwriteTypeMember,
-			Deny: discordgo.PermissionSendMessages,
-		},
-	})
+	ds := testPeerPermissionSession(t, nil)
+	ch2, err := ds.State.Channel("channel-2")
+	if err != nil {
+		t.Fatalf("Channel: %v", err)
+	}
+	ch2.PermissionOverwrites = []*discordgo.PermissionOverwrite{botMemberAllowOverwrite("bot-2")}
 
 	if b.requiresHumanMention(ds, "channel-1", "", "bot-1") {
-		t.Fatal("peer without channel send permission should not force mention-only")
+		t.Fatal("peer without explicit channel allow should not force mention-only")
 	}
 	if !b.requiresHumanMention(ds, "channel-2", "", "bot-1") {
-		t.Fatal("peer with channel send permission should force mention-only")
+		t.Fatal("peer with explicit channel allow should force mention-only")
 	}
 }
 
-func TestRoleOnlyPeerStillForcesMentionOnly(t *testing.T) {
+func TestPeerExplicitViewOverwriteForcesMentionOnlyWhenEffectiveSendAllows(t *testing.T) {
+	b := &Bot{
+		peers:   parseBotPeers("M5Bot:bot-1,ChunBot:bot-2"),
+		manager: channel.NewManager(channel.ManagerConfig{}),
+	}
+	ds := testPeerPermissionSession(t, []*discordgo.PermissionOverwrite{botMemberViewOverwrite("bot-2")})
+
+	if !b.requiresHumanMention(ds, "channel-1", "", "bot-1") {
+		t.Fatal("peer with explicit channel view allow and effective send permission should force mention-only")
+	}
+}
+
+func TestRoleOnlyPeerRequiresExplicitChannelAllow(t *testing.T) {
 	b := &Bot{
 		peers: []BotPeer{
 			{Name: "M5Bot", ID: "bot-1", RoleID: "role-1"},
-			{Name: "PeerRole", RoleID: "role-2"},
+			{Name: "PeerRole", RoleID: "role-2", Manual: true},
 		},
 		manager: channel.NewManager(channel.ManagerConfig{}),
 	}
 	ds := testPeerPermissionSession(t, nil)
 
+	if b.requiresHumanMention(ds, "channel-1", "", "bot-1") {
+		t.Fatal("role-only peer without explicit channel allow should not force mention-only")
+	}
+	ch, err := ds.State.Channel("channel-1")
+	if err != nil {
+		t.Fatalf("Channel: %v", err)
+	}
+	ch.PermissionOverwrites = []*discordgo.PermissionOverwrite{botRoleAllowOverwrite("role-2")}
 	if !b.requiresHumanMention(ds, "channel-1", "", "bot-1") {
-		t.Fatal("role-only peer should conservatively force mention-only")
+		t.Fatal("manual role-only peer with explicit channel allow should force mention-only")
+	}
+}
+
+func TestDiscoveredRoleOnlyPeerDoesNotForceMentionOnly(t *testing.T) {
+	b := &Bot{
+		peers: []BotPeer{
+			{Name: "M5Bot", ID: "bot-1", RoleID: "role-1"},
+			{Name: "DiscoveredRole", RoleID: "role-2"},
+		},
+		manager: channel.NewManager(channel.ManagerConfig{}),
+	}
+	ds := testPeerPermissionSession(t, []*discordgo.PermissionOverwrite{botRoleAllowOverwrite("role-2")})
+
+	if b.requiresHumanMention(ds, "channel-1", "", "bot-1") {
+		t.Fatal("auto-discovered role-only peer should not force mention-only")
+	}
+}
+
+func TestDoctorBotPeersExplainsChannelTrigger(t *testing.T) {
+	L.Load("en")
+	ds := testPeerPermissionSession(t, []*discordgo.PermissionOverwrite{botMemberAllowOverwrite("bot-2")})
+	b := &Bot{
+		discord: ds,
+		peers:   parseBotPeers("M5Bot:bot-1,ChunBot:bot-2"),
+		manager: channel.NewManager(channel.ManagerConfig{}),
+	}
+
+	got := b.doctorBotPeers("channel-1")
+	if !strings.Contains(got, "trigger: `ChunBot` (`bot-2`) via member overwrite") {
+		t.Fatalf("doctor output missing trigger explanation:\n%s", got)
+	}
+	if !strings.Contains(got, "mention-only") {
+		t.Fatalf("doctor output missing mention-only mode:\n%s", got)
+	}
+}
+
+func TestDoctorBotPeersExplainsNoChannelTrigger(t *testing.T) {
+	L.Load("en")
+	ds := testPeerPermissionSession(t, nil)
+	b := &Bot{
+		discord: ds,
+		peers:   parseBotPeers("M5Bot:bot-1,ChunBot:bot-2"),
+		manager: channel.NewManager(channel.ManagerConfig{}),
+	}
+
+	got := b.doctorBotPeers("channel-1")
+	if !strings.Contains(got, "discovered peers, but none have an explicit channel overwrite here") {
+		t.Fatalf("doctor output missing no-trigger explanation:\n%s", got)
+	}
+	if !strings.Contains(got, "channel/thread mode: open") {
+		t.Fatalf("doctor output missing open mode:\n%s", got)
 	}
 }
 
@@ -298,7 +393,12 @@ func TestPeerPermissionCacheCachesChannelChecks(t *testing.T) {
 func TestSlashCommandsIncludeAgentAndUsage(t *testing.T) {
 	foundAgent := false
 	foundUsage := false
+	foundInterrupt := false
 	for _, cmd := range buildSlashCommands() {
+		if cmd.Name == "interrupt" {
+			foundInterrupt = true
+			continue
+		}
 		if cmd.Name == "usage" {
 			foundUsage = true
 			if len(cmd.Options) != 1 || cmd.Options[0].Name != "user" {
@@ -314,8 +414,8 @@ func TestSlashCommandsIncludeAgentAndUsage(t *testing.T) {
 			t.Fatalf("/agent options = %+v, want optional mode", cmd.Options)
 		}
 	}
-	if !foundAgent || !foundUsage {
-		t.Fatal("expected /agent and /usage slash commands to be registered")
+	if !foundAgent || !foundUsage || !foundInterrupt {
+		t.Fatal("expected /agent, /usage, and /interrupt slash commands to be registered")
 	}
 }
 
@@ -325,7 +425,7 @@ func TestChannelOnlySlashCommands(t *testing.T) {
 			t.Fatalf("expected /%s to be channel-only", name)
 		}
 	}
-	for _, name := range []string{"status", "usage", "reset", "cancel", "compact", "clear", "model", "models", "memory", "flashmemory", "close"} {
+	for _, name := range []string{"status", "usage", "reset", "cancel", "interrupt", "compact", "clear", "model", "models", "memory", "flashmemory", "close"} {
 		if isChannelOnlySlashCommand(name) {
 			t.Fatalf("did not expect /%s to be channel-only", name)
 		}

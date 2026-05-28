@@ -21,6 +21,7 @@ type BotPeer struct {
 	ID      string
 	RoleID  string
 	Exclude bool
+	Manual  bool
 }
 
 func parseBotPeers(raw string) []BotPeer {
@@ -53,10 +54,10 @@ func parseBotPeers(raw string) []BotPeer {
 		} else if !ok {
 			continue
 		}
-		if id == "" {
+		if id == "" && roleID == "" {
 			continue
 		}
-		peers = append(peers, BotPeer{Name: name, ID: id, RoleID: roleID, Exclude: exclude})
+		peers = append(peers, BotPeer{Name: name, ID: id, RoleID: roleID, Exclude: exclude, Manual: true})
 	}
 	return peers
 }
@@ -202,25 +203,79 @@ func (b *Bot) multiBotMode(selfID string) bool {
 }
 
 func (b *Bot) channelMultiBotMode(ds *discordgo.Session, targetID, selfID string) bool {
+	_, ok := b.channelMultiBotTrigger(ds, targetID, selfID)
+	return ok
+}
+
+type peerPresenceDiagnostic struct {
+	Peer     BotPeer
+	Presence string
+}
+
+func (b *Bot) channelMultiBotTrigger(ds *discordgo.Session, targetID, selfID string) (peerPresenceDiagnostic, bool) {
 	if !b.multiBotMode(selfID) {
-		return false
+		return peerPresenceDiagnostic{}, false
 	}
-	hasRoleOnlyPeer := false
 	for _, p := range b.peerSnapshot() {
 		if p.ID == selfID {
 			continue
 		}
 		if p.ID == "" {
-			if p.RoleID != "" {
-				hasRoleOnlyPeer = true
+			if presence, ok := b.peerExplicitlyPresentInTarget(ds, p, targetID); ok {
+				return peerPresenceDiagnostic{Peer: p, Presence: presence}, true
 			}
 			continue
 		}
-		if b.peerCanRespondInTarget(ds, p.ID, targetID) {
-			return true
+		presence, present := b.peerExplicitlyPresentInTarget(ds, p, targetID)
+		if present && b.peerCanRespondInTarget(ds, p.ID, targetID) {
+			return peerPresenceDiagnostic{Peer: p, Presence: presence}, true
 		}
 	}
-	return hasRoleOnlyPeer
+	return peerPresenceDiagnostic{}, false
+}
+
+func (b *Bot) peerExplicitlyPresentInTarget(ds *discordgo.Session, p BotPeer, targetID string) (string, bool) {
+	if ds == nil || ds.State == nil || targetID == "" {
+		return "", false
+	}
+	ch, err := ds.State.Channel(targetID)
+	if err != nil || ch == nil {
+		return "", false
+	}
+	sendPermission := int64(discordgo.PermissionSendMessages)
+	required := int64(discordgo.PermissionViewChannel) | sendPermission
+	permissionChannel := ch
+	if ch.IsThread() {
+		sendPermission = int64(discordgo.PermissionSendMessagesInThreads)
+		required = int64(discordgo.PermissionViewChannel) | sendPermission
+		if ch.ParentID != "" {
+			if parent, err := ds.State.Channel(ch.ParentID); err == nil && parent != nil {
+				permissionChannel = parent
+			}
+		}
+	}
+	for _, ow := range permissionChannel.PermissionOverwrites {
+		if ow == nil {
+			continue
+		}
+		if ow.Deny&required != 0 {
+			continue
+		}
+		matchesPeer := p.ID != "" && ow.Type == discordgo.PermissionOverwriteTypeMember && ow.ID == p.ID
+		matchesRole := p.RoleID != "" && ow.Type == discordgo.PermissionOverwriteTypeRole && ow.ID == p.RoleID
+		if p.ID != "" && (matchesPeer || matchesRole) {
+			if ow.Allow&(int64(discordgo.PermissionViewChannel)|sendPermission) != 0 {
+				if matchesPeer {
+					return "member overwrite", true
+				}
+				return "role overwrite", true
+			}
+		}
+		if p.ID == "" && p.Manual && matchesRole && ow.Allow&required == required {
+			return "manual role overwrite", true
+		}
+	}
+	return "", false
 }
 
 func (b *Bot) peerCanRespondInTarget(ds *discordgo.Session, peerID, targetID string) bool {

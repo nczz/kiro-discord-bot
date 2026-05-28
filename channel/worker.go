@@ -58,7 +58,10 @@ type Worker struct {
 	cancelFn context.CancelFunc
 
 	// Current thread info (protected by cancelMu)
-	currentThreadID string
+	currentThreadID     string
+	currentJobID        string
+	currentJobSeq       uint64
+	pendingInterruptSeq uint64
 
 	onActivity func() // called during work to signal liveness (prevents idle cleanup)
 
@@ -74,6 +77,7 @@ type workerAgent interface {
 	AskAsync(string, acp.AsyncCallbacks)
 	AskAsyncMulti([]acp.PromptContent, acp.AsyncCallbacks)
 	CancelPrompt()
+	Interrupt() error
 	ContextUsage() float64
 	TurnMetrics() acp.TurnMetrics
 	OnReadErrorFunc(func(error))
@@ -154,6 +158,52 @@ func (w *Worker) CancelCurrent() {
 		fn()
 		w.agent.CancelPrompt()
 	}
+}
+
+// InterruptCurrent first requests a normal ACP cancellation, then interrupts
+// the agent process group if the same job is still active after grace.
+func (w *Worker) InterruptCurrent(grace time.Duration) bool {
+	w.cancelMu.Lock()
+	fn := w.cancelFn
+	jobID := w.currentJobID
+	jobSeq := w.currentJobSeq
+	alreadyPending := w.pendingInterruptSeq == jobSeq
+	if fn != nil && jobSeq != 0 && !alreadyPending {
+		w.pendingInterruptSeq = jobSeq
+	}
+	w.cancelMu.Unlock()
+	if fn == nil || jobSeq == 0 {
+		return false
+	}
+
+	fn()
+	w.agent.CancelPrompt()
+	if alreadyPending {
+		return true
+	}
+
+	go func() {
+		if grace > 0 {
+			timer := time.NewTimer(grace)
+			defer timer.Stop()
+			<-timer.C
+		}
+
+		w.cancelMu.Lock()
+		stillActive := w.cancelFn != nil && w.currentJobSeq == jobSeq
+		if w.pendingInterruptSeq == jobSeq {
+			w.pendingInterruptSeq = 0
+		}
+		w.cancelMu.Unlock()
+		if !stillActive {
+			return
+		}
+		if err := w.agent.Interrupt(); err != nil {
+			log.Printf("[worker %s] interrupt failed | job=%s err=%v", w.channelID, jobID, err)
+		}
+	}()
+
+	return true
 }
 
 // CurrentThreadID returns the thread ID of the currently running task.
@@ -270,6 +320,8 @@ func (w *Worker) execute(job *Job) {
 
 	w.cancelMu.Lock()
 	w.currentThreadID = threadID
+	w.currentJobID = job.MessageID
+	w.currentJobSeq++
 	w.cancelMu.Unlock()
 
 	// Post initial status in thread
@@ -375,6 +427,10 @@ func (w *Worker) execute(job *Job) {
 			w.cancelMu.Lock()
 			w.cancelFn = nil
 			w.currentThreadID = ""
+			w.currentJobID = ""
+			if w.pendingInterruptSeq == w.currentJobSeq {
+				w.pendingInterruptSeq = 0
+			}
 			w.cancelMu.Unlock()
 
 			if askErr != nil {
@@ -456,6 +512,10 @@ func (w *Worker) execute(job *Job) {
 		w.cancelMu.Lock()
 		w.cancelFn = nil
 		w.currentThreadID = ""
+		w.currentJobID = ""
+		if w.pendingInterruptSeq == w.currentJobSeq {
+			w.pendingInterruptSeq = 0
+		}
 		w.cancelMu.Unlock()
 		w.signalIdle()
 	})

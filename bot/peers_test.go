@@ -8,15 +8,18 @@ import (
 )
 
 func TestParseBotPeers(t *testing.T) {
-	peers := parseBotPeers("BuildBot:111111111111111111:222222222222222222, bad, ReviewBot:333333333333333333")
-	if len(peers) != 2 {
-		t.Fatalf("len = %d, want 2", len(peers))
+	peers := parseBotPeers("BuildBot:111111111111111111:222222222222222222, bad, ReviewBot:333333333333333333, RoleOnly::444444444444444444")
+	if len(peers) != 3 {
+		t.Fatalf("len = %d, want 3", len(peers))
 	}
 	if peers[0].Name != "BuildBot" || peers[0].Mention() != "<@111111111111111111>" || peers[0].RoleMention() != "<@&222222222222222222>" {
 		t.Fatalf("first peer = %#v mention=%q role=%q", peers[0], peers[0].Mention(), peers[0].RoleMention())
 	}
 	if peers[1].Name != "ReviewBot" || peers[1].Mention() != "<@333333333333333333>" {
 		t.Fatalf("second peer = %#v mention=%q", peers[1], peers[1].Mention())
+	}
+	if peers[2].Name != "RoleOnly" || peers[2].ID != "" || peers[2].RoleID != "444444444444444444" || !peers[2].Manual {
+		t.Fatalf("manual role-only peer = %#v", peers[2])
 	}
 }
 

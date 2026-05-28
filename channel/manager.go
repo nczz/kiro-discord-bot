@@ -151,6 +151,7 @@ func (m *Manager) SetBotID(botID string) {
 const (
 	sessionTargetChannel = "channel"
 	sessionTargetThread  = "thread"
+	interruptGrace       = 5 * time.Second
 )
 
 func (m *Manager) sessionKey(targetType, targetID string) string {
@@ -463,6 +464,21 @@ func (m *Manager) Cancel(channelID string) error {
 		return fmt.Errorf("no active session")
 	}
 	w.CancelCurrent()
+	return nil
+}
+
+// Interrupt cancels the current channel job and escalates to a process-level
+// interrupt if the same job does not finish within a short grace period.
+func (m *Manager) Interrupt(channelID string) error {
+	m.mu.Lock()
+	w, ok := m.workers[channelID]
+	m.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("no active session")
+	}
+	if !w.InterruptCurrent(interruptGrace) {
+		return fmt.Errorf("no active job")
+	}
 	return nil
 }
 
@@ -1377,6 +1393,20 @@ func (m *Manager) CancelThreadAgent(threadID string) error {
 		return fmt.Errorf("no thread agent")
 	}
 	entry.worker.CancelCurrent()
+	return nil
+}
+
+// InterruptThreadAgent interrupts the current job in a thread agent.
+func (m *Manager) InterruptThreadAgent(threadID string) error {
+	m.mu.Lock()
+	entry, ok := m.threadAgents[threadID]
+	m.mu.Unlock()
+	if !ok {
+		return fmt.Errorf("no thread agent")
+	}
+	if !entry.worker.InterruptCurrent(interruptGrace) {
+		return fmt.Errorf("no active job")
+	}
 	return nil
 }
 

@@ -314,13 +314,21 @@ func (b *Bot) doctorBotPeers(targetID string) string {
 		}
 		sb.WriteString(L.Getf("doctor.bot_peers.peer", p.Name, mention, p.ID) + "\n")
 	}
-	if b.channelMultiBotMode(b.discord, targetID, selfID) {
+	if diag, multiBot := b.channelMultiBotTrigger(b.discord, targetID, selfID); multiBot {
 		if b.manager != nil && b.manager.HasFullListenOverride(targetID) {
 			sb.WriteString(L.Get("doctor.bot_peers.mode_open_override") + "\n")
 			return sb.String()
 		}
+		peerID := diag.Peer.ID
+		if peerID == "" {
+			peerID = "role-only"
+		}
+		sb.WriteString(L.Getf("doctor.bot_peers.trigger", diag.Peer.Name, peerID, diag.Presence) + "\n")
 		sb.WriteString(L.Get("doctor.bot_peers.mode_multi_bot_mention") + "\n")
 	} else {
+		if b.multiBotMode(selfID) {
+			sb.WriteString(L.Get("doctor.bot_peers.no_channel_trigger") + "\n")
+		}
 		sb.WriteString(L.Get("doctor.bot_peers.mode_open") + "\n")
 	}
 	return sb.String()
@@ -367,6 +375,22 @@ func (b *Bot) cmdCancel(ctx cmdCtx) {
 		ctx.reply(L.Getf("error.cancel_failed", commandErrorString(err)))
 	} else {
 		ctx.reply(L.Get("cancel.success"))
+	}
+}
+
+func (b *Bot) cmdInterrupt(ctx cmdCtx) {
+	if ctx.inThread {
+		if err := b.manager.InterruptThreadAgent(ctx.targetID); err != nil {
+			ctx.reply(L.Getf("error.interrupt_failed", commandErrorString(err)))
+		} else {
+			ctx.reply(L.Get("interrupt.success"))
+		}
+		return
+	}
+	if err := b.manager.Interrupt(ctx.channelID); err != nil {
+		ctx.reply(L.Getf("error.interrupt_failed", commandErrorString(err)))
+	} else {
+		ctx.reply(L.Get("interrupt.success"))
 	}
 }
 

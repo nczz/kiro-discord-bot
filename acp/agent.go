@@ -696,6 +696,19 @@ func (a *Agent) CancelPrompt() {
 	go a.transport.Send(MethodCancel, map[string]string{"sessionId": a.SessionID})
 }
 
+// Interrupt sends SIGINT to the agent process group. It is intentionally less
+// terminal than Stop/Kill: if the ACP process survives, the session can keep
+// serving future prompts; if it exits, Manager's existing on-exit path restarts
+// on the next message without clearing persisted session metadata.
+func (a *Agent) Interrupt() error {
+	if a.cmd.Process == nil {
+		return nil
+	}
+	pid := a.cmd.Process.Pid
+	log.Printf("[agent:%s] interrupting pid=%d", a.Name, pid)
+	return syscall.Kill(-pid, syscall.SIGINT)
+}
+
 // SetModel switches the model for the current session via session/set_model.
 // Returns nil on success, or an error (including "Method not found" if unsupported).
 func (a *Agent) SetModel(modelID string) error {
