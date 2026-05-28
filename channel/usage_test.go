@@ -70,6 +70,51 @@ func TestUsageStoreMonthlyFilesAndReport(t *testing.T) {
 	}
 }
 
+func TestUsageStoreAcceptsSingularCreditUnit(t *testing.T) {
+	store := NewUsageStore(t.TempDir(), "Asia/Taipei", 0)
+	if err := store.Append(UsageRecord{
+		Timestamp:     "2026-05-28T10:00:00+08:00",
+		GuildID:       "g1",
+		ChannelID:     "c1",
+		UserID:        "u1",
+		MeteringUsage: []acp.MeteringItem{{Value: 0.5, Unit: "credit"}},
+	}); err != nil {
+		t.Fatalf("append singular credit usage: %v", err)
+	}
+	report, err := store.Report("g1", "", "u1", 0, time.Date(2026, 5, 28, 12, 0, 0, 0, store.Location()))
+	if err != nil {
+		t.Fatalf("report: %v", err)
+	}
+	if len(report.Rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(report.Rows))
+	}
+	if report.Rows[0].DayCredits != 0.5 || report.Rows[0].MeteredDayTurns != 1 {
+		t.Fatalf("day credits/metered = %.2f/%d, want 0.50/1", report.Rows[0].DayCredits, report.Rows[0].MeteredDayTurns)
+	}
+}
+
+func TestUsageReportRecomputesCreditsFromRawMetering(t *testing.T) {
+	store := NewUsageStore(t.TempDir(), "Asia/Taipei", 0)
+	if err := store.Append(UsageRecord{
+		Timestamp:         "2026-05-28T10:00:00+08:00",
+		GuildID:           "g1",
+		ChannelID:         "c1",
+		UserID:            "u1",
+		Credits:           0,
+		MeteringSupported: false,
+		MeteringUsage:     []acp.MeteringItem{{Value: 0.75, Unit: "credit"}},
+	}); err != nil {
+		t.Fatalf("append legacy incorrect usage: %v", err)
+	}
+	report, err := store.Report("g1", "", "u1", 0, time.Date(2026, 5, 28, 12, 0, 0, 0, store.Location()))
+	if err != nil {
+		t.Fatalf("report: %v", err)
+	}
+	if got := report.Rows[0].MonthCredits; got != 0.75 {
+		t.Fatalf("month credits = %.2f, want 0.75", got)
+	}
+}
+
 func TestUsageStoreMissingMeteringDoesNotFail(t *testing.T) {
 	store := NewUsageStore(t.TempDir(), "Asia/Taipei", 0)
 	if err := store.Append(UsageRecord{

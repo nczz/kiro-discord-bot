@@ -167,7 +167,8 @@ func creditsFromMetering(items []acp.MeteringItem) (float64, bool) {
 	var credits float64
 	supported := false
 	for _, item := range items {
-		if strings.EqualFold(strings.TrimSpace(item.Unit), "credits") {
+		unit := strings.ToLower(strings.TrimSpace(item.Unit))
+		if unit == "credit" || unit == "credits" {
 			credits += item.Value
 			supported = true
 		}
@@ -209,6 +210,11 @@ func (s *UsageStore) Report(guildID, channelID, userID string, limit int, now ti
 		if err != nil || t.After(now) {
 			continue
 		}
+		credits := rec.Credits
+		meteringSupported := rec.MeteringSupported
+		if len(rec.MeteringUsage) > 0 {
+			credits, meteringSupported = creditsFromMetering(rec.MeteringUsage)
+		}
 		row := rows[rec.UserID]
 		if row == nil {
 			row = &UsageReportRow{UserID: rec.UserID}
@@ -218,23 +224,23 @@ func (s *UsageStore) Report(guildID, channelID, userID string, limit int, now ti
 			row.Username = rec.Username
 		}
 		if !t.Before(monthStart) {
-			row.MonthCredits += rec.Credits
+			row.MonthCredits += credits
 			row.MonthTurns++
-			if rec.MeteringSupported {
+			if meteringSupported {
 				row.MeteredMonthTurns++
 			}
 		}
 		if !t.Before(weekStart) {
-			row.WeekCredits += rec.Credits
+			row.WeekCredits += credits
 			row.WeekTurns++
-			if rec.MeteringSupported {
+			if meteringSupported {
 				row.MeteredWeekTurns++
 			}
 		}
 		if !t.Before(dayStart) {
-			row.DayCredits += rec.Credits
+			row.DayCredits += credits
 			row.DayTurns++
-			if rec.MeteringSupported {
+			if meteringSupported {
 				row.MeteredDayTurns++
 			}
 		}
