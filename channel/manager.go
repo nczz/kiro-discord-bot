@@ -395,6 +395,7 @@ func (m *Manager) Status(channelID string) string {
 	state := "unknown"
 	kiroVersion := ""
 	ctxUsage := 0.0
+	qLen := 0
 	if agent, ok := m.agents[channelID]; ok {
 		state = agent.State()
 		kiroVersion = agent.AgentVersion()
@@ -404,20 +405,48 @@ func (m *Manager) Status(channelID string) string {
 		}
 	}
 
-	qLen := 0
 	if w, ok := m.workers[channelID]; ok {
 		qLen = w.QueueLen()
 	}
 
+	return m.formatStatus(sess, state, qLen, kiroVersion, ctxUsage)
+}
+
+// ThreadStatus returns the status string for a thread agent.
+func (m *Manager) ThreadStatus(threadID string) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	sess, ok := m.getThreadSession(threadID)
+	if !ok || sess.AgentName == "" {
+		return L.Get("status.no_session")
+	}
+
+	state := "unknown"
+	kiroVersion := ""
+	ctxUsage := 0.0
+	qLen := 0
+	if entry, ok := m.threadAgents[threadID]; ok {
+		state = entry.agent.State()
+		kiroVersion = entry.agent.AgentVersion()
+		ctxUsage = entry.agent.ContextUsage()
+		if !entry.agent.IsAlive() {
+			state = "dead"
+		}
+		qLen = entry.worker.QueueLen()
+	}
+
+	return m.formatStatus(sess, state, qLen, kiroVersion, ctxUsage)
+}
+
+func (m *Manager) formatStatus(sess *Session, state string, qLen int, kiroVersion string, ctxUsage float64) string {
 	sid := sess.SessionID
 	if len(sid) > 8 {
 		sid = sid[:8]
 	}
-
 	if kiroVersion == "" {
 		kiroVersion = "n/a"
 	}
-
 	return L.Getf("status.format", sess.AgentName, state, qLen, sid, modelDisplay(sess.Model), kiroVersion, m.botVersion, ctxUsage)
 }
 

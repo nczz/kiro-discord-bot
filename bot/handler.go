@@ -634,6 +634,24 @@ func (b *Bot) handleThreadMessage(ds *discordgo.Session, m *discordgo.MessageCre
 	case content == "!models":
 		b.cmdModels(ctx)
 		return
+	case content == "!cwd" || strings.HasPrefix(content, "!cwd "):
+		ctx.args = strings.TrimSpace(strings.TrimPrefix(content, "!cwd"))
+		b.cmdCwd(ctx)
+		return
+	case content == "!start" || strings.HasPrefix(content, "!start "):
+		ctx.args = strings.TrimSpace(strings.TrimPrefix(content, "!start"))
+		b.cmdStart(ctx)
+		return
+	case content == "!agent" || strings.HasPrefix(content, "!agent "):
+		ctx.args = strings.TrimSpace(strings.TrimPrefix(content, "!agent"))
+		b.cmdAgent(ctx)
+		return
+	case content == "!resume":
+		b.cmdResume(ctx)
+		return
+	case strings.HasPrefix(content, "!cron") || strings.HasPrefix(content, "!remind "):
+		ctx.reply(L.Get("error.channel_only"))
+		return
 	case strings.HasPrefix(content, "!memory"):
 		ctx.args = strings.TrimSpace(strings.TrimPrefix(content, "!memory"))
 		b.cmdMemory(ctx)
@@ -834,6 +852,14 @@ func (b *Bot) handleSlashCommand(ds *discordgo.Session, i *discordgo.Interaction
 		channelID = threadParent
 	}
 	inThread := threadParent != ""
+
+	if inThread && isChannelOnlySlashCommand(data.Name) {
+		_ = ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{Content: L.Get("error.channel_only")},
+		})
+		return
+	}
 
 	// Commands that need their own response type (not deferred)
 	switch data.Name {

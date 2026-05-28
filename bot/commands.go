@@ -22,10 +22,31 @@ type cmdCtx struct {
 	args      string       // optional arguments after the command name
 }
 
-// --- Commands with identical channel/thread behavior ---
+// --- Scope-aware commands ---
 
 func (b *Bot) cmdStatus(ctx cmdCtx) {
+	if ctx.inThread {
+		ctx.reply(b.manager.ThreadStatus(ctx.targetID))
+		return
+	}
 	ctx.reply(b.statusWithSTT(ctx.channelID))
+}
+
+func channelOnly(ctx cmdCtx) bool {
+	if !ctx.inThread {
+		return false
+	}
+	ctx.reply(L.Get("error.channel_only"))
+	return true
+}
+
+func isChannelOnlySlashCommand(name string) bool {
+	switch name {
+	case "start", "cwd", "agent", "resume", "cron", "cron-list", "cron-run", "cron-prompt", "remind":
+		return true
+	default:
+		return false
+	}
 }
 
 func (b *Bot) cmdPause(ctx cmdCtx) {
@@ -65,6 +86,9 @@ func (b *Bot) cmdModels(ctx cmdCtx) {
 }
 
 func (b *Bot) cmdResume(ctx cmdCtx) {
+	if channelOnly(ctx) {
+		return
+	}
 	sess, ok := b.manager.GetSession(ctx.targetID)
 	if !ok {
 		ctx.reply(L.Get("error.no_active_session"))
@@ -303,6 +327,9 @@ func (b *Bot) cmdClear(ctx cmdCtx) {
 }
 
 func (b *Bot) cmdAgent(ctx cmdCtx) {
+	if channelOnly(ctx) {
+		return
+	}
 	if ctx.args == "" {
 		// List available modes
 		current, modes := b.manager.AgentModes(ctx.channelID)
@@ -377,6 +404,9 @@ func (b *Bot) cmdClose(ctx cmdCtx) {
 // --- Channel-only commands ---
 
 func (b *Bot) cmdStart(ctx cmdCtx) {
+	if channelOnly(ctx) {
+		return
+	}
 	cwd := ctx.args
 	if cwd == "" {
 		ctx.reply(L.Get("start.usage"))
@@ -392,6 +422,9 @@ func (b *Bot) cmdStart(ctx cmdCtx) {
 }
 
 func (b *Bot) cmdCwd(ctx cmdCtx) {
+	if channelOnly(ctx) {
+		return
+	}
 	if ctx.args == "" {
 		ctx.reply(b.manager.CWD(ctx.channelID))
 		return
@@ -406,6 +439,9 @@ func (b *Bot) cmdCwd(ctx cmdCtx) {
 // --- Memory commands (unified from handleMemoryCommand + handleMemorySlash) ---
 
 func (b *Bot) cmdMemory(ctx cmdCtx) {
+	if ctx.inThread {
+		ctx.reply(L.Get("memory.parent_scope"))
+	}
 	action, value := parseActionValue(ctx.args)
 	switch action {
 	case "", "list":
@@ -453,6 +489,9 @@ func (b *Bot) cmdMemory(ctx cmdCtx) {
 }
 
 func (b *Bot) cmdFlashMemory(ctx cmdCtx) {
+	if ctx.inThread {
+		ctx.reply(L.Get("flashmemory.parent_scope"))
+	}
 	action, value := parseActionValue(ctx.args)
 	switch action {
 	case "", "list":

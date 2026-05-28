@@ -5,6 +5,7 @@ import (
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/nczz/kiro-discord-bot/channel"
+	L "github.com/nczz/kiro-discord-bot/locale"
 )
 
 func TestShouldIgnoreMessage(t *testing.T) {
@@ -193,4 +194,34 @@ func TestSlashCommandsIncludeAgent(t *testing.T) {
 		return
 	}
 	t.Fatal("expected /agent slash command to be registered")
+}
+
+func TestChannelOnlySlashCommands(t *testing.T) {
+	for _, name := range []string{"start", "cwd", "agent", "resume", "cron", "cron-list", "cron-run", "cron-prompt", "remind"} {
+		if !isChannelOnlySlashCommand(name) {
+			t.Fatalf("expected /%s to be channel-only", name)
+		}
+	}
+	for _, name := range []string{"status", "reset", "cancel", "compact", "clear", "model", "models", "memory", "flashmemory", "close"} {
+		if isChannelOnlySlashCommand(name) {
+			t.Fatalf("did not expect /%s to be channel-only", name)
+		}
+	}
+}
+
+func TestChannelOnlyCommandRejectsThreadContext(t *testing.T) {
+	L.Load("en")
+	var replies []string
+	ctx := cmdCtx{
+		channelID: "channel-1",
+		targetID:  "thread-1",
+		inThread:  true,
+		reply:     func(msg string) { replies = append(replies, msg) },
+	}
+
+	(&Bot{}).cmdCwd(ctx)
+
+	if len(replies) != 1 || replies[0] != L.Get("error.channel_only") {
+		t.Fatalf("replies = %#v, want channel-only error", replies)
+	}
 }

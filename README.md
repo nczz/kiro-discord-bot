@@ -330,6 +330,10 @@ The bot needs explicit permission in each channel it should respond to:
 
 All commands also work with `!` prefix (e.g. `!status`, `!reset`).
 
+When a command is used inside a Discord thread, it targets the thread agent when that is the least surprising behavior: `/status`, `/reset`, `/cancel`, `/compact`, `/clear`, and `/model` operate on the current thread agent. `/pause`, `/back`, and `/silent` apply to the current target, so a thread can override the parent channel. `/memory` and `/flashmemory` remain scoped to the parent channel because thread agents inherit that memory block.
+
+Channel setup and scheduling commands must be run in the parent channel: `/start`, `/cwd`, `/agent`, `/resume`, `/cron`, `/cron-list`, `/cron-run`, `/cron-prompt`, and `/remind`.
+
 **Thread-only commands** (inside a thread):
 
 | Command | Description |
@@ -806,6 +810,10 @@ RUN_ACP_SMOKE=1 KIRO_CLI=/Users/chun/.local/bin/kiro-cli scripts/release-preflig
 | `/flashmemory` | 管理 session 閃存記憶（add/list/remove/clear） |
 
 所有指令也支援 `!` 前綴（如 `!status`、`!reset`）。
+
+在 Discord 討論串中使用指令時，會依最符合直覺的作用範圍執行：`/status`、`/reset`、`/cancel`、`/compact`、`/clear`、`/model` 會操作目前的討論串 agent。`/pause`、`/back`、`/silent` 會套用在目前目標，因此討論串可以覆蓋父層頻道設定。`/memory` 與 `/flashmemory` 仍套用在父層頻道，因為討論串 agent 會繼承父層記憶。
+
+頻道設定與排程指令必須在父層頻道使用：`/start`、`/cwd`、`/agent`、`/resume`、`/cron`、`/cron-list`、`/cron-run`、`/cron-prompt`、`/remind`。
 
 **討論串專用指令**（在 thread 中使用）：
 

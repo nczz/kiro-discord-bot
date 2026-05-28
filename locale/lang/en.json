@@ -3,6 +3,7 @@
   "error.generic": "❌ %s",
   "error.no_active_session": "❌ No active session",
   "error.thread_only": "❌ This command can only be used inside a thread.",
+  "error.channel_only": "❌ This command must be used in the parent channel.",
   "error.no_response": "❌ No response to resume",
   "error.reset_failed": "❌ Reset failed: %s",
   "error.cancel_failed": "❌ Cancel failed: %s",
@@ -183,12 +184,14 @@
   "memory.removed": "🧠 Memory #%d removed.",
   "memory.cleared": "🧠 All memory rules cleared.",
   "memory.usage": "Usage: `!memory add <rule>` | `!memory list` | `!memory remove <#>` | `!memory clear`",
+  "memory.parent_scope": "ℹ️ Memory rules are scoped to the parent channel and apply to its threads.",
   "flashmemory.empty": "📭 No flash memory set. Use `!flashmemory add <rule>` to add one.",
   "flashmemory.list_header": "⚡ **Flash Memory (current session):**\n",
   "flashmemory.added": "⚡ Flash memory added: %s",
   "flashmemory.removed": "⚡ Flash memory #%d removed.",
   "flashmemory.cleared": "⚡ All flash memory cleared.",
   "flashmemory.usage": "Usage: `!flashmemory add <rule>` | `!flashmemory list` | `!flashmemory remove <#>` | `!flashmemory clear`",
+  "flashmemory.parent_scope": "ℹ️ Flash memory is scoped to the parent channel session and applies to its threads.",
   "metrics.footer": "-# ⚡ %s",
   "agent.no_session": "No active agent. Send a message first to start one."
 }
