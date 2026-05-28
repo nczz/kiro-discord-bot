@@ -32,6 +32,8 @@ type Bot struct {
 	peerMu             sync.RWMutex
 	peers              []BotPeer
 	manualPeers        []BotPeer
+	peerPermMu         sync.Mutex
+	peerPermCache      map[string]peerPermissionCacheEntry
 	cronPromptCache    cronPromptStore // parsed cron jobs awaiting button confirmation
 }
 
@@ -86,6 +88,7 @@ func NewFromConfig(cfg BotConfig) (*Bot, error) {
 		sttMaxDuration:     cfg.STTMaxDurationSec,
 		peers:              activeBotPeers(manualPeers),
 		manualPeers:        manualPeers,
+		peerPermCache:      make(map[string]peerPermissionCacheEntry),
 	}
 	if cfg.STTEnabled && cfg.STTAPIKey != "" {
 		b.sttClient = stt.New(cfg.STTProvider, cfg.STTAPIKey, cfg.STTModel, cfg.STTLanguage)

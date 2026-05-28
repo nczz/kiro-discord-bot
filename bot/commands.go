@@ -314,7 +314,7 @@ func (b *Bot) doctorBotPeers(targetID string) string {
 		}
 		sb.WriteString(L.Getf("doctor.bot_peers.peer", p.Name, mention, p.ID) + "\n")
 	}
-	if b.multiBotMode(selfID) {
+	if b.channelMultiBotMode(b.discord, targetID, selfID) {
 		if b.manager != nil && b.manager.HasFullListenOverride(targetID) {
 			sb.WriteString(L.Get("doctor.bot_peers.mode_open_override") + "\n")
 			return sb.String()

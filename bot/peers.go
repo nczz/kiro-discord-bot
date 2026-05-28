@@ -4,9 +4,17 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"time"
 
 	"github.com/bwmarrin/discordgo"
 )
+
+const peerPermissionCacheTTL = 30 * time.Second
+
+type peerPermissionCacheEntry struct {
+	canRespond bool
+	expiresAt  time.Time
+}
 
 type BotPeer struct {
 	Name    string
@@ -193,6 +201,70 @@ func (b *Bot) multiBotMode(selfID string) bool {
 	return false
 }
 
+func (b *Bot) channelMultiBotMode(ds *discordgo.Session, targetID, selfID string) bool {
+	if !b.multiBotMode(selfID) {
+		return false
+	}
+	hasRoleOnlyPeer := false
+	for _, p := range b.peerSnapshot() {
+		if p.ID == selfID {
+			continue
+		}
+		if p.ID == "" {
+			if p.RoleID != "" {
+				hasRoleOnlyPeer = true
+			}
+			continue
+		}
+		if b.peerCanRespondInTarget(ds, p.ID, targetID) {
+			return true
+		}
+	}
+	return hasRoleOnlyPeer
+}
+
+func (b *Bot) peerCanRespondInTarget(ds *discordgo.Session, peerID, targetID string) bool {
+	if ds == nil || peerID == "" || targetID == "" {
+		return false
+	}
+	key := targetID + ":" + peerID
+	now := time.Now()
+	if b != nil {
+		b.peerPermMu.Lock()
+		if entry, ok := b.peerPermCache[key]; ok && now.Before(entry.expiresAt) {
+			b.peerPermMu.Unlock()
+			return entry.canRespond
+		}
+		b.peerPermMu.Unlock()
+	}
+	perms, err := ds.UserChannelPermissions(peerID, targetID)
+	if err != nil {
+		log.Printf("[peers] channel permission check failed peer=%s channel=%s: %v", peerID, targetID, err)
+		return false
+	}
+	required := int64(discordgo.PermissionViewChannel | discordgo.PermissionSendMessages)
+	if ch, err := ds.State.Channel(targetID); err == nil && ch != nil && ch.IsThread() {
+		required = int64(discordgo.PermissionViewChannel | discordgo.PermissionSendMessagesInThreads)
+	}
+	canRespond := perms&required == required
+	if b != nil {
+		b.peerPermMu.Lock()
+		if b.peerPermCache == nil {
+			b.peerPermCache = make(map[string]peerPermissionCacheEntry)
+		}
+		b.peerPermCache[key] = peerPermissionCacheEntry{canRespond: canRespond, expiresAt: now.Add(peerPermissionCacheTTL)}
+		b.peerPermMu.Unlock()
+	}
+	return canRespond
+}
+
+func (b *Bot) slashCommandAllowedInTarget(ds *discordgo.Session, targetID string) bool {
+	if ds == nil || ds.State == nil || ds.State.User == nil {
+		return true
+	}
+	return b.peerCanRespondInTarget(ds, ds.State.User.ID, targetID)
+}
+
 func (b *Bot) mentionsOtherPeer(content, selfID string) bool {
 	for _, p := range b.peerSnapshot() {
 		if p.ID == "" || p.ID == selfID {
@@ -252,8 +324,8 @@ func (b *Bot) stripOwnMentions(content, selfID string) string {
 	return strings.TrimSpace(content)
 }
 
-func (b *Bot) requiresHumanMention(targetID, parentChannelID, selfID string) bool {
-	if !b.multiBotMode(selfID) {
+func (b *Bot) requiresHumanMention(ds *discordgo.Session, targetID, parentChannelID, selfID string) bool {
+	if !b.channelMultiBotMode(ds, targetID, selfID) {
 		return false
 	}
 	if b.manager == nil {

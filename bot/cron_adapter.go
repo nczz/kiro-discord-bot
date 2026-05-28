@@ -115,7 +115,7 @@ func (a *cronAdapter) AskAgentInThread(ctx context.Context, agent *acp.Agent, ch
 	a.Notify(channelID, L.Getf("cron.exec.running_link", threadName, threadID))
 
 	// Post initial status — save message ID for progress updates
-	statusMsg, _ := ds.ChannelMessageSend(threadID, "🔄 "+L.Get("worker.processing"))
+	statusMsg, _ := channel.SendProcessMessage(ds, threadID, "🔄 "+L.Get("worker.processing"))
 	var statusMsgID string
 	if statusMsg != nil {
 		statusMsgID = statusMsg.ID
@@ -154,9 +154,9 @@ func (a *cronAdapter) AskAgentInThread(ctx context.Context, agent *acp.Agent, ch
 			}
 			icon := channel.ToolKindIcon(evt.Kind)
 			if isSilent() {
-				ds.ChannelMessageSend(threadID, icon+" "+title)
+				channel.SendProcessMessage(ds, threadID, channel.CompactToolStartMessage(icon, evt))
 			} else {
-				msg := icon + " " + title
+				msg := icon + " " + channel.EscapeDiscordMarkdown(title)
 				if len(evt.Locations) > 0 {
 					files := make([]string, 0, len(evt.Locations))
 					for _, loc := range evt.Locations {
@@ -164,13 +164,13 @@ func (a *cronAdapter) AskAgentInThread(ctx context.Context, agent *acp.Agent, ch
 					}
 					msg += "\n📁 " + strings.Join(files, ", ")
 				}
-				ds.ChannelMessageSend(threadID, msg)
+				channel.SendProcessMessage(ds, threadID, msg)
 			}
 		},
 		OnToolResult: func(evt acp.ToolCallEvent) {
 			if isSilent() {
 				if evt.Status == "failed" {
-					ds.ChannelMessageSend(threadID, "❌ "+evt.Title)
+					channel.SendProcessMessage(ds, threadID, "❌ "+channel.EscapeDiscordMarkdown(evt.Title))
 				}
 				return
 			}
@@ -179,9 +179,9 @@ func (a *cronAdapter) AskAgentInThread(ctx context.Context, agent *acp.Agent, ch
 				if len(out) > 1900 {
 					out = out[:1900] + L.Get("tool.output_truncated")
 				}
-				ds.ChannelMessageSend(threadID, "```\n"+out+"\n```")
+				channel.SendProcessMessage(ds, threadID, "```\n"+out+"\n```")
 			} else if evt.Status == "failed" {
-				msg := "❌ " + evt.Title
+				msg := "❌ " + channel.EscapeDiscordMarkdown(evt.Title)
 				if evt.RawOutput != "" {
 					o := evt.RawOutput
 					if len(o) > 500 {
@@ -189,7 +189,7 @@ func (a *cronAdapter) AskAgentInThread(ctx context.Context, agent *acp.Agent, ch
 					}
 					msg += "\n```\n" + o + "\n```"
 				}
-				ds.ChannelMessageSend(threadID, msg)
+				channel.SendProcessMessage(ds, threadID, msg)
 			}
 		},
 		OnThought: func(text string) {
@@ -199,7 +199,7 @@ func (a *cronAdapter) AskAgentInThread(ctx context.Context, agent *acp.Agent, ch
 			if len(text) > 1900 {
 				text = text[:1900] + "…"
 			}
-			ds.ChannelMessageSend(threadID, "💭 "+text)
+			channel.SendProcessMessage(ds, threadID, "💭 "+channel.EscapeDiscordMarkdown(text))
 		},
 		OnComplete: func(response string, askErr error) {
 			elapsed := int(time.Since(startTime).Seconds())

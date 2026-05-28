@@ -317,7 +317,9 @@ The bot needs explicit permission in each channel it should respond to:
 | `/cwd` | Show current working directory |
 | `/pause` | Switch to mention-only mode (bot ignores non-mention messages) |
 | `/back` | Resume full-listen mode |
-| `/silent` | Toggle silent mode (compact tool output, default: on) |
+| `/silent` | Show silent mode status (compact tool output, default: on) |
+| `/silent on` | Enable compact tool output |
+| `/silent off` | Show full tool details |
 | `/model` | Show current model |
 | `/model <model-id>` | Switch model (dynamic switch, no restart if supported) |
 | `/models` | List all available models |
@@ -348,7 +350,9 @@ Channel setup and scheduling commands must be run in the parent channel: `/start
 | `!reset` | Restart the thread agent |
 | `!pause` | Switch thread to mention-only mode |
 | `!back` | Resume thread full-listen mode |
-| `!silent` | Toggle thread silent mode |
+| `!silent` | Show thread silent mode status |
+| `!silent on` | Enable compact tool output in this thread |
+| `!silent off` | Show full tool details in this thread |
 | `!compact` | Compress thread agent's conversation history |
 | `!clear` | Clear thread agent's conversation history |
 | `!model` | Show thread agent's current model |
@@ -359,7 +363,7 @@ All thread commands also work as `/` slash commands inside a thread.
 
 ### Sending Tasks
 
-**Full-listen mode (default):** Any message in the channel is sent to the agent. When peer bot discovery finds another bot, the channel and its threads automatically switch to mention-only behavior to prevent bot-to-bot loops.
+**Full-listen mode (default):** Any message in the channel is sent to the agent. When peer bot discovery finds another bot that can respond in the current channel or thread, that target automatically switches to mention-only behavior to prevent bot-to-bot loops.
 
 **Mention mode (after `/pause` or automatic multi-bot mode):** Only `@BotName your message` triggers the agent. Use a real Discord mention such as `<@111111111111111111>` or pick the bot from Discord's mention UI; plain text like `@BuildBot` may not trigger the target bot.
 
@@ -369,9 +373,11 @@ Use `/back` or `!back` on the target bot to open full-listen mode for that chann
 
 **Thread discussions:** You can continue chatting with the agent inside any thread. A dedicated agent is spawned per thread with the original task context injected. Thread agents are independent from the main channel agent, so both can work in parallel. Thread agents are automatically closed after idle timeout (`THREAD_AGENT_IDLE_SEC`) or when the thread is archived. Use `!close` in a thread to manually close its agent.
 
-**Multi-bot handoff:** Peer bots are auto-discovered from Discord guild bot members at startup, including their bot role when available. `BOT_PEERS` is only needed to override a discovered name/role, add a bot that discovery cannot see, or exclude an unrelated bot with `!userID`. When more than one bot is known, human messages must mention the intended bot unless full-listen was opened with `/back`. User mentions such as `<@111111111111111111>` and discovered or configured role mentions such as `<@&222222222222222222>` both route to the target bot. Bot-authored messages are ignored by default; a peer bot handoff is only accepted inside a thread when the target bot is explicitly mentioned, the original task message already has the done reaction (`✅`), and the message is not just progress, error, timeout, or empty output. Normal thread tasks include recent Discord thread messages as bounded context. Accepted cross-bot handoffs include a longer thread transcript as handoff context, so the receiving bot can understand the task, prior decisions, files, results, and remaining work before acting. This lets one bot ask another bot to continue work after the first bot has finished, without responding to every intermediate status update.
+**Multi-bot handoff:** Peer bots are auto-discovered from Discord guild bot members at startup, including their bot role when available. `BOT_PEERS` is only needed to override a discovered name/role, add a bot that discovery cannot see, or exclude an unrelated bot with `!userID`. When more than one bot can respond in the current channel or thread, human messages must mention the intended bot unless full-listen was opened with `/back`. User mentions such as `<@111111111111111111>` and discovered or configured role mentions such as `<@&222222222222222222>` both route to the target bot. Bot-authored messages are ignored by default; a peer bot handoff is only accepted inside a thread when the target bot is explicitly mentioned, the original task message already has the done reaction (`✅`), and the message is not just progress, error, timeout, or empty output. Normal thread tasks include recent Discord thread messages as bounded context. Accepted cross-bot handoffs include a longer thread transcript as handoff context, so the receiving bot can understand the task, prior decisions, files, results, and remaining work before acting. This lets one bot ask another bot to continue work after the first bot has finished, without responding to every intermediate status update.
 
 Run `/doctor` in the target channel or thread to verify Discord permissions, configured peers, and whether the current context is open, open by `/back` override, or automatic multi-bot mention-only mode.
+
+Slash commands are registered at guild scope, but the bot rejects command invocations in channels or threads where its Discord user cannot view and respond. To hide commands from Discord's command picker as well, configure application command permissions for the app in Discord or through an OAuth2 token with `applications.commands.permissions.update`.
 
 ### Status Indicators
 
@@ -396,7 +402,7 @@ Each task runs in a Discord thread. The bot posts the full work process in real-
 | Agent thinking | 💭 thought content |
 | Final response | Complete text, auto-split if > 2000 chars |
 
-**Silent mode** (default: on) shows compact output — tool start shows icon + title only (no file list), tool results and thoughts are hidden, failures show a one-line summary. Use `/silent off` for full detail.
+**Silent mode** (default: on) shows compact output. Tool start messages show only an icon plus a short title, execute commands show a short escaped prefix such as `Running: ssh n200 ...`, tool results and thoughts are hidden, and failures show a one-line summary. Use `/silent off` for full detail. `/silent` without an argument only shows the current status. Silent mode is stored in memory only, so it resets to on after the bot restarts. Threads have their own silent setting and do not inherit a parent channel's `/silent off`.
 
 ### Recovery
 
@@ -801,7 +807,9 @@ RUN_ACP_SMOKE=1 KIRO_CLI=/Users/chun/.local/bin/kiro-cli scripts/release-preflig
 | `/cwd` | 查詢目前工作目錄 |
 | `/pause` | 切換為 @mention 模式 |
 | `/back` | 恢復完整監聽模式 |
-| `/silent` | 切換安靜模式（精簡工具輸出，預設：開啟） |
+| `/silent` | 查詢安靜模式狀態（精簡工具輸出，預設：開啟） |
+| `/silent on` | 開啟精簡工具輸出 |
+| `/silent off` | 顯示完整工具細節 |
 | `/model` | 查詢目前使用的 model |
 | `/model <model-id>` | 切換 model 並重啟 agent |
 | `/models` | 列出所有可用的 model |
@@ -830,7 +838,9 @@ RUN_ACP_SMOKE=1 KIRO_CLI=/Users/chun/.local/bin/kiro-cli scripts/release-preflig
 | `!reset` | 重啟討論串 agent |
 | `!pause` | 切換討論串為 @mention 模式 |
 | `!back` | 恢復討論串完整監聽模式 |
-| `!silent` | 切換討論串安靜模式 |
+| `!silent` | 查詢討論串安靜模式狀態 |
+| `!silent on` | 開啟此討論串的精簡工具輸出 |
+| `!silent off` | 顯示此討論串的完整工具細節 |
 | `!compact` | 壓縮討論串 agent 的對話歷史 |
 | `!clear` | 清除討論串 agent 的對話歷史 |
 | `!model` | 查詢討論串 agent 目前的 model |
@@ -847,8 +857,9 @@ RUN_ACP_SMOKE=1 KIRO_CLI=/Users/chun/.local/bin/kiro-cli scripts/release-preflig
 - **Discord MCP 範圍**：用 `MCP_DISCORD_ALLOWED_GUILDS`、`MCP_DISCORD_ALLOWED_CHANNELS` 限制可操作的 guild/channel；用 `MCP_DISCORD_READ_ONLY`、`MCP_DISCORD_ALLOWED_WRITE_TOOLS` 或 `MCP_DISCORD_ALLOW_DESTRUCTIVE=false` 限制寫入工具
 - 回應被截斷時可用 `!resume` 補完
 - **討論串互動**：在 bot 建立的 thread 中發訊息，會自動啟動獨立的 thread agent 接續討論。閒置超過 `THREAD_AGENT_IDLE_SEC` 或 thread 歸檔時自動關閉，再次發訊息可重新啟動
-- **多 bot 模式**：bot 啟動時會從 Discord guild bot members 自動偵測同 server 內其他 bot，並盡量補上 bot role。`BOT_PEERS` 只需要用來覆蓋偵測結果、補上偵測不到的 bot，或用 `!userID` 排除無關 bot；格式為 `Name:userID`、`Name:userID:roleID` 或 `!userID`。當偵測到另一個 bot，頻道與討論串會自動改成 mention-only，避免互相回應形成 loop；請用真正的 Discord mention（例如 `<@111111111111111111>` 或 Discord 介面的提及選單），若偵測或設定了 role ID，role mention（例如 `<@&222222222222222222>`）也會路由到目標 bot；純文字 `@BuildBot` 不一定會觸發。若要讓其中一個 bot 暫時恢復完整監聽，對該 bot 在主頻道執行 `/back` 或 `!back`，該主頻道底下的討論串也會繼承；若只想讓某條討論串回到 mention-only，可在該討論串執行 `/pause` 或 `!pause`
+- **多 bot 模式**：bot 啟動時會從 Discord guild bot members 自動偵測同 server 內其他 bot，並盡量補上 bot role。`BOT_PEERS` 只需要用來覆蓋偵測結果、補上偵測不到的 bot，或用 `!userID` 排除無關 bot；格式為 `Name:userID`、`Name:userID:roleID` 或 `!userID`。當目前頻道或討論串內有另一個可回應的 bot，該目標會自動改成 mention-only，避免互相回應形成 loop；請用真正的 Discord mention（例如 `<@111111111111111111>` 或 Discord 介面的提及選單），若偵測或設定了 role ID，role mention（例如 `<@&222222222222222222>`）也會路由到目標 bot；純文字 `@BuildBot` 不一定會觸發。若要讓其中一個 bot 暫時恢復完整監聽，對該 bot 在主頻道執行 `/back` 或 `!back`，該主頻道底下的討論串也會繼承；若只想讓某條討論串回到 mention-only，可在該討論串執行 `/pause` 或 `!pause`
 - **Bot 交接限制**：bot 產生的訊息預設不會觸發另一個 bot。只有在討論串內、明確 tag 目標 bot、原始任務訊息已有完成反應（`✅`），且內容不是進度、錯誤、逾時或空輸出時，才會被視為有效交接。一般討論串任務會帶入近期 Discord 討論串訊息作為 bounded context；通過 gate 的跨 bot 交接會帶入較長的 thread transcript 作為 handoff context，讓被交辦 bot 先掌握任務、先前決策、相關檔案、結果與剩餘工作
+- **Slash command 範圍**：指令以 guild scope 註冊，但 bot 會拒絕在自己沒有讀寫權限的頻道或討論串中執行。若要讓 Discord 指令選單也隱藏該 bot 的指令，需要在 Discord app command permissions 設定，或用具備 `applications.commands.permissions.update` scope 的 OAuth2 token 同步權限
 - **部署診斷**：在目標頻道或討論串執行 `/doctor`，可確認 Discord 權限、`BOT_PEERS` 設定，以及目前是開放模式、`/back` override 開放模式，或自動多 bot mention-only 模式
 - **頻道 agent 閒置回收**：設定 `CHANNEL_AGENT_IDLE_SEC`（預設 `0` = 停用）可讓閒置的頻道 agent 自動關閉以釋放資源，下次發訊息時自動重啟
 

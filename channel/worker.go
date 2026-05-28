@@ -276,7 +276,7 @@ func (w *Worker) execute(job *Job) {
 	if job.Transcript != "" {
 		ds.ChannelMessageSend(threadID, L.Get("stt.prefix")+job.Transcript)
 	}
-	ds.ChannelMessageSend(threadID, "🔄 "+L.Get("worker.processing"))
+	SendProcessMessage(ds, threadID, "🔄 "+L.Get("worker.processing"))
 
 	// Setup timeout context as safety net
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(w.askTimeoutSec)*time.Second)
@@ -303,10 +303,10 @@ func (w *Worker) execute(job *Job) {
 			silent := w.isSilent != nil && w.isSilent()
 			if silent {
 				// Compact: icon + title only
-				ds.ChannelMessageSend(threadID, icon+" "+title)
+				SendProcessMessage(ds, threadID, CompactToolStartMessage(icon, evt))
 			} else {
 				// Full: icon + title + affected files
-				msg := icon + " " + title
+				msg := icon + " " + EscapeDiscordMarkdown(title)
 				if len(evt.Locations) > 0 {
 					files := make([]string, 0, len(evt.Locations))
 					for _, loc := range evt.Locations {
@@ -314,7 +314,7 @@ func (w *Worker) execute(job *Job) {
 					}
 					msg += "\n📁 " + strings.Join(files, ", ")
 				}
-				ds.ChannelMessageSend(threadID, msg)
+				SendProcessMessage(ds, threadID, msg)
 			}
 			swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "⚙️")
 		},
@@ -327,7 +327,7 @@ func (w *Worker) execute(job *Job) {
 			if silent {
 				// Compact: only show one-line failure
 				if evt.Status == "failed" {
-					ds.ChannelMessageSend(threadID, "❌ "+evt.Title)
+					SendProcessMessage(ds, threadID, "❌ "+EscapeDiscordMarkdown(evt.Title))
 				}
 				return
 			}
@@ -337,9 +337,9 @@ func (w *Worker) execute(job *Job) {
 				if len(out) > 1900 {
 					out = out[:1900] + L.Get("tool.output_truncated")
 				}
-				ds.ChannelMessageSend(threadID, "```\n"+out+"\n```")
+				SendProcessMessage(ds, threadID, "```\n"+out+"\n```")
 			} else if evt.Status == "failed" {
-				msg := "❌ " + evt.Title
+				msg := "❌ " + EscapeDiscordMarkdown(evt.Title)
 				if evt.RawOutput != "" {
 					o := evt.RawOutput
 					if len(o) > 500 {
@@ -347,7 +347,7 @@ func (w *Worker) execute(job *Job) {
 					}
 					msg += "\n```\n" + o + "\n```"
 				}
-				ds.ChannelMessageSend(threadID, msg)
+				SendProcessMessage(ds, threadID, msg)
 			}
 		},
 		OnThought: func(text string) {
@@ -362,7 +362,7 @@ func (w *Worker) execute(job *Job) {
 			if len(text) > 1900 {
 				text = text[:1900] + "…"
 			}
-			ds.ChannelMessageSend(threadID, "💭 "+text)
+			SendProcessMessage(ds, threadID, "💭 "+EscapeDiscordMarkdown(text))
 		},
 		OnComplete: func(response string, askErr error) {
 			if w.onActivity != nil {
@@ -774,6 +774,86 @@ func ToolKindIcon(kind string) string {
 	default:
 		return "⚙️"
 	}
+}
+
+func CompactToolStartMessage(icon string, evt acp.ToolCallEvent) string {
+	title := strings.TrimSpace(evt.Title)
+	if title == "" {
+		title = L.Get("worker.tool_fallback")
+	}
+	if evt.Kind == "execute" {
+		return icon + " " + compactExecuteTitle(title)
+	}
+	if len(title) > 80 {
+		title = truncateUTF8(title, 77) + "..."
+	}
+	return icon + " " + EscapeDiscordMarkdown(title)
+}
+
+func compactExecuteTitle(title string) string {
+	title = strings.TrimSpace(title)
+	lower := strings.ToLower(title)
+	if strings.HasPrefix(lower, "running:") || strings.HasPrefix(lower, "running ") {
+		return compactCommandTitle("Running", title)
+	}
+	if strings.HasPrefix(lower, "executing:") || strings.HasPrefix(lower, "executing ") {
+		return compactCommandTitle("Executing", title)
+	}
+	if len(title) > 80 {
+		return "Running command"
+	}
+	return EscapeDiscordMarkdown(title)
+}
+
+func compactCommandTitle(verb, title string) string {
+	cmd := strings.TrimSpace(title)
+	if before, after, ok := strings.Cut(cmd, ":"); ok && strings.EqualFold(strings.TrimSpace(before), verb) {
+		cmd = strings.TrimSpace(after)
+	}
+	lower := strings.ToLower(cmd)
+	prefix := strings.ToLower(verb)
+	if strings.HasPrefix(lower, prefix+" ") {
+		cmd = strings.TrimSpace(cmd[len(verb):])
+	}
+	cmd = strings.Join(strings.Fields(cmd), " ")
+	if cmd == "" {
+		return verb + " command"
+	}
+	if len(cmd) > 52 {
+		cmd = truncateUTF8(cmd, 49) + "..."
+	}
+	return verb + ": " + EscapeDiscordMarkdown(cmd)
+}
+
+func EscapeDiscordMarkdown(s string) string {
+	if s == "" {
+		return ""
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		switch r {
+		case '\\', '`', '*', '_', '~', '|', '>', '#':
+			b.WriteRune('\\')
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+func SendProcessMessage(ds *discordgo.Session, channelID, content string) (*discordgo.Message, error) {
+	if ds == nil || channelID == "" || content == "" {
+		return nil, nil
+	}
+	msg, err := ds.ChannelMessageSendComplex(channelID, &discordgo.MessageSend{
+		Content:         content,
+		AllowedMentions: &discordgo.MessageAllowedMentions{},
+		Flags:           discordgo.MessageFlagsSuppressEmbeds,
+	})
+	if err != nil {
+		log.Printf("[send] process message %s failed: %v (len=%d)", channelID, err, len(content))
+	}
+	return msg, err
 }
 
 // formatMetricsFooter builds a one-line metrics summary from turn metrics.

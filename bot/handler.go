@@ -462,7 +462,7 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 		return
 	}
 
-	if !m.Author.Bot && b.requiresHumanMention(m.ChannelID, parentChannelID, selfID) && !isCommand && !isMentioned {
+	if !m.Author.Bot && b.requiresHumanMention(ds, m.ChannelID, parentChannelID, selfID) && !isCommand && !isMentioned {
 		log.Printf("[handler] ignored human msg reason=multi_bot_mention_only channel=%s thread=%t msg=%s", m.ChannelID, parentChannelID != "", m.ID)
 		return
 	}
@@ -816,6 +816,13 @@ func (b *Bot) registerSlashCommands() {
 }
 
 func (b *Bot) handleAutocomplete(ds *discordgo.Session, i *discordgo.InteractionCreate) {
+	if !b.slashCommandAllowedInTarget(ds, i.ChannelID) {
+		_ = ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionApplicationCommandAutocompleteResult,
+			Data: &discordgo.InteractionResponseData{Choices: []*discordgo.ApplicationCommandOptionChoice{}},
+		})
+		return
+	}
 	data := i.ApplicationCommandData()
 	if data.Name != "cron-run" {
 		return
@@ -890,6 +897,17 @@ func (b *Bot) handleSlashCommand(ds *discordgo.Session, i *discordgo.Interaction
 	data := i.ApplicationCommandData()
 	log.Printf("[interaction] /%s from %s", data.Name, i.ChannelID)
 	rawChannelID := i.ChannelID
+	if !b.slashCommandAllowedInTarget(ds, rawChannelID) {
+		log.Printf("[interaction] rejected /%s reason=bot_not_in_channel channel=%s", data.Name, rawChannelID)
+		_ = ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{
+				Content: L.Get("error.bot_not_in_channel"),
+				Flags:   discordgo.MessageFlagsEphemeral,
+			},
+		})
+		return
+	}
 	threadParent := resolveThreadParent(ds, rawChannelID)
 	channelID := rawChannelID
 	if threadParent != "" {

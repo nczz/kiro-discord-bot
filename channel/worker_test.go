@@ -111,6 +111,54 @@ func TestPromptVisibleBodySkipsDiscordMetadataBlocks(t *testing.T) {
 	}
 }
 
+func TestCompactToolStartMessageHidesLongExecuteCommand(t *testing.T) {
+	evt := acp.ToolCallEvent{
+		Kind:  "execute",
+		Title: `Running: ssh n200 "docker exec sync_epb-postgres-1 psql -U epb -d epb -c 'select * from very_large_table'"`,
+	}
+	got := CompactToolStartMessage("▶️", evt)
+	if got != `▶️ Running: ssh n200 "docker exec sync\_epb-postgres-1 psql -U...` {
+		t.Fatalf("CompactToolStartMessage() = %q", got)
+	}
+	if strings.Contains(got, "very_large_table") {
+		t.Fatalf("compact execute message leaked long command tail: %q", got)
+	}
+}
+
+func TestCompactToolStartMessageTruncatesLongNonExecuteTitle(t *testing.T) {
+	evt := acp.ToolCallEvent{
+		Kind:  "read",
+		Title: strings.Repeat("a", 120),
+	}
+	got := CompactToolStartMessage("📖", evt)
+	if len(got) > len("📖 ")+80 {
+		t.Fatalf("compact message too long: len=%d msg=%q", len(got), got)
+	}
+	if !strings.HasSuffix(got, "...") {
+		t.Fatalf("expected truncated message, got %q", got)
+	}
+}
+
+func TestCompactToolStartMessageEscapesDiscordMarkdown(t *testing.T) {
+	evt := acp.ToolCallEvent{
+		Kind:  "read",
+		Title: "# Heading **bold** > quote",
+	}
+	got := CompactToolStartMessage("📖", evt)
+	want := "📖 \\# Heading \\*\\*bold\\*\\* \\> quote"
+	if got != want {
+		t.Fatalf("CompactToolStartMessage() = %q, want %q", got, want)
+	}
+}
+
+func TestEscapeDiscordMarkdown(t *testing.T) {
+	got := EscapeDiscordMarkdown("# H\n**bold** _em_ `code` > quote")
+	want := "\\# H\n\\*\\*bold\\*\\* \\_em\\_ \\`code\\` \\> quote"
+	if got != want {
+		t.Fatalf("EscapeDiscordMarkdown() = %q, want %q", got, want)
+	}
+}
+
 func TestBuildPromptContentEncodesImageData(t *testing.T) {
 	dir := t.TempDir()
 	imagePath := filepath.Join(dir, "sample.png")
