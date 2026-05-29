@@ -41,6 +41,9 @@ func TestThreadStatusUsesThreadSession(t *testing.T) {
 			t.Fatalf("ThreadStatus() should not include %q, got:\n%s", notWant, got)
 		}
 	}
+	if !strings.Contains(got, "inactive") || !strings.Contains(got, "send a message to restart") {
+		t.Fatalf("ThreadStatus() should explain inactive stored thread session, got:\n%s", got)
+	}
 }
 
 func TestThreadStatusWithoutThreadSession(t *testing.T) {

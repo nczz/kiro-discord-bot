@@ -227,8 +227,11 @@ func (b *Bot) channelMultiBotTrigger(ds *discordgo.Session, targetID, selfID str
 			continue
 		}
 		presence, present := b.peerExplicitlyPresentInTarget(ds, p, targetID)
-		if present && b.peerCanRespondInTarget(ds, p.ID, targetID) {
-			return peerPresenceDiagnostic{Peer: p, Presence: presence}, true
+		if b.peerCanRespondInTarget(ds, p.ID, targetID) {
+			if present {
+				return peerPresenceDiagnostic{Peer: p, Presence: presence}, true
+			}
+			return peerPresenceDiagnostic{Peer: p, Presence: "effective permissions"}, true
 		}
 	}
 	return peerPresenceDiagnostic{}, false

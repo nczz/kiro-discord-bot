@@ -59,6 +59,14 @@ func botMemberViewOverwrite(botID string) *discordgo.PermissionOverwrite {
 	}
 }
 
+func botMemberDenyOverwrite(botID string) *discordgo.PermissionOverwrite {
+	return &discordgo.PermissionOverwrite{
+		ID:   botID,
+		Type: discordgo.PermissionOverwriteTypeMember,
+		Deny: discordgo.PermissionViewChannel | discordgo.PermissionSendMessages | discordgo.PermissionSendMessagesInThreads,
+	}
+}
+
 func botRoleAllowOverwrite(roleID string) *discordgo.PermissionOverwrite {
 	return &discordgo.PermissionOverwrite{
 		ID:    roleID,
@@ -200,10 +208,10 @@ func TestMultiBotMentionOnlyCanBeOpenedByBack(t *testing.T) {
 		peers:   parseBotPeers("M5Bot:bot-1,ChunBot:bot-2"),
 		manager: channel.NewManager(channel.ManagerConfig{}),
 	}
-	ds := testPeerPermissionSession(t, []*discordgo.PermissionOverwrite{botMemberAllowOverwrite("bot-2")})
+	ds := testPeerPermissionSession(t, nil)
 
 	if !b.requiresHumanMention(ds, "channel-1", "", "bot-1") {
-		t.Fatal("explicit multi-bot channel should require mention by default")
+		t.Fatal("effective multi-bot channel should require mention by default")
 	}
 
 	b.manager.Back("channel-1")
@@ -222,10 +230,10 @@ func TestThreadMentionModeInheritsParentBack(t *testing.T) {
 		peers:   parseBotPeers("M5Bot:bot-1,ChunBot:bot-2"),
 		manager: channel.NewManager(channel.ManagerConfig{}),
 	}
-	ds := testPeerPermissionSession(t, []*discordgo.PermissionOverwrite{botMemberAllowOverwrite("bot-2")})
+	ds := testPeerPermissionSession(t, nil)
 
 	if !b.requiresHumanMention(ds, "thread-1", "channel-1", "bot-1") {
-		t.Fatal("thread should require mention by default when parent channel explicitly allows a peer bot")
+		t.Fatal("thread should require mention by default when peer bot has effective thread access")
 	}
 
 	b.manager.Back("channel-1")
@@ -249,16 +257,19 @@ func TestMultiBotMentionOnlyIsChannelScoped(t *testing.T) {
 		peers:   parseBotPeers("M5Bot:bot-1,ChunBot:bot-2"),
 		manager: channel.NewManager(channel.ManagerConfig{}),
 	}
-	ds := testPeerPermissionSession(t, nil)
+	ds := testPeerPermissionSession(t, []*discordgo.PermissionOverwrite{botMemberDenyOverwrite("bot-2")})
 	ch2, err := ds.State.Channel("channel-2")
 	if err != nil {
 		t.Fatalf("Channel: %v", err)
 	}
-	ch2.PermissionOverwrites = []*discordgo.PermissionOverwrite{botMemberAllowOverwrite("bot-2")}
 
 	if b.requiresHumanMention(ds, "channel-1", "", "bot-1") {
-		t.Fatal("peer without explicit channel allow should not force mention-only")
+		t.Fatal("peer without effective channel access should not force mention-only")
 	}
+	if !b.requiresHumanMention(ds, "channel-2", "", "bot-1") {
+		t.Fatal("peer with inherited effective channel access should force mention-only")
+	}
+	ch2.PermissionOverwrites = []*discordgo.PermissionOverwrite{botMemberAllowOverwrite("bot-2")}
 	if !b.requiresHumanMention(ds, "channel-2", "", "bot-1") {
 		t.Fatal("peer with explicit channel allow should force mention-only")
 	}
@@ -332,7 +343,7 @@ func TestDoctorBotPeersExplainsChannelTrigger(t *testing.T) {
 	}
 }
 
-func TestDoctorBotPeersExplainsNoChannelTrigger(t *testing.T) {
+func TestDoctorBotPeersExplainsEffectivePermissionTrigger(t *testing.T) {
 	L.Load("en")
 	ds := testPeerPermissionSession(t, nil)
 	b := &Bot{
@@ -342,8 +353,26 @@ func TestDoctorBotPeersExplainsNoChannelTrigger(t *testing.T) {
 	}
 
 	got := b.doctorBotPeers("channel-1")
-	if !strings.Contains(got, "discovered peers, but none have an explicit channel overwrite here") {
-		t.Fatalf("doctor output missing no-trigger explanation:\n%s", got)
+	if !strings.Contains(got, "trigger: `ChunBot` (`bot-2`) via effective permissions") {
+		t.Fatalf("doctor output missing effective permission trigger explanation:\n%s", got)
+	}
+	if !strings.Contains(got, "mention-only") {
+		t.Fatalf("doctor output missing mention-only mode:\n%s", got)
+	}
+}
+
+func TestDoctorBotPeersExplainsNoRespondingPeer(t *testing.T) {
+	L.Load("en")
+	ds := testPeerPermissionSession(t, []*discordgo.PermissionOverwrite{botMemberDenyOverwrite("bot-2")})
+	b := &Bot{
+		discord: ds,
+		peers:   parseBotPeers("M5Bot:bot-1,ChunBot:bot-2"),
+		manager: channel.NewManager(channel.ManagerConfig{}),
+	}
+
+	got := b.doctorBotPeers("channel-1")
+	if !strings.Contains(got, "discovered peers, but none can respond in this channel/thread") {
+		t.Fatalf("doctor output missing no-responding-peer explanation:\n%s", got)
 	}
 	if !strings.Contains(got, "channel/thread mode: open") {
 		t.Fatalf("doctor output missing open mode:\n%s", got)

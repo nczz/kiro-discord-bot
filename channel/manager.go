@@ -461,6 +461,8 @@ func (m *Manager) ThreadStatus(threadID string) string {
 			state = "dead"
 		}
 		qLen = entry.worker.QueueLen()
+	} else {
+		state = L.Get("status.inactive")
 	}
 
 	return m.formatStatus(sess, state, qLen, kiroVersion, ctxUsage)
