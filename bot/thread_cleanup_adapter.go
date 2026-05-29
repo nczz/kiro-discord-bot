@@ -10,7 +10,7 @@ func (a *threadCleanupAdapter) ThreadAgentEntries() []heartbeat.ThreadAgentInfo 
 	raw := a.bot.manager.ThreadAgentEntries()
 	out := make([]heartbeat.ThreadAgentInfo, len(raw))
 	for i, e := range raw {
-		out[i] = heartbeat.ThreadAgentInfo{ThreadID: e.ThreadID, ParentChID: e.ParentChID, LastActivity: e.LastActivity}
+		out[i] = heartbeat.ThreadAgentInfo{ThreadID: e.ThreadID, ParentChID: e.ParentChID, LastActivity: e.LastActivity, Active: e.Active}
 	}
 	return out
 }

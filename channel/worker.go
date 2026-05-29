@@ -61,9 +61,11 @@ type Worker struct {
 	currentThreadID     string
 	currentJobID        string
 	currentJobSeq       uint64
+	currentJobActive    bool
 	pendingInterruptSeq uint64
 
-	onActivity func() // called during work to signal liveness (prevents idle cleanup)
+	onActivity func()      // called during work to signal liveness (prevents idle cleanup)
+	onIdle     func() bool // called when a job finishes; true means the worker was stopped
 
 	memoryPrefix func() string // returns memory+flash prefix to inject into prompts
 
@@ -107,6 +109,9 @@ func newWorker(channelID string, agent workerAgent, bufSize, askTimeoutSec, stre
 // OnActivityFunc sets a callback invoked during work to signal liveness.
 func (w *Worker) OnActivityFunc(fn func()) { w.onActivity = fn }
 
+// OnIdleFunc sets a callback invoked after a job finishes.
+func (w *Worker) OnIdleFunc(fn func() bool) { w.onIdle = fn }
+
 // OnMemoryPrefixFunc sets a callback that returns memory rules to prepend to prompts.
 func (w *Worker) OnMemoryPrefixFunc(fn func() string) { w.memoryPrefix = fn }
 
@@ -149,15 +154,33 @@ func (w *Worker) Stop() {
 	})
 }
 
+func (w *Worker) isStopped() bool {
+	select {
+	case <-w.stopCh:
+		return true
+	default:
+		return false
+	}
+}
+
 // CancelCurrent cancels the currently running job, if any.
-func (w *Worker) CancelCurrent() {
+func (w *Worker) CancelCurrent() bool {
 	w.cancelMu.Lock()
 	fn := w.cancelFn
 	w.cancelMu.Unlock()
 	if fn != nil {
 		fn()
 		w.agent.CancelPrompt()
+		return true
 	}
+	return false
+}
+
+// IsActive reports whether this worker is currently executing a job.
+func (w *Worker) IsActive() bool {
+	w.cancelMu.Lock()
+	defer w.cancelMu.Unlock()
+	return w.currentJobActive
 }
 
 // InterruptCurrent first requests a normal ACP cancellation, then interrupts
@@ -214,6 +237,15 @@ func (w *Worker) CurrentThreadID() string {
 }
 
 func (w *Worker) signalIdle() {
+	if w.isStopped() {
+		return
+	}
+	if w.onIdle != nil && w.onIdle() {
+		return
+	}
+	if w.isStopped() {
+		return
+	}
 	select {
 	case w.idleCh <- struct{}{}:
 	default:
@@ -221,9 +253,12 @@ func (w *Worker) signalIdle() {
 }
 
 func (w *Worker) waitIdle() bool {
+	if w.isStopped() {
+		return false
+	}
 	select {
 	case <-w.idleCh:
-		return true
+		return !w.isStopped()
 	case <-w.stopCh:
 		return false
 	}
@@ -236,6 +271,9 @@ func (w *Worker) run() {
 			return
 		case job := <-w.queue:
 			if !w.waitIdle() {
+				return
+			}
+			if w.isStopped() {
 				return
 			}
 			w.execute(job)
@@ -280,6 +318,27 @@ func (w *Worker) execute(job *Job) {
 	log.Printf("[worker %s] job start | user=%s(%s) msg=%s prompt=%q",
 		w.channelID, job.Username, job.UserID, job.MessageID, promptSummary(job.Prompt, 80))
 
+	w.cancelMu.Lock()
+	w.currentJobID = job.MessageID
+	w.currentJobSeq++
+	w.currentJobActive = true
+	w.cancelMu.Unlock()
+	var finishOnce sync.Once
+	finishJob := func() {
+		finishOnce.Do(func() {
+			w.cancelMu.Lock()
+			w.cancelFn = nil
+			w.currentThreadID = ""
+			w.currentJobID = ""
+			w.currentJobActive = false
+			if w.pendingInterruptSeq == w.currentJobSeq {
+				w.pendingInterruptSeq = 0
+			}
+			w.cancelMu.Unlock()
+			w.signalIdle()
+		})
+	}
+
 	if w.logger != nil {
 		w.logger.Log(w.channelID, ChatEntry{
 			Role:        "user",
@@ -320,8 +379,6 @@ func (w *Worker) execute(job *Job) {
 
 	w.cancelMu.Lock()
 	w.currentThreadID = threadID
-	w.currentJobID = job.MessageID
-	w.currentJobSeq++
 	w.cancelMu.Unlock()
 
 	// Post initial status in thread
@@ -424,15 +481,6 @@ func (w *Worker) execute(job *Job) {
 			ctxErr := ctx.Err()
 			cancel() // release timeout context
 
-			w.cancelMu.Lock()
-			w.cancelFn = nil
-			w.currentThreadID = ""
-			w.currentJobID = ""
-			if w.pendingInterruptSeq == w.currentJobSeq {
-				w.pendingInterruptSeq = 0
-			}
-			w.cancelMu.Unlock()
-
 			if askErr != nil {
 				errMsg := askErr.Error()
 				emoji := "❌"
@@ -454,7 +502,7 @@ func (w *Worker) execute(job *Job) {
 					w.logger.Log(w.channelID, ChatEntry{Role: "assistant", Content: "❌ " + errMsg, Model: w.model})
 				}
 				w.recordUsage(job, threadID, "error")
-				w.signalIdle()
+				finishJob()
 				return
 			}
 
@@ -485,7 +533,7 @@ func (w *Worker) execute(job *Job) {
 				ds.ChannelMessageSend(threadID, "⚠️ "+L.Getf("context.usage_warning", usage))
 			}
 
-			w.signalIdle()
+			finishJob()
 		},
 	}
 
@@ -509,15 +557,7 @@ func (w *Worker) execute(job *Job) {
 			swapReaction(ds, job.ChannelID, job.MessageID, "⚙️", "⚠️")
 		}
 		cancel()
-		w.cancelMu.Lock()
-		w.cancelFn = nil
-		w.currentThreadID = ""
-		w.currentJobID = ""
-		if w.pendingInterruptSeq == w.currentJobSeq {
-			w.pendingInterruptSeq = 0
-		}
-		w.cancelMu.Unlock()
-		w.signalIdle()
+		finishJob()
 	})
 
 	// Inject thread ID into prompt so agent can post directly to thread via MCP
@@ -647,18 +687,32 @@ func isThreadAlreadyCreated(err error) bool {
 // executeFallback is the old synchronous path used when thread creation fails.
 func (w *Worker) executeFallback(job *Job) {
 	ds := job.Session
+	defer func() {
+		w.cancelMu.Lock()
+		w.cancelFn = nil
+		w.currentThreadID = ""
+		w.currentJobID = ""
+		w.currentJobActive = false
+		if w.pendingInterruptSeq == w.currentJobSeq {
+			w.pendingInterruptSeq = 0
+		}
+		w.cancelMu.Unlock()
+		w.signalIdle()
+	}()
 
 	replyMsg, err := ds.ChannelMessageSendReply(job.ChannelID, "🔄 "+L.Get("worker.processing"), &discordgo.MessageReference{
 		MessageID: job.MessageID, ChannelID: job.ChannelID,
 	})
 	if err != nil {
 		swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "❌")
-		w.signalIdle()
 		return
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(w.askTimeoutSec)*time.Second)
 	defer cancel()
+	w.cancelMu.Lock()
+	w.cancelFn = cancel
+	w.cancelMu.Unlock()
 
 	response, askErr := w.agent.Ask(ctx, job.Prompt, func(chunk string) {
 		if w.onActivity != nil {
@@ -687,7 +741,6 @@ func (w *Worker) executeFallback(job *Job) {
 		}
 		w.logger.Log(w.channelID, ChatEntry{Role: "assistant", Content: content, Model: w.model})
 	}
-	w.signalIdle()
 }
 
 func editMessage(ds *discordgo.Session, channelID, msgID, content string) {

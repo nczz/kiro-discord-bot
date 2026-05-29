@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -65,6 +66,27 @@ type threadAgentEntry struct {
 	parentChannelID string
 	threadID        string
 	lastActivity    time.Time
+	closeWhenIdle   bool
+}
+
+// ThreadAgentLimitCandidate is an inactive thread agent the user may choose to close.
+type ThreadAgentLimitCandidate struct {
+	ThreadID     string
+	ParentChID   string
+	LastActivity time.Time
+}
+
+// ThreadAgentLimitError reports that no new thread agent can be started
+// without exceeding the configured capacity.
+type ThreadAgentLimitError struct {
+	Max        int
+	Active     int
+	Inactive   int
+	Candidates []ThreadAgentLimitCandidate
+}
+
+func (e *ThreadAgentLimitError) Error() string {
+	return fmt.Sprintf("thread agent limit reached: max=%d active=%d inactive=%d", e.Max, e.Active, e.Inactive)
 }
 
 // ManagerConfig holds configuration for creating a Manager.
@@ -463,7 +485,12 @@ func (m *Manager) Cancel(channelID string) error {
 	if !ok {
 		return fmt.Errorf("no active session")
 	}
-	w.CancelCurrent()
+	if !w.CancelCurrent() {
+		if w.IsActive() {
+			return fmt.Errorf("active job is not cancellable yet")
+		}
+		return fmt.Errorf("no active job")
+	}
 	return nil
 }
 
@@ -1249,9 +1276,11 @@ func (m *Manager) EnqueueThread(ds *discordgo.Session, job *Job, parentChannelID
 	}
 
 	if !ok {
-		// Evict oldest if at capacity
+		// Capacity decisions are user-facing. Never kill an existing thread
+		// agent automatically; report inactive candidates so the user can choose
+		// what to close.
 		if len(m.threadAgents) >= m.threadAgentMax {
-			m.evictOldestThreadAgent()
+			return m.threadAgentLimitErrorLocked()
 		}
 
 		var err error
@@ -1270,6 +1299,27 @@ func (m *Manager) EnqueueThread(ds *discordgo.Session, job *Job, parentChannelID
 
 	_ = ds.MessageReactionAdd(job.ChannelID, job.MessageID, "⏳")
 	return nil
+}
+
+func (m *Manager) threadAgentLimitErrorLocked() error {
+	err := &ThreadAgentLimitError{Max: m.threadAgentMax}
+	for _, e := range m.threadAgents {
+		active := e.worker != nil && e.worker.IsActive()
+		if active {
+			err.Active++
+			continue
+		}
+		err.Inactive++
+		err.Candidates = append(err.Candidates, ThreadAgentLimitCandidate{
+			ThreadID:     e.threadID,
+			ParentChID:   e.parentChannelID,
+			LastActivity: e.lastActivity,
+		})
+	}
+	sort.Slice(err.Candidates, func(i, j int) bool {
+		return err.Candidates[i].LastActivity.Before(err.Candidates[j].LastActivity)
+	})
+	return err
 }
 
 // spawnThreadAgent creates a new agent+worker for a thread. Must be called with m.mu held.
@@ -1350,6 +1400,7 @@ func (m *Manager) spawnThreadAgent(threadID, parentChannelID string, modelOverri
 	w.SetUsageStore(m.usage)
 	w.SetHistoryPrefix(historyCtx)
 	w.OnActivityFunc(func() { m.TouchThreadAgent(threadID) })
+	w.OnIdleFunc(func() bool { return m.StopThreadAgentIfCloseWhenIdle(threadID) })
 	w.OnMemoryPrefixFunc(func() string {
 		m.mu.Lock()
 		defer m.mu.Unlock()
@@ -1373,15 +1424,51 @@ func (m *Manager) TouchThreadAgent(threadID string) {
 }
 
 // StopThreadAgent stops a specific thread agent.
-func (m *Manager) StopThreadAgent(threadID string) {
+func (m *Manager) StopThreadAgent(threadID string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.stopThreadAgentLocked(threadID)
+}
+
+func (m *Manager) stopThreadAgentLocked(threadID string) bool {
 	if entry, ok := m.threadAgents[threadID]; ok {
 		entry.worker.Stop()
 		entry.agent.Stop()
 		delete(m.threadAgents, threadID)
 		log.Printf("[manager] stopped thread agent thread-%s", threadID)
+		return true
 	}
+	return false
+}
+
+// MarkThreadArchived stops an inactive archived thread agent immediately, or
+// defers cleanup until the active job finishes.
+func (m *Manager) MarkThreadArchived(threadID string) (stopped bool, deferred bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	entry, ok := m.threadAgents[threadID]
+	if !ok {
+		return false, false
+	}
+	if entry.worker != nil && entry.worker.IsActive() {
+		entry.closeWhenIdle = true
+		return false, true
+	}
+	return m.stopThreadAgentLocked(threadID), false
+}
+
+// StopThreadAgentIfCloseWhenIdle closes a thread agent after a deferred archive.
+func (m *Manager) StopThreadAgentIfCloseWhenIdle(threadID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	entry, ok := m.threadAgents[threadID]
+	if !ok || !entry.closeWhenIdle {
+		return false
+	}
+	if entry.worker != nil && entry.worker.IsActive() {
+		return false
+	}
+	return m.stopThreadAgentLocked(threadID)
 }
 
 // CancelThreadAgent cancels the current job in a thread agent.
@@ -1392,7 +1479,12 @@ func (m *Manager) CancelThreadAgent(threadID string) error {
 	if !ok {
 		return fmt.Errorf("no thread agent")
 	}
-	entry.worker.CancelCurrent()
+	if !entry.worker.CancelCurrent() {
+		if entry.worker.IsActive() {
+			return fmt.Errorf("active job is not cancellable yet")
+		}
+		return fmt.Errorf("no active job")
+	}
 	return nil
 }
 
@@ -1444,6 +1536,7 @@ func (m *Manager) ThreadAgentEntries() []struct {
 	ThreadID     string
 	ParentChID   string
 	LastActivity time.Time
+	Active       bool
 } {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -1451,13 +1544,15 @@ func (m *Manager) ThreadAgentEntries() []struct {
 		ThreadID     string
 		ParentChID   string
 		LastActivity time.Time
+		Active       bool
 	}, 0, len(m.threadAgents))
 	for _, e := range m.threadAgents {
 		out = append(out, struct {
 			ThreadID     string
 			ParentChID   string
 			LastActivity time.Time
-		}{e.threadID, e.parentChannelID, e.lastActivity})
+			Active       bool
+		}{e.threadID, e.parentChannelID, e.lastActivity, e.worker != nil && e.worker.IsActive()})
 	}
 	return out
 }
@@ -1468,6 +1563,25 @@ func (m *Manager) HasThreadAgent(threadID string) bool {
 	defer m.mu.Unlock()
 	_, ok := m.threadAgents[threadID]
 	return ok
+}
+
+// ThreadAgentDetails returns the parent channel and active state for a thread agent.
+func (m *Manager) ThreadAgentDetails(threadID string) (parentChannelID string, active bool, ok bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	entry, ok := m.threadAgents[threadID]
+	if !ok {
+		return "", false, false
+	}
+	return entry.parentChannelID, entry.worker != nil && entry.worker.IsActive(), true
+}
+
+// IsThreadAgentActive reports whether a thread agent is currently executing a job.
+func (m *Manager) IsThreadAgentActive(threadID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	entry, ok := m.threadAgents[threadID]
+	return ok && entry.worker != nil && entry.worker.IsActive()
 }
 
 // SendCommandThread sends a slash command (e.g. "/compact", "/clear") to a thread agent.
@@ -1545,26 +1659,6 @@ func (m *Manager) ThreadModel(threadID string) string {
 		return L.Getf("model.current_global", m.defaultModel)
 	}
 	return L.Get("model.current_default")
-}
-
-// evictOldestThreadAgent removes the least recently active thread agent. Must be called with m.mu held.
-func (m *Manager) evictOldestThreadAgent() {
-	var oldestID string
-	var oldestTime time.Time
-	for id, e := range m.threadAgents {
-		if oldestID == "" || e.lastActivity.Before(oldestTime) {
-			oldestID = id
-			oldestTime = e.lastActivity
-		}
-	}
-	if oldestID != "" {
-		if entry, ok := m.threadAgents[oldestID]; ok {
-			entry.worker.Stop()
-			entry.agent.Stop()
-			delete(m.threadAgents, oldestID)
-			log.Printf("[manager] evicted thread agent thread-%s (idle since %s)", oldestID, oldestTime.Format(time.RFC3339))
-		}
-	}
 }
 
 // buildThreadHistory builds conversation history string for a thread agent.

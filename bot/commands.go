@@ -504,8 +504,86 @@ func (b *Bot) cmdClose(ctx cmdCtx) {
 		ctx.reply(L.Get("error.thread_only"))
 		return
 	}
-	b.manager.StopThreadAgent(ctx.targetID)
-	ctx.reply(L.Get("thread_agent.closed"))
+	if b.manager.StopThreadAgent(ctx.targetID) {
+		ctx.reply(L.Get("thread_agent.closed"))
+	} else {
+		ctx.reply(L.Get("thread_agent.not_running"))
+	}
+}
+
+func (b *Bot) cmdCloseThread(ctx cmdCtx) {
+	threadID := parseThreadIDArg(ctx.args)
+	if threadID == "" {
+		ctx.reply(L.Get("thread_agent.close_thread_usage"))
+		return
+	}
+	parentID, active, ok := b.manager.ThreadAgentDetails(threadID)
+	if !ok {
+		ctx.reply(L.Getf("thread_agent.not_running_thread", threadID))
+		return
+	}
+	if parentID != ctx.channelID {
+		ctx.reply(L.Get("thread_agent.close_thread_forbidden"))
+		return
+	}
+	if active {
+		ctx.reply(L.Get("thread_agent.close_thread_active"))
+		return
+	}
+	if err := b.validateManagedThread(ctx, threadID, parentID); err != nil {
+		ctx.reply(commandError(err))
+		return
+	}
+	if b.manager.StopThreadAgent(threadID) {
+		ctx.reply(L.Getf("thread_agent.closed_thread", threadID))
+	} else {
+		ctx.reply(L.Getf("thread_agent.not_running_thread", threadID))
+	}
+}
+
+func (b *Bot) validateManagedThread(ctx cmdCtx, threadID, parentID string) error {
+	ch, err := b.discordChannel(threadID)
+	if err != nil {
+		return fmt.Errorf("validate thread: %w", err)
+	}
+	if ch == nil || !ch.IsThread() {
+		return fmt.Errorf("target is not a thread")
+	}
+	if ctx.guildID != "" && ch.GuildID != "" && ch.GuildID != ctx.guildID {
+		return fmt.Errorf("thread belongs to another guild")
+	}
+	if ch.ParentID != parentID {
+		return fmt.Errorf("thread belongs to another parent channel")
+	}
+	return nil
+}
+
+func (b *Bot) discordChannel(channelID string) (*discordgo.Channel, error) {
+	if b.discord == nil {
+		return nil, fmt.Errorf("discord session unavailable")
+	}
+	if b.discord.State != nil {
+		if ch, err := b.discord.State.Channel(channelID); err == nil && ch != nil {
+			return ch, nil
+		}
+	}
+	return b.discord.Channel(channelID)
+}
+
+func parseThreadIDArg(raw string) string {
+	s := strings.TrimSpace(raw)
+	s = strings.TrimPrefix(s, "<#")
+	s = strings.TrimSuffix(s, ">")
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return ""
+		}
+	}
+	return s
 }
 
 // --- Channel-only commands ---

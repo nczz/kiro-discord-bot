@@ -520,6 +520,9 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 		b.cmdCancel(ctx)
 	case content == "!interrupt":
 		b.cmdInterrupt(ctx)
+	case content == "!close-thread" || strings.HasPrefix(content, "!close-thread "):
+		ctx.args = strings.TrimSpace(strings.TrimPrefix(content, "!close-thread"))
+		b.cmdCloseThread(ctx)
 	case content == "!compact":
 		b.cmdCompact(ctx)
 	case content == "!clear":
@@ -594,8 +597,15 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 func (b *Bot) handleThreadUpdate(ds *discordgo.Session, t *discordgo.ThreadUpdate) {
 	if t.ThreadMetadata != nil && t.ThreadMetadata.Archived {
 		if b.manager.HasThreadAgent(t.ID) {
-			log.Printf("[handler] thread %s archived, stopping thread agent", t.ID)
-			b.manager.StopThreadAgent(t.ID)
+			stopped, deferred := b.manager.MarkThreadArchived(t.ID)
+			if deferred {
+				log.Printf("[handler] thread %s archived while agent is active; scheduled stop after current job", t.ID)
+				if t.ParentID != "" {
+					_, _ = ds.ChannelMessageSend(t.ParentID, L.Getf("thread_agent.archive_deferred", t.ID))
+				}
+			} else if stopped {
+				log.Printf("[handler] thread %s archived, stopping thread agent", t.ID)
+			}
 		}
 	}
 }
@@ -634,6 +644,10 @@ func (b *Bot) handleThreadMessage(ds *discordgo.Session, m *discordgo.MessageCre
 		return
 	case content == "!close":
 		b.cmdClose(ctx)
+		return
+	case content == "!close-thread" || strings.HasPrefix(content, "!close-thread "):
+		ctx.args = strings.TrimSpace(strings.TrimPrefix(content, "!close-thread"))
+		b.cmdCloseThread(ctx)
 		return
 	case content == "!pause":
 		b.cmdPause(ctx)
@@ -729,7 +743,7 @@ func (b *Bot) handleThreadMessage(ds *discordgo.Session, m *discordgo.MessageCre
 	}
 	if err := b.manager.EnqueueThread(ds, job, parentChannelID); err != nil {
 		ds.MessageReactionRemove(threadID, m.ID, "⏳", "@me")
-		ds.ChannelMessageSend(threadID, L.Getf("error.generic", err.Error()))
+		ds.ChannelMessageSend(threadID, commandError(err))
 	}
 }
 
@@ -770,6 +784,9 @@ func buildSlashCommands() []*discordgo.ApplicationCommand {
 		{Name: "compact", Description: L.Get("cmd.compact.desc")},
 		{Name: "clear", Description: L.Get("cmd.clear.desc")},
 		{Name: "close", Description: L.Get("cmd.close.desc")},
+		{Name: "close-thread", Description: L.Get("cmd.close_thread.desc"), Options: []*discordgo.ApplicationCommandOption{
+			{Type: discordgo.ApplicationCommandOptionString, Name: "thread_id", Description: L.Get("cmd.close_thread.opt.thread_id"), Required: true},
+		}},
 		{Name: "resume", Description: L.Get("cmd.resume.desc")},
 		{Name: "cron-run", Description: L.Get("cmd.cron_run.desc"), Options: []*discordgo.ApplicationCommandOption{
 			{Type: discordgo.ApplicationCommandOptionString, Name: "name", Description: L.Get("cmd.cron_run.opt.name"), Required: true, Autocomplete: true},
@@ -1037,6 +1054,9 @@ func (b *Bot) handleSlashCommand(ds *discordgo.Session, i *discordgo.Interaction
 			b.cmdFlashMemory(ctx)
 		case "close":
 			b.cmdClose(ctx)
+		case "close-thread":
+			ctx.args = data.Options[0].StringValue()
+			b.cmdCloseThread(ctx)
 		case "resume":
 			b.cmdResume(ctx)
 		}

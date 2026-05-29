@@ -44,7 +44,7 @@ type Config struct {
 }
 
 func loadConfig() *Config {
-	return &Config{
+	cfg := &Config{
 		DiscordToken:         mustEnv("DISCORD_TOKEN"),
 		KiroCLIPath:          envOr("KIRO_CLI_PATH", "kiro-cli"),
 		DefaultCWD:           envOr("DEFAULT_CWD", "/projects"),
@@ -80,6 +80,10 @@ func loadConfig() *Config {
 		STTLanguage:          envOr("STT_LANGUAGE", ""),
 		STTMaxDurationSec:    envInt("STT_MAX_DURATION_SEC", 300),
 	}
+	if cfg.ThreadAgentMax <= 0 {
+		log.Fatalf("THREAD_AGENT_MAX must be greater than 0, got %d", cfg.ThreadAgentMax)
+	}
+	return cfg
 }
 
 func mustEnv(key string) string {

@@ -24,13 +24,14 @@ type ThreadAgentInfo struct {
 	ThreadID     string
 	ParentChID   string
 	LastActivity time.Time
+	Active       bool
 }
 
 // ThreadCleanupTask periodically kills idle thread agents.
 type ThreadCleanupTask struct {
-	deps       ThreadCleanupDeps
-	idleSec    int
-	maxAgents  int
+	deps      ThreadCleanupDeps
+	idleSec   int
+	maxAgents int
 }
 
 func NewThreadCleanupTask(deps ThreadCleanupDeps, idleSec, maxAgents int) *ThreadCleanupTask {
@@ -38,7 +39,7 @@ func NewThreadCleanupTask(deps ThreadCleanupDeps, idleSec, maxAgents int) *Threa
 }
 
 func (t *ThreadCleanupTask) Name() string               { return "thread-cleanup" }
-func (t *ThreadCleanupTask) ShouldRun(_ time.Time) bool { return true }
+func (t *ThreadCleanupTask) ShouldRun(_ time.Time) bool { return t.idleSec > 0 }
 
 func (t *ThreadCleanupTask) Run() error {
 	entries := t.deps.ThreadAgentEntries()
@@ -51,6 +52,9 @@ func (t *ThreadCleanupTask) Run() error {
 
 	// Kill idle agents
 	for _, e := range entries {
+		if e.Active || e.LastActivity.IsZero() {
+			continue
+		}
 		if now.Sub(e.LastActivity) > idleThreshold {
 			log.Printf("[thread-cleanup] killing idle thread agent %s (idle %s)", e.ThreadID, now.Sub(e.LastActivity).Round(time.Second))
 			t.deps.StopThreadAgent(e.ThreadID)

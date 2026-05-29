@@ -757,7 +757,7 @@ func (a *Agent) Stop() {
 		a.state = "stopped"
 		a.mu.Unlock()
 
-		if a.cmd.Process == nil {
+		if a.cmd == nil || a.cmd.Process == nil {
 			return
 		}
 
@@ -783,7 +783,7 @@ func (a *Agent) Kill() {
 		a.mu.Lock()
 		a.state = "stopped"
 		a.mu.Unlock()
-		if a.cmd.Process != nil {
+		if a.cmd != nil && a.cmd.Process != nil {
 			_ = syscall.Kill(-a.cmd.Process.Pid, syscall.SIGKILL)
 			<-a.exited
 		}

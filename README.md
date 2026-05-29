@@ -182,8 +182,8 @@ STT_MAX_DURATION_SEC=300
 | `ASK_TIMEOUT_SEC` | Agent response timeout (safety net) in seconds | `3600` |
 | `STREAM_UPDATE_SEC` | Discord message update interval during streaming | `3` |
 | `THREAD_AUTO_ARCHIVE` | Thread auto-archive duration in minutes (60/1440/4320/10080) | `1440` |
-| `THREAD_AGENT_MAX` | Max concurrent thread agents | `5` |
-| `THREAD_AGENT_IDLE_SEC` | Thread agent idle timeout in seconds | `900` |
+| `THREAD_AGENT_MAX` | Max concurrent thread agents (must be > 0) | `5` |
+| `THREAD_AGENT_IDLE_SEC` | Thread agent idle timeout in seconds (`0` = disabled) | `900` |
 | `CHANNEL_AGENT_IDLE_SEC` | Channel agent idle timeout in seconds (0 = disabled) | `0` |
 | `KIRO_MODEL` | Default model ID for kiro-cli (empty = kiro default) | `` |
 | `HEARTBEAT_SEC` | Agent health check interval in seconds | `60` |
@@ -333,6 +333,7 @@ The bot needs explicit permission in each channel it should respond to:
 | `/remind <time> <content>` | Set a one-time reminder (tags you when due) |
 | `/compact` | Compress conversation history to free context |
 | `/clear` | Clear conversation history |
+| `/close-thread <thread_id>` | Close an inactive thread agent in this channel scope |
 | `/memory` | Manage persistent memory rules (add/list/remove/clear) |
 | `/flashmemory` | Manage session-scoped flash memory (add/list/remove/clear) |
 
@@ -357,6 +358,7 @@ Channel setup and scheduling commands must be run in the parent channel: `/start
 | `!silent off` | Show full tool details in this thread |
 | `!compact` | Compress thread agent's conversation history |
 | `!clear` | Clear thread agent's conversation history |
+| `!close-thread <thread_id>` | Close an inactive thread agent in the parent channel scope |
 | `!model` | Show thread agent's current model |
 | `!model <model-id>` | Switch thread agent's model |
 | `!models` | List all available models |
@@ -373,7 +375,7 @@ Use `/back` or `!back` on the target bot to open full-listen mode for that chann
 
 **Thread-based progress:** Each task automatically creates a Discord Thread from your message. Tool execution status and the final response are posted in the thread, keeping the main channel clean.
 
-**Thread discussions:** You can continue chatting with the agent inside any thread. A dedicated agent is spawned per thread with the original task context injected. Thread agents are independent from the main channel agent, so both can work in parallel. Thread agents are automatically closed after idle timeout (`THREAD_AGENT_IDLE_SEC`) or when the thread is archived. Use `!close` in a thread to manually close its agent.
+**Thread discussions:** You can continue chatting with the agent inside any thread. A dedicated agent is spawned per thread with the original task context injected. Thread agents are independent from the main channel agent, so both can work in parallel. Inactive thread agents are automatically closed after idle timeout (`THREAD_AGENT_IDLE_SEC`) or when an inactive thread is archived. Capacity limits never close thread agents automatically: if all slots are full, the bot reports active/inactive counts and lists inactive candidates so a user can choose which one to close with `/close-thread thread_id:<id>`. Active work is never evicted by idle cleanup, archive events, or capacity limits; archived active threads are closed after the current job returns to idle. Use `!close` in a thread to manually close its agent.
 
 **Cancel vs interrupt:** `/cancel` sends ACP `session/cancel` for the current task. `/interrupt` first does the same soft cancel, waits briefly, and only if the same task is still active tries `SIGINT` on the agent process group so a stuck tool subprocess can be interrupted. A repeated `/interrupt` on the same still-running task can try another `SIGINT`. It does not clear persisted session metadata or close the Discord thread; if the agent exits, the manager's normal restart/load path handles the next message.
 
@@ -688,7 +690,7 @@ The agent will read the guide, build the binary, update `mcp.json`, and prompt y
 - **Attachments:** Stored in `DATA_DIR/ch-<channelID>/attachments/` with timestamp prefixes. Filenames are sanitized, downloads must return HTTP 200, and each file is capped by `ATTACHMENT_MAX_MB`. Auto-cleaned after `ATTACHMENT_RETAIN_DAYS`.
 - **Tool permissions:** Server-initiated ACP permission requests are approved only when `TRUST_ALL_TOOLS=true` or `TRUST_TOOLS` is set; otherwise they are denied by local policy.
 - **Preflight:** `PREFLIGHT_MODE=warn` keeps the bot online when `kiro-cli` is temporarily unavailable. Use `strict` for fail-fast production startup or `skip` for development.
-- **Thread agents:** Idle timeout respects active work — `lastActivity` is updated during tool execution, preventing premature cleanup of long-running tasks.
+- **Thread agents:** Idle timeout respects active work — cleanup skips workers with an active job, and `lastActivity` is updated during tool execution. Set `THREAD_AGENT_IDLE_SEC=0` to disable thread idle cleanup. `THREAD_AGENT_MAX` must be greater than zero and is a hard safety limit; capacity overflow asks the user to close an inactive thread with `/close-thread thread_id:<id>` instead of auto-evicting one.
 - **Channel agent idle:** Set `CHANNEL_AGENT_IDLE_SEC` (default `0` = disabled) to auto-close idle channel agents and free resources. Agents restart automatically on next message.
 - **Cron jobs:** Definitions in `DATA_DIR/cron/cron.json`, execution history in `DATA_DIR/cron/<jobID>/history.jsonl` (includes full agent output).
 
@@ -825,6 +827,7 @@ RUN_ACP_SMOKE=1 KIRO_CLI=/Users/chun/.local/bin/kiro-cli scripts/release-preflig
 | `/remind <時間> <內容>` | 預約單次提醒（到期時 tag 你） |
 | `/compact` | 壓縮對話歷史以釋放 context |
 | `/clear` | 清除對話歷史 |
+| `/close-thread <thread_id>` | 關閉目前頻道範圍內的 inactive 討論串 agent |
 | `/memory` | 管理永久記憶規則（add/list/remove/clear） |
 | `/flashmemory` | 管理 session 閃存記憶（add/list/remove/clear） |
 
@@ -849,6 +852,7 @@ RUN_ACP_SMOKE=1 KIRO_CLI=/Users/chun/.local/bin/kiro-cli scripts/release-preflig
 | `!silent off` | 顯示此討論串的完整工具細節 |
 | `!compact` | 壓縮討論串 agent 的對話歷史 |
 | `!clear` | 清除討論串 agent 的對話歷史 |
+| `!close-thread <thread_id>` | 關閉父頻道範圍內的 inactive 討論串 agent |
 | `!model` | 查詢討論串 agent 目前的 model |
 | `!model <model-id>` | 切換討論串 agent 的 model 並重啟 |
 | `!models` | 列出所有可用的 model |
@@ -862,7 +866,7 @@ RUN_ACP_SMOKE=1 KIRO_CLI=/Users/chun/.local/bin/kiro-cli scripts/release-preflig
 - MCP 設定自動繼承 `~/.kiro/settings/mcp.json`
 - **Discord MCP 範圍**：用 `MCP_DISCORD_ALLOWED_GUILDS`、`MCP_DISCORD_ALLOWED_CHANNELS` 限制可操作的 guild/channel；用 `MCP_DISCORD_READ_ONLY`、`MCP_DISCORD_ALLOWED_WRITE_TOOLS` 或 `MCP_DISCORD_ALLOW_DESTRUCTIVE=false` 限制寫入工具
 - 回應被截斷時可用 `!resume` 補完
-- **討論串互動**：在 bot 建立的 thread 中發訊息，會自動啟動獨立的 thread agent 接續討論。閒置超過 `THREAD_AGENT_IDLE_SEC` 或 thread 歸檔時自動關閉，再次發訊息可重新啟動
+- **討論串互動**：在 bot 建立的 thread 中發訊息，會自動啟動獨立的 thread agent 接續討論。非 active agent 閒置超過 `THREAD_AGENT_IDLE_SEC` 或非 active thread 歸檔時自動關閉，再次發訊息可重新啟動。容量上限不會自動關閉任何 thread agent；如果名額已滿，bot 會列出 active/inactive 狀態與 inactive 候選，讓使用者執行 `/close-thread thread_id:<id>` 關閉指定 inactive agent。active work 不會因 idle cleanup、歸檔事件或 thread agent 容量上限被強制終止；active thread 若被歸檔，會在目前 job 回到 idle 後關閉；`THREAD_AGENT_IDLE_SEC=0` 可停用討論串閒置清理。
 - **取消與中斷**：`/cancel` 只送出 ACP `session/cancel` 取消目前任務；`/interrupt` 會先做同樣的 soft cancel，短暫等待後若同一任務仍在執行，才嘗試對 agent process group 送 `SIGINT`，用來中斷卡住的工具子程序。若同一任務仍卡住，重複 `/interrupt` 可再嘗試一次 `SIGINT`。它不會清除已保存的 session metadata，也不會關閉 Discord thread；若 agent 因中斷退出，下一則訊息會走既有的重啟與 `session/load` 流程
 - **多 bot 模式**：bot 啟動時會從 Discord guild bot members 自動偵測同 server 內其他 bot，並盡量補上 bot role。`BOT_PEERS` 只需要用來覆蓋偵測結果、補上偵測不到的 bot、手動加入 role-only peer，或用 `!userID` 排除無關 bot；格式為 `Name:userID`、`Name:userID:roleID`、`Name::roleID` 或 `!userID`。自動 multi-bot mention-only 只會在另一個 peer bot 對目前頻道有明確 channel permission overwrite allow 時啟用；討論串則看父層頻道 overwrite。單純繼承 guild 或 `@everyone` 權限不會讓頻道被視為 multi-bot，自動偵測到的 role-only peer 也不會單獨觸發 mention-only。請用真正的 Discord mention（例如 `<@111111111111111111>` 或 Discord 介面的提及選單），若偵測或設定了 role ID，role mention（例如 `<@&222222222222222222>`）也會路由到目標 bot；純文字 `@BuildBot` 不一定會觸發。若要讓其中一個 bot 暫時恢復完整監聽，對該 bot 在主頻道執行 `/back` 或 `!back`，該主頻道底下的討論串也會繼承；若只想讓某條討論串回到 mention-only，可在該討論串執行 `/pause` 或 `!pause`
 - **Bot 交接限制**：bot 產生的訊息預設不會觸發另一個 bot。只有在討論串內、明確 tag 目標 bot、原始任務訊息已有完成反應（`✅`），且內容不是進度、錯誤、逾時或空輸出時，才會被視為有效交接。一般討論串任務會帶入近期 Discord 討論串訊息作為 bounded context；通過 gate 的跨 bot 交接會帶入較長的 thread transcript 作為 handoff context，讓被交辦 bot 先掌握任務、先前決策、相關檔案、結果與剩餘工作

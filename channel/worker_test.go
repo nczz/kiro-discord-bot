@@ -255,7 +255,9 @@ func TestWorkerCancelCurrentCancelsWithoutSignalingIdle(t *testing.T) {
 	w.cancelFn = cancel
 	w.cancelMu.Unlock()
 
-	w.CancelCurrent()
+	if !w.CancelCurrent() {
+		t.Fatal("CancelCurrent returned false for active job")
+	}
 
 	if err := ctx.Err(); err != context.Canceled {
 		t.Fatalf("ctx err = %v, want context.Canceled", err)
@@ -287,10 +289,84 @@ func TestWorkerCancelCurrentNoActiveJob(t *testing.T) {
 	agent := &fakeWorkerAgent{}
 	w := newWorker("ch1", agent, 1, 30, 1, 1440, nil, "")
 
-	w.CancelCurrent()
+	if w.CancelCurrent() {
+		t.Fatal("CancelCurrent returned true without active job")
+	}
 
 	if got := agent.CancelCalls(); got != 0 {
 		t.Fatalf("cancel calls = %d, want 0", got)
+	}
+}
+
+func TestWorkerIsActive(t *testing.T) {
+	agent := &fakeWorkerAgent{}
+	w := newWorker("ch1", agent, 1, 30, 1, 1440, nil, "")
+
+	if w.IsActive() {
+		t.Fatal("new worker should not be active")
+	}
+
+	_, cancel := context.WithCancel(context.Background())
+	w.cancelMu.Lock()
+	w.cancelFn = cancel
+	w.currentJobSeq = 1
+	w.currentJobActive = true
+	w.cancelMu.Unlock()
+
+	if !w.IsActive() {
+		t.Fatal("worker with active job context should be active")
+	}
+
+	w.cancelMu.Lock()
+	w.cancelFn = nil
+	w.currentJobActive = false
+	w.cancelMu.Unlock()
+
+	if w.IsActive() {
+		t.Fatal("worker with cleared job context should not be active")
+	}
+}
+
+func TestWorkerSignalIdleDoesNotReleaseNextJobWhenStopped(t *testing.T) {
+	agent := &fakeWorkerAgent{}
+	w := newWorker("ch1", agent, 2, 30, 1, 1440, nil, "")
+	w.OnIdleFunc(func() bool {
+		w.Stop()
+		return true
+	})
+
+	w.signalIdle()
+
+	select {
+	case <-w.idleCh:
+		t.Fatal("signalIdle released idle token after stop")
+	default:
+	}
+}
+
+func TestWorkerSignalIdleDoesNotReleaseTokenAfterStop(t *testing.T) {
+	agent := &fakeWorkerAgent{}
+	w := newWorker("ch1", agent, 2, 30, 1, 1440, nil, "")
+
+	w.Stop()
+	w.signalIdle()
+
+	select {
+	case <-w.idleCh:
+		t.Fatal("signalIdle released idle token after worker was stopped")
+	default:
+	}
+}
+
+func TestWorkerWaitIdleRejectsTokenAfterStop(t *testing.T) {
+	agent := &fakeWorkerAgent{}
+	w := newWorker("ch1", agent, 2, 30, 1, 1440, nil, "")
+
+	w.idleCh <- struct{}{}
+	w.Stop()
+
+	if w.waitIdle() {
+		t.Fatal("waitIdle accepted idle token after worker was stopped")
 	}
 }
 
