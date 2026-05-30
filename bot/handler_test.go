@@ -67,6 +67,15 @@ func botMemberDenyOverwrite(botID string) *discordgo.PermissionOverwrite {
 	}
 }
 
+func botMemberThreadReplyOverwrite(botID string) *discordgo.PermissionOverwrite {
+	return &discordgo.PermissionOverwrite{
+		ID:    botID,
+		Type:  discordgo.PermissionOverwriteTypeMember,
+		Allow: discordgo.PermissionViewChannel | discordgo.PermissionCreatePublicThreads | discordgo.PermissionSendMessagesInThreads,
+		Deny:  discordgo.PermissionSendMessages,
+	}
+}
+
 func botRoleAllowOverwrite(roleID string) *discordgo.PermissionOverwrite {
 	return &discordgo.PermissionOverwrite{
 		ID:    roleID,
@@ -284,6 +293,30 @@ func TestPeerExplicitViewOverwriteForcesMentionOnlyWhenEffectiveSendAllows(t *te
 
 	if !b.requiresHumanMention(ds, "channel-1", "", "bot-1") {
 		t.Fatal("peer with explicit channel view allow and effective send permission should force mention-only")
+	}
+}
+
+func TestPeerThreadReplyPermissionsForceMentionOnlyWithoutChannelSend(t *testing.T) {
+	b := &Bot{
+		peers:   parseBotPeers("M5Bot:bot-1,ChunBot:bot-2"),
+		manager: channel.NewManager(channel.ManagerConfig{}),
+	}
+	ds := testPeerPermissionSession(t, []*discordgo.PermissionOverwrite{botMemberThreadReplyOverwrite("bot-2")})
+
+	if !b.requiresHumanMention(ds, "channel-1", "", "bot-1") {
+		t.Fatal("peer that can create and reply in threads should force mention-only even without channel SendMessages")
+	}
+}
+
+func TestPeerThreadPermissionsForceMentionOnlyInThreadWithoutParentChannelSend(t *testing.T) {
+	b := &Bot{
+		peers:   parseBotPeers("M5Bot:bot-1,ChunBot:bot-2"),
+		manager: channel.NewManager(channel.ManagerConfig{}),
+	}
+	ds := testPeerPermissionSession(t, []*discordgo.PermissionOverwrite{botMemberThreadReplyOverwrite("bot-2")})
+
+	if !b.requiresHumanMention(ds, "thread-1", "channel-1", "bot-1") {
+		t.Fatal("peer that can reply in the thread should force mention-only even without parent channel SendMessages")
 	}
 }
 

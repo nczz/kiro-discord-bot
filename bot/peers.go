@@ -305,6 +305,10 @@ func (b *Bot) peerCanRespondInTarget(ds *discordgo.Session, peerID, targetID str
 		required = int64(discordgo.PermissionViewChannel | discordgo.PermissionSendMessagesInThreads)
 	}
 	canRespond := perms&required == required
+	if !canRespond {
+		channelThreadReply := int64(discordgo.PermissionViewChannel | discordgo.PermissionCreatePublicThreads | discordgo.PermissionSendMessagesInThreads)
+		canRespond = perms&channelThreadReply == channelThreadReply
+	}
 	if b != nil {
 		b.peerPermMu.Lock()
 		if b.peerPermCache == nil {
