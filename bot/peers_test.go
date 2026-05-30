@@ -91,6 +91,18 @@ func TestRoleOnlyPeerTriggersMultiBotAndMentions(t *testing.T) {
 	}
 }
 
+func TestBotPeerCountsSeparatesUserAndRoleOnlyPeers(t *testing.T) {
+	userPeers, roleOnlyPeers := botPeerCounts([]BotPeer{
+		{Name: "SelfBot", ID: "bot-1", RoleID: "role-1"},
+		{Name: "PeerBot", ID: "bot-2", RoleID: "role-2"},
+		{Name: "RoleOnly", RoleID: "role-3"},
+	})
+
+	if userPeers != 2 || roleOnlyPeers != 1 {
+		t.Fatalf("botPeerCounts() = (%d, %d), want (2, 1)", userPeers, roleOnlyPeers)
+	}
+}
+
 func TestBotRoleIDPrefersManagedNameMatch(t *testing.T) {
 	member := &discordgo.Member{
 		Nick:  "M5Bot",

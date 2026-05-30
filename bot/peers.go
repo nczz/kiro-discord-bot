@@ -499,7 +499,8 @@ func (b *Bot) discoverBotPeers(ds *discordgo.Session, ready *discordgo.Ready) {
 		}
 	}
 	b.setDiscoveredPeers(discovered)
-	log.Printf("[peers] discovery complete guilds=%d discovered=%d manual=%d active=%d", len(guildIDs), len(discovered), len(b.manualPeers), len(b.peerSnapshot()))
+	userPeers, roleOnlyPeers := botPeerCounts(b.peerSnapshot())
+	log.Printf("[peers] discovery complete guilds=%d discovered=%d manual=%d active=%d user_peers=%d role_only_peers=%d", len(guildIDs), len(discovered), len(b.manualPeers), len(b.peerSnapshot()), userPeers, roleOnlyPeers)
 }
 
 func (b *Bot) peerDiscoveryGuildIDs(ready *discordgo.Ready) []string {
@@ -527,16 +528,16 @@ func (b *Bot) guildRoles(ds *discordgo.Session, guildID string) ([]*discordgo.Ro
 }
 
 func (b *Bot) guildMembers(ds *discordgo.Session, guildID string) ([]*discordgo.Member, error) {
-	if ds.State != nil {
-		if guild, err := ds.State.Guild(guildID); err == nil && guild != nil && len(guild.Members) > 0 {
-			return guild.Members, nil
-		}
-	}
 	var all []*discordgo.Member
 	after := ""
 	for {
 		members, err := ds.GuildMembers(guildID, after, 1000)
 		if err != nil {
+			if ds.State != nil {
+				if guild, stateErr := ds.State.Guild(guildID); stateErr == nil && guild != nil && len(guild.Members) > 0 {
+					return guild.Members, nil
+				}
+			}
 			return all, err
 		}
 		all = append(all, members...)
@@ -549,7 +550,23 @@ func (b *Bot) guildMembers(ds *discordgo.Session, guildID string) ([]*discordgo.
 		}
 		after = last.User.ID
 	}
+	if len(all) == 0 && ds.State != nil {
+		if guild, err := ds.State.Guild(guildID); err == nil && guild != nil && len(guild.Members) > 0 {
+			return guild.Members, nil
+		}
+	}
 	return all, nil
+}
+
+func botPeerCounts(peers []BotPeer) (userPeers, roleOnlyPeers int) {
+	for _, p := range peers {
+		if p.ID != "" {
+			userPeers++
+		} else if p.RoleID != "" {
+			roleOnlyPeers++
+		}
+	}
+	return userPeers, roleOnlyPeers
 }
 
 func botRoleID(member *discordgo.Member, roleByID map[string]*discordgo.Role) string {
