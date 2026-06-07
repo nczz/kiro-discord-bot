@@ -1,13 +1,139 @@
 package bot
 
 import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"io"
+	"math"
+	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bwmarrin/discordgo"
+	"github.com/nczz/kiro-discord-bot/acp"
+	"github.com/nczz/kiro-discord-bot/audit"
 	"github.com/nczz/kiro-discord-bot/channel"
 	L "github.com/nczz/kiro-discord-bot/locale"
 )
+
+type failingDiscordTransport struct{}
+
+func (f failingDiscordTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	return &http.Response{
+		StatusCode: http.StatusInternalServerError,
+		Status:     "500 Internal Server Error",
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(`{"message":"forced discord failure","code":0}`)),
+		Request:    req,
+	}, nil
+}
+
+func newFailingDiscordSession(t *testing.T) *discordgo.Session {
+	t.Helper()
+	ds, err := discordgo.New("Bot test")
+	if err != nil {
+		t.Fatalf("new discord session: %v", err)
+	}
+	ds.Client = &http.Client{Transport: failingDiscordTransport{}}
+	ds.State = testPeerPermissionSession(t, nil).State
+	return ds
+}
+
+func newAuditTestBot(t *testing.T) (*Bot, string, func()) {
+	t.Helper()
+	dir := t.TempDir()
+	store, err := audit.Open(audit.Config{DataDir: dir})
+	if err != nil {
+		t.Fatalf("open audit store: %v", err)
+	}
+	recorder := audit.NewRecorder(store, 100, nil, false)
+	b := &Bot{
+		manager:       channel.NewManager(channel.ManagerConfig{DataDir: filepath.Join(dir, "data")}),
+		auditRecorder: recorder,
+		seen:          newSeenMessages(),
+	}
+	cleanup := func() {
+		b.seen.Stop()
+		recorder.Close()
+	}
+	return b, filepath.Join(dir, "audit", "discord.sqlite"), cleanup
+}
+
+func waitBotAuditEvent(t *testing.T, dbPath, eventType string) audit.BotEvent {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		db, err := sql.Open("sqlite", dbPath)
+		if err != nil {
+			t.Fatalf("open sqlite: %v", err)
+		}
+		var raw string
+		err = db.QueryRowContext(context.Background(), `SELECT raw_json FROM bot_audit_events WHERE event_type=? ORDER BY id DESC LIMIT 1`, eventType).Scan(&raw)
+		_ = db.Close()
+		if err == nil {
+			var evt audit.BotEvent
+			if err := json.Unmarshal([]byte(raw), &evt); err != nil {
+				t.Fatalf("unmarshal raw event: %v", err)
+			}
+			return evt
+		}
+		lastErr = err
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s: %v", eventType, lastErr)
+	return audit.BotEvent{}
+}
+
+func waitBotAuditEvents(t *testing.T, dbPath, eventType string, minCount int) []audit.BotEvent {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		db, err := sql.Open("sqlite", dbPath)
+		if err != nil {
+			t.Fatalf("open sqlite: %v", err)
+		}
+		rows, err := db.QueryContext(context.Background(), `SELECT raw_json FROM bot_audit_events WHERE event_type=? ORDER BY id`, eventType)
+		if err != nil {
+			_ = db.Close()
+			t.Fatalf("query audit events: %v", err)
+		}
+		var events []audit.BotEvent
+		for rows.Next() {
+			var raw string
+			if err := rows.Scan(&raw); err != nil {
+				_ = rows.Close()
+				_ = db.Close()
+				t.Fatalf("scan audit event: %v", err)
+			}
+			var evt audit.BotEvent
+			if err := json.Unmarshal([]byte(raw), &evt); err != nil {
+				_ = rows.Close()
+				_ = db.Close()
+				t.Fatalf("unmarshal raw event: %v", err)
+			}
+			events = append(events, evt)
+		}
+		lastErr = rows.Err()
+		_ = rows.Close()
+		_ = db.Close()
+		if lastErr != nil {
+			t.Fatalf("rows: %v", lastErr)
+		}
+		if len(events) >= minCount {
+			return events
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %d %s events: %v", minCount, eventType, lastErr)
+	return nil
+}
 
 func testPeerPermissionSession(t *testing.T, channelOneOverwrites []*discordgo.PermissionOverwrite) *discordgo.Session {
 	t.Helper()
@@ -602,5 +728,369 @@ func TestChannelOnlyCommandRejectsThreadContext(t *testing.T) {
 
 	if len(replies) != 1 || replies[0] != L.Get("error.channel_only") {
 		t.Fatalf("replies = %#v, want channel-only error", replies)
+	}
+}
+
+func TestRecordAgentCommandUsageWritesLedger(t *testing.T) {
+	dir := t.TempDir()
+	manager := channel.NewManager(channel.ManagerConfig{DataDir: dir, UsageTimezone: "UTC"})
+	b := &Bot{manager: manager}
+
+	b.recordAgentCommandUsage(cmdCtx{
+		channelID:     "channel-1",
+		guildID:       "guild-1",
+		userID:        "user-1",
+		username:      "mxp",
+		interactionID: "interaction-1",
+	}, "/compact", channel.AgentCommandResult{
+		Model:    "model-1",
+		Executed: true,
+		Metrics: acp.TurnMetrics{
+			MeteringUsage:  []acp.MeteringItem{{Value: 0.22, Unit: "credit"}},
+			TurnDurationMs: 5000,
+			ContextUsage:   11,
+		},
+	}, "error")
+
+	report, err := manager.UsageReport("guild-1", "channel-1", "", 10)
+	if err != nil {
+		t.Fatalf("usage report: %v", err)
+	}
+	if len(report.Rows) != 1 {
+		t.Fatalf("usage rows = %d, want 1", len(report.Rows))
+	}
+	if report.Rows[0].DayTurns != 1 || math.Abs(report.Rows[0].DayCredits-0.22) > 0.000001 {
+		t.Fatalf("usage row = %+v, want one 0.22 credit turn", report.Rows[0])
+	}
+	records, err := manager.UsageReport("guild-1", "channel-1", "user-1", 10)
+	if err != nil {
+		t.Fatalf("usage report by user: %v", err)
+	}
+	if len(records.Rows) != 1 {
+		t.Fatalf("filtered usage rows = %d, want 1", len(records.Rows))
+	}
+	files, err := filepath.Glob(filepath.Join(dir, "usage", "*.jsonl"))
+	if err != nil {
+		t.Fatalf("glob usage files: %v", err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("usage files = %v, want one file", files)
+	}
+	data, err := os.ReadFile(files[0])
+	if err != nil {
+		t.Fatalf("read usage file: %v", err)
+	}
+	if strings.Contains(string(data), `"message_id":"interaction-1"`) {
+		t.Fatalf("usage record = %s, interaction id should not be stored as message_id", data)
+	}
+	if !strings.Contains(string(data), `"interaction_id":"interaction-1"`) || !strings.Contains(string(data), `"invocation_id":"interaction-1"`) {
+		t.Fatalf("usage record = %s, want interaction_id and invocation_id", data)
+	}
+}
+
+func TestRecordCommandResponseWithMetadataStoresMetrics(t *testing.T) {
+	dir := t.TempDir()
+	store, err := audit.Open(audit.Config{DataDir: dir})
+	if err != nil {
+		t.Fatalf("open audit store: %v", err)
+	}
+	recorder := audit.NewRecorder(store, 10, nil, false)
+	b := &Bot{auditRecorder: recorder}
+
+	metadata := map[string]any{
+		"credits":       0.22,
+		"duration_ms":   int64(5000),
+		"context_usage": 11.0,
+	}
+	b.recordCommandResponseWithMetadata(cmdCtx{
+		channelID:     "channel-1",
+		targetID:      "channel-1",
+		guildID:       "guild-1",
+		userID:        "user-1",
+		username:      "mxp",
+		messageID:     "message-1",
+		interactionID: "interaction-1",
+	}, "compact", "slash", "sent", "✅ compacted", metadata)
+	if _, ok := metadata["content_len"]; ok {
+		t.Fatal("recordCommandResponseWithMetadata mutated caller metadata")
+	}
+	recorder.Close()
+
+	db, err := sql.Open("sqlite", filepath.Join(dir, "audit", "discord.sqlite"))
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer db.Close()
+	var raw, messageID, interactionID string
+	if err := db.QueryRowContext(context.Background(), `SELECT raw_json, message_id, interaction_id FROM bot_audit_events WHERE event_type='bot_command_response_sent'`).Scan(&raw, &messageID, &interactionID); err != nil {
+		t.Fatalf("query bot audit event: %v", err)
+	}
+	if messageID != "message-1" || interactionID != "interaction-1" {
+		t.Fatalf("stored message/interaction id = %q/%q, want message-1/interaction-1", messageID, interactionID)
+	}
+	var evt audit.BotEvent
+	if err := json.Unmarshal([]byte(raw), &evt); err != nil {
+		t.Fatalf("unmarshal raw event: %v", err)
+	}
+	if evt.MessageID != "message-1" || evt.InteractionID != "interaction-1" {
+		t.Fatalf("raw event message/interaction id = %q/%q, want message-1/interaction-1", evt.MessageID, evt.InteractionID)
+	}
+	if evt.Metadata["content_len"].(float64) != float64(len("✅ compacted")) {
+		t.Fatalf("metadata content_len = %#v", evt.Metadata["content_len"])
+	}
+	if math.Abs(evt.Metadata["credits"].(float64)-0.22) > 0.000001 {
+		t.Fatalf("metadata credits = %#v, want 0.22", evt.Metadata["credits"])
+	}
+	if evt.Metadata["duration_ms"].(float64) != 5000 {
+		t.Fatalf("metadata duration_ms = %#v, want 5000", evt.Metadata["duration_ms"])
+	}
+}
+
+func TestRecordCommandCompletedStoresInvocationIDs(t *testing.T) {
+	dir := t.TempDir()
+	store, err := audit.Open(audit.Config{DataDir: dir})
+	if err != nil {
+		t.Fatalf("open audit store: %v", err)
+	}
+	recorder := audit.NewRecorder(store, 10, nil, false)
+	b := &Bot{auditRecorder: recorder}
+
+	b.recordCommandCompleted(cmdCtx{
+		channelID:     "channel-1",
+		targetID:      "channel-1",
+		guildID:       "guild-1",
+		userID:        "user-1",
+		username:      "mxp",
+		messageID:     "message-1",
+		interactionID: "interaction-1",
+	}, "compact", "slash", "completed", "")
+	recorder.Close()
+
+	db, err := sql.Open("sqlite", filepath.Join(dir, "audit", "discord.sqlite"))
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer db.Close()
+	var raw, messageID, interactionID string
+	if err := db.QueryRowContext(context.Background(), `SELECT raw_json, message_id, interaction_id FROM bot_audit_events WHERE event_type='bot_command_completed'`).Scan(&raw, &messageID, &interactionID); err != nil {
+		t.Fatalf("query bot audit event: %v", err)
+	}
+	if messageID != "message-1" || interactionID != "interaction-1" {
+		t.Fatalf("stored message/interaction id = %q/%q, want message-1/interaction-1", messageID, interactionID)
+	}
+	var evt audit.BotEvent
+	if err := json.Unmarshal([]byte(raw), &evt); err != nil {
+		t.Fatalf("unmarshal raw event: %v", err)
+	}
+	if evt.MessageID != "message-1" || evt.InteractionID != "interaction-1" {
+		t.Fatalf("raw event message/interaction id = %q/%q, want message-1/interaction-1", evt.MessageID, evt.InteractionID)
+	}
+}
+
+func TestRecordCommandResponseDeliveryStoresDiscordResult(t *testing.T) {
+	dir := t.TempDir()
+	store, err := audit.Open(audit.Config{DataDir: dir})
+	if err != nil {
+		t.Fatalf("open audit store: %v", err)
+	}
+	recorder := audit.NewRecorder(store, 10, nil, false)
+	b := &Bot{auditRecorder: recorder}
+
+	ctx := cmdCtx{
+		channelID: "channel-1",
+		targetID:  "channel-1",
+		guildID:   "guild-1",
+		userID:    "user-1",
+		messageID: "invoke-message-1",
+	}
+	b.recordCommandResponseDelivery(ctx, "compact", "message", "sent", "ok", map[string]any{"credits": 0.22}, &discordgo.Message{
+		ID:        "response-message-1",
+		ChannelID: "channel-1",
+	}, nil)
+	b.recordCommandResponseDelivery(ctx, "compact", "message", "sent", "failed", nil, nil, fmt.Errorf("discord send failed"))
+	recorder.Close()
+
+	db, err := sql.Open("sqlite", filepath.Join(dir, "audit", "discord.sqlite"))
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer db.Close()
+	rows, err := db.QueryContext(context.Background(), `SELECT raw_json FROM bot_audit_events WHERE event_type IN ('bot_command_response_sent', 'bot_command_response_failed') ORDER BY id`)
+	if err != nil {
+		t.Fatalf("query bot audit events: %v", err)
+	}
+	defer rows.Close()
+	var events []audit.BotEvent
+	for rows.Next() {
+		var raw string
+		if err := rows.Scan(&raw); err != nil {
+			t.Fatalf("scan event: %v", err)
+		}
+		var evt audit.BotEvent
+		if err := json.Unmarshal([]byte(raw), &evt); err != nil {
+			t.Fatalf("unmarshal event: %v", err)
+		}
+		events = append(events, evt)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows: %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("events len = %d, want 2", len(events))
+	}
+	if events[0].Type != "bot_command_response_sent" || events[0].Status != "sent" || events[0].Metadata["response_message_id"] != "response-message-1" {
+		t.Fatalf("success event = %+v, want sent with response_message_id", events[0])
+	}
+	if events[1].Type != "bot_command_response_failed" || events[1].Status != "error" || events[1].Error != "discord send failed" || events[1].Metadata["send_error"] != "discord send failed" {
+		t.Fatalf("error event = %+v, want send error metadata", events[1])
+	}
+}
+
+func TestHandleBangCommandRecordsDeliveryFailure(t *testing.T) {
+	L.Load("en")
+	b, dbPath, cleanup := newAuditTestBot(t)
+	defer cleanup()
+	ds := newFailingDiscordSession(t)
+
+	b.handleMessage(ds, &discordgo.MessageCreate{Message: &discordgo.Message{
+		ID:        "invoke-message-1",
+		ChannelID: "channel-1",
+		GuildID:   "guild-1",
+		Content:   "!thread",
+		Author:    &discordgo.User{ID: "user-1", Username: "mxp"},
+	}})
+
+	evt := waitBotAuditEvent(t, dbPath, "bot_command_response_failed")
+	if evt.Command != "thread" || evt.Source != "message" || evt.MessageID != "invoke-message-1" {
+		t.Fatalf("event command/source/message = %q/%q/%q, want thread/message/invoke-message-1", evt.Command, evt.Source, evt.MessageID)
+	}
+	if evt.Error == "" || evt.Metadata["send_error"] == "" {
+		t.Fatalf("event = %+v, want send error recorded", evt)
+	}
+}
+
+func TestHandleSlashCommandRecordsFollowupDeliveryFailure(t *testing.T) {
+	L.Load("en")
+	b, dbPath, cleanup := newAuditTestBot(t)
+	defer cleanup()
+	ds := newFailingDiscordSession(t)
+
+	b.handleSlashCommand(ds, &discordgo.InteractionCreate{Interaction: &discordgo.Interaction{
+		ID:        "interaction-1",
+		Type:      discordgo.InteractionApplicationCommand,
+		GuildID:   "guild-1",
+		ChannelID: "channel-1",
+		Token:     "token-1",
+		Member:    &discordgo.Member{User: &discordgo.User{ID: "user-1", Username: "mxp"}},
+		Data: discordgo.ApplicationCommandInteractionData{
+			Name: "thread",
+		},
+	}})
+
+	events := waitBotAuditEvents(t, dbPath, "bot_command_response_failed", 2)
+	var foundFollowup bool
+	for _, evt := range events {
+		if evt.Command == "thread" && evt.Source == "slash" && evt.InteractionID == "interaction-1" && evt.Metadata["interaction_response_type"] == nil && evt.Metadata["content_len"].(float64) > 0 {
+			foundFollowup = true
+			if evt.Error == "" || evt.Metadata["send_error"] == "" {
+				t.Fatalf("event = %+v, want send error recorded", evt)
+			}
+		}
+	}
+	if !foundFollowup {
+		t.Fatalf("events = %+v, want failed followup command response", events)
+	}
+}
+
+func TestHandleSlashCommandRecordsInitialRejectionDeliveryFailure(t *testing.T) {
+	L.Load("en")
+	b, dbPath, cleanup := newAuditTestBot(t)
+	defer cleanup()
+	ds := newFailingDiscordSession(t)
+	ds.State = testPeerPermissionSession(t, []*discordgo.PermissionOverwrite{{
+		ID:   "bot-1",
+		Type: discordgo.PermissionOverwriteTypeMember,
+		Deny: int64(discordgo.PermissionViewChannel | discordgo.PermissionSendMessages),
+	}}).State
+
+	b.handleSlashCommand(ds, &discordgo.InteractionCreate{Interaction: &discordgo.Interaction{
+		ID:        "interaction-early-reject",
+		Type:      discordgo.InteractionApplicationCommand,
+		GuildID:   "guild-1",
+		ChannelID: "channel-1",
+		Token:     "token-1",
+		Member:    &discordgo.Member{User: &discordgo.User{ID: "user-1", Username: "mxp"}},
+		Data: discordgo.ApplicationCommandInteractionData{
+			Name: "thread",
+		},
+	}})
+
+	evt := waitBotAuditEvent(t, dbPath, "bot_command_response_failed")
+	if evt.Command != "thread" || evt.Source != "slash" || evt.InteractionID != "interaction-early-reject" {
+		t.Fatalf("event command/source/interaction = %q/%q/%q, want thread/slash/interaction-early-reject", evt.Command, evt.Source, evt.InteractionID)
+	}
+	if evt.Status != "error" || evt.Metadata["ephemeral"] != true || evt.Metadata["interaction_response_type"] == "" {
+		t.Fatalf("event = %+v, want failed ephemeral initial interaction response metadata", evt)
+	}
+}
+
+func TestHandleSlashCronModalRecordsDeliveryFailure(t *testing.T) {
+	L.Load("en")
+	b, dbPath, cleanup := newAuditTestBot(t)
+	defer cleanup()
+	ds := newFailingDiscordSession(t)
+
+	b.handleSlashCommand(ds, &discordgo.InteractionCreate{Interaction: &discordgo.Interaction{
+		ID:        "interaction-cron",
+		Type:      discordgo.InteractionApplicationCommand,
+		GuildID:   "guild-1",
+		ChannelID: "channel-1",
+		Token:     "token-1",
+		Member:    &discordgo.Member{User: &discordgo.User{ID: "user-1", Username: "mxp"}},
+		Data: discordgo.ApplicationCommandInteractionData{
+			Name: "cron",
+		},
+	}})
+
+	evt := waitBotAuditEvent(t, dbPath, "bot_command_response_failed")
+	if evt.Command != "cron" || evt.Source != "slash" || evt.InteractionID != "interaction-cron" {
+		t.Fatalf("event command/source/interaction = %q/%q/%q, want cron/slash/interaction-cron", evt.Command, evt.Source, evt.InteractionID)
+	}
+	if evt.Metadata["modal_custom_id"] != "cron_add_modal" || evt.Metadata["interaction_response_type"] == "" {
+		t.Fatalf("event = %+v, want modal delivery metadata", evt)
+	}
+}
+
+func TestAgentCommandUsageIDPrefersInteractionThenMessage(t *testing.T) {
+	if got := agentCommandUsageID(cmdCtx{messageID: "msg-1", interactionID: "interaction-1"}); got != "interaction-1" {
+		t.Fatalf("usage id = %q, want interaction id", got)
+	}
+	if got := agentCommandUsageID(cmdCtx{messageID: "msg-1"}); got != "msg-1" {
+		t.Fatalf("usage id = %q, want message id", got)
+	}
+}
+
+func TestAgentCommandErrorAppendsMetricsFooter(t *testing.T) {
+	L.Load("en")
+	msg := agentCommandError(fmt.Errorf("agent failed"), channel.AgentCommandResult{
+		Executed: true,
+		Metrics: acp.TurnMetrics{
+			MeteringUsage:  []acp.MeteringItem{{Value: 0.22, Unit: "credit"}},
+			TurnDurationMs: 5000,
+			ContextUsage:   11,
+		},
+	})
+	if !strings.Contains(msg, "agent failed") || !strings.Contains(msg, "⚡ 0.22 credit · 5.0s · ctx 11%") {
+		t.Fatalf("agent command error = %q, want error with metrics footer", msg)
+	}
+}
+
+func TestAgentCommandMetadataIncludesStatus(t *testing.T) {
+	metadata := agentCommandMetadata(channel.AgentCommandResult{Executed: true}, "error")
+	if metadata["agent_status"] != "error" {
+		t.Fatalf("agent_status = %#v, want error", metadata["agent_status"])
+	}
+	if metadata["agent_executed"] != true {
+		t.Fatalf("agent_executed = %#v, want true", metadata["agent_executed"])
 	}
 }

@@ -89,6 +89,14 @@ type ThreadAgentLimitError struct {
 	Candidates []ThreadAgentLimitCandidate
 }
 
+// AgentCommandResult is the result of a direct command sent to an agent.
+type AgentCommandResult struct {
+	Response string
+	Metrics  acp.TurnMetrics
+	Model    string
+	Executed bool
+}
+
 func (e *ThreadAgentLimitError) Error() string {
 	return fmt.Sprintf("thread agent limit reached: max=%d active=%d inactive=%d", e.Max, e.Active, e.Inactive)
 }
@@ -1136,15 +1144,31 @@ func (m *Manager) StartTempAgent(name, cwd, model string) (*acp.Agent, error) {
 
 // SendCommand sends a slash command (e.g. /compact, /clear) to the channel's agent.
 func (m *Manager) SendCommand(channelID, command string) (string, error) {
+	result, err := m.SendCommandResult(channelID, command)
+	return result.Response, err
+}
+
+// SendCommandResult sends a slash command (e.g. /compact, /clear) to the channel's agent.
+func (m *Manager) SendCommandResult(channelID, command string) (AgentCommandResult, error) {
 	m.mu.Lock()
 	agent, ok := m.agents[channelID]
 	m.mu.Unlock()
 	if !ok {
-		return "", fmt.Errorf("no agent")
+		return AgentCommandResult{}, fmt.Errorf("no agent")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	return agent.Ask(ctx, command, nil)
+	resp, err := agent.Ask(ctx, command, nil)
+	result := AgentCommandResult{
+		Response: resp,
+		Metrics:  agent.TurnMetrics(),
+		Model:    agent.CurrentModelID(),
+		Executed: true,
+	}
+	if err != nil {
+		return result, err
+	}
+	return result, nil
 }
 
 // StopTempAgent stops a temporary agent.
@@ -1791,15 +1815,31 @@ func (m *Manager) IsThreadAgentActive(threadID string) bool {
 
 // SendCommandThread sends a slash command (e.g. "/compact", "/clear") to a thread agent.
 func (m *Manager) SendCommandThread(threadID, command string) (string, error) {
+	result, err := m.SendCommandThreadResult(threadID, command)
+	return result.Response, err
+}
+
+// SendCommandThreadResult sends a slash command (e.g. "/compact", "/clear") to a thread agent.
+func (m *Manager) SendCommandThreadResult(threadID, command string) (AgentCommandResult, error) {
 	m.mu.Lock()
 	entry, ok := m.threadAgents[threadID]
 	m.mu.Unlock()
 	if !ok {
-		return "", fmt.Errorf("no thread agent")
+		return AgentCommandResult{}, fmt.Errorf("no thread agent")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	return entry.agent.Ask(ctx, command, nil)
+	resp, err := entry.agent.Ask(ctx, command, nil)
+	result := AgentCommandResult{
+		Response: resp,
+		Metrics:  entry.agent.TurnMetrics(),
+		Model:    entry.agent.CurrentModelID(),
+		Executed: true,
+	}
+	if err != nil {
+		return result, err
+	}
+	return result, nil
 }
 
 // ResetThreadAgent stops and respawns a thread agent, preserving parent binding.

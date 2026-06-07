@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/bwmarrin/discordgo"
@@ -33,37 +34,76 @@ func (b *Bot) recordCommandInvoked(ctx cmdCtx, command, source, messageID, inter
 }
 
 func (b *Bot) recordCommandResponse(ctx cmdCtx, command, source, status, content string) {
+	b.recordCommandResponseWithMetadata(ctx, command, source, status, content, nil)
+}
+
+func (b *Bot) recordCommandResponseWithMetadata(ctx cmdCtx, command, source, status, content string, metadata map[string]any) {
+	b.recordCommandResponseDelivery(ctx, command, source, status, content, metadata, nil, nil)
+}
+
+func (b *Bot) recordCommandResponseDelivery(ctx cmdCtx, command, source, status, content string, metadata map[string]any, msg *discordgo.Message, sendErr error) {
+	copied := make(map[string]any, len(metadata)+1)
+	for k, v := range metadata {
+		copied[k] = v
+	}
+	copied["content_len"] = len(content)
+	if msg != nil && msg.ID != "" {
+		copied["response_message_id"] = msg.ID
+		if msg.ChannelID != "" {
+			copied["response_channel_id"] = msg.ChannelID
+		}
+	}
+	errText := ""
+	eventType := "bot_command_response_sent"
+	if sendErr != nil {
+		eventType = "bot_command_response_failed"
+		status = "error"
+		errText = sendErr.Error()
+		copied["send_error"] = errText
+	}
 	b.recordBotAuditEvent(audit.BotEvent{
-		Type:      "bot_command_response_sent",
-		GuildID:   ctx.guildID,
-		ChannelID: ctx.channelID,
-		TargetID:  ctx.targetID,
-		ThreadID:  threadIDFromCtx(ctx),
-		UserID:    ctx.userID,
-		Username:  ctx.username,
-		Command:   command,
-		Source:    source,
-		Status:    status,
-		Content:   content,
-		Metadata: map[string]any{
-			"content_len": len(content),
-		},
+		Type:          eventType,
+		GuildID:       ctx.guildID,
+		ChannelID:     ctx.channelID,
+		TargetID:      ctx.targetID,
+		ThreadID:      threadIDFromCtx(ctx),
+		MessageID:     ctx.messageID,
+		InteractionID: ctx.interactionID,
+		UserID:        ctx.userID,
+		Username:      ctx.username,
+		Command:       command,
+		Source:        source,
+		Status:        status,
+		Content:       content,
+		Error:         errText,
+		Metadata:      copied,
 	})
+}
+
+func (b *Bot) recordInteractionResponseDelivery(ctx cmdCtx, command, status, content string, responseType discordgo.InteractionResponseType, metadata map[string]any, sendErr error) {
+	copied := make(map[string]any, len(metadata)+1)
+	for k, v := range metadata {
+		copied[k] = v
+	}
+	copied["interaction_response_type"] = fmt.Sprintf("%d", responseType)
+	b.recordCommandResponseDelivery(ctx, command, "slash", status, content, copied, nil, sendErr)
 }
 
 func (b *Bot) recordCommandCompleted(ctx cmdCtx, command, source, status, errText string) {
 	b.recordBotAuditEvent(audit.BotEvent{
-		Type:      "bot_command_completed",
-		GuildID:   ctx.guildID,
-		ChannelID: ctx.channelID,
-		TargetID:  ctx.targetID,
-		ThreadID:  threadIDFromCtx(ctx),
-		UserID:    ctx.userID,
-		Username:  ctx.username,
-		Command:   command,
-		Source:    source,
-		Status:    status,
-		Error:     errText,
+		Type:          "bot_command_completed",
+		GuildID:       ctx.guildID,
+		ChannelID:     ctx.channelID,
+		TargetID:      ctx.targetID,
+		ThreadID:      threadIDFromCtx(ctx),
+		MessageID:     ctx.messageID,
+		InteractionID: ctx.interactionID,
+		UserID:        ctx.userID,
+		Username:      ctx.username,
+		Command:       command,
+		Source:        source,
+		Status:        status,
+		Error:         errText,
 	})
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/nczz/kiro-discord-bot/acp"
+	"github.com/nczz/kiro-discord-bot/audit"
 	L "github.com/nczz/kiro-discord-bot/locale"
 )
 
@@ -205,10 +207,30 @@ type fakeWorkerAgent struct {
 	interruptCalls int
 	callbacks      acp.AsyncCallbacks
 	readError      func(error)
+	metrics        acp.TurnMetrics
+	askResponse    string
+	askErr         error
+}
+
+type recordingAuditSink struct {
+	mu     sync.Mutex
+	events []audit.BotEvent
+}
+
+func (s *recordingAuditSink) RecordBotEvent(evt audit.BotEvent) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.events = append(s.events, evt)
+}
+
+func (s *recordingAuditSink) Snapshot() []audit.BotEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]audit.BotEvent(nil), s.events...)
 }
 
 func (f *fakeWorkerAgent) Ask(context.Context, string, func(string)) (string, error) {
-	return "", nil
+	return f.askResponse, f.askErr
 }
 
 func (f *fakeWorkerAgent) AskAsync(string, acp.AsyncCallbacks) {}
@@ -236,7 +258,7 @@ func (f *fakeWorkerAgent) Interrupt() error {
 
 func (f *fakeWorkerAgent) ContextUsage() float64 { return 0 }
 
-func (f *fakeWorkerAgent) TurnMetrics() acp.TurnMetrics { return acp.TurnMetrics{} }
+func (f *fakeWorkerAgent) TurnMetrics() acp.TurnMetrics { return f.metrics }
 
 func (f *fakeWorkerAgent) OnReadErrorFunc(fn func(error)) {
 	f.mu.Lock()
@@ -313,10 +335,40 @@ func (rt *recordingRoundTripper) Snapshot() ([]string, []string) {
 	return reqs, bodies
 }
 
+type failingRoundTripper struct{}
+
+func (rt failingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	return &http.Response{
+		StatusCode: http.StatusInternalServerError,
+		Status:     http.StatusText(http.StatusInternalServerError),
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(`{"message":"forced failure"}`)),
+		Request:    req,
+	}, nil
+}
+
 func testDiscordSession(rt http.RoundTripper) *discordgo.Session {
 	ds, _ := discordgo.New("Bot test")
 	ds.Client = &http.Client{Transport: rt}
 	return ds
+}
+
+func TestSendLongThreadReportsDeliveryResult(t *testing.T) {
+	sentCount, err := SendLongThread(testDiscordSession(&recordingRoundTripper{}), "thread-1", "hello")
+	if err != nil {
+		t.Fatalf("SendLongThread success err = %v", err)
+	}
+	if sentCount != 1 {
+		t.Fatalf("sent count = %d, want 1", sentCount)
+	}
+
+	sentCount, err = SendLongThread(testDiscordSession(failingRoundTripper{}), "thread-1", "hello")
+	if err == nil {
+		t.Fatal("SendLongThread failure err = nil, want error")
+	}
+	if sentCount != 0 {
+		t.Fatalf("sent count = %d, want 0 on failure", sentCount)
+	}
 }
 
 func TestWorkerCancelCurrentCancelsWithoutSignalingIdle(t *testing.T) {
@@ -587,9 +639,14 @@ func TestWorkerEnqueueFull(t *testing.T) {
 }
 
 func TestWorkerInlineDeliverySendsOnlyFinalReplyAndReplacesQueuedReaction(t *testing.T) {
+	L.Load("en")
 	rt := &recordingRoundTripper{}
 	ds := testDiscordSession(rt)
-	agent := &fakeWorkerAgent{}
+	agent := &fakeWorkerAgent{metrics: acp.TurnMetrics{
+		MeteringUsage:  []acp.MeteringItem{{Value: 0.22, Unit: "credit"}},
+		TurnDurationMs: 5000,
+		ContextUsage:   11,
+	}}
 	w := newWorker("ch1", agent, 1, 30, 1, 1440, nil, "")
 
 	w.executeInline(&Job{
@@ -615,6 +672,9 @@ func TestWorkerInlineDeliverySendsOnlyFinalReplyAndReplacesQueuedReaction(t *tes
 			if !strings.Contains(bodies[i], "final response") {
 				t.Fatalf("final reply body = %q, want final response", bodies[i])
 			}
+			if !strings.Contains(bodies[i], "⚡ 0.22 credit · 5.0s · ctx 11%") {
+				t.Fatalf("final reply body = %q, want metrics footer", bodies[i])
+			}
 		}
 		if strings.HasPrefix(req, "DELETE ") && strings.Contains(req, "/reactions/⏳/@me") {
 			removedQueued = true
@@ -632,6 +692,123 @@ func TestWorkerInlineDeliverySendsOnlyFinalReplyAndReplacesQueuedReaction(t *tes
 	if !addedDone {
 		t.Fatalf("expected inline pulse to add final done reaction; requests=%v", reqs)
 	}
+}
+
+func TestWorkerThreadDeliveryAppendsMetricsToFinalResponse(t *testing.T) {
+	L.Load("en")
+	rt := &recordingRoundTripper{}
+	ds := testDiscordSession(rt)
+	agent := &fakeWorkerAgent{metrics: acp.TurnMetrics{
+		MeteringUsage:  []acp.MeteringItem{{Value: 0.22, Unit: "credit"}},
+		TurnDurationMs: 5000,
+		ContextUsage:   11,
+	}}
+	w := newWorker("ch1", agent, 1, 30, 1, 1440, nil, "")
+
+	w.execute(&Job{
+		ChannelID: "ch1",
+		ThreadID:  "thread-1",
+		MessageID: "m1",
+		Prompt:    "hello",
+		Session:   ds,
+	})
+	cb := agent.Callbacks()
+	if cb.OnComplete == nil {
+		t.Fatal("expected thread callbacks to be registered")
+	}
+	cb.OnComplete("final response", nil)
+
+	reqs, bodies := rt.Snapshot()
+	var finalPosts int
+	for i, req := range reqs {
+		if !strings.HasPrefix(req, "POST ") || !strings.Contains(req, "/channels/thread-1/messages") {
+			continue
+		}
+		if strings.Contains(bodies[i], "final response") {
+			finalPosts++
+			if !strings.Contains(bodies[i], "⚡ 0.22 credit · 5.0s · ctx 11%") {
+				t.Fatalf("thread final body = %q, want metrics footer", bodies[i])
+			}
+		}
+		if strings.Contains(bodies[i], "⚡ 0.22 credit · 5.0s · ctx 11%") && !strings.Contains(bodies[i], "final response") {
+			t.Fatalf("metrics footer was sent as a separate thread message: %q", bodies[i])
+		}
+	}
+	if finalPosts != 1 {
+		t.Fatalf("thread final posts = %d, want 1; requests=%v bodies=%v", finalPosts, reqs, bodies)
+	}
+}
+
+func TestWorkerInlineErrorAppendsMetricsFooter(t *testing.T) {
+	L.Load("en")
+	rt := &recordingRoundTripper{}
+	ds := testDiscordSession(rt)
+	agent := &fakeWorkerAgent{metrics: acp.TurnMetrics{
+		MeteringUsage:  []acp.MeteringItem{{Value: 0.22, Unit: "credit"}},
+		TurnDurationMs: 5000,
+		ContextUsage:   11,
+	}}
+	w := newWorker("ch1", agent, 1, 30, 1, 1440, nil, "")
+
+	w.executeInline(&Job{
+		ChannelID:    "ch1",
+		MessageID:    "m1",
+		Prompt:       "hello",
+		Session:      ds,
+		DeliveryMode: DeliveryInline,
+	})
+	cb := agent.Callbacks()
+	if cb.OnComplete == nil {
+		t.Fatal("expected inline callbacks to be registered")
+	}
+	cb.OnComplete("", context.Canceled)
+
+	reqs, bodies := rt.Snapshot()
+	for i, req := range reqs {
+		if strings.HasPrefix(req, "POST /api/") && strings.HasSuffix(req, "/channels/ch1/messages") {
+			if !strings.Contains(bodies[i], "❌") || !strings.Contains(bodies[i], "⚡ 0.22 credit · 5.0s · ctx 11%") {
+				t.Fatalf("inline error body = %q, want error with metrics footer", bodies[i])
+			}
+			return
+		}
+	}
+	t.Fatalf("expected inline error reply; requests=%v bodies=%v", reqs, bodies)
+}
+
+func TestWorkerThreadErrorAppendsMetricsFooter(t *testing.T) {
+	L.Load("en")
+	rt := &recordingRoundTripper{}
+	ds := testDiscordSession(rt)
+	agent := &fakeWorkerAgent{metrics: acp.TurnMetrics{
+		MeteringUsage:  []acp.MeteringItem{{Value: 0.22, Unit: "credit"}},
+		TurnDurationMs: 5000,
+		ContextUsage:   11,
+	}}
+	w := newWorker("ch1", agent, 1, 30, 1, 1440, nil, "")
+
+	w.execute(&Job{
+		ChannelID: "ch1",
+		ThreadID:  "thread-1",
+		MessageID: "m1",
+		Prompt:    "hello",
+		Session:   ds,
+	})
+	cb := agent.Callbacks()
+	if cb.OnComplete == nil {
+		t.Fatal("expected thread callbacks to be registered")
+	}
+	cb.OnComplete("", context.Canceled)
+
+	reqs, bodies := rt.Snapshot()
+	for i, req := range reqs {
+		if strings.HasPrefix(req, "POST ") && strings.Contains(req, "/channels/thread-1/messages") && strings.Contains(bodies[i], "❌") {
+			if !strings.Contains(bodies[i], "⚡ 0.22 credit · 5.0s · ctx 11%") {
+				t.Fatalf("thread error body = %q, want metrics footer", bodies[i])
+			}
+			return
+		}
+	}
+	t.Fatalf("expected thread error reply; requests=%v bodies=%v", reqs, bodies)
 }
 
 func TestWorkerInlineReadErrorSendsFinalErrorReply(t *testing.T) {
@@ -671,5 +848,229 @@ func TestWorkerInlineReadErrorSendsFinalErrorReply(t *testing.T) {
 	}
 	if !addedWarn {
 		t.Fatalf("expected warning reaction; requests=%v", reqs)
+	}
+}
+
+func TestMetricsMetadataIncludesCostDurationAndContext(t *testing.T) {
+	got := MetricsMetadata(acp.TurnMetrics{
+		MeteringUsage: []acp.MeteringItem{
+			{Value: 0.22, Unit: "credit"},
+			{Value: 0.03, Unit: "credits"},
+			{Value: 10, Unit: "tokens"},
+		},
+		TurnDurationMs: 5000,
+		ContextUsage:   11,
+	})
+	if got["duration_ms"] != int64(5000) {
+		t.Fatalf("duration_ms = %#v, want 5000", got["duration_ms"])
+	}
+	if got["context_usage"] != float64(11) {
+		t.Fatalf("context_usage = %#v, want 11", got["context_usage"])
+	}
+	if math.Abs(got["credits"].(float64)-0.25) > 0.000001 {
+		t.Fatalf("credits = %#v, want 0.25", got["credits"])
+	}
+	if _, ok := got["metering_usage"].([]acp.MeteringItem); !ok {
+		t.Fatalf("metering_usage = %#v, want []acp.MeteringItem", got["metering_usage"])
+	}
+}
+
+func TestFormatMetricsFooterSumsCreditItems(t *testing.T) {
+	L.Load("en")
+	got := FormatMetricsFooter(acp.TurnMetrics{
+		MeteringUsage: []acp.MeteringItem{
+			{Value: 10, Unit: "tokens"},
+			{Value: 0.22, Unit: "credit"},
+			{Value: 0.03, Unit: "credits"},
+		},
+		TurnDurationMs: 5000,
+		ContextUsage:   11,
+	})
+	if !strings.Contains(got, "⚡ 0.25 credit · 5.0s · ctx 11%") {
+		t.Fatalf("footer = %q, want summed credit footer", got)
+	}
+}
+
+func TestFormatMetricsFooterIncludesContextOnly(t *testing.T) {
+	L.Load("en")
+	got := FormatMetricsFooter(acp.TurnMetrics{ContextUsage: 11})
+	if !strings.Contains(got, "⚡ ctx 11%") {
+		t.Fatalf("footer = %q, want context-only footer", got)
+	}
+}
+
+func TestWorkerFallbackAppendsMetricsFooter(t *testing.T) {
+	L.Load("en")
+	rt := &recordingRoundTripper{}
+	ds := testDiscordSession(rt)
+	agent := &fakeWorkerAgent{
+		askResponse: "fallback response",
+		metrics: acp.TurnMetrics{
+			MeteringUsage:  []acp.MeteringItem{{Value: 0.22, Unit: "credit"}},
+			TurnDurationMs: 5000,
+			ContextUsage:   11,
+		},
+	}
+	w := newWorker("ch1", agent, 1, 30, 1, 1440, nil, "")
+
+	w.executeFallback(&Job{
+		ChannelID: "ch1",
+		MessageID: "m1",
+		Prompt:    "hello",
+		Session:   ds,
+	})
+
+	reqs, bodies := rt.Snapshot()
+	for i, req := range reqs {
+		if strings.HasPrefix(req, "PATCH ") && strings.Contains(req, "/channels/ch1/messages/reply-1") {
+			if !strings.Contains(bodies[i], "fallback response") {
+				t.Fatalf("fallback edit body = %q, want response", bodies[i])
+			}
+			if !strings.Contains(bodies[i], "⚡ 0.22 credit · 5.0s · ctx 11%") {
+				t.Fatalf("fallback edit body = %q, want metrics footer", bodies[i])
+			}
+			return
+		}
+	}
+	t.Fatalf("expected fallback edit request; requests=%v", reqs)
+}
+
+func TestWorkerFallbackEmptyResponseStillAppendsMetricsFooter(t *testing.T) {
+	L.Load("en")
+	rt := &recordingRoundTripper{}
+	ds := testDiscordSession(rt)
+	agent := &fakeWorkerAgent{
+		metrics: acp.TurnMetrics{
+			MeteringUsage:  []acp.MeteringItem{{Value: 0.22, Unit: "credit"}},
+			TurnDurationMs: 5000,
+			ContextUsage:   11,
+		},
+	}
+	w := newWorker("ch1", agent, 1, 30, 1, 1440, nil, "")
+
+	w.executeFallback(&Job{
+		ChannelID: "ch1",
+		MessageID: "m1",
+		Prompt:    "hello",
+		Session:   ds,
+	})
+
+	reqs, bodies := rt.Snapshot()
+	for i, req := range reqs {
+		if strings.HasPrefix(req, "PATCH ") && strings.Contains(req, "/channels/ch1/messages/reply-1") {
+			if !strings.Contains(bodies[i], L.Get("worker.empty_response")) || !strings.Contains(bodies[i], "⚡ 0.22 credit · 5.0s · ctx 11%") {
+				t.Fatalf("fallback empty body = %q, want empty response with metrics footer", bodies[i])
+			}
+			return
+		}
+	}
+	t.Fatalf("expected fallback edit request; requests=%v bodies=%v", reqs, bodies)
+}
+
+func TestWorkerFallbackErrorAppendsMetricsFooter(t *testing.T) {
+	L.Load("en")
+	rt := &recordingRoundTripper{}
+	ds := testDiscordSession(rt)
+	agent := &fakeWorkerAgent{
+		askErr: context.Canceled,
+		metrics: acp.TurnMetrics{
+			MeteringUsage:  []acp.MeteringItem{{Value: 0.22, Unit: "credit"}},
+			TurnDurationMs: 5000,
+			ContextUsage:   11,
+		},
+	}
+	w := newWorker("ch1", agent, 1, 30, 1, 1440, nil, "")
+
+	w.executeFallback(&Job{
+		ChannelID: "ch1",
+		MessageID: "m1",
+		Prompt:    "hello",
+		Session:   ds,
+	})
+
+	reqs, bodies := rt.Snapshot()
+	for i, req := range reqs {
+		if strings.HasPrefix(req, "PATCH ") && strings.Contains(req, "/channels/ch1/messages/reply-1") {
+			if !strings.Contains(bodies[i], "❌") || !strings.Contains(bodies[i], "⚡ 0.22 credit · 5.0s · ctx 11%") {
+				t.Fatalf("fallback error body = %q, want error with metrics footer", bodies[i])
+			}
+			return
+		}
+	}
+	t.Fatalf("expected fallback error edit request; requests=%v bodies=%v", reqs, bodies)
+}
+
+func TestWorkerInlineAuditStoresPureResponseWithoutMetricsFooter(t *testing.T) {
+	L.Load("en")
+	rt := &recordingRoundTripper{}
+	ds := testDiscordSession(rt)
+	agent := &fakeWorkerAgent{metrics: acp.TurnMetrics{
+		MeteringUsage:  []acp.MeteringItem{{Value: 0.22, Unit: "credit"}},
+		TurnDurationMs: 5000,
+		ContextUsage:   11,
+	}}
+	sink := &recordingAuditSink{}
+	w := newWorker("ch1", agent, 1, 30, 1, 1440, nil, "model-1")
+	w.SetAuditSink(sink)
+
+	w.executeInline(&Job{
+		ChannelID:    "ch1",
+		MessageID:    "m1",
+		Prompt:       "hello",
+		Session:      ds,
+		DeliveryMode: DeliveryInline,
+	})
+	cb := agent.Callbacks()
+	cb.OnComplete("final response", nil)
+
+	for _, evt := range sink.Snapshot() {
+		if evt.Type == "agent_response_sent" {
+			if evt.Content != "final response" {
+				t.Fatalf("audit response content = %q, want pure response", evt.Content)
+			}
+			if evt.Metadata["credits"] != float64(0.22) {
+				t.Fatalf("audit metadata credits = %#v, want 0.22", evt.Metadata["credits"])
+			}
+			return
+		}
+	}
+	t.Fatal("expected agent_response_sent audit event")
+}
+
+func TestWorkerInlineLoggerStoresResponseWithoutMetricsFooter(t *testing.T) {
+	L.Load("en")
+	rt := &recordingRoundTripper{}
+	ds := testDiscordSession(rt)
+	logger := NewChatLogger(t.TempDir())
+	defer logger.Close()
+	agent := &fakeWorkerAgent{metrics: acp.TurnMetrics{
+		MeteringUsage:  []acp.MeteringItem{{Value: 0.22, Unit: "credit"}},
+		TurnDurationMs: 5000,
+		ContextUsage:   11,
+	}}
+	w := newWorker("ch1", agent, 1, 30, 1, 1440, logger, "model-1")
+
+	w.executeInline(&Job{
+		ChannelID:    "ch1",
+		MessageID:    "m1",
+		Prompt:       "hello",
+		Session:      ds,
+		DeliveryMode: DeliveryInline,
+	})
+	cb := agent.Callbacks()
+	cb.OnComplete("final response", nil)
+
+	history := logger.RecentHistory("ch1", 10)
+	var assistantEntries []ChatEntry
+	for _, entry := range history {
+		if entry.Role == "assistant" {
+			assistantEntries = append(assistantEntries, entry)
+		}
+	}
+	if len(assistantEntries) != 1 {
+		t.Fatalf("assistant history len = %d, want 1; history=%+v", len(assistantEntries), history)
+	}
+	if assistantEntries[0].Content != "final response" {
+		t.Fatalf("assistant history content = %q, want response without metrics footer", assistantEntries[0].Content)
 	}
 }

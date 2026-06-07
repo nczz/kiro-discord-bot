@@ -1,6 +1,10 @@
 package channel
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestListenModeOverridesPersistAcrossManagerRestart(t *testing.T) {
 	dataDir := t.TempDir()
@@ -79,5 +83,26 @@ func TestUnknownThreadUsesParentThreadModeFallback(t *testing.T) {
 	m.SetThreadMode("channel-1", false)
 	if !m.ThreadMentionOnly("thread-1", "channel-1") {
 		t.Fatal("expected unknown thread to be mention-only when parent thread mode is off")
+	}
+}
+
+func TestManagerClearHistoryTruncatesChatLog(t *testing.T) {
+	dataDir := t.TempDir()
+	m := NewManager(ManagerConfig{DataDir: dataDir})
+	m.logger.Log("channel-1", ChatEntry{Role: "user", Content: "hello"})
+	m.logger.Log("channel-1", ChatEntry{Role: "assistant", Content: "response\n\n-# ⚡ 0.22 credit"})
+
+	m.ClearHistory("channel-1")
+
+	path := filepath.Join(dataDir, "ch-channel-1", "chat.jsonl")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read chat log: %v", err)
+	}
+	if len(data) != 0 {
+		t.Fatalf("chat log after clear = %q, want empty", data)
+	}
+	if history := m.logger.RecentHistory("channel-1", 10); len(history) != 0 {
+		t.Fatalf("history len after clear = %d, want 0", len(history))
 	}
 }

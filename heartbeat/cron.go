@@ -32,8 +32,9 @@ type CronHistory struct {
 type CronDeps interface {
 	StartTempAgent(name, cwd, model string) (*acp.Agent, error)
 	StopTempAgent(agent *acp.Agent)
-	AskAgentInThread(ctx context.Context, agent *acp.Agent, channelID, threadName, threadID, prompt, mentionID, createdByID string) (response string, usedThreadID string, err error)
+	AskAgentInThread(ctx context.Context, agent *acp.Agent, channelID, threadName, threadID, prompt, mentionID, createdByID string) (response string, usedThreadID string, responseSent bool, err error)
 	RecordAgentUsage(agent *acp.Agent, job *CronJob, threadID, status string)
+	RecordAgentResponse(agent *acp.Agent, job *CronJob, threadID, status, content string, responseSent bool)
 	Notify(channelID, msg string)
 }
 
@@ -188,7 +189,7 @@ func (c *CronTask) execute(job *CronJob, now time.Time) {
 	defer cancel()
 
 	threadName := "⏰ " + job.Name
-	response, usedThreadID, err := c.deps.AskAgentInThread(ctx, agent, job.ChannelID, threadName, job.ThreadID, prompt, job.MentionID, job.CreatedByID)
+	response, usedThreadID, responseSent, err := c.deps.AskAgentInThread(ctx, agent, job.ChannelID, threadName, job.ThreadID, prompt, job.MentionID, job.CreatedByID)
 	duration := int(time.Since(start).Seconds())
 	status := "ok"
 
@@ -204,6 +205,7 @@ func (c *CronTask) execute(job *CronJob, now time.Time) {
 		c.deps.Notify(job.ChannelID, L.Getf("cron.exec.failed", label, job.Name, err.Error()))
 	}
 	c.deps.RecordAgentUsage(agent, job, usedThreadID, status)
+	c.deps.RecordAgentResponse(agent, job, usedThreadID, status, response, responseSent)
 
 	c.saveHistory(job.ID, CronHistory{
 		Timestamp: now.Format(time.RFC3339), Prompt: job.Prompt, Response: response, Status: status, DurationSec: duration,

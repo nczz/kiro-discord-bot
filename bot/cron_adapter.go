@@ -10,6 +10,7 @@ import (
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/nczz/kiro-discord-bot/acp"
+	"github.com/nczz/kiro-discord-bot/audit"
 	"github.com/nczz/kiro-discord-bot/channel"
 	"github.com/nczz/kiro-discord-bot/heartbeat"
 	L "github.com/nczz/kiro-discord-bot/locale"
@@ -64,7 +65,59 @@ func (a *cronAdapter) RecordAgentUsage(agent *acp.Agent, job *heartbeat.CronJob,
 	}
 }
 
-func (a *cronAdapter) AskAgentInThread(ctx context.Context, agent *acp.Agent, channelID, threadName, existingThreadID, prompt, mentionID, createdByID string) (string, string, error) {
+func (a *cronAdapter) RecordAgentResponse(agent *acp.Agent, job *heartbeat.CronJob, threadID, status, content string, responseSent bool) {
+	if a == nil || a.bot == nil || agent == nil || job == nil {
+		return
+	}
+	metrics := agent.TurnMetrics()
+	model := job.Model
+	if model == "" {
+		model = agent.CurrentModelID()
+	}
+	userID := job.CreatedByID
+	if userID == "" {
+		userID = job.MentionID
+	}
+	source := "cron"
+	if job.OneShot {
+		source = "reminder"
+	}
+	targetID := threadID
+	if targetID == "" {
+		targetID = job.ChannelID
+	}
+	metadata := channel.MetricsMetadata(metrics)
+	metadata["content_len"] = len(content)
+	metadata["cron_job_name"] = job.Name
+	metadata["response_sent"] = responseSent
+	eventType := "agent_response_sent"
+	if !responseSent {
+		eventType = "agent_response_failed"
+		failureStage := "response_delivery"
+		if threadID == "" {
+			failureStage = "delivery_setup"
+		}
+		metadata["failure_stage"] = failureStage
+	}
+	a.bot.recordBotAuditEvent(audit.BotEvent{
+		Type:            eventType,
+		GuildID:         job.GuildID,
+		ChannelID:       job.ChannelID,
+		TargetID:        targetID,
+		ThreadID:        threadID,
+		ParentChannelID: job.ChannelID,
+		JobID:           job.ID,
+		UserID:          userID,
+		Username:        job.CreatedBy,
+		Source:          source,
+		Status:          status,
+		Content:         content,
+		Model:           model,
+		Metadata:        metadata,
+	})
+}
+
+func (a *cronAdapter) AskAgentInThread(ctx context.Context, agent *acp.Agent, channelID, threadName, existingThreadID, prompt, mentionID, createdByID string) (string, string, bool, error) {
 	ds := a.bot.discord
 	archiveDur := a.bot.manager.ThreadArchive()
 	if archiveDur <= 0 {
@@ -93,7 +146,7 @@ func (a *cronAdapter) AskAgentInThread(ctx context.Context, agent *acp.Agent, ch
 		// Create new thread
 		thread, err := ds.ThreadStart(channelID, threadName, discordgo.ChannelTypeGuildPublicThread, archiveDur)
 		if err != nil {
-			return "", "", fmt.Errorf("create thread: %w", err)
+			return "", "", false, fmt.Errorf("create thread: %w", err)
 		}
 		threadID = thread.ID
 		// Post initial separator for new thread
@@ -126,8 +179,9 @@ func (a *cronAdapter) AskAgentInThread(ctx context.Context, agent *acp.Agent, ch
 
 	// Use done channel to block until completion
 	type result struct {
-		response string
-		err      error
+		response     string
+		responseSent bool
+		err          error
 	}
 	done := make(chan result, 1)
 
@@ -213,8 +267,11 @@ func (a *cronAdapter) AskAgentInThread(ctx context.Context, agent *acp.Agent, ch
 				if statusMsgID != "" {
 					ds.ChannelMessageEdit(threadID, statusMsgID, L.Getf("cron.progress.failed", elapsed, count))
 				}
-				ds.ChannelMessageSend(threadID, "❌ "+errMsg)
-				done <- result{"", askErr}
+				sentCount, sendErr := channel.SendLongThread(ds, threadID, channel.AppendMetricsFooter("❌ "+errMsg, agent.TurnMetrics()))
+				if sendErr != nil {
+					log.Printf("[cron] failed to send agent error response thread=%s: %v", threadID, sendErr)
+				}
+				done <- result{responseSent: sentCount > 0 && sendErr == nil, err: askErr}
 				return
 			}
 			if response == "" {
@@ -228,8 +285,11 @@ func (a *cronAdapter) AskAgentInThread(ctx context.Context, agent *acp.Agent, ch
 			if mentionID != "" {
 				ds.ChannelMessageSend(threadID, fmt.Sprintf("<@%s>", mentionID))
 			}
-			channel.SendLongThread(ds, threadID, response)
-			done <- result{response, nil}
+			sentCount, sendErr := channel.SendLongThread(ds, threadID, channel.AppendMetricsFooter(response, agent.TurnMetrics()))
+			if sendErr != nil {
+				log.Printf("[cron] failed to send agent response thread=%s: %v", threadID, sendErr)
+			}
+			done <- result{response: response, responseSent: sentCount > 0 && sendErr == nil}
 		},
 	}
 
@@ -246,7 +306,7 @@ func (a *cronAdapter) AskAgentInThread(ctx context.Context, agent *acp.Agent, ch
 
 	// Block until complete
 	r := <-done
-	return r.response, threadID, r.err
+	return r.response, threadID, r.responseSent, r.err
 }
 
 func boolPtr(b bool) *bool { return &b }

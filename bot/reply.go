@@ -1,6 +1,9 @@
 package bot
 
-import "strings"
+import (
+	"strconv"
+	"strings"
+)
 
 const discordReplyLimit = 1900
 
@@ -13,6 +16,35 @@ func replyLong(reply func(string), content string) {
 	for _, part := range parts {
 		reply(part)
 	}
+}
+
+func replyLongWithMetadata(ctx cmdCtx, content string, metadata map[string]any) {
+	const prefixReserve = 16
+	parts := splitDiscordMessage(content, discordReplyLimit-prefixReserve)
+	if len(parts) == 0 {
+		ctx.sendReplyWithMetadata("", replyPartMetadata(metadata, 1, 1))
+		return
+	}
+	for i, part := range parts {
+		if len(parts) > 1 {
+			part = formatReplyPart(i, len(parts), part)
+		}
+		ctx.sendReplyWithMetadata(part, replyPartMetadata(metadata, i+1, len(parts)))
+	}
+}
+
+func formatReplyPart(idx, total int, content string) string {
+	return strings.TrimSpace("(" + strconv.Itoa(idx+1) + "/" + strconv.Itoa(total) + ") " + content)
+}
+
+func replyPartMetadata(metadata map[string]any, partIndex, partTotal int) map[string]any {
+	out := make(map[string]any, len(metadata)+2)
+	for k, v := range metadata {
+		out[k] = v
+	}
+	out["part_index"] = partIndex
+	out["part_total"] = partTotal
+	return out
 }
 
 func splitDiscordMessage(content string, limit int) []string {

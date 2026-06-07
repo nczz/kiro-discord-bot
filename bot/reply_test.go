@@ -42,3 +42,44 @@ func TestReplyLongSendsAllParts(t *testing.T) {
 		t.Fatalf("got %d replies, want 2", len(got))
 	}
 }
+
+func TestReplyLongWithMetadataSendsMetadataForEveryPart(t *testing.T) {
+	var plain []string
+	var withMeta []string
+	var metadatas []map[string]any
+	ctx := cmdCtx{
+		reply: func(msg string) {
+			plain = append(plain, msg)
+		},
+		replyWithMetadata: func(msg string, metadata map[string]any) {
+			withMeta = append(withMeta, msg)
+			metadatas = append(metadatas, metadata)
+		},
+	}
+	metadata := map[string]any{"credits": 0.22}
+	replyLongWithMetadata(ctx, strings.Repeat("x", discordReplyLimit+10), metadata)
+	if _, ok := metadata["part_index"]; ok {
+		t.Fatal("replyLongWithMetadata mutated caller metadata")
+	}
+
+	if len(withMeta) != 2 {
+		t.Fatalf("metadata replies = %d, want 2", len(withMeta))
+	}
+	if len(plain) != 0 {
+		t.Fatalf("plain replies = %d, want 0", len(plain))
+	}
+	for i, metadata := range metadatas {
+		if metadata["credits"] != 0.22 {
+			t.Fatalf("metadata[%d] = %#v, want credits", i, metadata)
+		}
+		if metadata["part_index"] != i+1 || metadata["part_total"] != 2 {
+			t.Fatalf("metadata[%d] part = %#v/%#v, want %d/2", i, metadata["part_index"], metadata["part_total"], i+1)
+		}
+	}
+	if !strings.HasPrefix(withMeta[0], "(1/2) ") || !strings.HasPrefix(withMeta[1], "(2/2) ") {
+		t.Fatalf("reply prefixes = %q / %q, want part prefixes", withMeta[0], withMeta[1])
+	}
+	if len(withMeta[0]) > discordReplyLimit || len(withMeta[1]) > discordReplyLimit {
+		t.Fatalf("reply lengths = %d/%d, want <= %d", len(withMeta[0]), len(withMeta[1]), discordReplyLimit)
+	}
+}

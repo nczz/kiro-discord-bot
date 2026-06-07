@@ -533,18 +533,19 @@ func (w *Worker) execute(job *Job) {
 				}
 				log.Printf("[worker %s] job error | user=%s msg=%s elapsed=%s ctxErr=%v err=%v",
 					w.channelID, job.Username, job.MessageID, time.Since(startTime).Round(time.Millisecond), ctxErr, askErr)
-				ds.ChannelMessageSend(threadID, "❌ "+errMsg)
+				errorContent := "❌ " + errMsg
+				SendLongThread(ds, threadID, AppendMetricsFooter(errorContent, w.agent.TurnMetrics()))
 				swapReaction(ds, job.ChannelID, job.MessageID, "🔄", emoji)
 				swapReaction(ds, job.ChannelID, job.MessageID, "⚙️", emoji)
 				if w.logger != nil {
-					w.logger.Log(w.channelID, ChatEntry{Role: "assistant", Content: "❌ " + errMsg, Model: w.model})
+					w.logger.Log(w.channelID, ChatEntry{Role: "assistant", Content: errorContent, Model: w.model})
 				}
 				w.auditJobEvent("agent_job_failed", job, threadID, "error", map[string]any{
 					"error":      errMsg,
 					"ctx_error":  fmt.Sprint(ctxErr),
 					"elapsed_ms": time.Since(startTime).Milliseconds(),
 				})
-				w.auditResponseEvent(job, threadID, "error", "❌ "+errMsg)
+				w.auditResponseEvent(job, threadID, "error", errorContent)
 				w.recordUsage(job, threadID, "error")
 				finishJob()
 				return
@@ -557,7 +558,7 @@ func (w *Worker) execute(job *Job) {
 			swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "✅")
 			swapReaction(ds, job.ChannelID, job.MessageID, "⚙️", "✅")
 			// Mark the origin done before final text so tagged peer bots see a completed source.
-			SendLongThread(ds, threadID, response)
+			SendLongThread(ds, threadID, AppendMetricsFooter(response, w.agent.TurnMetrics()))
 			w.auditResponseEvent(job, threadID, "success", response)
 
 			log.Printf("[worker %s] job done | user=%s msg=%s elapsed=%s len=%d",
@@ -567,10 +568,6 @@ func (w *Worker) execute(job *Job) {
 				w.logger.Log(w.channelID, ChatEntry{Role: "assistant", Content: response, Model: w.model})
 			}
 
-			// Show turn metrics footer if available
-			if footer := formatMetricsFooter(w.agent.TurnMetrics()); footer != "" {
-				ds.ChannelMessageSend(threadID, footer)
-			}
 			w.recordUsage(job, threadID, "success")
 			w.auditJobEvent("agent_job_completed", job, threadID, "success", map[string]any{
 				"elapsed_ms":   time.Since(startTime).Milliseconds(),
@@ -845,9 +842,10 @@ func (w *Worker) executeInline(job *Job) {
 				}
 				log.Printf("[worker %s] inline job error | user=%s msg=%s elapsed=%s ctxErr=%v err=%v",
 					w.channelID, job.Username, job.MessageID, time.Since(startTime).Round(time.Millisecond), ctxErr, askErr)
-				SendLongReply(ds, job.ChannelID, job.MessageID, "❌ "+errMsg)
+				errorContent := "❌ " + errMsg
+				SendLongReply(ds, job.ChannelID, job.MessageID, AppendMetricsFooter(errorContent, w.agent.TurnMetrics()))
 				if w.logger != nil {
-					w.logger.Log(w.channelID, ChatEntry{Role: "assistant", Content: "❌ " + errMsg, Model: w.model})
+					w.logger.Log(w.channelID, ChatEntry{Role: "assistant", Content: errorContent, Model: w.model})
 				}
 				w.auditJobEvent("agent_job_failed", job, "", "error", map[string]any{
 					"delivery_mode": DeliveryInline.String(),
@@ -855,7 +853,7 @@ func (w *Worker) executeInline(job *Job) {
 					"ctx_error":     fmt.Sprint(ctxErr),
 					"elapsed_ms":    time.Since(startTime).Milliseconds(),
 				})
-				w.auditResponseEvent(job, "", "error", "❌ "+errMsg)
+				w.auditResponseEvent(job, "", "error", errorContent)
 				w.recordUsage(job, "", "error")
 				finishJob(emoji)
 				return
@@ -864,7 +862,8 @@ func (w *Worker) executeInline(job *Job) {
 			if response == "" {
 				response = L.Get("worker.empty_response")
 			}
-			SendLongReply(ds, job.ChannelID, job.MessageID, response)
+			responseWithMetrics := AppendMetricsFooter(response, w.agent.TurnMetrics())
+			SendLongReply(ds, job.ChannelID, job.MessageID, responseWithMetrics)
 			w.auditResponseEvent(job, "", "success", response)
 			if w.logger != nil {
 				w.logger.Log(w.channelID, ChatEntry{Role: "assistant", Content: response, Model: w.model})
@@ -953,6 +952,13 @@ func (w *Worker) auditResponseEvent(job *Job, threadID, status, content string) 
 	if targetID == "" {
 		targetID = job.ChannelID
 	}
+	metadata := map[string]any{
+		"content_len":   len(content),
+		"delivery_mode": job.DeliveryMode.String(),
+	}
+	for k, v := range MetricsMetadata(w.agent.TurnMetrics()) {
+		metadata[k] = v
+	}
 	w.audit.RecordBotEvent(audit.BotEvent{
 		Type:            "agent_response_sent",
 		GuildID:         job.GuildID,
@@ -968,10 +974,7 @@ func (w *Worker) auditResponseEvent(job *Job, threadID, status, content string) 
 		Status:          status,
 		Content:         content,
 		Model:           w.model,
-		Metadata: map[string]any{
-			"content_len":   len(content),
-			"delivery_mode": job.DeliveryMode.String(),
-		},
+		Metadata:        metadata,
 	})
 }
 
@@ -1113,6 +1116,7 @@ func (w *Worker) executeFallback(job *Job) {
 		}
 	})
 
+	logContent := response
 	if askErr != nil {
 		errMsg := askErr.Error()
 		if ctx.Err() == context.DeadlineExceeded {
@@ -1120,19 +1124,25 @@ func (w *Worker) executeFallback(job *Job) {
 		} else if stderr := w.agent.RecentStderr(); stderr != "" {
 			errMsg += "\n```\n" + stderr + "\n```"
 		}
-		editMessage(ds, job.ChannelID, replyMsg.ID, "❌ "+errMsg)
+		logContent = "❌ " + errMsg
+		sendLong(ds, job.ChannelID, replyMsg.ID, AppendMetricsFooter(logContent, w.agent.TurnMetrics()))
 		swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "❌")
+		w.auditResponseEvent(job, "", "error", logContent)
+		w.recordUsage(job, "", "error")
 	} else {
+		if response == "" {
+			response = L.Get("worker.empty_response")
+		}
+		logContent = response
 		swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "✅")
-		sendLong(ds, job.ChannelID, replyMsg.ID, response)
+		responseWithMetrics := AppendMetricsFooter(response, w.agent.TurnMetrics())
+		sendLong(ds, job.ChannelID, replyMsg.ID, responseWithMetrics)
+		w.auditResponseEvent(job, "", "success", response)
+		w.recordUsage(job, "", "success")
 	}
 
 	if w.logger != nil {
-		content := response
-		if askErr != nil {
-			content = "❌ " + askErr.Error()
-		}
-		w.logger.Log(w.channelID, ChatEntry{Role: "assistant", Content: content, Model: w.model})
+		w.logger.Log(w.channelID, ChatEntry{Role: "assistant", Content: logContent, Model: w.model})
 	}
 }
 
@@ -1164,14 +1174,22 @@ func sendLong(ds *discordgo.Session, channelID, placeholderID, content string) {
 }
 
 // SendLongThread sends a long message to a thread, auto-splitting at Discord's limit.
-func SendLongThread(ds *discordgo.Session, threadID, content string) {
+func SendLongThread(ds *discordgo.Session, threadID, content string) (int, error) {
 	const limit = 1990
 	parts := splitMessage(content, limit)
+	sentCount := 0
+	var firstErr error
 	for _, p := range parts {
 		if _, err := ds.ChannelMessageSend(threadID, p); err != nil {
 			log.Printf("[send] thread %s failed: %v (len=%d)", threadID, err, len(p))
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
 		}
+		sentCount++
 	}
+	return sentCount, firstErr
 }
 
 func SendLongReply(ds *discordgo.Session, channelID, messageID, content string) {
@@ -1379,16 +1397,31 @@ func SendProcessMessage(ds *discordgo.Session, channelID, content string) (*disc
 	return msg, err
 }
 
-// formatMetricsFooter builds a one-line metrics summary from turn metrics.
+// AppendMetricsFooter appends the turn metrics footer to a final user-visible response.
+func AppendMetricsFooter(content string, m acp.TurnMetrics) string {
+	if footer := FormatMetricsFooter(m); footer != "" {
+		if content == "" {
+			return footer
+		}
+		return content + "\n\n" + footer
+	}
+	return content
+}
+
+// FormatMetricsFooter builds a one-line metrics summary from turn metrics.
 // Returns empty string if no meaningful metrics are available.
-func formatMetricsFooter(m acp.TurnMetrics) string {
-	if m.TurnDurationMs == 0 && len(m.MeteringUsage) == 0 {
+func FormatMetricsFooter(m acp.TurnMetrics) string {
+	if m.TurnDurationMs == 0 && len(m.MeteringUsage) == 0 && m.ContextUsage == 0 {
 		return ""
 	}
 	var parts []string
-	if len(m.MeteringUsage) > 0 {
-		item := m.MeteringUsage[0]
-		parts = append(parts, fmt.Sprintf("%.2f %s", item.Value, item.Unit))
+	if credits := CreditsFromMetrics(m); credits > 0 {
+		parts = append(parts, fmt.Sprintf("%.2f credit", credits))
+	} else if len(m.MeteringUsage) > 0 {
+		item := firstNonZeroMeteringItem(m.MeteringUsage)
+		if item.Value > 0 && strings.TrimSpace(item.Unit) != "" {
+			parts = append(parts, fmt.Sprintf("%.2f %s", item.Value, item.Unit))
+		}
 	}
 	if m.TurnDurationMs > 0 {
 		parts = append(parts, fmt.Sprintf("%.1fs", float64(m.TurnDurationMs)/1000))
@@ -1400,4 +1433,43 @@ func formatMetricsFooter(m acp.TurnMetrics) string {
 		return ""
 	}
 	return L.Getf("metrics.footer", strings.Join(parts, " · "))
+}
+
+// MetricsMetadata returns structured turn metrics for audit metadata.
+func MetricsMetadata(m acp.TurnMetrics) map[string]any {
+	out := make(map[string]any)
+	if m.TurnDurationMs > 0 {
+		out["duration_ms"] = m.TurnDurationMs
+	}
+	if m.ContextUsage > 0 {
+		out["context_usage"] = m.ContextUsage
+	}
+	if len(m.MeteringUsage) > 0 {
+		out["metering_usage"] = m.MeteringUsage
+		if credits := CreditsFromMetrics(m); credits > 0 {
+			out["credits"] = credits
+		}
+	}
+	return out
+}
+
+// CreditsFromMetrics sums all credit-denominated metering entries.
+func CreditsFromMetrics(m acp.TurnMetrics) float64 {
+	var credits float64
+	for _, item := range m.MeteringUsage {
+		unit := strings.ToLower(strings.TrimSpace(item.Unit))
+		if unit == "credit" || unit == "credits" {
+			credits += item.Value
+		}
+	}
+	return credits
+}
+
+func firstNonZeroMeteringItem(items []acp.MeteringItem) acp.MeteringItem {
+	for _, item := range items {
+		if item.Value > 0 && strings.TrimSpace(item.Unit) != "" {
+			return item
+		}
+	}
+	return acp.MeteringItem{}
 }

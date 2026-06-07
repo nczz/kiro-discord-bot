@@ -3,6 +3,7 @@ package bot
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"strconv"
 	"strings"
@@ -17,14 +18,31 @@ import (
 // cmdCtx holds the execution context for a command, abstracting away
 // the differences between bang commands, slash commands, channel, and thread.
 type cmdCtx struct {
-	channelID string       // parent channel (session/memory key)
-	targetID  string       // where the command was issued (channelID or threadID)
-	inThread  bool         // true if issued inside a thread
-	reply     func(string) // unified reply function
-	args      string       // optional arguments after the command name
-	guildID   string
-	userID    string
-	username  string
+	channelID         string                       // parent channel (session/memory key)
+	targetID          string                       // where the command was issued (channelID or threadID)
+	inThread          bool                         // true if issued inside a thread
+	reply             func(string)                 // unified reply function
+	replyWithMetadata func(string, map[string]any) // reply with audit metadata
+	args              string                       // optional arguments after the command name
+	guildID           string
+	userID            string
+	username          string
+	messageID         string
+	interactionID     string
+}
+
+func (ctx cmdCtx) sendReply(msg string) {
+	if ctx.reply != nil {
+		ctx.reply(msg)
+	}
+}
+
+func (ctx cmdCtx) sendReplyWithMetadata(msg string, metadata map[string]any) {
+	if ctx.replyWithMetadata != nil {
+		ctx.replyWithMetadata(msg, metadata)
+		return
+	}
+	ctx.sendReply(msg)
 }
 
 // --- Scope-aware commands ---
@@ -478,42 +496,110 @@ func (b *Bot) cmdInterrupt(ctx cmdCtx) {
 }
 
 func (b *Bot) cmdCompact(ctx cmdCtx) {
-	var resp string
+	var result channel.AgentCommandResult
 	var err error
 	if ctx.inThread {
-		resp, err = b.manager.SendCommandThread(ctx.targetID, "/compact")
+		result, err = b.manager.SendCommandThreadResult(ctx.targetID, "/compact")
 	} else {
-		resp, err = b.manager.SendCommand(ctx.channelID, "/compact")
+		result, err = b.manager.SendCommandResult(ctx.channelID, "/compact")
 	}
 	if err != nil {
-		ctx.reply(commandError(err))
+		b.recordAgentCommandUsage(ctx, "/compact", result, "error")
+		if result.Executed {
+			replyLongWithMetadata(ctx, agentCommandError(err, result), agentCommandMetadata(result, "error"))
+		} else {
+			ctx.reply(commandError(err))
+		}
 	} else {
+		resp := result.Response
 		if resp == "" {
 			resp = L.Get("compact.success")
 		}
-		ctx.reply("✅ " + resp)
+		replyLongWithMetadata(ctx, "✅ "+channel.AppendMetricsFooter(resp, result.Metrics), agentCommandMetadata(result, "success"))
+		b.recordAgentCommandUsage(ctx, "/compact", result, "success")
 	}
 }
 
 func (b *Bot) cmdClear(ctx cmdCtx) {
-	var resp string
+	var result channel.AgentCommandResult
 	var err error
 	if ctx.inThread {
-		resp, err = b.manager.SendCommandThread(ctx.targetID, "/clear")
+		result, err = b.manager.SendCommandThreadResult(ctx.targetID, "/clear")
 	} else {
-		resp, err = b.manager.SendCommand(ctx.channelID, "/clear")
+		result, err = b.manager.SendCommandResult(ctx.channelID, "/clear")
 		if err == nil {
 			b.manager.ClearHistory(ctx.channelID)
 		}
 	}
 	if err != nil {
-		ctx.reply(commandError(err))
+		b.recordAgentCommandUsage(ctx, "/clear", result, "error")
+		if result.Executed {
+			replyLongWithMetadata(ctx, agentCommandError(err, result), agentCommandMetadata(result, "error"))
+		} else {
+			ctx.reply(commandError(err))
+		}
 	} else {
+		resp := result.Response
 		if resp == "" {
 			resp = L.Get("clear.success")
 		}
-		ctx.reply("✅ " + resp)
+		replyLongWithMetadata(ctx, "✅ "+channel.AppendMetricsFooter(resp, result.Metrics), agentCommandMetadata(result, "success"))
+		b.recordAgentCommandUsage(ctx, "/clear", result, "success")
 	}
+}
+
+func (b *Bot) recordAgentCommandUsage(ctx cmdCtx, command string, result channel.AgentCommandResult, status string) {
+	if !result.Executed {
+		return
+	}
+	targetChannelID := ctx.channelID
+	threadID := ""
+	if ctx.inThread {
+		threadID = ctx.targetID
+	}
+	if err := b.manager.RecordUsage(channel.UsageRecord{
+		GuildID:       ctx.guildID,
+		ChannelID:     targetChannelID,
+		ThreadID:      threadID,
+		UserID:        ctx.userID,
+		Username:      ctx.username,
+		MessageID:     ctx.messageID,
+		InteractionID: ctx.interactionID,
+		InvocationID:  agentCommandUsageID(ctx),
+		Model:         result.Model,
+		Source:        "command:" + strings.TrimPrefix(command, "/"),
+		Status:        status,
+		MeteringUsage: result.Metrics.MeteringUsage,
+		DurationMs:    result.Metrics.TurnDurationMs,
+		ContextUsage:  result.Metrics.ContextUsage,
+	}); err != nil {
+		log.Printf("[usage] append command failed | command=%s user=%s msg=%s interaction=%s status=%s err=%v",
+			command, ctx.userID, ctx.messageID, ctx.interactionID, status, err)
+		return
+	}
+}
+
+func agentCommandMetadata(result channel.AgentCommandResult, status string) map[string]any {
+	metadata := channel.MetricsMetadata(result.Metrics)
+	if result.Model != "" {
+		metadata["model"] = result.Model
+	}
+	metadata["agent_executed"] = result.Executed
+	if status != "" {
+		metadata["agent_status"] = status
+	}
+	return metadata
+}
+
+func agentCommandError(err error, result channel.AgentCommandResult) string {
+	return channel.AppendMetricsFooter(commandError(err), result.Metrics)
+}
+
+func agentCommandUsageID(ctx cmdCtx) string {
+	if ctx.interactionID != "" {
+		return ctx.interactionID
+	}
+	return ctx.messageID
 }
 
 func (b *Bot) cmdAgent(ctx cmdCtx) {

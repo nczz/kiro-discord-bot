@@ -512,20 +512,30 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 	// Commands
 	bangCommand := commandNameFromBang(content)
 	isKnownCommand := isKnownBangCommand(bangCommand, content)
+	auditCtx := ctxForAudit(m.ChannelID, m.ChannelID, false, m.GuildID, m.Author.ID, m.Author.Username)
+	auditCtx.messageID = m.ID
 	reply := func(msg string) {
-		ds.ChannelMessageSendReply(m.ChannelID, msg, &discordgo.MessageReference{MessageID: m.ID, ChannelID: m.ChannelID})
+		sent, err := ds.ChannelMessageSendReply(m.ChannelID, msg, &discordgo.MessageReference{MessageID: m.ID, ChannelID: m.ChannelID})
 		if isKnownCommand {
-			b.recordCommandResponse(ctxForAudit(m.ChannelID, m.ChannelID, false, m.GuildID, m.Author.ID, m.Author.Username), bangCommand, "message", "sent", msg)
+			b.recordCommandResponseDelivery(auditCtx, bangCommand, "message", "sent", msg, nil, sent, err)
+		}
+	}
+	replyWithMetadata := func(msg string, metadata map[string]any) {
+		sent, err := ds.ChannelMessageSendReply(m.ChannelID, msg, &discordgo.MessageReference{MessageID: m.ID, ChannelID: m.ChannelID})
+		if isKnownCommand {
+			b.recordCommandResponseDelivery(auditCtx, bangCommand, "message", "sent", msg, metadata, sent, err)
 		}
 	}
 	ctx := cmdCtx{
-		channelID: m.ChannelID,
-		targetID:  m.ChannelID,
-		inThread:  false,
-		reply:     reply,
-		guildID:   m.GuildID,
-		userID:    m.Author.ID,
-		username:  m.Author.Username,
+		channelID:         m.ChannelID,
+		targetID:          m.ChannelID,
+		inThread:          false,
+		reply:             reply,
+		replyWithMetadata: replyWithMetadata,
+		guildID:           m.GuildID,
+		userID:            m.Author.ID,
+		username:          m.Author.Username,
+		messageID:         m.ID,
 	}
 	if isKnownCommand {
 		b.recordCommandInvoked(ctx, bangCommand, "message", m.ID, "")
@@ -662,20 +672,30 @@ func (b *Bot) handleThreadMessage(ds *discordgo.Session, m *discordgo.MessageCre
 	threadID := m.ChannelID
 	bangCommand := commandNameFromBang(content)
 	isKnownCommand := isKnownBangCommand(bangCommand, content)
+	auditCtx := ctxForAudit(parentChannelID, threadID, true, m.GuildID, m.Author.ID, m.Author.Username)
+	auditCtx.messageID = m.ID
 	reply := func(msg string) {
-		ds.ChannelMessageSend(threadID, msg)
+		sent, err := ds.ChannelMessageSend(threadID, msg)
 		if isKnownCommand {
-			b.recordCommandResponse(ctxForAudit(parentChannelID, threadID, true, m.GuildID, m.Author.ID, m.Author.Username), bangCommand, "thread_message", "sent", msg)
+			b.recordCommandResponseDelivery(auditCtx, bangCommand, "thread_message", "sent", msg, nil, sent, err)
+		}
+	}
+	replyWithMetadata := func(msg string, metadata map[string]any) {
+		sent, err := ds.ChannelMessageSend(threadID, msg)
+		if isKnownCommand {
+			b.recordCommandResponseDelivery(auditCtx, bangCommand, "thread_message", "sent", msg, metadata, sent, err)
 		}
 	}
 	ctx := cmdCtx{
-		channelID: parentChannelID,
-		targetID:  threadID,
-		inThread:  true,
-		reply:     reply,
-		guildID:   m.GuildID,
-		userID:    m.Author.ID,
-		username:  m.Author.Username,
+		channelID:         parentChannelID,
+		targetID:          threadID,
+		inThread:          true,
+		reply:             reply,
+		replyWithMetadata: replyWithMetadata,
+		guildID:           m.GuildID,
+		userID:            m.Author.ID,
+		username:          m.Author.Username,
+		messageID:         m.ID,
 	}
 	if isKnownCommand {
 		b.recordCommandInvoked(ctx, bangCommand, "thread_message", m.ID, "")
@@ -998,18 +1018,19 @@ func (b *Bot) handleSlashCommand(ds *discordgo.Session, i *discordgo.Interaction
 	rawChannelID := i.ChannelID
 	userID, username := interactionUser(i)
 	auditCtx := ctxForAudit(rawChannelID, rawChannelID, false, i.GuildID, userID, username)
+	auditCtx.interactionID = i.ID
 	b.recordCommandInvoked(auditCtx, data.Name, "slash", "", i.ID)
 	if !b.slashCommandAllowedInTarget(ds, rawChannelID) {
 		log.Printf("[interaction] rejected /%s reason=bot_not_in_channel channel=%s", data.Name, rawChannelID)
 		msg := L.Get("error.bot_not_in_channel")
-		_ = ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		err := ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
 			Data: &discordgo.InteractionResponseData{
 				Content: msg,
 				Flags:   discordgo.MessageFlagsEphemeral,
 			},
 		})
-		b.recordCommandResponse(auditCtx, data.Name, "slash", "rejected", msg)
+		b.recordInteractionResponseDelivery(auditCtx, data.Name, "rejected", msg, discordgo.InteractionResponseChannelMessageWithSource, map[string]any{"ephemeral": true}, err)
 		b.recordCommandCompleted(auditCtx, data.Name, "slash", "rejected", "bot_not_in_channel")
 		return
 	}
@@ -1025,11 +1046,11 @@ func (b *Bot) handleSlashCommand(ds *discordgo.Session, i *discordgo.Interaction
 
 	if inThread && isChannelOnlySlashCommand(data.Name) {
 		msg := L.Get("error.channel_only")
-		_ = ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		err := ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
 			Data: &discordgo.InteractionResponseData{Content: msg},
 		})
-		b.recordCommandResponse(auditCtx, data.Name, "slash", "rejected", msg)
+		b.recordInteractionResponseDelivery(auditCtx, data.Name, "rejected", msg, discordgo.InteractionResponseChannelMessageWithSource, nil, err)
 		b.recordCommandCompleted(auditCtx, data.Name, "slash", "rejected", "channel_only")
 		return
 	}
@@ -1037,21 +1058,21 @@ func (b *Bot) handleSlashCommand(ds *discordgo.Session, i *discordgo.Interaction
 	// Commands that need their own response type (not deferred)
 	switch data.Name {
 	case "cron":
-		b.handleCronModal(ds, i)
+		b.handleCronModal(ds, i, auditCtx)
 		b.recordCommandCompleted(auditCtx, data.Name, "slash", "completed", "")
 		return
 	case "cron-list":
-		b.handleCronList(ds, i)
+		b.handleCronList(ds, i, auditCtx)
 		b.recordCommandCompleted(auditCtx, data.Name, "slash", "completed", "")
 		return
 	case "cron-run":
 		name := data.Options[0].StringValue()
-		b.handleCronRun(ds, i, name)
+		b.handleCronRun(ds, i, auditCtx, name)
 		b.recordCommandCompleted(auditCtx, data.Name, "slash", "completed", "")
 		return
 	case "cron-prompt":
 		desc := data.Options[0].StringValue()
-		b.handleCronPrompt(ds, i, desc)
+		b.handleCronPrompt(ds, i, auditCtx, desc)
 		b.recordCommandCompleted(auditCtx, data.Name, "slash", "completed", "")
 		return
 	case "remind":
@@ -1061,20 +1082,25 @@ func (b *Bot) handleSlashCommand(ds *discordgo.Session, i *discordgo.Interaction
 		if len(data.Options) > 2 {
 			useAgent = data.Options[2].BoolValue()
 		}
-		b.handleRemind(ds, i, timeStr, content, useAgent)
+		b.handleRemind(ds, i, auditCtx, timeStr, content, useAgent)
 		b.recordCommandCompleted(auditCtx, data.Name, "slash", "completed", "")
 		return
 	}
 
 	// All other commands: acknowledge immediately to avoid 3-second timeout
-	_ = ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+	err := ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
 	})
+	b.recordInteractionResponseDelivery(auditCtx, data.Name, "deferred", "", discordgo.InteractionResponseDeferredChannelMessageWithSource, nil, err)
 	reply := func(msg string) {
-		_, _ = ds.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{Content: msg})
-		b.recordCommandResponse(auditCtx, data.Name, "slash", "sent", msg)
+		sent, err := ds.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{Content: msg})
+		b.recordCommandResponseDelivery(auditCtx, data.Name, "slash", "sent", msg, nil, sent, err)
 	}
-	ctx := cmdCtx{channelID: channelID, targetID: rawChannelID, inThread: inThread, reply: reply, guildID: i.GuildID, userID: userID, username: username}
+	replyWithMetadata := func(msg string, metadata map[string]any) {
+		sent, err := ds.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{Content: msg})
+		b.recordCommandResponseDelivery(auditCtx, data.Name, "slash", "sent", msg, metadata, sent, err)
+	}
+	ctx := cmdCtx{channelID: channelID, targetID: rawChannelID, inThread: inThread, reply: reply, replyWithMetadata: replyWithMetadata, guildID: i.GuildID, userID: userID, username: username, interactionID: i.ID}
 
 	go func() {
 		defer b.recordCommandCompleted(auditCtx, data.Name, "slash", "completed", "")

@@ -27,6 +27,8 @@ type UsageRecord struct {
 	UserID            string             `json:"user_id"`
 	Username          string             `json:"username,omitempty"`
 	MessageID         string             `json:"message_id,omitempty"`
+	InteractionID     string             `json:"interaction_id,omitempty"`
+	InvocationID      string             `json:"invocation_id,omitempty"`
 	Model             string             `json:"model,omitempty"`
 	Source            string             `json:"source"`
 	Status            string             `json:"status"`
