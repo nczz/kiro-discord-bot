@@ -387,17 +387,29 @@ func (b *Bot) stripOwnMentions(content, selfID string) string {
 }
 
 func (b *Bot) requiresHumanMention(ds *discordgo.Session, targetID, parentChannelID, selfID string) bool {
+	if b.manager != nil {
+		if b.manager.HasMentionOnlyOverride(targetID) {
+			return true
+		}
+		if b.manager.HasFullListenOverride(targetID) {
+			return false
+		}
+		if parentChannelID != "" {
+			if mode, ok := b.manager.ThreadListenSnapshot(targetID); ok {
+				return mode == "mention"
+			}
+			if b.manager.ThreadMentionOnly(targetID, parentChannelID) {
+				return true
+			}
+		} else if !b.manager.ThreadModeEnabled(targetID) {
+			return true
+		}
+	}
 	if !b.channelMultiBotMode(ds, targetID, selfID) {
 		return false
 	}
 	if b.manager == nil {
 		return true
-	}
-	if b.manager.HasMentionOnlyOverride(targetID) {
-		return true
-	}
-	if b.manager.HasFullListenOverride(targetID) {
-		return false
 	}
 	if parentChannelID != "" {
 		if b.manager.HasMentionOnlyOverride(parentChannelID) {

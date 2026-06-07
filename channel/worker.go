@@ -24,19 +24,35 @@ var reMention = regexp.MustCompile(`<@!?\d+>`)
 
 // Job represents a single user message to be processed.
 type Job struct {
-	ChannelID       string
-	ParentChannelID string
-	GuildID         string
-	MessageID       string
-	Prompt          string
-	Session         *discordgo.Session
-	UserID          string
-	Username        string
-	Attachments     []string
-	ThreadID        string // non-empty = follow-up in existing thread, skip thread creation
-	Transcript      string // STT transcription result, shown in thread if non-empty
-	Handoff         bool   // true when this job is an accepted cross-bot handoff
-	Source          string // message, thread, cron, etc.
+	ChannelID         string
+	ParentChannelID   string
+	GuildID           string
+	MessageID         string
+	Prompt            string
+	Session           *discordgo.Session
+	UserID            string
+	Username          string
+	Attachments       []string
+	ThreadID          string // non-empty = follow-up in existing thread, skip thread creation
+	Transcript        string // STT transcription result, shown in thread if non-empty
+	Handoff           bool   // true when this job is an accepted cross-bot handoff
+	Source            string // message, thread, cron, etc.
+	DeliveryMode      DeliveryMode
+	ThreadMentionOnly bool // listen snapshot for newly created agent threads
+}
+
+type DeliveryMode string
+
+const (
+	DeliveryThread DeliveryMode = "thread"
+	DeliveryInline DeliveryMode = "inline"
+)
+
+func (m DeliveryMode) String() string {
+	if m == "" {
+		return string(DeliveryThread)
+	}
+	return string(m)
 }
 
 type AuditSink interface {
@@ -70,8 +86,9 @@ type Worker struct {
 	currentJobActive    bool
 	pendingInterruptSeq uint64
 
-	onActivity func()      // called during work to signal liveness (prevents idle cleanup)
-	onIdle     func() bool // called when a job finishes; true means the worker was stopped
+	onActivity      func()      // called during work to signal liveness (prevents idle cleanup)
+	onIdle          func() bool // called when a job finishes; true means the worker was stopped
+	onThreadCreated func(threadID string, mentionOnly bool)
 
 	memoryPrefix func() string // returns memory+flash prefix to inject into prompts
 
@@ -117,6 +134,10 @@ func (w *Worker) OnActivityFunc(fn func()) { w.onActivity = fn }
 
 // OnIdleFunc sets a callback invoked after a job finishes.
 func (w *Worker) OnIdleFunc(fn func() bool) { w.onIdle = fn }
+
+func (w *Worker) OnThreadCreatedFunc(fn func(threadID string, mentionOnly bool)) {
+	w.onThreadCreated = fn
+}
 
 // OnMemoryPrefixFunc sets a callback that returns memory rules to prepend to prompts.
 func (w *Worker) OnMemoryPrefixFunc(fn func() string) { w.memoryPrefix = fn }
@@ -315,6 +336,10 @@ func promptVisibleBody(prompt string) string {
 }
 
 func (w *Worker) execute(job *Job) {
+	if job.DeliveryMode == DeliveryInline {
+		w.executeInline(job)
+		return
+	}
 	ds := job.Session
 	startTime := time.Now()
 	w.auditJobEvent("agent_job_started", job, "", "", nil)
@@ -385,6 +410,9 @@ func (w *Worker) execute(job *Job) {
 			return
 		}
 		threadID = thread.ID
+		if w.onThreadCreated != nil {
+			w.onThreadCreated(threadID, job.ThreadMentionOnly)
+		}
 	}
 
 	w.cancelMu.Lock()
@@ -603,6 +631,298 @@ func (w *Worker) execute(job *Job) {
 	// Returns immediately — callbacks handle the rest
 }
 
+type inlineReactionPulse struct {
+	ds        *discordgo.Session
+	channelID string
+	messageID string
+	done      chan struct{}
+	mu        sync.Mutex
+	mode      string
+	current   string
+	stopped   bool
+}
+
+func newInlineReactionPulse(ds *discordgo.Session, channelID, messageID, initial string) *inlineReactionPulse {
+	return &inlineReactionPulse{ds: ds, channelID: channelID, messageID: messageID, done: make(chan struct{}), mode: "work", current: initial}
+}
+
+func (p *inlineReactionPulse) Start() {
+	p.set("🔄")
+	ticker := time.NewTicker(12 * time.Second)
+	go func() {
+		defer ticker.Stop()
+		work := []string{"🔄", "💭", "✨", "🔁"}
+		tool := []string{"🛠️", "⚙️", "🔧", "⚙️"}
+		i := 0
+		for {
+			select {
+			case <-p.done:
+				return
+			case <-ticker.C:
+				p.mu.Lock()
+				mode := p.mode
+				p.mu.Unlock()
+				seq := work
+				if mode == "tool" {
+					seq = tool
+				}
+				p.set(seq[i%len(seq)])
+				i++
+			}
+		}
+	}()
+}
+
+func (p *inlineReactionPulse) Tool() {
+	p.mu.Lock()
+	p.mode = "tool"
+	p.mu.Unlock()
+	p.set("🛠️")
+}
+
+func (p *inlineReactionPulse) Work() {
+	p.mu.Lock()
+	p.mode = "work"
+	p.mu.Unlock()
+	p.set("🔄")
+}
+
+func (p *inlineReactionPulse) Finish(final string) {
+	p.mu.Lock()
+	if p.stopped {
+		p.mu.Unlock()
+		return
+	}
+	p.stopped = true
+	p.mu.Unlock()
+	close(p.done)
+	p.setFinal(final)
+}
+
+func (p *inlineReactionPulse) set(next string) {
+	if p == nil || p.ds == nil || next == "" {
+		return
+	}
+	p.mu.Lock()
+	if p.stopped {
+		p.mu.Unlock()
+		return
+	}
+	prev := p.current
+	p.current = next
+	p.mu.Unlock()
+	p.replace(prev, next)
+}
+
+func (p *inlineReactionPulse) setFinal(next string) {
+	if p == nil || p.ds == nil || next == "" {
+		return
+	}
+	p.mu.Lock()
+	prev := p.current
+	p.current = next
+	p.mu.Unlock()
+	p.replace(prev, next)
+}
+
+func (p *inlineReactionPulse) replace(prev, next string) {
+	if prev != "" && prev != next {
+		_ = p.ds.MessageReactionRemove(p.channelID, p.messageID, prev, "@me")
+	}
+	_ = p.ds.MessageReactionAdd(p.channelID, p.messageID, next)
+}
+
+func (w *Worker) executeInline(job *Job) {
+	ds := job.Session
+	startTime := time.Now()
+	w.auditJobEvent("agent_job_started", job, "", "", map[string]any{"delivery_mode": DeliveryInline.String()})
+	if w.onActivity != nil {
+		w.onActivity()
+	}
+
+	log.Printf("[worker %s] inline job start | user=%s(%s) msg=%s prompt=%q",
+		w.channelID, job.Username, job.UserID, job.MessageID, promptSummary(job.Prompt, 80))
+
+	w.cancelMu.Lock()
+	w.currentJobID = job.MessageID
+	w.currentJobSeq++
+	w.currentJobActive = true
+	w.cancelMu.Unlock()
+
+	pulse := newInlineReactionPulse(ds, job.ChannelID, job.MessageID, "⏳")
+	pulse.Start()
+
+	var finishMu sync.Mutex
+	finished := false
+	beginFinish := func() bool {
+		finishMu.Lock()
+		defer finishMu.Unlock()
+		if finished {
+			return false
+		}
+		finished = true
+		return true
+	}
+	finishJob := func(finalEmoji string) {
+		pulse.Finish(finalEmoji)
+		w.cancelMu.Lock()
+		w.cancelFn = nil
+		w.currentThreadID = ""
+		w.currentJobID = ""
+		w.currentJobActive = false
+		if w.pendingInterruptSeq == w.currentJobSeq {
+			w.pendingInterruptSeq = 0
+		}
+		w.cancelMu.Unlock()
+		w.signalIdle()
+	}
+
+	if w.logger != nil {
+		w.logger.Log(w.channelID, ChatEntry{
+			Role:        "user",
+			UserID:      job.UserID,
+			Username:    job.Username,
+			MessageID:   job.MessageID,
+			Content:     job.Prompt,
+			Attachments: job.Attachments,
+		})
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(w.askTimeoutSec)*time.Second)
+	w.cancelMu.Lock()
+	w.cancelFn = cancel
+	w.cancelMu.Unlock()
+
+	callbacks := acp.AsyncCallbacks{
+		OnChunk: func(chunk string) {
+			if w.onActivity != nil {
+				w.onActivity()
+			}
+		},
+		OnToolCall: func(evt acp.ToolCallEvent) {
+			if w.onActivity != nil {
+				w.onActivity()
+			}
+			pulse.Tool()
+		},
+		OnToolResult: func(evt acp.ToolCallEvent) {
+			if w.onActivity != nil {
+				w.onActivity()
+			}
+			if evt.Status == "failed" {
+				pulse.set("⚠️")
+				return
+			}
+			pulse.Work()
+		},
+		OnThought: func(text string) {
+			if w.onActivity != nil {
+				w.onActivity()
+			}
+			pulse.set("💭")
+		},
+		OnComplete: func(response string, askErr error) {
+			if w.onActivity != nil {
+				w.onActivity()
+			}
+			ctxErr := ctx.Err()
+			cancel()
+			if !beginFinish() {
+				return
+			}
+
+			if askErr != nil {
+				errMsg := askErr.Error()
+				emoji := "❌"
+				if ctxErr == context.DeadlineExceeded {
+					errMsg = L.Getf("worker.timeout", w.askTimeoutSec)
+					emoji = "⚠️"
+				} else if ctxErr == context.Canceled {
+					errMsg = L.Get("cancel.success")
+					emoji = "⚠️"
+				} else if stderr := w.agent.RecentStderr(); stderr != "" {
+					errMsg += "\n```\n" + stderr + "\n```"
+				}
+				log.Printf("[worker %s] inline job error | user=%s msg=%s elapsed=%s ctxErr=%v err=%v",
+					w.channelID, job.Username, job.MessageID, time.Since(startTime).Round(time.Millisecond), ctxErr, askErr)
+				SendLongReply(ds, job.ChannelID, job.MessageID, "❌ "+errMsg)
+				if w.logger != nil {
+					w.logger.Log(w.channelID, ChatEntry{Role: "assistant", Content: "❌ " + errMsg, Model: w.model})
+				}
+				w.auditJobEvent("agent_job_failed", job, "", "error", map[string]any{
+					"delivery_mode": DeliveryInline.String(),
+					"error":         errMsg,
+					"ctx_error":     fmt.Sprint(ctxErr),
+					"elapsed_ms":    time.Since(startTime).Milliseconds(),
+				})
+				w.auditResponseEvent(job, "", "error", "❌ "+errMsg)
+				w.recordUsage(job, "", "error")
+				finishJob(emoji)
+				return
+			}
+
+			if response == "" {
+				response = L.Get("worker.empty_response")
+			}
+			SendLongReply(ds, job.ChannelID, job.MessageID, response)
+			w.auditResponseEvent(job, "", "success", response)
+			if w.logger != nil {
+				w.logger.Log(w.channelID, ChatEntry{Role: "assistant", Content: response, Model: w.model})
+			}
+			w.recordUsage(job, "", "success")
+			w.auditJobEvent("agent_job_completed", job, "", "success", map[string]any{
+				"delivery_mode": DeliveryInline.String(),
+				"elapsed_ms":    time.Since(startTime).Milliseconds(),
+				"response_len":  len(response),
+			})
+			finishJob("✅")
+		},
+	}
+
+	go func() {
+		<-ctx.Done()
+		if ctx.Err() == context.DeadlineExceeded {
+			log.Printf("[worker %s] inline timeout %ds, sending cancel", w.channelID, w.askTimeoutSec)
+			go w.agent.CancelPrompt()
+		}
+	}()
+
+	w.agent.OnReadErrorFunc(func(err error) {
+		log.Printf("[worker %s] inline agent read error | user=%s msg=%s elapsed=%s err=%v",
+			w.channelID, job.Username, job.MessageID, time.Since(startTime).Round(time.Millisecond), err)
+		if !beginFinish() {
+			return
+		}
+		errMsg := L.Getf("error.agent_read", err)
+		SendLongReply(ds, job.ChannelID, job.MessageID, errMsg)
+		if w.logger != nil {
+			w.logger.Log(w.channelID, ChatEntry{Role: "assistant", Content: errMsg, Model: w.model})
+		}
+		w.auditJobEvent("agent_job_failed", job, "", "error", map[string]any{
+			"delivery_mode": DeliveryInline.String(),
+			"error":         errMsg,
+			"elapsed_ms":    time.Since(startTime).Milliseconds(),
+		})
+		w.auditResponseEvent(job, "", "error", errMsg)
+		w.recordUsage(job, "", "error")
+		cancel()
+		finishJob("⚠️")
+	})
+
+	prompt := job.Prompt
+	if w.historyPrefix != "" {
+		prompt = w.historyPrefix + prompt
+		w.historyPrefix = ""
+	}
+	if w.memoryPrefix != nil {
+		if mp := w.memoryPrefix(); mp != "" {
+			prompt = mp + prompt
+		}
+	}
+	promptContent := buildPromptContent(prompt, job.Attachments, w.agent.SupportsImagePrompt())
+	w.agent.AskAsyncMulti(promptContent, callbacks)
+}
+
 func (w *Worker) auditJobEvent(eventType string, job *Job, threadID, status string, metadata map[string]any) {
 	if w == nil || w.audit == nil || job == nil {
 		return
@@ -629,11 +949,15 @@ func (w *Worker) auditResponseEvent(job *Job, threadID, status, content string) 
 	if w == nil || w.audit == nil || job == nil {
 		return
 	}
+	targetID := threadID
+	if targetID == "" {
+		targetID = job.ChannelID
+	}
 	w.audit.RecordBotEvent(audit.BotEvent{
 		Type:            "agent_response_sent",
 		GuildID:         job.GuildID,
 		ChannelID:       job.ChannelID,
-		TargetID:        threadID,
+		TargetID:        targetID,
 		ThreadID:        threadID,
 		ParentChannelID: job.ParentChannelID,
 		MessageID:       job.MessageID,
@@ -645,7 +969,8 @@ func (w *Worker) auditResponseEvent(job *Job, threadID, status, content string) 
 		Content:         content,
 		Model:           w.model,
 		Metadata: map[string]any{
-			"content_len": len(content),
+			"content_len":   len(content),
+			"delivery_mode": job.DeliveryMode.String(),
 		},
 	})
 }
@@ -845,6 +1170,23 @@ func SendLongThread(ds *discordgo.Session, threadID, content string) {
 	for _, p := range parts {
 		if _, err := ds.ChannelMessageSend(threadID, p); err != nil {
 			log.Printf("[send] thread %s failed: %v (len=%d)", threadID, err, len(p))
+		}
+	}
+}
+
+func SendLongReply(ds *discordgo.Session, channelID, messageID, content string) {
+	const limit = 1990
+	parts := splitMessage(content, limit)
+	if len(parts) == 0 {
+		parts = []string{L.Get("worker.empty_response")}
+	}
+	for i, p := range parts {
+		if len(parts) > 1 {
+			p = fmt.Sprintf("(%d/%d) %s", i+1, len(parts), p)
+		}
+		ref := &discordgo.MessageReference{MessageID: messageID, ChannelID: channelID}
+		if _, err := ds.ChannelMessageSendReply(channelID, p, ref); err != nil {
+			log.Printf("[send] reply channel %s failed: %v (len=%d)", channelID, err, len(p))
 		}
 	}
 }

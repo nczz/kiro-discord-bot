@@ -114,11 +114,17 @@ func formatAuditTimeline(events []audit.TimelineEvent) string {
 
 func (b *Bot) cmdPause(ctx cmdCtx) {
 	b.manager.Pause(ctx.targetID)
+	if !ctx.inThread {
+		b.manager.SetThreadMode(ctx.channelID, false)
+	}
 	ctx.reply(L.Get("pause.on"))
 }
 
 func (b *Bot) cmdBack(ctx cmdCtx) {
 	b.manager.Back(ctx.targetID)
+	if !ctx.inThread {
+		b.manager.SetThreadMode(ctx.channelID, true)
+	}
 	ctx.reply(L.Get("pause.off"))
 }
 
@@ -135,6 +141,24 @@ func (b *Bot) cmdSilent(ctx cmdCtx) {
 			ctx.reply(L.Get("silent.status.on"))
 		} else {
 			ctx.reply(L.Get("silent.status.off"))
+		}
+	}
+}
+
+func (b *Bot) cmdThreadMode(ctx cmdCtx) {
+	target := ctx.channelID
+	switch ctx.args {
+	case "on":
+		b.manager.SetThreadMode(target, true)
+		ctx.reply(L.Get("thread_mode.on"))
+	case "off":
+		b.manager.SetThreadMode(target, false)
+		ctx.reply(L.Get("thread_mode.off"))
+	default:
+		if b.manager.ThreadModeEnabled(target) {
+			ctx.reply(L.Get("thread_mode.status.on"))
+		} else {
+			ctx.reply(L.Get("thread_mode.status.off"))
 		}
 	}
 }

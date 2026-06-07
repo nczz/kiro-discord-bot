@@ -114,7 +114,7 @@ func isKnownBangCommand(name, content string) bool {
 		return false
 	}
 	switch name {
-	case "resume", "pause", "back", "silent", "reset", "status", "usage", "doctor", "audit", "cancel", "interrupt",
+	case "resume", "pause", "back", "silent", "thread", "reset", "status", "usage", "doctor", "audit", "cancel", "interrupt",
 		"close-thread", "compact", "clear", "cwd", "start", "agent", "model", "models", "memory", "flashmemory", "cron":
 		return true
 	case "remind":
@@ -542,6 +542,9 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 	case content == "!silent", content == "!silent on", content == "!silent off":
 		ctx.args = strings.TrimSpace(strings.TrimPrefix(content, "!silent"))
 		b.cmdSilent(ctx)
+	case content == "!thread", content == "!thread on", content == "!thread off":
+		ctx.args = strings.TrimSpace(strings.TrimPrefix(content, "!thread"))
+		b.cmdThreadMode(ctx)
 	case content == "!reset":
 		b.cmdReset(ctx)
 	case content == "!status":
@@ -612,17 +615,23 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 		}
 
 		prompt := buildPrompt(content, localPaths, m.ChannelID, m.GuildID, m.Author.Username, b.peerPromptContext(selfID))
+		deliveryMode := channel.DeliveryThread
+		if !b.manager.ThreadModeEnabled(m.ChannelID) {
+			deliveryMode = channel.DeliveryInline
+		}
 
 		job := &channel.Job{
-			ChannelID:   m.ChannelID,
-			GuildID:     m.GuildID,
-			MessageID:   m.ID,
-			Prompt:      prompt,
-			UserID:      m.Author.ID,
-			Username:    m.Author.Username,
-			Attachments: localPaths,
-			Transcript:  transcript,
-			Source:      "message",
+			ChannelID:         m.ChannelID,
+			GuildID:           m.GuildID,
+			MessageID:         m.ID,
+			Prompt:            prompt,
+			UserID:            m.Author.ID,
+			Username:          m.Author.Username,
+			Attachments:       localPaths,
+			Transcript:        transcript,
+			Source:            "message",
+			DeliveryMode:      deliveryMode,
+			ThreadMentionOnly: b.requiresHumanMention(ds, m.ChannelID, "", selfID),
 		}
 		if err := b.manager.Enqueue(ds, job); err != nil {
 			ds.MessageReactionRemove(m.ChannelID, m.ID, "⏳", "@me")
@@ -711,6 +720,10 @@ func (b *Bot) handleThreadMessage(ds *discordgo.Session, m *discordgo.MessageCre
 	case content == "!silent", content == "!silent on", content == "!silent off":
 		ctx.args = strings.TrimSpace(strings.TrimPrefix(content, "!silent"))
 		b.cmdSilent(ctx)
+		return
+	case content == "!thread", content == "!thread on", content == "!thread off":
+		ctx.args = strings.TrimSpace(strings.TrimPrefix(content, "!thread"))
+		b.cmdThreadMode(ctx)
 		return
 	case content == "!compact":
 		b.cmdCompact(ctx)
@@ -823,6 +836,13 @@ func buildSlashCommands() []*discordgo.ApplicationCommand {
 		{Name: "back", Description: L.Get("cmd.back.desc")},
 		{Name: "silent", Description: L.Get("cmd.silent.desc"), Options: []*discordgo.ApplicationCommandOption{
 			{Type: discordgo.ApplicationCommandOptionString, Name: "mode", Description: L.Get("cmd.silent.opt.mode"), Required: false,
+				Choices: []*discordgo.ApplicationCommandOptionChoice{
+					{Name: "on", Value: "on"},
+					{Name: "off", Value: "off"},
+				}},
+		}},
+		{Name: "thread", Description: L.Get("cmd.thread.desc"), Options: []*discordgo.ApplicationCommandOption{
+			{Type: discordgo.ApplicationCommandOptionString, Name: "mode", Description: L.Get("cmd.thread.opt.mode"), Required: false,
 				Choices: []*discordgo.ApplicationCommandOptionChoice{
 					{Name: "on", Value: "on"},
 					{Name: "off", Value: "off"},
@@ -1103,6 +1123,11 @@ func (b *Bot) handleSlashCommand(ds *discordgo.Session, i *discordgo.Interaction
 				ctx.args = data.Options[0].StringValue()
 			}
 			b.cmdSilent(ctx)
+		case "thread":
+			if len(data.Options) > 0 {
+				ctx.args = data.Options[0].StringValue()
+			}
+			b.cmdThreadMode(ctx)
 		case "model":
 			if len(data.Options) > 0 {
 				ctx.args = data.Options[0].StringValue()

@@ -25,7 +25,9 @@ type Manager struct {
 	workers         map[string]*Worker
 	agents          map[string]*acp.Agent
 	paused          map[string]bool
-	silent          map[string]bool // channelID → silent mode (default true when absent)
+	threadMode      map[string]bool   // parent channel ID -> agent opens new threads (default true)
+	threadListen    map[string]string // thread ID -> "full" or "mention" snapshot
+	silent          map[string]bool   // channelID → silent mode (default true when absent)
 	store           *SessionStore
 	kiroCLI         string
 	defaultCWD      string
@@ -123,6 +125,8 @@ func NewManager(cfg ManagerConfig) *Manager {
 		workers:             make(map[string]*Worker),
 		agents:              make(map[string]*acp.Agent),
 		paused:              make(map[string]bool),
+		threadMode:          make(map[string]bool),
+		threadListen:        make(map[string]string),
 		silent:              make(map[string]bool),
 		threadAgents:        make(map[string]*threadAgentEntry),
 		store:               cfg.Store,
@@ -155,6 +159,10 @@ func NewManager(cfg ManagerConfig) *Manager {
 	if err := m.loadListenModes(); err != nil {
 		log.Printf("[manager] load listen modes: %v", err)
 	}
+	if err := m.loadThreadModes(); err != nil {
+		log.Printf("[manager] load thread modes: %v", err)
+	}
+	m.migratePausedThreadModes()
 	return m
 }
 
@@ -371,7 +379,7 @@ func (m *Manager) Enqueue(ds *discordgo.Session, job *Job) error {
 
 	qLen := worker.QueueLen()
 	_ = ds.MessageReactionAdd(job.ChannelID, job.MessageID, "⏳")
-	if qLen > 1 {
+	if qLen > 1 && job.DeliveryMode != DeliveryInline {
 		_, _ = ds.ChannelMessageSendReply(job.ChannelID, L.Getf("status.queued", qLen), &discordgo.MessageReference{
 			MessageID: job.MessageID,
 			ChannelID: job.ChannelID,
@@ -402,8 +410,9 @@ func (m *Manager) recordJobEnqueued(job *Job, queueLen int, thread bool) {
 		Source:          job.Source,
 		Status:          "queued",
 		Metadata: map[string]any{
-			"queue_len": queueLen,
-			"thread":    thread,
+			"queue_len":     queueLen,
+			"thread":        thread,
+			"delivery_mode": job.DeliveryMode.String(),
 		},
 	})
 }
@@ -970,6 +979,9 @@ func (m *Manager) startAgentAndWorker(channelID string) (*Worker, error) {
 	w := NewWorker(channelID, agent, m.queueBufSize, m.askTimeoutSec, m.streamUpdateSec, m.threadArchive, m.logger, model)
 	w.SetUsageStore(m.usage)
 	w.SetAuditSink(m.audit)
+	w.OnThreadCreatedFunc(func(threadID string, mentionOnly bool) {
+		m.SetThreadListenMode(threadID, mentionOnly)
+	})
 	w.SetHistoryPrefix(historyCtx)
 	w.OnMemoryPrefixFunc(func() string {
 		m.mu.Lock()
@@ -1241,6 +1253,107 @@ func (m *Manager) saveListenModesLocked() error {
 	return os.Rename(tmp, path)
 }
 
+type persistedThreadModes struct {
+	Channels map[string]string `json:"channels"`
+	Threads  map[string]string `json:"threads"`
+}
+
+func (m *Manager) threadModesPath() string {
+	if m.dataDir == "" {
+		return ""
+	}
+	return filepath.Join(m.dataDir, "thread_modes.json")
+}
+
+func (m *Manager) loadThreadModes() error {
+	path := m.threadModesPath()
+	if path == "" {
+		return nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	var modes persistedThreadModes
+	if err := json.Unmarshal(data, &modes); err != nil {
+		return err
+	}
+	for channelID, mode := range modes.Channels {
+		switch mode {
+		case "on":
+			m.threadMode[channelID] = true
+		case "off":
+			m.threadMode[channelID] = false
+		}
+	}
+	for threadID, mode := range modes.Threads {
+		switch mode {
+		case "full", "mention":
+			m.threadListen[threadID] = mode
+		}
+	}
+	return nil
+}
+
+func (m *Manager) migratePausedThreadModes() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	changed := false
+	for channelID, paused := range m.paused {
+		if !paused {
+			continue
+		}
+		if _, ok := m.threadMode[channelID]; ok {
+			continue
+		}
+		m.threadMode[channelID] = false
+		changed = true
+	}
+	if changed {
+		if err := m.saveThreadModesLocked(); err != nil {
+			log.Printf("[manager] migrate paused thread modes: %v", err)
+		}
+	}
+}
+
+func (m *Manager) saveThreadModesLocked() error {
+	path := m.threadModesPath()
+	if path == "" {
+		return nil
+	}
+	modes := persistedThreadModes{
+		Channels: make(map[string]string, len(m.threadMode)),
+		Threads:  make(map[string]string, len(m.threadListen)),
+	}
+	for channelID, enabled := range m.threadMode {
+		if enabled {
+			modes.Channels[channelID] = "on"
+		} else {
+			modes.Channels[channelID] = "off"
+		}
+	}
+	for threadID, mode := range m.threadListen {
+		if mode == "full" || mode == "mention" {
+			modes.Threads[threadID] = mode
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(modes, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
 // HasFullListenOverride returns true when the channel/thread was explicitly
 // resumed with /back. An absent entry means "use the default mode", which may
 // still be mention-only in multi-bot channels.
@@ -1264,6 +1377,60 @@ func (m *Manager) IsPaused(channelID string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.paused[channelID]
+}
+
+func (m *Manager) SetThreadMode(parentChannelID string, enabled bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.threadMode[parentChannelID] = enabled
+	if err := m.saveThreadModesLocked(); err != nil {
+		log.Printf("[manager] save thread mode for %s: %v", parentChannelID, err)
+	}
+}
+
+func (m *Manager) ThreadModeEnabled(parentChannelID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	enabled, ok := m.threadMode[parentChannelID]
+	if !ok {
+		return true
+	}
+	return enabled
+}
+
+func (m *Manager) SetThreadListenMode(threadID string, mentionOnly bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if mentionOnly {
+		m.threadListen[threadID] = "mention"
+	} else {
+		m.threadListen[threadID] = "full"
+	}
+	if err := m.saveThreadModesLocked(); err != nil {
+		log.Printf("[manager] save thread listen mode for %s: %v", threadID, err)
+	}
+}
+
+func (m *Manager) ThreadListenSnapshot(threadID string) (string, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	mode, ok := m.threadListen[threadID]
+	return mode, ok
+}
+
+func (m *Manager) ThreadMentionOnly(threadID, parentChannelID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if mode, ok := m.threadListen[threadID]; ok {
+		return mode == "mention"
+	}
+	if paused, ok := m.paused[threadID]; ok {
+		return paused
+	}
+	if enabled, ok := m.threadMode[parentChannelID]; ok && !enabled {
+		return true
+	}
+	return false
 }
 
 // SetSilent sets the silent (compact output) mode for a channel.

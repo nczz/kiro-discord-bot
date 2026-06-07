@@ -323,8 +323,9 @@ The bot needs explicit permission in each channel it should respond to:
 | `/cancel` | Cancel the currently running task |
 | `/interrupt` | Interrupt a stuck current task; starts with `/cancel`, then tries a process interrupt if still active |
 | `/cwd` | Show current working directory |
-| `/pause` | Switch to mention-only mode (bot ignores non-mention messages) |
-| `/back` | Resume full-listen mode |
+| `/pause` | Switch the channel to mention-only inline mode for new tasks |
+| `/back` | Resume full-listen mode and enable new task threads |
+| `/thread [on|off]` | Show or set whether new channel tasks open Discord threads |
 | `/silent` | Show silent mode status (compact tool output, default: on) |
 | `/silent on` | Enable compact tool output |
 | `/silent off` | Show full tool details |
@@ -346,7 +347,7 @@ The bot needs explicit permission in each channel it should respond to:
 
 All commands also work with `!` prefix (e.g. `!status`, `!reset`).
 
-When a command is used inside a Discord thread, it targets the thread agent when that is the least surprising behavior: `/status`, `/reset`, `/cancel`, `/interrupt`, `/compact`, `/clear`, and `/model` operate on the current thread agent. `/pause`, `/back`, and `/silent` apply to the current target, so a thread can override the parent channel. `/memory` and `/flashmemory` remain scoped to the parent channel because thread agents inherit that memory block.
+When a command is used inside a Discord thread, it targets the thread agent when that is the least surprising behavior: `/status`, `/reset`, `/cancel`, `/interrupt`, `/compact`, `/clear`, and `/model` operate on the current thread agent. `/pause`, `/back`, and `/silent` apply to the current target, so a thread can override the listen behavior captured when it was created. `/thread` always applies to the parent channel's future new-task behavior. `/memory` and `/flashmemory` remain scoped to the parent channel because thread agents inherit that memory block.
 
 Channel setup and scheduling commands must be run in the parent channel: `/start`, `/cwd`, `/agent`, `/resume`, `/cron`, `/cron-list`, `/cron-run`, `/cron-prompt`, and `/remind`.
 
@@ -360,6 +361,7 @@ Channel setup and scheduling commands must be run in the parent channel: `/start
 | `!reset` | Restart the thread agent |
 | `!pause` | Switch thread to mention-only mode |
 | `!back` | Resume thread full-listen mode |
+| `!thread [on\|off]` | Show or set whether new parent-channel tasks open Discord threads |
 | `!silent` | Show thread silent mode status |
 | `!silent on` | Enable compact tool output in this thread |
 | `!silent off` | Show full tool details in this thread |
@@ -377,13 +379,13 @@ All thread commands also work as `/` slash commands inside a thread.
 
 **Full-listen mode (default):** Any message in the channel is sent to the agent. When peer bot discovery finds another bot that can respond in the current channel or thread, including through inherited permissions, that target automatically switches to mention-only behavior to prevent bot-to-bot loops.
 
-**Mention mode (after `/pause` or automatic multi-bot mode):** Only `@BotName your message` triggers the agent. Use a real Discord mention such as `<@111111111111111111>` or pick the bot from Discord's mention UI; plain text like `@BuildBot` may not trigger the target bot.
+**Mention mode (after `/pause` or automatic multi-bot mode):** Only `@BotName your message` triggers the agent. Use a real Discord mention such as `<@111111111111111111>` or pick the bot from Discord's mention UI; plain text like `@BuildBot` may not trigger the target bot. In a parent channel, `/pause` also disables new task threads so mentioned work replies in-channel with emoji progress; `/back` restores full-listen mode and enables new task threads again.
 
-Use `/back` or `!back` on the target bot to open full-listen mode for that channel and its threads, even when multi-bot mode made mention-only the default. A thread can still override the parent channel with its own `/pause` or `!pause`, and can return to full-listen with thread-local `/back` or `!back`.
+Use `/back` or `!back` on the target bot to open full-listen mode for that channel and enable future task threads, even when multi-bot mode made mention-only the default. A thread can still override its own listen behavior with `/pause` or `!pause`, and can return to full-listen with thread-local `/back` or `!back`.
 
-**Thread-based progress:** Each task automatically creates a Discord Thread from your message. Tool execution status and the final response are posted in the thread, keeping the main channel clean.
+**Thread mode:** By default, each parent-channel task automatically creates a Discord Thread from your message. Tool execution status and the final response are posted in the thread, keeping the main channel clean. `/thread off` or parent-channel `/pause` stops opening new threads; new tasks must mention the bot, run on the channel's main agent, show progress by rotating reactions such as `🔄`, `💭`, `✨`, `🛠️`, and `⚙️`, then post only the final reply in the channel. `/thread on` or parent-channel `/back` restores new task threads.
 
-**Thread discussions:** You can continue chatting with the agent inside any thread. A dedicated agent is spawned per thread with the original task context injected. Thread agents are independent from the main channel agent, so both can work in parallel. Inactive thread agents are automatically closed after idle timeout (`THREAD_AGENT_IDLE_SEC`) or when an inactive thread is archived. Capacity limits never close thread agents automatically: if all slots are full, the bot reports active/inactive counts and lists inactive candidates so a user can choose which one to close with `/close-thread thread_id:<id>`. Active work is never evicted by idle cleanup, archive events, or capacity limits; archived active threads are closed after the current job returns to idle. Use `!close` in a thread to manually close its agent.
+**Thread discussions:** You can continue chatting with the agent inside any thread. A dedicated agent is spawned per thread with the original task context injected. Thread agents are independent from the main channel agent, so both can work in parallel. A thread keeps the listen mode captured when it was created; changing the parent channel's thread mode later does not silently change old threads. Manually created or unknown threads under `/thread off` default to mention-only until overridden in that thread. Inactive thread agents are automatically closed after idle timeout (`THREAD_AGENT_IDLE_SEC`) or when an inactive thread is archived. Capacity limits never close thread agents automatically: if all slots are full, the bot reports active/inactive counts and lists inactive candidates so a user can choose which one to close with `/close-thread thread_id:<id>`. Active work is never evicted by idle cleanup, archive events, or capacity limits; archived active threads are closed after the current job returns to idle. Use `!close` in a thread to manually close its agent.
 
 **Cancel vs interrupt:** `/cancel` sends ACP `session/cancel` for the current task. `/interrupt` first does the same soft cancel, waits briefly, and only if the same task is still active tries `SIGINT` on the agent process group so a stuck tool subprocess can be interrupted. A repeated `/interrupt` on the same still-running task can try another `SIGINT`. It does not clear persisted session metadata or close the Discord thread; if the agent exits, the manager's normal restart/load path handles the next message.
 
@@ -823,8 +825,9 @@ RUN_ACP_SMOKE=1 KIRO_CLI=/Users/chun/.local/bin/kiro-cli scripts/release-preflig
 | `/cancel` | 取消目前執行中的任務 |
 | `/interrupt` | 中斷卡住的目前任務；先執行取消，仍未結束才嘗試進程層中斷 |
 | `/cwd` | 查詢目前工作目錄 |
-| `/pause` | 切換為 @mention 模式 |
-| `/back` | 恢復完整監聽模式 |
+| `/pause` | 切換頻道為 @mention 原頻道回覆模式 |
+| `/back` | 恢復完整監聽並啟用新任務討論串 |
+| `/thread [on|off]` | 查詢或設定新的頻道任務是否開啟 Discord 討論串 |
 | `/silent` | 查詢安靜模式狀態（精簡工具輸出，預設：開啟） |
 | `/silent on` | 開啟精簡工具輸出 |
 | `/silent off` | 顯示完整工具細節 |
@@ -844,7 +847,7 @@ RUN_ACP_SMOKE=1 KIRO_CLI=/Users/chun/.local/bin/kiro-cli scripts/release-preflig
 
 所有指令也支援 `!` 前綴（如 `!status`、`!reset`）。
 
-在 Discord 討論串中使用指令時，會依最符合直覺的作用範圍執行：`/status`、`/reset`、`/cancel`、`/interrupt`、`/compact`、`/clear`、`/model` 會操作目前的討論串 agent。`/pause`、`/back`、`/silent` 會套用在目前目標，因此討論串可以覆蓋父層頻道設定。`/memory` 與 `/flashmemory` 仍套用在父層頻道，因為討論串 agent 會繼承父層記憶。
+在 Discord 討論串中使用指令時，會依最符合直覺的作用範圍執行：`/status`、`/reset`、`/cancel`、`/interrupt`、`/compact`、`/clear`、`/model` 會操作目前的討論串 agent。`/pause`、`/back`、`/silent` 會套用在目前目標，因此討論串可以覆蓋建立當下保存的監聽行為。`/thread` 永遠套用在父頻道未來新任務是否開討論串。`/memory` 與 `/flashmemory` 仍套用在父層頻道，因為討論串 agent 會繼承父層記憶。
 
 頻道設定與排程指令必須在父層頻道使用：`/start`、`/cwd`、`/agent`、`/resume`、`/cron`、`/cron-list`、`/cron-run`、`/cron-prompt`、`/remind`。
 
@@ -858,6 +861,7 @@ RUN_ACP_SMOKE=1 KIRO_CLI=/Users/chun/.local/bin/kiro-cli scripts/release-preflig
 | `!reset` | 重啟討論串 agent |
 | `!pause` | 切換討論串為 @mention 模式 |
 | `!back` | 恢復討論串完整監聽模式 |
+| `!thread [on\|off]` | 查詢或設定父頻道未來新任務是否開討論串 |
 | `!silent` | 查詢討論串安靜模式狀態 |
 | `!silent on` | 開啟此討論串的精簡工具輸出 |
 | `!silent off` | 顯示此討論串的完整工具細節 |
@@ -880,7 +884,8 @@ RUN_ACP_SMOKE=1 KIRO_CLI=/Users/chun/.local/bin/kiro-cli scripts/release-preflig
 - **Raw Discord 稽核資料庫**：bot 可見的 Discord events 會獨立寫入 SQLite（預設 `DATA_DIR/audit/discord.sqlite`），包含 append-only `discord_events` 與 messages、attachments、reactions、threads 查詢投影；也會在 `bot_audit_events` 紀錄 command 呼叫、command 回覆、agent job lifecycle、agent final response 等語意事件。高頻 typing-start event 預設不紀錄。這不會觸發 agent，也不會自動注入 agent 對話 context；現有 `chat.jsonl` 仍只紀錄實際 user/agent 互動。
 - **稽核權限**：`/audit` 與 `!audit` 直接使用 Discord effective channel permissions，不另建 ACL。呼叫者必須能管理目前目標頻道或討論串；討論串會接受父層頻道管理權限。Discord 權限異動會在下一次查詢即時生效。
 - 回應被截斷時可用 `!resume` 補完
-- **討論串互動**：在 bot 建立的 thread 中發訊息，會自動啟動獨立的 thread agent 接續討論。非 active agent 閒置超過 `THREAD_AGENT_IDLE_SEC` 或非 active thread 歸檔時自動關閉，再次發訊息可重新啟動。容量上限不會自動關閉任何 thread agent；如果名額已滿，bot 會列出 active/inactive 狀態與 inactive 候選，讓使用者執行 `/close-thread thread_id:<id>` 關閉指定 inactive agent。active work 不會因 idle cleanup、歸檔事件或 thread agent 容量上限被強制終止；active thread 若被歸檔，會在目前 job 回到 idle 後關閉；`THREAD_AGENT_IDLE_SEC=0` 可停用討論串閒置清理。
+- **討論串模式**：預設新的父頻道任務會由 bot 主動開 Discord thread，過程與最終回覆都在 thread 中。`/thread off` 或父頻道 `/pause` 會停止新任務開 thread；新任務必須 @mention bot，使用頻道主 agent，在原頻道以 `🔄`、`💭`、`✨`、`🛠️`、`⚙️` 等 reaction heartbeat 顯示仍在運作，最後才送出實際回覆。`/thread on` 或父頻道 `/back` 會恢復新任務開 thread。
+- **討論串互動**：在 bot 建立的 thread 中發訊息，會自動啟動獨立的 thread agent 接續討論。thread 會保存建立當下的監聽模式；父頻道後續切換 `/thread off` 不會讓舊 thread 被動改成 mention-only。若父頻道已是 `/thread off`，手動建立或未知來源的 thread 預設 mention-only，直到在該 thread 內 `/back`。非 active agent 閒置超過 `THREAD_AGENT_IDLE_SEC` 或非 active thread 歸檔時自動關閉，再次發訊息可重新啟動。容量上限不會自動關閉任何 thread agent；如果名額已滿，bot 會列出 active/inactive 狀態與 inactive 候選，讓使用者執行 `/close-thread thread_id:<id>` 關閉指定 inactive agent。active work 不會因 idle cleanup、歸檔事件或 thread agent 容量上限被強制終止；active thread 若被歸檔，會在目前 job 回到 idle 後關閉；`THREAD_AGENT_IDLE_SEC=0` 可停用討論串閒置清理。
 - **取消與中斷**：`/cancel` 只送出 ACP `session/cancel` 取消目前任務；`/interrupt` 會先做同樣的 soft cancel，短暫等待後若同一任務仍在執行，才嘗試對 agent process group 送 `SIGINT`，用來中斷卡住的工具子程序。若同一任務仍卡住，重複 `/interrupt` 可再嘗試一次 `SIGINT`。它不會清除已保存的 session metadata，也不會關閉 Discord thread；若 agent 因中斷退出，下一則訊息會走既有的重啟與 `session/load` 流程
 - **多 bot 模式**：bot 啟動時會用完整 Discord guild member list 自動偵測同 server 內其他 bot，並盡量補上 bot role。`BOT_PEERS` 只需要用來覆蓋偵測結果、補上偵測不到的 bot、手動加入 role-only peer，或用 `!userID` 排除無關 bot；格式為 `Name:userID`、`Name:userID:roleID`、`Name::roleID` 或 `!userID`。自動 multi-bot mention-only 會在另一個 peer bot 對目前頻道或討論串具有實際可回應權限時啟用，包含直接在頻道發訊息，或建立公開討論串並在討論串內回覆；權限來源可以是明確 channel overwrite、繼承 role 權限或 `@everyone` 權限。自動偵測到的 role-only peer 仍不會單獨觸發 mention-only，除非用 `BOT_PEERS=Name::roleID` 手動指定。請用真正的 Discord mention（例如 `<@111111111111111111>` 或 Discord 介面的提及選單），若偵測或設定了 role ID，role mention（例如 `<@&222222222222222222>`）也會路由到目標 bot；純文字 `@BuildBot` 不一定會觸發。若要讓其中一個 bot 暫時恢復完整監聽，對該 bot 在主頻道執行 `/back` 或 `!back`，該主頻道底下的討論串也會繼承；若只想讓某條討論串回到 mention-only，可在該討論串執行 `/pause` 或 `!pause`
 - **Bot 交接限制**：bot 產生的訊息預設不會觸發另一個 bot。只有在討論串內、明確 tag 目標 bot、原始任務訊息已有完成反應（`✅`），且內容不是進度、錯誤、逾時或空輸出時，才會被視為有效交接。一般討論串任務會帶入近期 Discord 討論串訊息作為 bounded context；通過 gate 的跨 bot 交接會帶入較長的 thread transcript 作為 handoff context，讓被交辦 bot 先掌握任務、先前決策、相關檔案、結果與剩餘工作

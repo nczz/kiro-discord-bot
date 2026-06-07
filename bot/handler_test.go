@@ -269,6 +269,51 @@ func TestThreadMentionModeInheritsParentBack(t *testing.T) {
 	}
 }
 
+func TestThreadListenSnapshotOutlivesParentThreadModeChange(t *testing.T) {
+	b := &Bot{
+		peers:   parseBotPeers("M5Bot:bot-1,ChunBot:bot-2"),
+		manager: channel.NewManager(channel.ManagerConfig{}),
+	}
+	ds := testPeerPermissionSession(t, nil)
+	b.manager.SetThreadListenMode("thread-1", false)
+	b.manager.SetThreadMode("channel-1", false)
+
+	if b.requiresHumanMention(ds, "thread-1", "channel-1", "bot-1") {
+		t.Fatal("full-listen thread snapshot should not become mention-only when parent thread mode is turned off")
+	}
+}
+
+func TestUnknownThreadUsesParentThreadModeOffMentionOnly(t *testing.T) {
+	b := &Bot{manager: channel.NewManager(channel.ManagerConfig{})}
+	ds := testPeerPermissionSession(t, nil)
+	b.manager.SetThreadMode("channel-1", false)
+
+	if !b.requiresHumanMention(ds, "thread-1", "channel-1", "bot-1") {
+		t.Fatal("unknown thread under thread-mode-off parent should require mention")
+	}
+}
+
+func TestChannelPauseBackToggleThreadMode(t *testing.T) {
+	L.Load("en")
+	b := &Bot{manager: channel.NewManager(channel.ManagerConfig{})}
+	ctx := cmdCtx{channelID: "channel-1", targetID: "channel-1", reply: func(string) {}}
+
+	b.cmdPause(ctx)
+	if b.manager.ThreadModeEnabled("channel-1") {
+		t.Fatal("channel /pause should disable new thread creation")
+	}
+	b.cmdBack(ctx)
+	if !b.manager.ThreadModeEnabled("channel-1") {
+		t.Fatal("channel /back should re-enable new thread creation")
+	}
+
+	threadCtx := cmdCtx{channelID: "channel-1", targetID: "thread-1", inThread: true, reply: func(string) {}}
+	b.cmdPause(threadCtx)
+	if !b.manager.ThreadModeEnabled("channel-1") {
+		t.Fatal("thread /pause should not change parent channel thread mode")
+	}
+}
+
 func TestMultiBotMentionOnlyIsChannelScoped(t *testing.T) {
 	b := &Bot{
 		peers:   parseBotPeers("M5Bot:bot-1,ChunBot:bot-2"),
@@ -497,7 +542,15 @@ func TestSlashCommandsIncludeAgentAndUsage(t *testing.T) {
 	foundAgent := false
 	foundUsage := false
 	foundInterrupt := false
+	foundThread := false
 	for _, cmd := range buildSlashCommands() {
+		if cmd.Name == "thread" {
+			foundThread = true
+			if len(cmd.Options) != 1 || cmd.Options[0].Name != "mode" {
+				t.Fatalf("/thread options = %+v, want optional mode", cmd.Options)
+			}
+			continue
+		}
 		if cmd.Name == "interrupt" {
 			foundInterrupt = true
 			continue
@@ -517,8 +570,8 @@ func TestSlashCommandsIncludeAgentAndUsage(t *testing.T) {
 			t.Fatalf("/agent options = %+v, want optional mode", cmd.Options)
 		}
 	}
-	if !foundAgent || !foundUsage || !foundInterrupt {
-		t.Fatal("expected /agent, /usage, and /interrupt slash commands to be registered")
+	if !foundAgent || !foundUsage || !foundInterrupt || !foundThread {
+		t.Fatal("expected /agent, /usage, /interrupt, and /thread slash commands to be registered")
 	}
 }
 

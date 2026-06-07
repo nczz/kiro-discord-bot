@@ -3,6 +3,7 @@ package channel
 import (
 	"context"
 	"encoding/base64"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/nczz/kiro-discord-bot/acp"
+	L "github.com/nczz/kiro-discord-bot/locale"
 )
 
 func TestCodeBlockState(t *testing.T) {
@@ -201,6 +203,8 @@ type fakeWorkerAgent struct {
 	mu             sync.Mutex
 	cancelCalls    int
 	interruptCalls int
+	callbacks      acp.AsyncCallbacks
+	readError      func(error)
 }
 
 func (f *fakeWorkerAgent) Ask(context.Context, string, func(string)) (string, error) {
@@ -209,7 +213,11 @@ func (f *fakeWorkerAgent) Ask(context.Context, string, func(string)) (string, er
 
 func (f *fakeWorkerAgent) AskAsync(string, acp.AsyncCallbacks) {}
 
-func (f *fakeWorkerAgent) AskAsyncMulti([]acp.PromptContent, acp.AsyncCallbacks) {}
+func (f *fakeWorkerAgent) AskAsyncMulti(_ []acp.PromptContent, cb acp.AsyncCallbacks) {
+	f.mu.Lock()
+	f.callbacks = cb
+	f.mu.Unlock()
+}
 
 func (f *fakeWorkerAgent) SupportsImagePrompt() bool { return false }
 
@@ -230,7 +238,11 @@ func (f *fakeWorkerAgent) ContextUsage() float64 { return 0 }
 
 func (f *fakeWorkerAgent) TurnMetrics() acp.TurnMetrics { return acp.TurnMetrics{} }
 
-func (f *fakeWorkerAgent) OnReadErrorFunc(func(error)) {}
+func (f *fakeWorkerAgent) OnReadErrorFunc(fn func(error)) {
+	f.mu.Lock()
+	f.readError = fn
+	f.mu.Unlock()
+}
 
 func (f *fakeWorkerAgent) RecentStderr() string { return "" }
 
@@ -244,6 +256,67 @@ func (f *fakeWorkerAgent) InterruptCalls() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.interruptCalls
+}
+
+func (f *fakeWorkerAgent) Callbacks() acp.AsyncCallbacks {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.callbacks
+}
+
+func (f *fakeWorkerAgent) TriggerReadError(err error) {
+	f.mu.Lock()
+	fn := f.readError
+	f.mu.Unlock()
+	if fn != nil {
+		fn(err)
+	}
+}
+
+type recordingRoundTripper struct {
+	mu       sync.Mutex
+	requests []string
+	bodies   []string
+}
+
+func (rt *recordingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	body := ""
+	if req.Body != nil {
+		b, _ := io.ReadAll(req.Body)
+		body = string(b)
+	}
+	rt.mu.Lock()
+	rt.requests = append(rt.requests, req.Method+" "+req.URL.Path)
+	rt.bodies = append(rt.bodies, body)
+	rt.mu.Unlock()
+
+	status := http.StatusNoContent
+	respBody := ""
+	if req.Method == http.MethodPost && strings.HasSuffix(req.URL.Path, "/messages") {
+		status = http.StatusOK
+		respBody = `{"id":"reply-1","channel_id":"ch1","content":"ok"}`
+	}
+	return &http.Response{
+		StatusCode: status,
+		Status:     http.StatusText(status),
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(respBody)),
+		Request:    req,
+	}, nil
+}
+
+func (rt *recordingRoundTripper) Snapshot() ([]string, []string) {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	reqs := append([]string(nil), rt.requests...)
+	bodies := append([]string(nil), rt.bodies...)
+	return reqs, bodies
+}
+
+func testDiscordSession(rt http.RoundTripper) *discordgo.Session {
+	ds, _ := discordgo.New("Bot test")
+	ds.Client = &http.Client{Transport: rt}
+	return ds
 }
 
 func TestWorkerCancelCurrentCancelsWithoutSignalingIdle(t *testing.T) {
@@ -510,5 +583,93 @@ func TestWorkerEnqueueFull(t *testing.T) {
 	}
 	if err := w.Enqueue(&Job{MessageID: "m2"}); err == nil {
 		t.Fatal("second enqueue should fail when buffer is full")
+	}
+}
+
+func TestWorkerInlineDeliverySendsOnlyFinalReplyAndReplacesQueuedReaction(t *testing.T) {
+	rt := &recordingRoundTripper{}
+	ds := testDiscordSession(rt)
+	agent := &fakeWorkerAgent{}
+	w := newWorker("ch1", agent, 1, 30, 1, 1440, nil, "")
+
+	w.executeInline(&Job{
+		ChannelID:    "ch1",
+		MessageID:    "m1",
+		Prompt:       "hello",
+		Session:      ds,
+		DeliveryMode: DeliveryInline,
+	})
+	cb := agent.Callbacks()
+	if cb.OnComplete == nil || cb.OnToolCall == nil {
+		t.Fatal("expected inline callbacks to be registered")
+	}
+	cb.OnToolCall(acp.ToolCallEvent{Kind: "execute", Title: "Running tool"})
+	cb.OnComplete("final response", nil)
+
+	reqs, bodies := rt.Snapshot()
+	var messagePosts int
+	var removedQueued, addedDone bool
+	for i, req := range reqs {
+		if strings.HasPrefix(req, "POST /api/") && strings.HasSuffix(req, "/channels/ch1/messages") {
+			messagePosts++
+			if !strings.Contains(bodies[i], "final response") {
+				t.Fatalf("final reply body = %q, want final response", bodies[i])
+			}
+		}
+		if strings.HasPrefix(req, "DELETE ") && strings.Contains(req, "/reactions/⏳/@me") {
+			removedQueued = true
+		}
+		if strings.HasPrefix(req, "PUT ") && strings.Contains(req, "/reactions/✅/@me") {
+			addedDone = true
+		}
+	}
+	if messagePosts != 1 {
+		t.Fatalf("message post count = %d, want 1; requests=%v", messagePosts, reqs)
+	}
+	if !removedQueued {
+		t.Fatalf("expected inline pulse to remove queued reaction; requests=%v", reqs)
+	}
+	if !addedDone {
+		t.Fatalf("expected inline pulse to add final done reaction; requests=%v", reqs)
+	}
+}
+
+func TestWorkerInlineReadErrorSendsFinalErrorReply(t *testing.T) {
+	L.Load("en")
+	rt := &recordingRoundTripper{}
+	ds := testDiscordSession(rt)
+	agent := &fakeWorkerAgent{}
+	w := newWorker("ch1", agent, 1, 30, 1, 1440, nil, "")
+
+	w.executeInline(&Job{
+		ChannelID:    "ch1",
+		MessageID:    "m1",
+		Prompt:       "hello",
+		Session:      ds,
+		DeliveryMode: DeliveryInline,
+	})
+	agent.TriggerReadError(context.Canceled)
+
+	reqs, bodies := rt.Snapshot()
+	var messagePosts int
+	var body string
+	var addedWarn bool
+	for i, req := range reqs {
+		if strings.HasPrefix(req, "POST /api/") && strings.HasSuffix(req, "/channels/ch1/messages") {
+			messagePosts++
+			body = bodies[i]
+		}
+		if strings.HasPrefix(req, "PUT ") && strings.Contains(req, "/reactions/⚠️/@me") {
+			addedWarn = true
+		}
+	}
+	if messagePosts != 1 {
+		t.Fatalf("message post count = %d, want 1; requests=%v", messagePosts, reqs)
+	}
+	if !strings.Contains(body, "Agent communication lost") {
+		t.Fatalf("read error body = %q, want agent communication error", body)
+	}
+	if !addedWarn {
+		t.Fatalf("expected warning reaction; requests=%v", reqs)
 	}
 }
