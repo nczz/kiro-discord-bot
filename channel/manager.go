@@ -15,6 +15,7 @@ import (
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/nczz/kiro-discord-bot/acp"
+	"github.com/nczz/kiro-discord-bot/audit"
 	L "github.com/nczz/kiro-discord-bot/locale"
 )
 
@@ -36,6 +37,7 @@ type Manager struct {
 	defaultModel    string
 	logger          *ChatLogger
 	usage           *UsageStore
+	audit           AuditSink
 	botVersion      string
 	guildID         string
 	botID           string
@@ -113,6 +115,7 @@ type ManagerConfig struct {
 	BotID                string
 	UsageTimezone        string
 	UsageRetentionMonths int
+	Audit                AuditSink
 }
 
 func NewManager(cfg ManagerConfig) *Manager {
@@ -133,6 +136,7 @@ func NewManager(cfg ManagerConfig) *Manager {
 		defaultModel:        cfg.KiroModel,
 		logger:              NewChatLogger(cfg.DataDir),
 		usage:               NewUsageStore(cfg.DataDir, cfg.UsageTimezone, cfg.UsageRetentionMonths),
+		audit:               cfg.Audit,
 		botVersion:          cfg.BotVersion,
 		guildID:             cfg.GuildID,
 		botID:               cfg.BotID,
@@ -362,6 +366,7 @@ func (m *Manager) Enqueue(ds *discordgo.Session, job *Job) error {
 	if err := worker.Enqueue(job); err != nil {
 		return fmt.Errorf("queue full (%d jobs pending)", worker.QueueLen())
 	}
+	m.recordJobEnqueued(job, worker.QueueLen(), false)
 	m.channelLastActivity[job.ChannelID] = time.Now()
 
 	qLen := worker.QueueLen()
@@ -373,6 +378,34 @@ func (m *Manager) Enqueue(ds *discordgo.Session, job *Job) error {
 		})
 	}
 	return nil
+}
+
+func (m *Manager) recordJobEnqueued(job *Job, queueLen int, thread bool) {
+	if m == nil || m.audit == nil || job == nil {
+		return
+	}
+	targetID := job.ChannelID
+	if job.ThreadID != "" {
+		targetID = job.ThreadID
+	}
+	m.audit.RecordBotEvent(audit.BotEvent{
+		Type:            "agent_job_enqueued",
+		GuildID:         job.GuildID,
+		ChannelID:       job.ChannelID,
+		TargetID:        targetID,
+		ThreadID:        job.ThreadID,
+		ParentChannelID: job.ParentChannelID,
+		MessageID:       job.MessageID,
+		JobID:           job.MessageID,
+		UserID:          job.UserID,
+		Username:        job.Username,
+		Source:          job.Source,
+		Status:          "queued",
+		Metadata: map[string]any{
+			"queue_len": queueLen,
+			"thread":    thread,
+		},
+	})
 }
 
 // Reset stops the current agent and worker, clears session, starts fresh.
@@ -936,6 +969,7 @@ func (m *Manager) startAgentAndWorker(channelID string) (*Worker, error) {
 
 	w := NewWorker(channelID, agent, m.queueBufSize, m.askTimeoutSec, m.streamUpdateSec, m.threadArchive, m.logger, model)
 	w.SetUsageStore(m.usage)
+	w.SetAuditSink(m.audit)
 	w.SetHistoryPrefix(historyCtx)
 	w.OnMemoryPrefixFunc(func() string {
 		m.mu.Lock()
@@ -1298,6 +1332,7 @@ func (m *Manager) EnqueueThread(ds *discordgo.Session, job *Job, parentChannelID
 	if err := entry.worker.Enqueue(job); err != nil {
 		return fmt.Errorf("thread queue full")
 	}
+	m.recordJobEnqueued(job, entry.worker.QueueLen(), true)
 
 	_ = ds.MessageReactionAdd(job.ChannelID, job.MessageID, "⏳")
 	return nil
@@ -1400,6 +1435,7 @@ func (m *Manager) spawnThreadAgent(threadID, parentChannelID string, modelOverri
 
 	w := NewWorker("thread-"+threadID, agent, m.queueBufSize, m.askTimeoutSec, m.streamUpdateSec, 0, m.logger, model)
 	w.SetUsageStore(m.usage)
+	w.SetAuditSink(m.audit)
 	w.SetHistoryPrefix(historyCtx)
 	w.OnActivityFunc(func() { m.TouchThreadAgent(threadID) })
 	w.OnIdleFunc(func() bool { return m.StopThreadAgentIfCloseWhenIdle(threadID) })

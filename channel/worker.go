@@ -16,6 +16,7 @@ import (
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/nczz/kiro-discord-bot/acp"
+	"github.com/nczz/kiro-discord-bot/audit"
 	L "github.com/nczz/kiro-discord-bot/locale"
 )
 
@@ -38,6 +39,10 @@ type Job struct {
 	Source          string // message, thread, cron, etc.
 }
 
+type AuditSink interface {
+	RecordBotEvent(audit.BotEvent)
+}
+
 // Worker manages a per-channel job queue and executes jobs sequentially.
 type Worker struct {
 	channelID       string
@@ -52,6 +57,7 @@ type Worker struct {
 	started         sync.Once
 	logger          *ChatLogger
 	usage           *UsageStore
+	audit           AuditSink
 	model           string
 
 	cancelMu sync.Mutex
@@ -117,6 +123,8 @@ func (w *Worker) OnMemoryPrefixFunc(fn func() string) { w.memoryPrefix = fn }
 
 // SetUsageStore sets the append-only usage ledger used for report commands.
 func (w *Worker) SetUsageStore(store *UsageStore) { w.usage = store }
+
+func (w *Worker) SetAuditSink(sink AuditSink) { w.audit = sink }
 
 // OnSilentFunc sets a callback that returns whether silent mode is active.
 func (w *Worker) OnSilentFunc(fn func() bool) { w.isSilent = fn }
@@ -309,6 +317,7 @@ func promptVisibleBody(prompt string) string {
 func (w *Worker) execute(job *Job) {
 	ds := job.Session
 	startTime := time.Now()
+	w.auditJobEvent("agent_job_started", job, "", "", nil)
 
 	// Signal activity at task start
 	if w.onActivity != nil {
@@ -371,6 +380,7 @@ func (w *Worker) execute(job *Job) {
 		thread, err := w.threadForMessage(ds, job, threadName)
 		if err != nil {
 			log.Printf("[worker %s] get/create thread: %v, falling back to sync", w.channelID, err)
+			w.auditJobEvent("agent_thread_create_failed", job, "", "error", map[string]any{"error": err.Error()})
 			w.executeFallback(job)
 			return
 		}
@@ -501,6 +511,12 @@ func (w *Worker) execute(job *Job) {
 				if w.logger != nil {
 					w.logger.Log(w.channelID, ChatEntry{Role: "assistant", Content: "❌ " + errMsg, Model: w.model})
 				}
+				w.auditJobEvent("agent_job_failed", job, threadID, "error", map[string]any{
+					"error":      errMsg,
+					"ctx_error":  fmt.Sprint(ctxErr),
+					"elapsed_ms": time.Since(startTime).Milliseconds(),
+				})
+				w.auditResponseEvent(job, threadID, "error", "❌ "+errMsg)
 				w.recordUsage(job, threadID, "error")
 				finishJob()
 				return
@@ -514,6 +530,7 @@ func (w *Worker) execute(job *Job) {
 			swapReaction(ds, job.ChannelID, job.MessageID, "⚙️", "✅")
 			// Mark the origin done before final text so tagged peer bots see a completed source.
 			SendLongThread(ds, threadID, response)
+			w.auditResponseEvent(job, threadID, "success", response)
 
 			log.Printf("[worker %s] job done | user=%s msg=%s elapsed=%s len=%d",
 				w.channelID, job.Username, job.MessageID, time.Since(startTime).Round(time.Millisecond), len(response))
@@ -527,6 +544,10 @@ func (w *Worker) execute(job *Job) {
 				ds.ChannelMessageSend(threadID, footer)
 			}
 			w.recordUsage(job, threadID, "success")
+			w.auditJobEvent("agent_job_completed", job, threadID, "success", map[string]any{
+				"elapsed_ms":   time.Since(startTime).Milliseconds(),
+				"response_len": len(response),
+			})
 
 			// Warn if context usage is high
 			if usage := w.agent.ContextUsage(); usage >= 90 {
@@ -580,6 +601,53 @@ func (w *Worker) execute(job *Job) {
 	promptContent := buildPromptContent(prompt, job.Attachments, w.agent.SupportsImagePrompt())
 	w.agent.AskAsyncMulti(promptContent, callbacks)
 	// Returns immediately — callbacks handle the rest
+}
+
+func (w *Worker) auditJobEvent(eventType string, job *Job, threadID, status string, metadata map[string]any) {
+	if w == nil || w.audit == nil || job == nil {
+		return
+	}
+	w.audit.RecordBotEvent(audit.BotEvent{
+		Type:            eventType,
+		GuildID:         job.GuildID,
+		ChannelID:       job.ChannelID,
+		TargetID:        job.ChannelID,
+		ThreadID:        threadID,
+		ParentChannelID: job.ParentChannelID,
+		MessageID:       job.MessageID,
+		JobID:           job.MessageID,
+		UserID:          job.UserID,
+		Username:        job.Username,
+		Source:          job.Source,
+		Status:          status,
+		Model:           w.model,
+		Metadata:        metadata,
+	})
+}
+
+func (w *Worker) auditResponseEvent(job *Job, threadID, status, content string) {
+	if w == nil || w.audit == nil || job == nil {
+		return
+	}
+	w.audit.RecordBotEvent(audit.BotEvent{
+		Type:            "agent_response_sent",
+		GuildID:         job.GuildID,
+		ChannelID:       job.ChannelID,
+		TargetID:        threadID,
+		ThreadID:        threadID,
+		ParentChannelID: job.ParentChannelID,
+		MessageID:       job.MessageID,
+		JobID:           job.MessageID,
+		UserID:          job.UserID,
+		Username:        job.Username,
+		Source:          job.Source,
+		Status:          status,
+		Content:         content,
+		Model:           w.model,
+		Metadata: map[string]any{
+			"content_len": len(content),
+		},
+	})
 }
 
 func (w *Worker) recordUsage(job *Job, threadID, status string) {

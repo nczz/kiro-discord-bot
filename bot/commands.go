@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/bwmarrin/discordgo"
+	"github.com/nczz/kiro-discord-bot/audit"
 	"github.com/nczz/kiro-discord-bot/channel"
 	L "github.com/nczz/kiro-discord-bot/locale"
 )
@@ -51,6 +52,64 @@ func isChannelOnlySlashCommand(name string) bool {
 	default:
 		return false
 	}
+}
+
+func (b *Bot) cmdAudit(ctx cmdCtx) {
+	if b.auditRecorder == nil {
+		ctx.reply(L.Get("audit.disabled"))
+		return
+	}
+	if !b.userCanManageAuditTarget(b.discord, ctx.userID, ctx.targetID) {
+		ctx.reply(L.Get("audit.forbidden"))
+		return
+	}
+	limit := 20
+	args := strings.Fields(ctx.args)
+	if len(args) > 0 {
+		if n, err := strconv.Atoi(args[len(args)-1]); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	events, err := b.auditRecorder.RecentTimeline(context.Background(), ctx.targetID, limit)
+	if err != nil {
+		ctx.reply(commandError(err))
+		return
+	}
+	if len(events) == 0 {
+		ctx.reply(L.Get("audit.no_records"))
+		return
+	}
+	ctx.reply(formatAuditTimeline(events))
+}
+
+func formatAuditTimeline(events []audit.TimelineEvent) string {
+	var sb strings.Builder
+	sb.WriteString(L.Get("audit.recent_header"))
+	for _, evt := range events {
+		label := evt.Type
+		if evt.Command != "" {
+			label += " /" + evt.Command
+		}
+		if evt.Status != "" {
+			label += " [" + evt.Status + "]"
+		}
+		user := evt.UserID
+		if user != "" {
+			user = " <@" + user + ">"
+		}
+		content := strings.TrimSpace(evt.Content)
+		if len([]rune(content)) > 120 {
+			content = string([]rune(content)[:120]) + "..."
+		}
+		sb.WriteString(fmt.Sprintf("\n- `%s` `%s`%s", evt.Kind, label, user))
+		if evt.MessageID != "" {
+			sb.WriteString(" msg:`" + evt.MessageID + "`")
+		}
+		if content != "" {
+			sb.WriteString(" — " + channel.EscapeDiscordMarkdown(content))
+		}
+	}
+	return sb.String()
 }
 
 func (b *Bot) cmdPause(ctx cmdCtx) {

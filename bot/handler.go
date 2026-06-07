@@ -98,6 +98,32 @@ func messageReactionState(m *discordgo.Message) string {
 	}
 }
 
+func ctxForAudit(channelID, targetID string, inThread bool, guildID, userID, username string) cmdCtx {
+	return cmdCtx{
+		channelID: channelID,
+		targetID:  targetID,
+		inThread:  inThread,
+		guildID:   guildID,
+		userID:    userID,
+		username:  username,
+	}
+}
+
+func isKnownBangCommand(name, content string) bool {
+	if name == "" {
+		return false
+	}
+	switch name {
+	case "resume", "pause", "back", "silent", "reset", "status", "usage", "doctor", "audit", "cancel", "interrupt",
+		"close-thread", "compact", "clear", "cwd", "start", "agent", "model", "models", "memory", "flashmemory", "cron":
+		return true
+	case "remind":
+		return strings.HasPrefix(strings.TrimSpace(content), "!remind ")
+	default:
+		return false
+	}
+}
+
 func (b *Bot) shouldAcceptBotResultMention(ds *discordgo.Session, m *discordgo.MessageCreate, content, selfID, parentChannelID string) bool {
 	if m.Author == nil || !m.Author.Bot || m.Author.ID == selfID {
 		return false
@@ -484,8 +510,13 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 	}
 
 	// Commands
+	bangCommand := commandNameFromBang(content)
+	isKnownCommand := isKnownBangCommand(bangCommand, content)
 	reply := func(msg string) {
 		ds.ChannelMessageSendReply(m.ChannelID, msg, &discordgo.MessageReference{MessageID: m.ID, ChannelID: m.ChannelID})
+		if isKnownCommand {
+			b.recordCommandResponse(ctxForAudit(m.ChannelID, m.ChannelID, false, m.GuildID, m.Author.ID, m.Author.Username), bangCommand, "message", "sent", msg)
+		}
 	}
 	ctx := cmdCtx{
 		channelID: m.ChannelID,
@@ -495,6 +526,10 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 		guildID:   m.GuildID,
 		userID:    m.Author.ID,
 		username:  m.Author.Username,
+	}
+	if isKnownCommand {
+		b.recordCommandInvoked(ctx, bangCommand, "message", m.ID, "")
+		defer b.recordCommandCompleted(ctx, bangCommand, "message", "completed", "")
 	}
 
 	switch {
@@ -516,6 +551,9 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 		b.cmdUsage(ctx)
 	case content == "!doctor":
 		b.cmdDoctor(ctx)
+	case content == "!audit" || strings.HasPrefix(content, "!audit "):
+		ctx.args = strings.TrimSpace(strings.TrimPrefix(content, "!audit"))
+		b.cmdAudit(ctx)
 	case content == "!cancel":
 		b.cmdCancel(ctx)
 	case content == "!interrupt":
@@ -613,7 +651,14 @@ func (b *Bot) handleThreadUpdate(ds *discordgo.Session, t *discordgo.ThreadUpdat
 // handleThreadMessage handles messages sent inside a thread, routing to a dedicated thread agent.
 func (b *Bot) handleThreadMessage(ds *discordgo.Session, m *discordgo.MessageCreate, content, parentChannelID string, handoff bool) {
 	threadID := m.ChannelID
-	reply := func(msg string) { ds.ChannelMessageSend(threadID, msg) }
+	bangCommand := commandNameFromBang(content)
+	isKnownCommand := isKnownBangCommand(bangCommand, content)
+	reply := func(msg string) {
+		ds.ChannelMessageSend(threadID, msg)
+		if isKnownCommand {
+			b.recordCommandResponse(ctxForAudit(parentChannelID, threadID, true, m.GuildID, m.Author.ID, m.Author.Username), bangCommand, "thread_message", "sent", msg)
+		}
+	}
 	ctx := cmdCtx{
 		channelID: parentChannelID,
 		targetID:  threadID,
@@ -622,6 +667,10 @@ func (b *Bot) handleThreadMessage(ds *discordgo.Session, m *discordgo.MessageCre
 		guildID:   m.GuildID,
 		userID:    m.Author.ID,
 		username:  m.Author.Username,
+	}
+	if isKnownCommand {
+		b.recordCommandInvoked(ctx, bangCommand, "thread_message", m.ID, "")
+		defer b.recordCommandCompleted(ctx, bangCommand, "thread_message", "completed", "")
 	}
 
 	// Thread-specific commands
@@ -635,6 +684,10 @@ func (b *Bot) handleThreadMessage(ds *discordgo.Session, m *discordgo.MessageCre
 		return
 	case content == "!doctor":
 		b.cmdDoctor(ctx)
+		return
+	case content == "!audit" || strings.HasPrefix(content, "!audit "):
+		ctx.args = strings.TrimSpace(strings.TrimPrefix(content, "!audit"))
+		b.cmdAudit(ctx)
 		return
 	case content == "!cancel":
 		b.cmdCancel(ctx)
@@ -758,6 +811,9 @@ func buildSlashCommands() []*discordgo.ApplicationCommand {
 			{Type: discordgo.ApplicationCommandOptionUser, Name: "user", Description: L.Get("cmd.usage.opt.user"), Required: false},
 		}},
 		{Name: "doctor", Description: L.Get("cmd.doctor.desc")},
+		{Name: "audit", Description: L.Get("cmd.audit.desc"), Options: []*discordgo.ApplicationCommandOption{
+			{Type: discordgo.ApplicationCommandOptionInteger, Name: "limit", Description: L.Get("cmd.audit.opt.limit"), Required: false},
+		}},
 		{Name: "cancel", Description: L.Get("cmd.cancel.desc")},
 		{Name: "interrupt", Description: L.Get("cmd.interrupt.desc")},
 		{Name: "cwd", Description: L.Get("cmd.cwd.desc"), Options: []*discordgo.ApplicationCommandOption{
@@ -920,15 +976,21 @@ func (b *Bot) handleSlashCommand(ds *discordgo.Session, i *discordgo.Interaction
 	data := i.ApplicationCommandData()
 	log.Printf("[interaction] /%s from %s", data.Name, i.ChannelID)
 	rawChannelID := i.ChannelID
+	userID, username := interactionUser(i)
+	auditCtx := ctxForAudit(rawChannelID, rawChannelID, false, i.GuildID, userID, username)
+	b.recordCommandInvoked(auditCtx, data.Name, "slash", "", i.ID)
 	if !b.slashCommandAllowedInTarget(ds, rawChannelID) {
 		log.Printf("[interaction] rejected /%s reason=bot_not_in_channel channel=%s", data.Name, rawChannelID)
+		msg := L.Get("error.bot_not_in_channel")
 		_ = ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
 			Data: &discordgo.InteractionResponseData{
-				Content: L.Get("error.bot_not_in_channel"),
+				Content: msg,
 				Flags:   discordgo.MessageFlagsEphemeral,
 			},
 		})
+		b.recordCommandResponse(auditCtx, data.Name, "slash", "rejected", msg)
+		b.recordCommandCompleted(auditCtx, data.Name, "slash", "rejected", "bot_not_in_channel")
 		return
 	}
 	threadParent := resolveThreadParent(ds, rawChannelID)
@@ -937,12 +999,18 @@ func (b *Bot) handleSlashCommand(ds *discordgo.Session, i *discordgo.Interaction
 		channelID = threadParent
 	}
 	inThread := threadParent != ""
+	auditCtx.channelID = channelID
+	auditCtx.targetID = rawChannelID
+	auditCtx.inThread = inThread
 
 	if inThread && isChannelOnlySlashCommand(data.Name) {
+		msg := L.Get("error.channel_only")
 		_ = ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{Content: L.Get("error.channel_only")},
+			Data: &discordgo.InteractionResponseData{Content: msg},
 		})
+		b.recordCommandResponse(auditCtx, data.Name, "slash", "rejected", msg)
+		b.recordCommandCompleted(auditCtx, data.Name, "slash", "rejected", "channel_only")
 		return
 	}
 
@@ -950,17 +1018,21 @@ func (b *Bot) handleSlashCommand(ds *discordgo.Session, i *discordgo.Interaction
 	switch data.Name {
 	case "cron":
 		b.handleCronModal(ds, i)
+		b.recordCommandCompleted(auditCtx, data.Name, "slash", "completed", "")
 		return
 	case "cron-list":
 		b.handleCronList(ds, i)
+		b.recordCommandCompleted(auditCtx, data.Name, "slash", "completed", "")
 		return
 	case "cron-run":
 		name := data.Options[0].StringValue()
 		b.handleCronRun(ds, i, name)
+		b.recordCommandCompleted(auditCtx, data.Name, "slash", "completed", "")
 		return
 	case "cron-prompt":
 		desc := data.Options[0].StringValue()
 		b.handleCronPrompt(ds, i, desc)
+		b.recordCommandCompleted(auditCtx, data.Name, "slash", "completed", "")
 		return
 	case "remind":
 		timeStr := data.Options[0].StringValue()
@@ -970,6 +1042,7 @@ func (b *Bot) handleSlashCommand(ds *discordgo.Session, i *discordgo.Interaction
 			useAgent = data.Options[2].BoolValue()
 		}
 		b.handleRemind(ds, i, timeStr, content, useAgent)
+		b.recordCommandCompleted(auditCtx, data.Name, "slash", "completed", "")
 		return
 	}
 
@@ -979,11 +1052,12 @@ func (b *Bot) handleSlashCommand(ds *discordgo.Session, i *discordgo.Interaction
 	})
 	reply := func(msg string) {
 		_, _ = ds.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{Content: msg})
+		b.recordCommandResponse(auditCtx, data.Name, "slash", "sent", msg)
 	}
-	userID, username := interactionUser(i)
 	ctx := cmdCtx{channelID: channelID, targetID: rawChannelID, inThread: inThread, reply: reply, guildID: i.GuildID, userID: userID, username: username}
 
 	go func() {
+		defer b.recordCommandCompleted(auditCtx, data.Name, "slash", "completed", "")
 		// Extract args from slash command options
 		switch data.Name {
 		case "start":
@@ -1002,6 +1076,11 @@ func (b *Bot) handleSlashCommand(ds *discordgo.Session, i *discordgo.Interaction
 			b.cmdUsage(ctx)
 		case "doctor":
 			b.cmdDoctor(ctx)
+		case "audit":
+			if len(data.Options) > 0 {
+				ctx.args = fmt.Sprintf("%d", data.Options[0].IntValue())
+			}
+			b.cmdAudit(ctx)
 		case "cancel":
 			b.cmdCancel(ctx)
 		case "interrupt":

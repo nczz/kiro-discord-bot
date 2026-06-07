@@ -2,12 +2,14 @@ package bot
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"sync"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
+	"github.com/nczz/kiro-discord-bot/audit"
 	"github.com/nczz/kiro-discord-bot/channel"
 	"github.com/nczz/kiro-discord-bot/heartbeat"
 	"github.com/nczz/kiro-discord-bot/stt"
@@ -22,6 +24,7 @@ type Bot struct {
 	hbCancel           context.CancelFunc
 	cronStore          *heartbeat.CronStore
 	cronTask           *heartbeat.CronTask
+	auditRecorder      *audit.Recorder
 	cronTimezone       string
 	version            string
 	downloadClient     *http.Client
@@ -63,6 +66,7 @@ type BotConfig struct {
 	STTLanguage        string
 	STTMaxDurationSec  int
 	BotPeers           string
+	Audit              audit.Config
 }
 
 func NewFromConfig(cfg BotConfig) (*Bot, error) {
@@ -77,6 +81,21 @@ func NewFromConfig(cfg BotConfig) (*Bot, error) {
 		return nil, err
 	}
 
+	var auditRecorder *audit.Recorder
+	if cfg.Audit.Enabled {
+		cfg.Audit.DataDir = cfg.DataDir
+		auditStore, err := audit.Open(cfg.Audit)
+		if err != nil {
+			return nil, fmt.Errorf("open audit recorder: %w", err)
+		}
+		auditRecorder = audit.NewRecorder(auditStore, cfg.Audit.QueueSize, func(channelID string) string {
+			return resolveThreadParent(ds, channelID)
+		}, cfg.Audit.RecordTyping)
+		auditRecorder.Register(ds)
+		cfg.ManagerConfig.Audit = auditRecorder
+		log.Printf("[audit] sqlite recorder enabled")
+	}
+
 	cfg.ManagerConfig.Store = store
 	manager := channel.NewManager(cfg.ManagerConfig)
 
@@ -89,6 +108,7 @@ func NewFromConfig(cfg BotConfig) (*Bot, error) {
 		peers:              activeBotPeers(manualPeers),
 		manualPeers:        manualPeers,
 		peerPermCache:      make(map[string]peerPermissionCacheEntry),
+		auditRecorder:      auditRecorder,
 	}
 	if cfg.STTEnabled && cfg.STTAPIKey != "" {
 		b.sttClient = stt.New(cfg.STTProvider, cfg.STTAPIKey, cfg.STTModel, cfg.STTLanguage)
@@ -97,6 +117,9 @@ func NewFromConfig(cfg BotConfig) (*Bot, error) {
 
 	cronStore, err := heartbeat.NewCronStore(cfg.DataDir)
 	if err != nil {
+		if b.auditRecorder != nil {
+			b.auditRecorder.Close()
+		}
 		return nil, err
 	}
 	b.cronStore = cronStore
@@ -141,4 +164,7 @@ func (b *Bot) Stop() {
 	b.seen.Stop()
 	b.manager.StopAll()
 	b.discord.Close()
+	if b.auditRecorder != nil {
+		b.auditRecorder.Close()
+	}
 }

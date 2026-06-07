@@ -202,6 +202,12 @@ STT_MAX_DURATION_SEC=300
 | `PREFLIGHT_MODE` | Startup ACP check behavior: `warn`, `strict`, or `skip` | `warn` |
 | `SKIP_PREFLIGHT` | Legacy override; any non-empty value skips startup preflight | `` |
 | `BOT_PEERS` | Optional peer bot overrides for multi-bot coordination and handoffs. Peers are auto-discovered from Discord guild bot members first. Format: `Name:userID`, `Name:userID:roleID`, `Name::roleID` for a manual role-only peer, or `!userID` to exclude an auto-discovered bot, e.g. `BuildBot:111111111111111111:222222222222222222,!333333333333333333` | `` |
+| `AUDIT_LOG_ENABLED` | Record bot-visible Discord raw events to SQLite without affecting agent routing or context | `true` |
+| `AUDIT_LOG_DB` | SQLite audit DB path (empty = `DATA_DIR/audit/discord.sqlite`) | `` |
+| `AUDIT_LOG_RETENTION_DAYS` | Days of audit rows to keep (0 = keep forever) | `0` |
+| `AUDIT_LOG_QUEUE_SIZE` | Buffered Discord event queue size before dropping audit-only events | `1000` |
+| `AUDIT_LOG_RECORD_CONTENT` | Store message content in audit projections and raw JSON (`false` redacts JSON `content` fields) | `true` |
+| `AUDIT_LOG_RECORD_TYPING` | Record high-volume Discord typing-start events | `false` |
 | `MCP_DISCORD_ALLOWED_GUILDS` | Comma-separated guild IDs the Discord MCP server may access (empty = unrestricted) | `` |
 | `MCP_DISCORD_ALLOWED_CHANNELS` | Comma-separated channel/thread IDs the Discord MCP server may access (empty = unrestricted) | `` |
 | `MCP_DISCORD_DOWNLOAD_DIR` | Restrict `discord_download_attachment` writes to this directory (empty = caller-selected directory) | `` |
@@ -313,6 +319,7 @@ The bot needs explicit permission in each channel it should respond to:
 | `/status` | Show agent state, queue length, context usage, session ID |
 | `/usage [user]` | Show credit usage for today, this week, and month-to-date |
 | `/doctor` | Run deployment diagnostics and ACP preflight |
+| `/audit [limit]` | Show recent raw/semantic audit events for the current channel or thread |
 | `/cancel` | Cancel the currently running task |
 | `/interrupt` | Interrupt a stuck current task; starts with `/cancel`, then tries a process interrupt if still active |
 | `/cwd` | Show current working directory |
@@ -362,6 +369,7 @@ Channel setup and scheduling commands must be run in the parent channel: `/start
 | `!model` | Show thread agent's current model |
 | `!model <model-id>` | Switch thread agent's model |
 | `!models` | List all available models |
+| `!audit [limit]` | Show recent audit events for this thread |
 
 All thread commands also work as `/` slash commands inside a thread.
 
@@ -687,6 +695,8 @@ The agent will read the guide, build the binary, update `mcp.json`, and prompt y
 - **CWD allowlist:** Set `ALLOWED_CWD_ROOTS` to restrict all agent working directories to approved roots. Docker defaults this to `/projects`.
 - **Long responses:** Automatically split into multiple messages at 2000 char Discord limit.
 - **Conversation logs:** All user/agent interactions are recorded in `DATA_DIR/ch-<channelID>/chat.jsonl`.
+- **Raw Discord audit DB:** Bot-visible Discord events are recorded independently in SQLite at `DATA_DIR/audit/discord.sqlite` by default. The audit recorder stores append-only `discord_events` rows plus query projections for messages, attachments, reactions, and threads. It also records semantic bot events such as command invocations, command responses, agent job lifecycle, and agent final responses in `bot_audit_events`. High-volume typing-start events are disabled by default. Audit data does not trigger the agent and is never injected into conversation context unless an explicit command or future tool reads it.
+- **Audit permissions:** `/audit` and `!audit` use Discord effective channel permissions instead of a separate ACL. The caller must be able to manage the current target channel/thread, either directly or through the parent channel for threads. Discord permission changes take effect on the next audit query.
 - **Attachments:** Stored in `DATA_DIR/ch-<channelID>/attachments/` with timestamp prefixes. Filenames are sanitized, downloads must return HTTP 200, and each file is capped by `ATTACHMENT_MAX_MB`. Auto-cleaned after `ATTACHMENT_RETAIN_DAYS`.
 - **Tool permissions:** Server-initiated ACP permission requests are approved only when `TRUST_ALL_TOOLS=true` or `TRUST_TOOLS` is set; otherwise they are denied by local policy.
 - **Preflight:** `PREFLIGHT_MODE=warn` keeps the bot online when `kiro-cli` is temporarily unavailable. Use `strict` for fail-fast production startup or `skip` for development.
@@ -809,6 +819,7 @@ RUN_ACP_SMOKE=1 KIRO_CLI=/Users/chun/.local/bin/kiro-cli scripts/release-preflig
 | `/status` | 查詢 agent 狀態、queue 長度、context 使用率 |
 | `/usage [user]` | 查詢今天、本周、本月至今 credits 用量 |
 | `/doctor` | 執行部署診斷與 ACP preflight |
+| `/audit [limit]` | 查看目前頻道或討論串最近的 raw/semantic 稽核事件 |
 | `/cancel` | 取消目前執行中的任務 |
 | `/interrupt` | 中斷卡住的目前任務；先執行取消，仍未結束才嘗試進程層中斷 |
 | `/cwd` | 查詢目前工作目錄 |
@@ -856,6 +867,7 @@ RUN_ACP_SMOKE=1 KIRO_CLI=/Users/chun/.local/bin/kiro-cli scripts/release-preflig
 | `!model` | 查詢討論串 agent 目前的 model |
 | `!model <model-id>` | 切換討論串 agent 的 model 並重啟 |
 | `!models` | 列出所有可用的 model |
+| `!audit [limit]` | 查看此討論串最近的稽核事件 |
 
 所有討論串指令也支援 `/` slash command 形式。
 
@@ -865,6 +877,8 @@ RUN_ACP_SMOKE=1 KIRO_CLI=/Users/chun/.local/bin/kiro-cli scripts/release-preflig
 - Session ID 會存到 `DATA_DIR/sessions.json`；當 kiro-cli 宣告支援 `loadSession` 時，頻道與討論串 agent 重啟會優先用 `session/load` 接回既有 ACP session。Session key 會依 guild、bot 身分、目標類型與 channel/thread ID 分開；舊版 channel-only key 仍會作為遷移 fallback 讀取
 - MCP 設定自動繼承 `~/.kiro/settings/mcp.json`
 - **Discord MCP 範圍**：用 `MCP_DISCORD_ALLOWED_GUILDS`、`MCP_DISCORD_ALLOWED_CHANNELS` 限制可操作的 guild/channel；用 `MCP_DISCORD_READ_ONLY`、`MCP_DISCORD_ALLOWED_WRITE_TOOLS` 或 `MCP_DISCORD_ALLOW_DESTRUCTIVE=false` 限制寫入工具
+- **Raw Discord 稽核資料庫**：bot 可見的 Discord events 會獨立寫入 SQLite（預設 `DATA_DIR/audit/discord.sqlite`），包含 append-only `discord_events` 與 messages、attachments、reactions、threads 查詢投影；也會在 `bot_audit_events` 紀錄 command 呼叫、command 回覆、agent job lifecycle、agent final response 等語意事件。高頻 typing-start event 預設不紀錄。這不會觸發 agent，也不會自動注入 agent 對話 context；現有 `chat.jsonl` 仍只紀錄實際 user/agent 互動。
+- **稽核權限**：`/audit` 與 `!audit` 直接使用 Discord effective channel permissions，不另建 ACL。呼叫者必須能管理目前目標頻道或討論串；討論串會接受父層頻道管理權限。Discord 權限異動會在下一次查詢即時生效。
 - 回應被截斷時可用 `!resume` 補完
 - **討論串互動**：在 bot 建立的 thread 中發訊息，會自動啟動獨立的 thread agent 接續討論。非 active agent 閒置超過 `THREAD_AGENT_IDLE_SEC` 或非 active thread 歸檔時自動關閉，再次發訊息可重新啟動。容量上限不會自動關閉任何 thread agent；如果名額已滿，bot 會列出 active/inactive 狀態與 inactive 候選，讓使用者執行 `/close-thread thread_id:<id>` 關閉指定 inactive agent。active work 不會因 idle cleanup、歸檔事件或 thread agent 容量上限被強制終止；active thread 若被歸檔，會在目前 job 回到 idle 後關閉；`THREAD_AGENT_IDLE_SEC=0` 可停用討論串閒置清理。
 - **取消與中斷**：`/cancel` 只送出 ACP `session/cancel` 取消目前任務；`/interrupt` 會先做同樣的 soft cancel，短暫等待後若同一任務仍在執行，才嘗試對 agent process group 送 `SIGINT`，用來中斷卡住的工具子程序。若同一任務仍卡住，重複 `/interrupt` 可再嘗試一次 `SIGINT`。它不會清除已保存的 session metadata，也不會關閉 Discord thread；若 agent 因中斷退出，下一則訊息會走既有的重啟與 `session/load` 流程

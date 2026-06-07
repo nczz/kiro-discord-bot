@@ -8,6 +8,7 @@ import (
 	"syscall"
 
 	"github.com/nczz/kiro-discord-bot/acp"
+	"github.com/nczz/kiro-discord-bot/audit"
 	"github.com/nczz/kiro-discord-bot/bot"
 	"github.com/nczz/kiro-discord-bot/channel"
 	"github.com/nczz/kiro-discord-bot/locale"
@@ -73,12 +74,20 @@ func main() {
 		CronTimezone:       cfg.CronTimezone,
 		DownloadTimeoutSec: cfg.DownloadTimeoutSec,
 		BotPeers:           cfg.BotPeers,
-		STTEnabled:         cfg.STTEnabled,
-		STTProvider:        cfg.STTProvider,
-		STTAPIKey:          cfg.STTAPIKey,
-		STTModel:           cfg.STTModel,
-		STTLanguage:        cfg.STTLanguage,
-		STTMaxDurationSec:  cfg.STTMaxDurationSec,
+		Audit: audit.Config{
+			Enabled:       cfg.AuditEnabled,
+			DBPath:        cfg.AuditDBPath,
+			RetentionDays: cfg.AuditRetentionDays,
+			QueueSize:     cfg.AuditQueueSize,
+			RecordContent: cfg.AuditRecordContent,
+			RecordTyping:  cfg.AuditRecordTyping,
+		},
+		STTEnabled:        cfg.STTEnabled,
+		STTProvider:       cfg.STTProvider,
+		STTAPIKey:         cfg.STTAPIKey,
+		STTModel:          cfg.STTModel,
+		STTLanguage:       cfg.STTLanguage,
+		STTMaxDurationSec: cfg.STTMaxDurationSec,
 	})
 	if err != nil {
 		log.Fatal(err)

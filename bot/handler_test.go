@@ -84,6 +84,14 @@ func botRoleAllowOverwrite(roleID string) *discordgo.PermissionOverwrite {
 	}
 }
 
+func userMemberManageOverwrite(userID string, perms int64) *discordgo.PermissionOverwrite {
+	return &discordgo.PermissionOverwrite{
+		ID:    userID,
+		Type:  discordgo.PermissionOverwriteTypeMember,
+		Allow: discordgo.PermissionViewChannel | perms,
+	}
+}
+
 func TestShouldIgnoreMessage(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -449,6 +457,39 @@ func TestPeerPermissionCacheCachesChannelChecks(t *testing.T) {
 	}}
 	if !b.peerCanRespondInTarget(ds, "bot-2", "channel-1") {
 		t.Fatal("expected cached peer permission result")
+	}
+}
+
+func TestUserCanManageAuditTargetUsesDiscordChannelPermissions(t *testing.T) {
+	b := &Bot{}
+	ds := testPeerPermissionSession(t, []*discordgo.PermissionOverwrite{
+		userMemberManageOverwrite("manager", discordgo.PermissionManageChannels),
+	})
+	if err := ds.State.MemberAdd(&discordgo.Member{GuildID: "guild-1", User: &discordgo.User{ID: "manager"}}); err != nil {
+		t.Fatalf("MemberAdd manager: %v", err)
+	}
+	if err := ds.State.MemberAdd(&discordgo.Member{GuildID: "guild-1", User: &discordgo.User{ID: "viewer"}}); err != nil {
+		t.Fatalf("MemberAdd viewer: %v", err)
+	}
+
+	if !b.userCanManageAuditTarget(ds, "manager", "channel-1") {
+		t.Fatal("manager with channel manage permission should be allowed")
+	}
+	if b.userCanManageAuditTarget(ds, "viewer", "channel-1") {
+		t.Fatal("viewer without manage permission should be denied")
+	}
+}
+
+func TestUserCanManageAuditTargetFallsBackToThreadParent(t *testing.T) {
+	b := &Bot{}
+	ds := testPeerPermissionSession(t, []*discordgo.PermissionOverwrite{
+		userMemberManageOverwrite("manager", discordgo.PermissionManageChannels),
+	})
+	if err := ds.State.MemberAdd(&discordgo.Member{GuildID: "guild-1", User: &discordgo.User{ID: "manager"}}); err != nil {
+		t.Fatalf("MemberAdd manager: %v", err)
+	}
+	if !b.userCanManageAuditTarget(ds, "manager", "thread-1") {
+		t.Fatal("manager of parent channel should be allowed to audit thread")
 	}
 }
 

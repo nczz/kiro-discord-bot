@@ -35,6 +35,12 @@ type Config struct {
 	TrustTools           string
 	PreflightMode        string
 	BotPeers             string
+	AuditEnabled         bool
+	AuditDBPath          string
+	AuditRetentionDays   int
+	AuditQueueSize       int
+	AuditRecordContent   bool
+	AuditRecordTyping    bool
 	STTEnabled           bool
 	STTProvider          string
 	STTAPIKey            string
@@ -73,6 +79,12 @@ func loadConfig() *Config {
 		TrustTools:           envOr("TRUST_TOOLS", ""),
 		PreflightMode:        envOr("PREFLIGHT_MODE", "warn"),
 		BotPeers:             envOr("BOT_PEERS", ""),
+		AuditEnabled:         envBool("AUDIT_LOG_ENABLED", true),
+		AuditDBPath:          envOr("AUDIT_LOG_DB", ""),
+		AuditRetentionDays:   envInt("AUDIT_LOG_RETENTION_DAYS", 0),
+		AuditQueueSize:       envInt("AUDIT_LOG_QUEUE_SIZE", 1000),
+		AuditRecordContent:   envBool("AUDIT_LOG_RECORD_CONTENT", true),
+		AuditRecordTyping:    envBool("AUDIT_LOG_RECORD_TYPING", false),
 		STTEnabled:           envOr("STT_ENABLED", "false") == "true",
 		STTProvider:          envOr("STT_PROVIDER", "groq"),
 		STTAPIKey:            envOr("STT_API_KEY", ""),
@@ -111,4 +123,19 @@ func envInt(key string, def int) int {
 		return def
 	}
 	return n
+}
+
+func envBool(key string, def bool) bool {
+	v := os.Getenv(key)
+	if v == "" {
+		return def
+	}
+	switch v {
+	case "1", "true", "TRUE", "True", "yes", "YES", "on", "ON":
+		return true
+	case "0", "false", "FALSE", "False", "no", "NO", "off", "OFF":
+		return false
+	default:
+		return def
+	}
 }
