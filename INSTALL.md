@@ -41,7 +41,6 @@ Select based on detected OS/Arch:
 | Darwin | x86_64 | `kiro-discord-bot_darwin_amd64.tar.gz` |
 | Linux | x86_64 | `kiro-discord-bot_linux_amd64.tar.gz` |
 | Linux | aarch64 | `kiro-discord-bot_linux_arm64.tar.gz` |
-| Windows | x86_64 | `kiro-discord-bot_windows_amd64.zip` |
 
 Each archive contains:
 - `kiro-discord-bot` — the bot
