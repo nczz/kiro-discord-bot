@@ -9,3 +9,4 @@ data-local/
 mcp-media
 mcp-media-server
 logs/
+dist/

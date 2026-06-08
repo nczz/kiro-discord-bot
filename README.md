@@ -646,7 +646,7 @@ For stricter deployments, set `MCP_DISCORD_READ_ONLY=true` to block every write 
 
 ```bash
 # 1. Build the MCP server binary
-go build -o mcp-discord-server ./cmd/mcp-discord/
+go build -o mcp-discord ./cmd/mcp-discord/
 
 # 2. Install the steering file (global, so it works in any project directory)
 mkdir -p ~/.kiro/steering
@@ -661,7 +661,7 @@ cp .kiro/steering/discord-mcp.md ~/.kiro/steering/discord-mcp.md
   "command": "sh",
   "args": [
     "-c",
-    "set -a && . /absolute/path/to/kiro-discord-bot/.env && exec /absolute/path/to/kiro-discord-bot/mcp-discord-server"
+    "set -a && . /absolute/path/to/kiro-discord-bot/.env && exec /absolute/path/to/kiro-discord-bot/mcp-discord"
   ]
 }
 ```
@@ -980,7 +980,7 @@ bot 的頻道 policy 不綁定特定 MCP server：它只負責啟用 catalog ser
 
 ```bash
 # 1. 編譯 MCP server
-go build -o mcp-discord-server ./cmd/mcp-discord/
+go build -o mcp-discord ./cmd/mcp-discord/
 
 # 2. 安裝 steering 文件（全域，讓任何專案目錄都能使用）
 mkdir -p ~/.kiro/steering
@@ -995,7 +995,7 @@ cp .kiro/steering/discord-mcp.md ~/.kiro/steering/discord-mcp.md
   "command": "sh",
   "args": [
     "-c",
-    "set -a && . /你的專案絕對路徑/.env && exec /你的專案絕對路徑/mcp-discord-server"
+    "set -a && . /你的專案絕對路徑/.env && exec /你的專案絕對路徑/mcp-discord"
   ]
 }
 ```

@@ -11,7 +11,7 @@ This project includes a Go-based Discord MCP Server (`cmd/mcp-discord/`) that gi
 Run from the project root:
 
 ```bash
-go build -o mcp-discord-server ./cmd/mcp-discord/
+go build -o mcp-discord ./cmd/mcp-discord/
 ```
 
 ### Step 2: Install the steering file
@@ -32,7 +32,7 @@ Edit `~/.kiro/settings/mcp.json` and add the following entry under `"mcpServers"
   "command": "sh",
   "args": [
     "-c",
-    "set -a && . <PROJECT_DIR>/.env && exec <PROJECT_DIR>/mcp-discord-server"
+    "set -a && . <PROJECT_DIR>/.env && exec <PROJECT_DIR>/mcp-discord"
   ]
 }
 ```
@@ -46,7 +46,7 @@ For example, if the project is at `/home/user/kiro-discord-bot`:
   "command": "sh",
   "args": [
     "-c",
-    "set -a && . /home/user/kiro-discord-bot/.env && exec /home/user/kiro-discord-bot/mcp-discord-server"
+    "set -a && . /home/user/kiro-discord-bot/.env && exec /home/user/kiro-discord-bot/mcp-discord"
   ]
 }
 ```

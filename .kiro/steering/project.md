@@ -8,7 +8,7 @@ description: Use for ANY code change, build, debug, or architecture question in 
 ## Build & Run
 
 - Build: `go build -o kiro-discord-bot .`
-- Build MCP server: `go build -o mcp-discord-server ./cmd/mcp-discord/`
+- Build MCP server: `go build -o mcp-discord ./cmd/mcp-discord/`
 - Test: `go test ./...`
 - Single package test: `go test ./acp/`
 - Release preflight: `scripts/release-preflight.sh`
