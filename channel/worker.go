@@ -1341,7 +1341,7 @@ func compactExecuteTitle(title string) string {
 		return compactCommandTitle("Executing", title)
 	}
 	if len(title) > 80 {
-		return "Running command"
+		return L.Get("worker.tool_running_command")
 	}
 	return EscapeDiscordMarkdown(title)
 }

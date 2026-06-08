@@ -114,7 +114,7 @@ func isKnownBangCommand(name, content string) bool {
 		return false
 	}
 	switch name {
-	case "resume", "pause", "back", "silent", "thread", "reset", "status", "usage", "doctor", "audit", "cancel", "interrupt",
+	case "resume", "pause", "back", "silent", "thread", "reset", "status", "usage", "doctor", "audit", "mcp", "cancel", "interrupt",
 		"close-thread", "compact", "clear", "cwd", "start", "agent", "model", "models", "memory", "flashmemory", "cron":
 		return true
 	case "remind":
@@ -567,6 +567,9 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 	case content == "!audit" || strings.HasPrefix(content, "!audit "):
 		ctx.args = strings.TrimSpace(strings.TrimPrefix(content, "!audit"))
 		b.cmdAudit(ctx)
+	case content == "!mcp" || strings.HasPrefix(content, "!mcp "):
+		ctx.args = strings.TrimSpace(strings.TrimPrefix(content, "!mcp"))
+		b.cmdMCP(ctx)
 	case content == "!cancel":
 		b.cmdCancel(ctx)
 	case content == "!interrupt":
@@ -718,6 +721,10 @@ func (b *Bot) handleThreadMessage(ds *discordgo.Session, m *discordgo.MessageCre
 		ctx.args = strings.TrimSpace(strings.TrimPrefix(content, "!audit"))
 		b.cmdAudit(ctx)
 		return
+	case content == "!mcp" || strings.HasPrefix(content, "!mcp "):
+		ctx.args = strings.TrimSpace(strings.TrimPrefix(content, "!mcp"))
+		b.cmdMCP(ctx)
+		return
 	case content == "!cancel":
 		b.cmdCancel(ctx)
 		return
@@ -847,6 +854,7 @@ func buildSlashCommands() []*discordgo.ApplicationCommand {
 		{Name: "audit", Description: L.Get("cmd.audit.desc"), Options: []*discordgo.ApplicationCommandOption{
 			{Type: discordgo.ApplicationCommandOptionInteger, Name: "limit", Description: L.Get("cmd.audit.opt.limit"), Required: false},
 		}},
+		{Name: "mcp", Description: L.Get("cmd.mcp.desc"), Options: mcpSlashOptions()},
 		{Name: "cancel", Description: L.Get("cmd.cancel.desc")},
 		{Name: "interrupt", Description: L.Get("cmd.interrupt.desc")},
 		{Name: "cwd", Description: L.Get("cmd.cwd.desc"), Options: []*discordgo.ApplicationCommandOption{
@@ -916,6 +924,44 @@ func buildSlashCommands() []*discordgo.ApplicationCommand {
 			{Type: discordgo.ApplicationCommandOptionString, Name: "value", Description: L.Get("cmd.flashmemory.opt.value"), Required: false},
 		}},
 	}
+}
+
+func mcpSlashOptions() []*discordgo.ApplicationCommandOption {
+	return []*discordgo.ApplicationCommandOption{
+		{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "manage", Description: L.Get("cmd.mcp.sub.manage")},
+		{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "status", Description: L.Get("cmd.mcp.sub.status"), Options: []*discordgo.ApplicationCommandOption{
+			{Type: discordgo.ApplicationCommandOptionString, Name: "server", Description: L.Get("cmd.mcp.opt.server"), Required: false},
+		}},
+		{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "enable", Description: L.Get("cmd.mcp.sub.enable"), Options: []*discordgo.ApplicationCommandOption{
+			{Type: discordgo.ApplicationCommandOptionString, Name: "server", Description: L.Get("cmd.mcp.opt.server"), Required: true},
+		}},
+		{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "disable", Description: L.Get("cmd.mcp.sub.disable"), Options: []*discordgo.ApplicationCommandOption{
+			{Type: discordgo.ApplicationCommandOptionString, Name: "server", Description: L.Get("cmd.mcp.opt.server"), Required: true},
+		}},
+	}
+}
+
+func mcpArgsFromSlashOptions(options []*discordgo.ApplicationCommandInteractionDataOption) string {
+	if len(options) == 0 {
+		return "status"
+	}
+	sub := options[0]
+	args := []string{sub.Name}
+	for _, opt := range sub.Options {
+		switch opt.Type {
+		case discordgo.ApplicationCommandOptionBoolean:
+			if opt.BoolValue() {
+				args = append(args, "on")
+			} else {
+				args = append(args, "off")
+			}
+		default:
+			if s := strings.TrimSpace(opt.StringValue()); s != "" {
+				args = append(args, s)
+			}
+		}
+	}
+	return strings.Join(args, " ")
 }
 
 func (b *Bot) registerSlashCommands() {
@@ -991,7 +1037,9 @@ func (b *Bot) handleInteraction(ds *discordgo.Session, i *discordgo.InteractionC
 		}
 	case discordgo.InteractionMessageComponent:
 		customID := i.MessageComponentData().CustomID
-		if strings.HasPrefix(customID, "cronp_") {
+		if strings.HasPrefix(customID, mcpCustomPrefix+":") {
+			b.handleMCPComponent(ds, i)
+		} else if strings.HasPrefix(customID, "cronp_") {
 			b.handleCronPromptButton(ds, i)
 		} else if strings.HasPrefix(customID, "cron_") {
 			b.handleCronButton(ds, i)
@@ -1127,6 +1175,13 @@ func (b *Bot) handleSlashCommand(ds *discordgo.Session, i *discordgo.Interaction
 				ctx.args = fmt.Sprintf("%d", data.Options[0].IntValue())
 			}
 			b.cmdAudit(ctx)
+		case "mcp":
+			ctx.args = mcpArgsFromSlashOptions(data.Options)
+			if strings.TrimSpace(ctx.args) == "manage" {
+				b.sendMCPManagePanel(ds, i, ctx)
+				return
+			}
+			b.cmdMCP(ctx)
 		case "cancel":
 			b.cmdCancel(ctx)
 		case "interrupt":

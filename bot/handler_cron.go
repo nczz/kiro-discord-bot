@@ -723,7 +723,3 @@ func (b *Bot) handleCronPromptButton(ds *discordgo.Session, i *discordgo.Interac
 		},
 	})
 }
-
-func init() {
-	log.Println("[handler_cron] loaded")
-}

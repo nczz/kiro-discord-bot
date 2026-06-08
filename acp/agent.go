@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -54,6 +55,49 @@ type AgentOptions struct {
 	BotName       string // clientInfo.name
 	BotVersion    string // clientInfo.version
 	LoadSessionID string // if non-empty, use session/load instead of session/new
+	Env           []string
+	MCPServers    []MCPServerConfig
+}
+
+// MCPServerConfig is passed to Kiro ACP session/new and session/load.
+type MCPServerConfig struct {
+	Name          string            `json:"name"`
+	Command       string            `json:"command"`
+	Args          []string          `json:"args,omitempty"`
+	Env           map[string]string `json:"env,omitempty"`
+	DisabledTools []string          `json:"disabledTools,omitempty"`
+}
+
+type mcpEnvVariable struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+func (c MCPServerConfig) MarshalJSON() ([]byte, error) {
+	args := c.Args
+	if args == nil {
+		args = []string{}
+	}
+	env := make([]mcpEnvVariable, 0, len(c.Env))
+	keys := make([]string, 0, len(c.Env))
+	for k := range c.Env {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		env = append(env, mcpEnvVariable{Name: k, Value: c.Env[k]})
+	}
+	return json.Marshal(struct {
+		Name    string           `json:"name"`
+		Command string           `json:"command"`
+		Args    []string         `json:"args"`
+		Env     []mcpEnvVariable `json:"env"`
+	}{
+		Name:    c.Name,
+		Command: c.Command,
+		Args:    args,
+		Env:     env,
+	})
 }
 
 // StartAgent spawns kiro-cli acp and performs the ACP handshake (initialize + session/new).
@@ -84,7 +128,7 @@ func StartAgent(name, kiroCLI, cwd, model string, opts AgentOptions) (*Agent, er
 
 	cmd := exec.Command(resolvedCLI, args...)
 	cmd.Dir = cwd
-	cmd.Env = os.Environ()
+	cmd.Env = append(os.Environ(), opts.Env...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	stdin, err := cmd.StdinPipe()
@@ -192,11 +236,7 @@ func StartAgent(name, kiroCLI, cwd, model string, opts AgentOptions) (*Agent, er
 	// Handshake: session setup — try session/load if requested, fallback to session/new.
 	var sessResp SessionNewResult
 	if opts.LoadSessionID != "" && a.SupportsLoadSession() {
-		loadRaw, loadErr := a.transport.Send(MethodLoadSession, map[string]interface{}{
-			"sessionId":  opts.LoadSessionID,
-			"cwd":        cwd,
-			"mcpServers": []interface{}{},
-		})
+		loadRaw, loadErr := a.transport.Send(MethodLoadSession, sessionParams(cwd, opts.LoadSessionID, opts.MCPServers))
 		if loadErr == nil {
 			json.Unmarshal(loadRaw, &sessResp)
 			if sessResp.SessionID == "" {
@@ -214,11 +254,7 @@ func StartAgent(name, kiroCLI, cwd, model string, opts AgentOptions) (*Agent, er
 		opts.LoadSessionID = ""
 	}
 	if opts.LoadSessionID == "" {
-		// Fresh session — kiro-cli loads MCP from <cwd>/.kiro/settings/mcp.json
-		sessRaw, sessErr := a.transport.Send(MethodNewSession, map[string]interface{}{
-			"cwd":        cwd,
-			"mcpServers": []interface{}{},
-		})
+		sessRaw, sessErr := a.transport.Send(MethodNewSession, sessionParams(cwd, "", opts.MCPServers))
 		if sessErr != nil {
 			a.Kill()
 			return nil, a.wrapHandshakeError("session/new", sessErr)
@@ -231,6 +267,20 @@ func StartAgent(name, kiroCLI, cwd, model string, opts AgentOptions) (*Agent, er
 
 	log.Printf("[agent:%s] session=%s", name, a.SessionID)
 	return a, nil
+}
+
+func sessionParams(cwd, sessionID string, servers []MCPServerConfig) map[string]interface{} {
+	if servers == nil {
+		servers = []MCPServerConfig{}
+	}
+	params := map[string]interface{}{
+		"cwd":        cwd,
+		"mcpServers": servers,
+	}
+	if sessionID != "" {
+		params["sessionId"] = sessionID
+	}
+	return params
 }
 
 func (a *Agent) wrapHandshakeError(stage string, err error) error {
@@ -792,7 +842,17 @@ func (a *Agent) Kill() {
 
 // PreflightCheck validates the full ACP lifecycle: spawn → handshake → ask → stop.
 func PreflightCheck(kiroCLI string) error {
-	agent, err := StartAgent("preflight", kiroCLI, "/tmp", "", AgentOptions{TrustAllTools: true})
+	return PreflightCheckWithOptions(kiroCLI, AgentOptions{TrustAllTools: true})
+}
+
+// PreflightCheckWithOptions validates the full ACP lifecycle using the same
+// process options as production runtime agents.
+func PreflightCheckWithOptions(kiroCLI string, opts AgentOptions) error {
+	opts.TrustAllTools = true
+	opts.TrustTools = ""
+	opts.LoadSessionID = ""
+	opts.MCPServers = nil
+	agent, err := StartAgent("preflight", kiroCLI, "/tmp", "", opts)
 	if err != nil {
 		return fmt.Errorf("handshake failed: %w", err)
 	}

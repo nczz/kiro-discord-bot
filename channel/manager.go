@@ -3,6 +3,7 @@ package channel
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -57,6 +58,9 @@ type Manager struct {
 	agentProfile       string // --agent flag
 	trustAllTools      bool   // --trust-all-tools
 	trustTools         string // --trust-tools <names>
+	mcpPolicies        *MCPPolicyStore
+	kiroRuntimeHome    string
+	mcpProxyCommand    string
 
 	// Channel agent idle tracking
 	channelLastActivity map[string]time.Time
@@ -95,6 +99,21 @@ type AgentCommandResult struct {
 	Metrics  acp.TurnMetrics
 	Model    string
 	Executed bool
+}
+
+// MCPServerView describes a catalog server and its channel policy.
+type MCPServerView struct {
+	Name      string
+	Source    string
+	ArgsCount int
+	Policy    MCPChannelPolicy
+	InCatalog bool
+}
+
+// MCPToolView describes a discovered tool and whether channel policy exposes it.
+type MCPToolView struct {
+	MCPToolInfo
+	Allowed bool
 }
 
 func (e *ThreadAgentLimitError) Error() string {
@@ -163,6 +182,26 @@ func NewManager(cfg ManagerConfig) *Manager {
 		agentProfile:        cfg.AgentProfile,
 		trustAllTools:       cfg.TrustAllTools,
 		trustTools:          cfg.TrustTools,
+		kiroRuntimeHome:     filepath.Join(cfg.DataDir, "kiro-runtime"),
+	}
+	if exe, err := os.Executable(); err == nil {
+		m.mcpProxyCommand = exe
+	}
+	if cfg.DataDir != "" {
+		if err := os.MkdirAll(m.kiroRuntimeHome, 0755); err != nil {
+			log.Printf("[mcp-policy] create runtime home: %v", err)
+		}
+	}
+	if store, err := OpenMCPPolicyStore(cfg.DataDir); err != nil {
+		log.Printf("[mcp-policy] disabled: %v", err)
+	} else {
+		m.mcpPolicies = store
+		if m.botID != "" {
+			if err := m.applyLegacyMCPMigration(); err != nil {
+				log.Printf("[mcp-policy] legacy migration: %v", err)
+			}
+		}
+		log.Printf("[mcp-policy] catalog servers=%d", len(store.Catalog()))
 	}
 	if err := m.loadListenModes(); err != nil {
 		log.Printf("[manager] load listen modes: %v", err)
@@ -185,16 +224,111 @@ func (m *Manager) DefaultCWD() string { return m.defaultCWD }
 
 // SetBotID scopes persisted ACP sessions to this Discord bot identity.
 func (m *Manager) SetBotID(botID string) {
+	botID = strings.TrimSpace(botID)
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.botID = strings.TrimSpace(botID)
+	changed := m.botID != botID
+	m.botID = botID
+	m.mu.Unlock()
+	if botID != "" && changed {
+		if err := m.applyLegacyMCPMigration(); err != nil {
+			log.Printf("[mcp-policy] legacy migration: %v", err)
+		}
+	}
 }
 
 const (
 	sessionTargetChannel = "channel"
 	sessionTargetThread  = "thread"
 	interruptGrace       = 5 * time.Second
+	mcpLegacyMigrationV1 = "legacy_catalog_full_enable_v1"
 )
+
+func (m *Manager) applyLegacyMCPMigration() error {
+	if m.mcpPolicies == nil || m.store == nil {
+		return nil
+	}
+	ctx := context.Background()
+	if err := m.mcpPolicies.RefreshCatalog(ctx); err != nil {
+		return fmt.Errorf("refresh catalog: %w", err)
+	}
+	catalog := m.mcpPolicies.Catalog()
+	applied, err := m.mcpPolicies.MigrationApplied(ctx, mcpLegacyMigrationV1)
+	if err != nil {
+		return err
+	}
+	if applied {
+		return nil
+	}
+	channels := m.legacyMCPMigrationChannels()
+	if len(channels) > 0 && len(catalog) > 0 {
+		enabled := 0
+		for _, channelID := range channels {
+			for _, entry := range catalog {
+				exists, err := m.mcpPolicies.HasExplicitPolicy(ctx, m.guildID, channelID, entry.Name)
+				if err != nil {
+					return err
+				}
+				if exists {
+					continue
+				}
+				p := defaultMCPPolicy(m.guildID, channelID, entry.Name).ApplyPreset("full")
+				p.Enabled = true
+				p.UpdatedBy = "system:migration:" + mcpLegacyMigrationV1
+				if err := m.mcpPolicies.SetPolicy(ctx, p); err != nil {
+					return err
+				}
+				enabled++
+			}
+		}
+		log.Printf("[mcp-policy] legacy migration enabled full access for channels=%d servers=%d policies=%d", len(channels), len(catalog), enabled)
+	}
+	return m.mcpPolicies.MarkMigrationApplied(ctx, mcpLegacyMigrationV1, catalog)
+}
+
+func (m *Manager) legacyMCPMigrationChannels() []string {
+	if m.store == nil {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	for key, sess := range m.store.All() {
+		channelID := m.legacyMCPMigrationChannelFromSession(key, sess)
+		if channelID == "" {
+			continue
+		}
+		seen[channelID] = struct{}{}
+	}
+	out := make([]string, 0, len(seen))
+	for channelID := range seen {
+		out = append(out, channelID)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func (m *Manager) legacyMCPMigrationChannelFromSession(key string, sess *Session) string {
+	if sess != nil {
+		if m.guildID != "" && strings.TrimSpace(sess.GuildID) != "" && strings.TrimSpace(sess.GuildID) != m.guildID {
+			return ""
+		}
+		if m.botID != "" && strings.TrimSpace(sess.BotID) != "" && strings.TrimSpace(sess.BotID) != m.botID {
+			return ""
+		}
+		if sess.TargetType == sessionTargetChannel && strings.TrimSpace(sess.TargetID) != "" {
+			return strings.TrimSpace(sess.TargetID)
+		}
+		if sess.TargetType == sessionTargetThread && strings.TrimSpace(sess.ParentChannelID) != "" {
+			return strings.TrimSpace(sess.ParentChannelID)
+		}
+		if strings.TrimSpace(sess.ParentChannelID) != "" {
+			return strings.TrimSpace(sess.ParentChannelID)
+		}
+	}
+	key = strings.TrimSpace(key)
+	if key == "" || strings.Contains(key, ":") {
+		return ""
+	}
+	return key
+}
 
 func (m *Manager) sessionKey(targetType, targetID string) string {
 	targetID = strings.TrimSpace(targetID)
@@ -339,6 +473,43 @@ func (m *Manager) agentOpts() acp.AgentOptions {
 	}
 }
 
+func (m *Manager) agentOptsForChannel(channelID string) acp.AgentOptions {
+	opts := m.agentOpts()
+	if m.kiroRuntimeHome != "" {
+		opts.Env = append(opts.Env, "KIRO_HOME="+m.kiroRuntimeHome)
+	}
+	opts.MCPServers = m.mcpServersForChannel(channelID)
+	return opts
+}
+
+func (m *Manager) mcpServersForChannel(channelID string) []acp.MCPServerConfig {
+	if m.mcpPolicies == nil || strings.TrimSpace(channelID) == "" {
+		return nil
+	}
+	if err := m.mcpPolicies.RefreshCatalog(context.Background()); err != nil {
+		log.Printf("[mcp-policy] refresh catalog: %v", err)
+	}
+	if m.mcpProxyCommand == "" {
+		log.Printf("[mcp-policy] proxy command unavailable; blocking all MCP servers for channel=%s", channelID)
+		return nil
+	}
+	policies, err := m.mcpPolicies.EnabledPolicies(context.Background(), m.guildID, channelID)
+	if err != nil {
+		log.Printf("[mcp-policy] load channel=%s: %v", channelID, err)
+		return nil
+	}
+	var servers []acp.MCPServerConfig
+	for _, policy := range policies {
+		entry, ok := m.mcpPolicies.CatalogEntry(policy.ServerName)
+		if !ok {
+			log.Printf("[mcp-policy] server %s enabled for channel=%s but not found in catalog", policy.ServerName, channelID)
+			continue
+		}
+		servers = append(servers, policy.ToACPServer(entry, m.mcpProxyCommand, m.guildID, channelID))
+	}
+	return servers
+}
+
 // stopChannel stops the worker and agent for a channel. Must be called with m.mu held.
 func (m *Manager) stopChannel(channelID string) {
 	if w, ok := m.workers[channelID]; ok {
@@ -363,6 +534,9 @@ func (m *Manager) StopAll() {
 		entry.worker.Stop()
 		entry.agent.Stop()
 		delete(m.threadAgents, threadID)
+	}
+	if m.mcpPolicies != nil {
+		_ = m.mcpPolicies.Close()
 	}
 	m.logger.Close()
 	log.Println("[manager] all agents stopped")
@@ -527,6 +701,353 @@ func (m *Manager) formatStatus(sess *Session, state string, qLen int, kiroVersio
 		kiroVersion = "n/a"
 	}
 	return L.Getf("status.format", sess.AgentName, state, qLen, sid, modelDisplay(sess.Model), kiroVersion, m.botVersion, ctxUsage)
+}
+
+// MCPCatalogStatus is a backward-compatible alias for the combined MCP checklist.
+func (m *Manager) MCPCatalogStatus() string {
+	return m.MCPStatusChecklist("")
+}
+
+// MCPStatusChecklist reports discovered MCP servers with their effective channel policy.
+func (m *Manager) MCPStatusChecklist(channelID string) string {
+	if m.mcpPolicies == nil {
+		return L.Get("mcp.store_unavailable")
+	}
+	views, err := m.MCPServerViews(channelID)
+	if err != nil {
+		return L.Getf("mcp.catalog_refresh_failed", err.Error())
+	}
+	if len(views) == 0 {
+		return L.Get("mcp.catalog.empty")
+	}
+	var sb strings.Builder
+	sb.WriteString(L.Get("mcp.checklist.header"))
+	if strings.TrimSpace(channelID) != "" {
+		sb.WriteString(L.Getf("mcp.checklist.channel", channelID))
+	}
+	for _, view := range views {
+		check := " "
+		if view.Policy.Enabled {
+			check = "x"
+		}
+		preset := mcpPolicyPresetText(view.Policy)
+		toolText := mcpPolicyToolText(view.Policy)
+		source := ""
+		if view.ArgsCount > 0 {
+			source += L.Getf("mcp.catalog.entry_args", view.ArgsCount)
+		}
+		if view.Source != "" {
+			source += L.Getf("mcp.catalog.entry_source", view.Source)
+		}
+		sb.WriteString(L.Getf("mcp.checklist.row",
+			check, view.Name, mcpPolicyStateText(view.Policy), preset, toolText, source))
+	}
+	sb.WriteString(L.Get("mcp.checklist.footer"))
+	return sb.String()
+}
+
+// MCPServerViews returns discovered MCP servers with their channel policy.
+func (m *Manager) MCPServerViews(channelID string) ([]MCPServerView, error) {
+	if m.mcpPolicies == nil {
+		return nil, errors.New(L.Get("mcp.store_unavailable"))
+	}
+	if err := m.mcpPolicies.RefreshCatalog(context.Background()); err != nil {
+		return nil, fmt.Errorf("refresh mcp catalog: %w", err)
+	}
+	catalog := m.mcpPolicies.Catalog()
+	views := make([]MCPServerView, 0, len(catalog))
+	for _, entry := range catalog {
+		p, err := m.mcpPolicies.GetPolicy(context.Background(), m.guildID, channelID, entry.Name)
+		if err != nil {
+			return nil, err
+		}
+		views = append(views, MCPServerView{
+			Name:      entry.Name,
+			Source:    entry.Source,
+			ArgsCount: len(entry.Args),
+			Policy:    p,
+			InCatalog: true,
+		})
+	}
+	return views, nil
+}
+
+// MCPServerView returns one discovered MCP server with its channel policy.
+func (m *Manager) MCPServerView(channelID, serverName string) (MCPServerView, error) {
+	if m.mcpPolicies == nil {
+		return MCPServerView{}, errors.New(L.Get("mcp.store_unavailable"))
+	}
+	serverName = strings.TrimSpace(serverName)
+	if serverName == "" {
+		return MCPServerView{}, errors.New(L.Get("mcp.status.requires_server"))
+	}
+	if err := m.mcpPolicies.RefreshCatalog(context.Background()); err != nil {
+		return MCPServerView{}, fmt.Errorf("refresh mcp catalog: %w", err)
+	}
+	entry, ok := m.mcpPolicies.CatalogEntry(serverName)
+	if !ok {
+		return MCPServerView{}, fmt.Errorf("mcp server %q was not found in catalog", serverName)
+	}
+	p, err := m.mcpPolicies.GetPolicy(context.Background(), m.guildID, channelID, serverName)
+	if err != nil {
+		return MCPServerView{}, err
+	}
+	return MCPServerView{
+		Name:      entry.Name,
+		Source:    entry.Source,
+		ArgsCount: len(entry.Args),
+		Policy:    p,
+		InCatalog: true,
+	}, nil
+}
+
+// MCPToolViews returns cached tools for a server with channel allow state.
+func (m *Manager) MCPToolViews(channelID, serverName string) ([]MCPToolView, error) {
+	if m.mcpPolicies == nil {
+		return nil, errors.New(L.Get("mcp.store_unavailable"))
+	}
+	p, err := m.mcpPolicies.GetPolicy(context.Background(), m.guildID, channelID, serverName)
+	if err != nil {
+		return nil, err
+	}
+	tools, err := m.mcpPolicies.CachedTools(context.Background(), serverName)
+	if err != nil {
+		return nil, err
+	}
+	allowed := make(map[string]struct{}, len(p.EffectiveTools()))
+	for _, name := range p.EffectiveTools() {
+		allowed[name] = struct{}{}
+	}
+	out := make([]MCPToolView, 0, len(tools))
+	for _, tool := range tools {
+		_, ok := allowed[tool.Name]
+		out = append(out, MCPToolView{MCPToolInfo: tool, Allowed: p.AllowAllTools || ok})
+	}
+	return out, nil
+}
+
+// DiscoverMCPTools scans one MCP server and stores the discovered tool list.
+func (m *Manager) DiscoverMCPTools(ctx context.Context, serverName string) ([]MCPToolInfo, error) {
+	if m.mcpPolicies == nil {
+		return nil, errors.New(L.Get("mcp.store_unavailable"))
+	}
+	return m.mcpPolicies.DiscoverTools(ctx, serverName)
+}
+
+// MCPStatus reports the effective channel-level MCP policy.
+func (m *Manager) MCPStatus(channelID, serverName string) string {
+	if m.mcpPolicies == nil {
+		return L.Get("mcp.store_unavailable")
+	}
+	if strings.TrimSpace(serverName) == "" {
+		return L.Get("mcp.status.requires_server")
+	}
+	if err := m.mcpPolicies.RefreshCatalog(context.Background()); err != nil {
+		return L.Getf("mcp.catalog_refresh_failed", err.Error())
+	}
+	p, err := m.mcpPolicies.GetPolicy(context.Background(), m.guildID, channelID, serverName)
+	if err != nil {
+		return L.Getf("mcp.status.policy_error", err.Error())
+	}
+	_, inCatalog := m.mcpPolicies.CatalogEntry(serverName)
+	return L.Getf("mcp.status.format",
+		serverName, mcpPolicyStateText(p), localizedBool(inCatalog), channelID, mcpPolicyPresetText(p),
+		localizedBool(p.AllowAllTools), mcpPolicyToolText(p))
+}
+
+func mcpPolicyStateText(p MCPChannelPolicy) string {
+	if p.Enabled {
+		return L.Get("mcp.status.state.enabled")
+	}
+	return L.Get("mcp.status.state.disabled")
+}
+
+func mcpPolicyPresetText(p MCPChannelPolicy) string {
+	if p.Preset == "" {
+		return L.Get("mcp.status.preset_custom")
+	}
+	return p.Preset
+}
+
+func mcpPolicyToolText(p MCPChannelPolicy) string {
+	if !p.Enabled {
+		return L.Get("mcp.status.tools.none")
+	}
+	tools := p.EffectiveTools()
+	if p.AllowAllTools {
+		return L.Get("mcp.status.tools.all")
+	}
+	if p.ReadOnly {
+		return L.Get("mcp.status.tools.read_only")
+	}
+	if len(tools) > 0 {
+		return strings.Join(tools, ", ")
+	}
+	return L.Get("mcp.status.tools.none")
+}
+
+func localizedBool(v bool) string {
+	if v {
+		return L.Get("bool.true")
+	}
+	return L.Get("bool.false")
+}
+
+// SetMCPPolicy updates a channel MCP server policy and restarts agents in that channel scope.
+func (m *Manager) SetMCPPolicy(channelID, userID, serverName string, enabled bool, preset string) error {
+	serverName = strings.TrimSpace(serverName)
+	if m.mcpPolicies == nil {
+		return fmt.Errorf("mcp policy store is unavailable")
+	}
+	if err := m.mcpPolicies.RefreshCatalog(context.Background()); err != nil {
+		return fmt.Errorf("refresh mcp catalog: %w", err)
+	}
+	if _, ok := m.mcpPolicies.CatalogEntry(serverName); !ok {
+		return fmt.Errorf("mcp server %q was not found in catalog", serverName)
+	}
+	ctx := context.Background()
+	p, err := m.mcpPolicies.GetPolicy(ctx, m.guildID, channelID, serverName)
+	if err != nil {
+		return err
+	}
+	p.Enabled = enabled
+	p.UpdatedBy = userID
+	if preset != "" {
+		p = p.ApplyPreset(preset)
+	} else if enabled && p.Preset == "" {
+		p = p.ApplyPreset("read")
+	}
+	if err := validateMCPPolicyExposesTools(p); err != nil {
+		return err
+	}
+	if err := m.mcpPolicies.SetPolicy(ctx, p); err != nil {
+		return err
+	}
+	stopped := m.RestartMCPScope(channelID)
+	m.recordMCPPolicyEvent(channelID, userID, "policy", "updated", p, map[string]any{"action": "set_policy", "stopped_agents": stopped})
+	return nil
+}
+
+func (m *Manager) SetMCPTool(channelID, userID, serverName, tool string, allowed bool) error {
+	serverName = strings.TrimSpace(serverName)
+	tool = strings.TrimSpace(tool)
+	return m.updateMCPPolicy(channelID, userID, serverName, map[string]any{"action": "tool", "tool": tool, "allowed": allowed}, func(p MCPChannelPolicy) MCPChannelPolicy {
+		p.Enabled = true
+		p.Preset = ""
+		p.ReadOnly = false
+		if p.AllowAllTools && !allowed {
+			if tools, err := m.mcpPolicies.CachedTools(context.Background(), serverName); err == nil {
+				p.AllowedTools = make([]string, 0, len(tools))
+				for _, discovered := range tools {
+					p.AllowedTools = append(p.AllowedTools, discovered.Name)
+				}
+			}
+		}
+		p.AllowAllTools = false
+		p.AllowedTools = normalizeStrings(p.AllowedTools)
+		if allowed {
+			p.AllowedTools = normalizeStrings(append(p.AllowedTools, tool))
+			return p
+		}
+		var next []string
+		for _, existing := range p.AllowedTools {
+			if existing != tool {
+				next = append(next, existing)
+			}
+		}
+		p.AllowedTools = next
+		if len(p.AllowedTools) == 0 {
+			p.Enabled = false
+			p.ReadOnly = true
+		}
+		return p
+	})
+}
+
+func (m *Manager) updateMCPPolicy(channelID, userID, serverName string, metadata map[string]any, mutate func(MCPChannelPolicy) MCPChannelPolicy) error {
+	serverName = strings.TrimSpace(serverName)
+	if m.mcpPolicies == nil {
+		return fmt.Errorf("mcp policy store is unavailable")
+	}
+	if err := m.mcpPolicies.RefreshCatalog(context.Background()); err != nil {
+		return fmt.Errorf("refresh mcp catalog: %w", err)
+	}
+	if _, ok := m.mcpPolicies.CatalogEntry(serverName); !ok {
+		return fmt.Errorf("mcp server %q was not found in catalog", serverName)
+	}
+	ctx := context.Background()
+	p, err := m.mcpPolicies.GetPolicy(ctx, m.guildID, channelID, serverName)
+	if err != nil {
+		return err
+	}
+	p = mutate(p)
+	p.UpdatedBy = userID
+	if err := validateMCPPolicyExposesTools(p); err != nil {
+		return err
+	}
+	if err := m.mcpPolicies.SetPolicy(ctx, p); err != nil {
+		return err
+	}
+	stopped := m.RestartMCPScope(channelID)
+	if metadata == nil {
+		metadata = map[string]any{"action": "update_policy"}
+	}
+	metadata["stopped_agents"] = stopped
+	m.recordMCPPolicyEvent(channelID, userID, "policy", "updated", p, metadata)
+	return nil
+}
+
+func validateMCPPolicyExposesTools(p MCPChannelPolicy) error {
+	if !p.Enabled || p.AllowAllTools || len(p.EffectiveTools()) > 0 {
+		return nil
+	}
+	return errors.New(L.Getf("mcp.policy_no_tools", p.ServerName))
+}
+
+// RestartMCPScope stops the channel agent and child thread agents so the next start applies current MCP policy.
+func (m *Manager) RestartMCPScope(channelID string) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	stopped := 0
+	if _, ok := m.agents[channelID]; ok {
+		m.stopChannel(channelID)
+		stopped++
+	}
+	for threadID, entry := range m.threadAgents {
+		if entry.parentChannelID == channelID {
+			entry.worker.Stop()
+			entry.agent.Stop()
+			delete(m.threadAgents, threadID)
+			stopped++
+		}
+	}
+	return stopped
+}
+
+func (m *Manager) recordMCPPolicyEvent(channelID, userID, source, status string, p MCPChannelPolicy, metadata map[string]any) {
+	if m.audit == nil {
+		return
+	}
+	copied := make(map[string]any, len(metadata)+8)
+	for k, v := range metadata {
+		copied[k] = v
+	}
+	copied["server_name"] = p.ServerName
+	copied["enabled"] = p.Enabled
+	copied["preset"] = p.Preset
+	copied["read_only"] = p.ReadOnly
+	copied["allow_destructive"] = p.AllowDestructive
+	copied["allowed_tools"] = append([]string(nil), p.AllowedTools...)
+	m.audit.RecordBotEvent(audit.BotEvent{
+		Type:      "mcp_policy_updated",
+		GuildID:   m.guildID,
+		ChannelID: channelID,
+		TargetID:  channelID,
+		UserID:    userID,
+		Source:    source,
+		Status:    status,
+		Metadata:  copied,
+	})
 }
 
 // Cancel cancels the current running job for a channel.
@@ -943,7 +1464,7 @@ func (m *Manager) startAgentAndWorker(channelID string) (*Worker, error) {
 	}
 
 	// Try to load previous session if available
-	opts := m.agentOpts()
+	opts := m.agentOptsForChannel(channelID)
 	if sess, ok := m.getChannelSession(channelID); ok && sess.SessionID != "" {
 		opts.LoadSessionID = sess.SessionID
 	}
@@ -1067,66 +1588,75 @@ func (m *Manager) CheckAgent(channelID string) error {
 // Doctor runs deployment diagnostics that are useful before accepting live work.
 func (m *Manager) Doctor(ctx context.Context) string {
 	var sb strings.Builder
-	sb.WriteString("**Doctor**\n")
+	sb.WriteString(L.Get("doctor.header"))
 
 	resolvedCLI, err := acp.ResolveKiroCLI(m.kiroCLI)
 	if err != nil {
-		sb.WriteString("❌ kiro-cli: " + err.Error() + "\n")
+		sb.WriteString(L.Getf("doctor.kiro_cli.error", err.Error()))
 	} else {
-		sb.WriteString("✅ kiro-cli: `" + resolvedCLI + "`")
+		sb.WriteString(L.Getf("doctor.kiro_cli.ok", resolvedCLI))
 		if out, err := exec.CommandContext(ctx, resolvedCLI, "--version").Output(); err == nil {
 			sb.WriteString(" — `" + strings.TrimSpace(string(out)) + "`")
 		} else {
-			sb.WriteString(" — version check failed: `" + err.Error() + "`")
+			sb.WriteString(L.Getf("doctor.kiro_cli.version_failed", err.Error()))
 		}
 		sb.WriteString("\n")
 	}
 
 	if cwd, err := m.ValidateCWD(m.defaultCWD); err != nil {
-		sb.WriteString("❌ default cwd: " + err.Error() + "\n")
+		sb.WriteString(L.Getf("doctor.default_cwd.error", err.Error()))
 	} else {
-		sb.WriteString("✅ default cwd: `" + cwd + "`\n")
+		sb.WriteString(L.Getf("doctor.default_cwd.ok", cwd))
 	}
 
 	if len(m.allowedCwdRoots) == 0 {
-		sb.WriteString("⚠️ cwd allowlist: not configured\n")
+		sb.WriteString(L.Get("doctor.cwd_allowlist.empty"))
 	} else {
-		sb.WriteString("✅ cwd allowlist: `" + strings.Join(m.allowedCwdRoots, "`, `") + "`\n")
+		sb.WriteString(L.Getf("doctor.cwd_allowlist.ok", strings.Join(m.allowedCwdRoots, "`, `")))
 	}
 
 	if m.trustTools != "" {
-		sb.WriteString("✅ ACP tool policy: allowlisted tools `" + m.trustTools + "`\n")
+		sb.WriteString(L.Getf("doctor.acp_tool_policy.allowlisted", m.trustTools))
 	} else if m.trustAllTools {
-		sb.WriteString("⚠️ ACP tool policy: trust all tools\n")
+		sb.WriteString(L.Get("doctor.acp_tool_policy.trust_all"))
 	} else {
-		sb.WriteString("✅ ACP tool policy: deny by default\n")
+		sb.WriteString(L.Get("doctor.acp_tool_policy.deny_default"))
 	}
 
 	m.mu.Lock()
 	activeAgents := len(m.agents)
 	activeThreadAgents := len(m.threadAgents)
 	m.mu.Unlock()
-	sb.WriteString(fmt.Sprintf("✅ agents: channels=%d threads=%d thread_limit=%d\n", activeAgents, activeThreadAgents, m.threadAgentMax))
+	sb.WriteString(L.Getf("doctor.agents", activeAgents, activeThreadAgents, m.threadAgentMax))
 
 	if err := os.MkdirAll(m.dataDir, 0755); err != nil {
-		sb.WriteString("❌ data dir: " + err.Error() + "\n")
+		sb.WriteString(L.Getf("doctor.data_dir.error", err.Error()))
 	} else {
 		probe := filepath.Join(m.dataDir, ".doctor-write-test")
 		if err := os.WriteFile(probe, []byte("ok\n"), 0644); err != nil {
-			sb.WriteString("❌ data dir writable: " + err.Error() + "\n")
+			sb.WriteString(L.Getf("doctor.data_dir.writable_error", err.Error()))
 		} else {
 			_ = os.Remove(probe)
-			sb.WriteString("✅ data dir writable: `" + m.dataDir + "`\n")
+			sb.WriteString(L.Getf("doctor.data_dir.writable_ok", m.dataDir))
 		}
 	}
 
-	if err := acp.PreflightCheck(m.kiroCLI); err != nil {
-		sb.WriteString("❌ ACP preflight: " + err.Error() + "\n")
+	if err := acp.PreflightCheckWithOptions(m.kiroCLI, m.preflightAgentOptions()); err != nil {
+		sb.WriteString(L.Getf("doctor.acp_preflight.error", err.Error()))
 	} else {
-		sb.WriteString("✅ ACP preflight: passed\n")
+		sb.WriteString(L.Get("doctor.acp_preflight.ok"))
 	}
 
 	return sb.String()
+}
+
+func (m *Manager) preflightAgentOptions() acp.AgentOptions {
+	opts := m.agentOptsForChannel("")
+	opts.TrustAllTools = true
+	opts.TrustTools = ""
+	opts.LoadSessionID = ""
+	opts.MCPServers = nil
+	return opts
 }
 
 // StartTempAgent starts a temporary agent (for cron jobs).
@@ -1139,7 +1669,7 @@ func (m *Manager) StartTempAgent(name, cwd, model string) (*acp.Agent, error) {
 	if err != nil {
 		return nil, err
 	}
-	return acp.StartAgent(name, m.kiroCLI, cwd, model, m.agentOpts())
+	return acp.StartAgent(name, m.kiroCLI, cwd, model, m.agentOptsForChannel(""))
 }
 
 // SendCommand sends a slash command (e.g. /compact, /clear) to the channel's agent.
@@ -1581,7 +2111,7 @@ func (m *Manager) spawnThreadAgent(threadID, parentChannelID string, modelOverri
 	}
 
 	agentName := "thread-" + threadID
-	opts := m.agentOpts()
+	opts := m.agentOptsForChannel(parentChannelID)
 	if hasThreadSession && threadSess.SessionID != "" {
 		opts.LoadSessionID = threadSess.SessionID
 	}

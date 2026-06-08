@@ -53,6 +53,8 @@ For example, if the project is at `/home/user/kiro-discord-bot`:
 
 This sources `DISCORD_TOKEN` from the project `.env` file at startup — no token duplication needed.
 
+Registration only adds `mcp-discord` to Kiro's MCP catalog. The bot does not expose catalog MCP servers to agents by default. A Discord channel manager must run `/mcp status` to confirm the server appears in the checklist, then `/mcp enable server:mcp-discord` in the target channel before the bot injects this server into that channel's agent session. For narrower access, use `/mcp manage` to scan the server and allow only selected tools.
+
 ### Step 3.5: Set a safety scope
 
 Before enabling the server broadly, restrict the Discord surfaces the MCP server can touch in `<PROJECT_DIR>/.env`:
@@ -68,11 +70,11 @@ Empty allowlists preserve unrestricted legacy behavior. When a guild allowlist i
 
 For stricter deployments, set `MCP_DISCORD_READ_ONLY=true` to block every write tool, or set `MCP_DISCORD_ALLOWED_WRITE_TOOLS` to a comma-separated list such as `discord_send_message,discord_reply_message`. Set `MCP_DISCORD_ALLOW_DESTRUCTIVE=false` to block delete/edit/pin/topic/reaction-removal operations while still allowing non-destructive sends.
 
-### Step 4: Restart the agent session
+### Step 4: Enable it per channel
 
 After completing the steps above, tell the user:
 
-> MCP server installed. Please run `/reset` or `!reset` to restart the agent session. After restart, I'll have direct access to Discord.
+> MCP server installed in the catalog. Please run `/mcp status` to confirm it appears in the checklist, then `/mcp enable server:mcp-discord` in the target channel, or use `/mcp manage` to allow selected tools only. The bot will restart active agents in that channel scope so the policy applies on next use.
 
 ## Available Tools (after enabled)
 

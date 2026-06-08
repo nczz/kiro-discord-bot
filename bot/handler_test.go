@@ -669,7 +669,37 @@ func TestSlashCommandsIncludeAgentAndUsage(t *testing.T) {
 	foundUsage := false
 	foundInterrupt := false
 	foundThread := false
+	foundMCP := false
 	for _, cmd := range buildSlashCommands() {
+		if cmd.Name == "mcp" {
+			foundMCP = true
+			if len(cmd.Options) != 4 {
+				t.Fatalf("/mcp should expose 4 subcommands, got %+v", cmd.Options)
+			}
+			if cmd.Options[0].Type != discordgo.ApplicationCommandOptionSubCommand {
+				t.Fatalf("/mcp option should be subcommand, got %+v", cmd.Options[0])
+			}
+			if cmd.Options[0].Name != "manage" {
+				t.Fatalf("/mcp first subcommand = %q, want manage", cmd.Options[0].Name)
+			}
+			for _, opt := range cmd.Options {
+				switch opt.Name {
+				case "catalog", "preset", "readonly", "destructive", "restart-agent":
+					t.Fatalf("/mcp should not expose %q as a separate subcommand: %+v", opt.Name, cmd.Options)
+				}
+				if opt.Name == "status" {
+					if len(opt.Options) != 1 || opt.Options[0].Name != "server" || opt.Options[0].Required {
+						t.Fatalf("/mcp status server option should be optional, got %+v", opt.Options)
+					}
+				}
+				if opt.Name == "enable" {
+					if len(opt.Options) != 1 || opt.Options[0].Name != "server" {
+						t.Fatalf("/mcp enable should only require server, got %+v", opt.Options)
+					}
+				}
+			}
+			continue
+		}
 		if cmd.Name == "thread" {
 			foundThread = true
 			if len(cmd.Options) != 1 || cmd.Options[0].Name != "mode" {
@@ -696,9 +726,193 @@ func TestSlashCommandsIncludeAgentAndUsage(t *testing.T) {
 			t.Fatalf("/agent options = %+v, want optional mode", cmd.Options)
 		}
 	}
-	if !foundAgent || !foundUsage || !foundInterrupt || !foundThread {
-		t.Fatal("expected /agent, /usage, /interrupt, and /thread slash commands to be registered")
+	if !foundAgent || !foundUsage || !foundInterrupt || !foundThread || !foundMCP {
+		t.Fatal("expected /agent, /usage, /interrupt, /thread, and /mcp slash commands to be registered")
 	}
+}
+
+func TestMCPArgsFromSlashOptions(t *testing.T) {
+	got := mcpArgsFromSlashOptions([]*discordgo.ApplicationCommandInteractionDataOption{{
+		Type: discordgo.ApplicationCommandOptionSubCommand,
+		Name: "manage",
+	}})
+	if got != "manage" {
+		t.Fatalf("mcp manage args = %q", got)
+	}
+
+}
+
+func TestBuildMCPManagePanel(t *testing.T) {
+	L.Load("en")
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "mcp.json")
+	if err := os.WriteFile(cfgPath, []byte(`{"mcpServers":{"context7":{"command":"npx","args":["-y","@upstash/context7-mcp"]},"generic-tools":{"command":"/tmp/generic-tools"}}}`), 0644); err != nil {
+		t.Fatalf("write mcp config: %v", err)
+	}
+	t.Setenv("KIRO_MCP_CONFIG", cfgPath)
+	m := channel.NewManager(channel.ManagerConfig{DataDir: dir, GuildID: "guild-1"})
+	defer m.StopAll()
+	b := &Bot{manager: m}
+
+	content, components := b.buildMCPManagePanel("channel-1", "context7")
+	if !strings.Contains(content, "MCP policy panel") || !strings.Contains(content, "context7") {
+		t.Fatalf("unexpected panel content:\n%s", content)
+	}
+	if len(components) != 4 {
+		t.Fatalf("components len = %d, want select + actions + tools + restart", len(components))
+	}
+	row, ok := components[0].(discordgo.ActionsRow)
+	if !ok || len(row.Components) != 1 {
+		t.Fatalf("first row should contain select menu: %+v", components[0])
+	}
+	menu, ok := row.Components[0].(discordgo.SelectMenu)
+	if !ok {
+		t.Fatalf("first component should be select menu: %+v", row.Components[0])
+	}
+	if len(menu.Options) < 2 {
+		t.Fatalf("select options = %+v", menu.Options)
+	}
+	labels := make([]string, 0, len(menu.Options))
+	for _, opt := range menu.Options {
+		labels = append(labels, opt.Label)
+	}
+	if !containsAll(strings.Join(labels, ","), "context7", "generic-tools") {
+		t.Fatalf("select options missing configured servers: %+v", menu.Options)
+	}
+	actionRow, ok := components[1].(discordgo.ActionsRow)
+	if !ok || len(actionRow.Components) != 2 {
+		t.Fatalf("action row should contain full and disable buttons: %+v", components[1])
+	}
+}
+
+func TestMCPManagePanelUsesShortComponentPayloads(t *testing.T) {
+	L.Load("en")
+	dir := t.TempDir()
+	longServer := "vendor:" + strings.Repeat("very-long-context-server/", 8)
+	cfg := fmt.Sprintf(`{"mcpServers":{%q:{"command":"/tmp/long-mcp"}}}`, longServer)
+	cfgPath := filepath.Join(dir, "mcp.json")
+	if err := os.WriteFile(cfgPath, []byte(cfg), 0644); err != nil {
+		t.Fatalf("write mcp config: %v", err)
+	}
+	t.Setenv("KIRO_MCP_CONFIG", cfgPath)
+	m := channel.NewManager(channel.ManagerConfig{DataDir: dir, GuildID: "guild-1"})
+	defer m.StopAll()
+	b := &Bot{manager: m}
+
+	_, components := b.buildMCPManagePanel("123456789012345678", longServer)
+	for _, customID := range collectMCPComponentCustomIDs(components) {
+		if len(customID) > 100 {
+			t.Fatalf("custom_id length = %d, want <= 100: %q", len(customID), customID)
+		}
+		if strings.Contains(customID, longServer) {
+			t.Fatalf("custom_id leaked raw server name: %q", customID)
+		}
+	}
+	row := components[0].(discordgo.ActionsRow)
+	menu := row.Components[0].(discordgo.SelectMenu)
+	var selected discordgo.SelectMenuOption
+	for _, opt := range menu.Options {
+		if opt.Default {
+			selected = opt
+			break
+		}
+	}
+	if selected.Value == "" {
+		t.Fatalf("selected long-server option not found: %+v", menu.Options)
+	}
+	if len(selected.Value) > 100 || strings.Contains(selected.Value, longServer) {
+		t.Fatalf("select value should be short token, got %q", selected.Value)
+	}
+	if got := b.resolveMCPServerToken("123456789012345678", selected.Value); got != longServer {
+		t.Fatalf("resolved server = %q, want %q", got, longServer)
+	}
+}
+
+func TestMCPToolSelectOptionsUseShortValues(t *testing.T) {
+	longTool := "tool:" + strings.Repeat("read-large-dataset/", 8)
+	allow, _ := mcpToolSelectOptions([]channel.MCPToolView{{
+		MCPToolInfo: channel.MCPToolInfo{Name: longTool, Description: "long tool"},
+	}})
+	if len(allow) != 1 {
+		t.Fatalf("allow options = %+v", allow)
+	}
+	if len(allow[0].Value) > 100 || strings.Contains(allow[0].Value, longTool) {
+		t.Fatalf("tool select value should be short token, got %q", allow[0].Value)
+	}
+	if allow[0].Emoji == nil || allow[0].Emoji.Name != "⚪" {
+		t.Fatalf("blocked tool option emoji = %+v, want white circle", allow[0].Emoji)
+	}
+	_, remove := mcpToolSelectOptions([]channel.MCPToolView{{
+		MCPToolInfo: channel.MCPToolInfo{Name: "allowed-tool"},
+		Allowed:     true,
+	}})
+	if len(remove) != 1 || remove[0].Emoji == nil || remove[0].Emoji.Name != "🟢" {
+		t.Fatalf("allowed tool option = %+v, want green emoji", remove)
+	}
+}
+
+func TestMCPToolPaginationBounds(t *testing.T) {
+	if got := mcpToolPageCount(0); got != 1 {
+		t.Fatalf("empty page count = %d, want 1", got)
+	}
+	if got := mcpToolPageCount(26); got != 2 {
+		t.Fatalf("page count = %d, want 2", got)
+	}
+	start, end := mcpToolPageBounds(53, 2)
+	if start != 50 || end != 53 {
+		t.Fatalf("page 3 bounds = %d/%d, want 50/53", start, end)
+	}
+	start, end = mcpToolPageBounds(53, 99)
+	if start != 50 || end != 53 {
+		t.Fatalf("overflow page bounds = %d/%d, want 50/53", start, end)
+	}
+	allowed, blocked := mcpToolCounts([]channel.MCPToolView{{Allowed: true}, {}, {Allowed: true}})
+	if allowed != 2 || blocked != 1 {
+		t.Fatalf("tool counts = %d/%d, want 2/1", allowed, blocked)
+	}
+	if got := parseMCPPage("-1"); got != 0 {
+		t.Fatalf("negative page = %d, want 0", got)
+	}
+	if got := parseMCPPage("bad"); got != 0 {
+		t.Fatalf("invalid page = %d, want 0", got)
+	}
+}
+
+func TestTruncateDiscordMessageContent(t *testing.T) {
+	got := truncateDiscordMessageContent(strings.Repeat("x", 20), 10)
+	if got != "xxxxxxx..." {
+		t.Fatalf("truncated content = %q", got)
+	}
+}
+
+func TestMCPComponentIDParsesLegacyEscapedServerNames(t *testing.T) {
+	id := "mcpui:apply:channel-1:vendor%3Acontext%2Fserver:full"
+	parts := parseMCPComponentID(id)
+	if len(parts) != 5 {
+		t.Fatalf("parts = %+v", parts)
+	}
+	if parts[3] != "vendor:context/server" {
+		t.Fatalf("server part = %q", parts[3])
+	}
+}
+
+func collectMCPComponentCustomIDs(components []discordgo.MessageComponent) []string {
+	var out []string
+	for _, component := range components {
+		row, ok := component.(discordgo.ActionsRow)
+		if !ok {
+			continue
+		}
+		for _, child := range row.Components {
+			switch c := child.(type) {
+			case discordgo.Button:
+				out = append(out, c.CustomID)
+			case discordgo.SelectMenu:
+				out = append(out, c.CustomID)
+			}
+		}
+	}
+	return out
 }
 
 func TestChannelOnlySlashCommands(t *testing.T) {

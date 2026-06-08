@@ -72,6 +72,81 @@ func isChannelOnlySlashCommand(name string) bool {
 	}
 }
 
+func (b *Bot) cmdMCP(ctx cmdCtx) {
+	args := strings.Fields(ctx.args)
+	action := "status"
+	if len(args) > 0 {
+		action = strings.ToLower(args[0])
+	}
+	targetChannel := ctx.channelID
+	switch action {
+	case "manage":
+		ctx.reply(L.Get("mcp.manage.slash_only"))
+	case "catalog":
+		ctx.reply(b.manager.MCPStatusChecklist(targetChannel))
+	case "status":
+		server := mcpOptionalServer(args)
+		if server == "" {
+			ctx.reply(b.manager.MCPStatusChecklist(targetChannel))
+			return
+		}
+		ctx.reply(b.manager.MCPStatus(targetChannel, server))
+	case "enable":
+		if !b.userCanManageAuditTarget(b.discord, ctx.userID, ctx.targetID) {
+			ctx.reply(L.Get("mcp.forbidden"))
+			return
+		}
+		server := mcpRequiredServer(args)
+		if server == "" {
+			ctx.reply(L.Get("mcp.usage"))
+			return
+		}
+		if err := b.manager.SetMCPPolicy(targetChannel, ctx.userID, server, true, "full"); err != nil {
+			ctx.reply(commandError(err))
+			return
+		}
+		ctx.reply(L.Getf("mcp.enabled", server))
+	case "disable":
+		if !b.userCanManageAuditTarget(b.discord, ctx.userID, ctx.targetID) {
+			ctx.reply(L.Get("mcp.forbidden"))
+			return
+		}
+		server := mcpRequiredServer(args)
+		if server == "" {
+			ctx.reply(L.Get("mcp.usage"))
+			return
+		}
+		if err := b.manager.SetMCPPolicy(targetChannel, ctx.userID, server, false, ""); err != nil {
+			ctx.reply(commandError(err))
+			return
+		}
+		ctx.reply(L.Getf("mcp.disabled", server))
+	default:
+		ctx.reply(L.Get("mcp.usage"))
+	}
+}
+
+func mcpOptionalServer(args []string) string {
+	if len(args) > 1 {
+		return args[1]
+	}
+	return ""
+}
+
+func mcpRequiredServer(args []string) string {
+	if len(args) > 1 {
+		return args[1]
+	}
+	return ""
+}
+
+func localeBool(v bool) string {
+	if v {
+		return L.Get("bool.true")
+	}
+	return L.Get("bool.false")
+}
+
 func (b *Bot) cmdAudit(ctx cmdCtx) {
 	if b.auditRecorder == nil {
 		ctx.reply(L.Get("audit.disabled"))
@@ -293,45 +368,40 @@ func (b *Bot) doctor(ctx context.Context, channelID, targetID string) string {
 	var sb strings.Builder
 	sb.WriteString(b.manager.Doctor(ctx))
 
-	sb.WriteString("\n**Discord**\n")
+	sb.WriteString("\n" + L.Get("doctor.discord.header"))
 	if b.discord == nil {
-		sb.WriteString("❌ session: not initialized\n")
+		sb.WriteString(L.Get("doctor.discord.session_not_initialized"))
 	} else {
 		if b.discord.State != nil && b.discord.State.User != nil {
-			sb.WriteString("✅ bot user: `" + b.discord.State.User.String() + "`\n")
+			sb.WriteString(L.Getf("doctor.discord.bot_user.ok", b.discord.State.User.String()))
 		} else if u, err := b.discord.User("@me"); err != nil {
-			sb.WriteString("❌ bot user: " + err.Error() + "\n")
+			sb.WriteString(L.Getf("doctor.discord.bot_user.error", err.Error()))
 		} else {
-			sb.WriteString("✅ bot user: `" + u.String() + "`\n")
+			sb.WriteString(L.Getf("doctor.discord.bot_user.ok", u.String()))
 		}
 
 		if b.guildID == "" {
-			sb.WriteString("⚠️ guild restriction: not configured\n")
+			sb.WriteString(L.Get("doctor.discord.guild_restriction.empty"))
 		} else if b.discord.State != nil {
 			if g, err := b.discord.State.Guild(b.guildID); err == nil && g != nil {
-				sb.WriteString("✅ guild: `" + g.Name + "` (`" + b.guildID + "`)\n")
+				sb.WriteString(L.Getf("doctor.discord.guild.ok", g.Name, b.guildID))
 			} else if g, err := b.discord.Guild(b.guildID); err != nil {
-				sb.WriteString("❌ guild: " + err.Error() + "\n")
+				sb.WriteString(L.Getf("doctor.discord.guild.error", err.Error()))
 			} else {
-				sb.WriteString("✅ guild: `" + g.Name + "` (`" + b.guildID + "`)\n")
+				sb.WriteString(L.Getf("doctor.discord.guild.ok", g.Name, b.guildID))
 			}
 		} else if g, err := b.discord.Guild(b.guildID); err != nil {
-			sb.WriteString("❌ guild: " + err.Error() + "\n")
+			sb.WriteString(L.Getf("doctor.discord.guild.error", err.Error()))
 		} else {
-			sb.WriteString("✅ guild: `" + g.Name + "` (`" + b.guildID + "`)\n")
+			sb.WriteString(L.Getf("doctor.discord.guild.ok", g.Name, b.guildID))
 		}
 	}
 
 	sb.WriteString(b.doctorDiscordPermissions(channelID, targetID))
 	sb.WriteString(b.doctorBotPeers(targetID))
 
-	sb.WriteString("\n**Discord MCP**\n")
-	sb.WriteString(doctorEnvLine("guild allowlist", "MCP_DISCORD_ALLOWED_GUILDS", "not configured"))
-	sb.WriteString(doctorEnvLine("channel allowlist", "MCP_DISCORD_ALLOWED_CHANNELS", "not configured"))
-	sb.WriteString(doctorEnvLine("download dir", "MCP_DISCORD_DOWNLOAD_DIR", "not restricted"))
-	sb.WriteString(doctorEnvLine("read only", "MCP_DISCORD_READ_ONLY", "false"))
-	sb.WriteString(doctorEnvLine("write tools", "MCP_DISCORD_ALLOWED_WRITE_TOOLS", "unrestricted"))
-	sb.WriteString(doctorEnvLine("destructive writes", "MCP_DISCORD_ALLOW_DESTRUCTIVE", "true"))
+	sb.WriteString("\n")
+	sb.WriteString(b.manager.MCPStatusChecklist(channelID))
 
 	return sb.String()
 }
@@ -614,7 +684,7 @@ func (b *Bot) cmdAgent(ctx cmdCtx) {
 			return
 		}
 		var sb strings.Builder
-		sb.WriteString("**Agent Modes**\n")
+		sb.WriteString(L.Get("agent.modes.header"))
 		for _, m := range modes {
 			marker := " "
 			if m.ID == current {
@@ -622,15 +692,15 @@ func (b *Bot) cmdAgent(ctx cmdCtx) {
 			}
 			sb.WriteString(fmt.Sprintf("%s `%s` — %s\n", marker, m.ID, m.Description))
 		}
-		sb.WriteString("\nUsage: `!agent <mode_id>`")
+		sb.WriteString(L.Get("agent.modes.footer"))
 		ctx.reply(sb.String())
 		return
 	}
 	// Switch mode
 	if err := b.manager.SwitchMode(ctx.channelID, ctx.args); err != nil {
-		ctx.reply(fmt.Sprintf("❌ Mode switch failed: %s", err.Error()))
+		ctx.reply(L.Getf("agent.mode_switch_failed", err.Error()))
 	} else {
-		ctx.reply(fmt.Sprintf("✅ Switched to mode: `%s`", ctx.args))
+		ctx.reply(L.Getf("agent.mode_switched", ctx.args))
 	}
 }
 

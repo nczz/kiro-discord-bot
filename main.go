@@ -1,9 +1,11 @@
 package main
 
 import (
+	"context"
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 
@@ -12,9 +14,21 @@ import (
 	"github.com/nczz/kiro-discord-bot/bot"
 	"github.com/nczz/kiro-discord-bot/channel"
 	"github.com/nczz/kiro-discord-bot/locale"
+	"github.com/nczz/kiro-discord-bot/mcpproxy"
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "mcp-proxy" {
+		cfg, err := mcpproxy.LoadConfigFromEnv()
+		if err != nil {
+			log.Fatal(err)
+		}
+		if err := mcpproxy.Run(context.Background(), cfg, os.Stdin, os.Stdout, os.Stderr); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+
 	cfg := loadConfig()
 	locale.Load(cfg.BotLocale)
 
@@ -26,18 +40,18 @@ func main() {
 	}
 	switch preflightMode {
 	case "", "warn":
-		if err := acp.PreflightCheck(cfg.KiroCLIPath); err != nil {
+		if err := acp.PreflightCheckWithOptions(cfg.KiroCLIPath, preflightAgentOptions(cfg)); err != nil {
 			log.Printf("[preflight] WARNING: %v — agent may be unavailable, errors will surface per-request", err)
 		}
 	case "strict", "fatal":
-		if err := acp.PreflightCheck(cfg.KiroCLIPath); err != nil {
+		if err := acp.PreflightCheckWithOptions(cfg.KiroCLIPath, preflightAgentOptions(cfg)); err != nil {
 			log.Fatalf("[preflight] FATAL: %v — set PREFLIGHT_MODE=warn or skip only if you accept delayed per-request failures", err)
 		}
 	case "skip", "off", "false":
 		log.Printf("[preflight] skipped")
 	default:
 		log.Printf("[preflight] unknown PREFLIGHT_MODE=%q, using warn", cfg.PreflightMode)
-		if err := acp.PreflightCheck(cfg.KiroCLIPath); err != nil {
+		if err := acp.PreflightCheckWithOptions(cfg.KiroCLIPath, preflightAgentOptions(cfg)); err != nil {
 			log.Printf("[preflight] WARNING: %v — agent may be unavailable, errors will surface per-request", err)
 		}
 	}
@@ -102,4 +116,20 @@ func main() {
 	<-sc
 
 	b.Stop()
+}
+
+func preflightAgentOptions(cfg *Config) acp.AgentOptions {
+	opts := acp.AgentOptions{
+		MaxBuffer: cfg.MaxScannerBuffer,
+		Agent:     cfg.AgentProfile,
+	}
+	if strings.TrimSpace(cfg.DataDir) == "" {
+		return opts
+	}
+	runtimeHome := filepath.Join(cfg.DataDir, "kiro-runtime")
+	if err := os.MkdirAll(runtimeHome, 0755); err != nil {
+		log.Printf("[preflight] create runtime KIRO_HOME: %v", err)
+	}
+	opts.Env = append(opts.Env, "KIRO_HOME="+runtimeHome)
+	return opts
 }
