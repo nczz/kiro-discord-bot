@@ -149,7 +149,7 @@ func (b *Bot) handleCronModalSubmit(ds *discordgo.Session, i *discordgo.Interact
 	}
 
 	respondInteraction(ds, i, L.Getf("cron.created",
-		name, cronExpr, heartbeat.DescribeSchedule(cronExpr), prompt))
+		name, cronExpr, heartbeat.DescribeSchedule(cronExpr), truncate(prompt, 200)))
 }
 
 // handleCronEditSubmit processes the edit modal form submission.
@@ -205,7 +205,7 @@ func (b *Bot) handleCronEditSubmit(ds *discordgo.Session, i *discordgo.Interacti
 	}
 
 	respondInteraction(ds, i, L.Getf("cron.updated",
-		job.Name, cronExpr, heartbeat.DescribeSchedule(cronExpr), job.Prompt))
+		job.Name, cronExpr, heartbeat.DescribeSchedule(cronExpr), truncate(job.Prompt, 200)))
 }
 
 // handleCronList responds to /cron-list with a list of jobs and action buttons.
@@ -427,10 +427,12 @@ func (b *Bot) followupInteractionForCommand(ds *discordgo.Session, i *discordgo.
 }
 
 func respondInteraction(ds *discordgo.Session, i *discordgo.InteractionCreate, msg string) {
-	_ = ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+	if err := ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseChannelMessageWithSource,
 		Data: &discordgo.InteractionResponseData{Content: msg},
-	})
+	}); err != nil {
+		log.Printf("[interaction] respond failed: %v (content_len=%d)", err, len(msg))
+	}
 }
 
 func truncate(s string, n int) string {
