@@ -26,6 +26,7 @@ type MCPCatalogEntry struct {
 	Command string
 	Args    []string
 	Env     map[string]string
+	URL     string
 	Source  string
 }
 
@@ -199,12 +200,19 @@ func (s *MCPPolicyStore) DiscoverTools(ctx context.Context, serverName string) (
 	if !ok {
 		return nil, fmt.Errorf("mcp server %q was not found in catalog", serverName)
 	}
-	env := make([]string, 0, len(entry.Env))
-	for k, v := range entry.Env {
-		env = append(env, k+"="+v)
+
+	var c *mcpclient.Client
+	var err error
+	if entry.URL != "" {
+		c, err = mcpclient.NewStreamableHttpClient(entry.URL)
+	} else {
+		env := make([]string, 0, len(entry.Env))
+		for k, v := range entry.Env {
+			env = append(env, k+"="+v)
+		}
+		sort.Strings(env)
+		c, err = mcpclient.NewStdioMCPClient(entry.Command, env, entry.Args...)
 	}
-	sort.Strings(env)
-	c, err := mcpclient.NewStdioMCPClient(entry.Command, env, entry.Args...)
 	if err != nil {
 		return nil, err
 	}
@@ -521,13 +529,20 @@ func (p MCPChannelPolicy) ApplyPreset(preset string) MCPChannelPolicy {
 }
 
 func (p MCPChannelPolicy) ToACPServer(entry MCPCatalogEntry, proxyCommand string, guildID, channelID string) acp.MCPServerConfig {
-	env := make(map[string]string, len(entry.Env))
-	for k, v := range entry.Env {
-		env[k] = v
-	}
 	allowedTools := p.EffectiveTools()
 	proxyEnv := map[string]string{}
-	for _, item := range mcpproxy.ConfigEnv(entry.Command, entry.Args, env, allowedTools, p.AllowAllTools) {
+
+	var envItems []string
+	if entry.URL != "" {
+		envItems = mcpproxy.ConfigEnvURL(entry.URL, allowedTools, p.AllowAllTools)
+	} else {
+		env := make(map[string]string, len(entry.Env))
+		for k, v := range entry.Env {
+			env[k] = v
+		}
+		envItems = mcpproxy.ConfigEnv(entry.Command, entry.Args, env, allowedTools, p.AllowAllTools)
+	}
+	for _, item := range envItems {
 		k, v, ok := strings.Cut(item, "=")
 		if ok {
 			proxyEnv[k] = v
@@ -580,6 +595,7 @@ func readMCPConfig(path string) (map[string]MCPCatalogEntry, error) {
 			Command string            `json:"command"`
 			Args    []string          `json:"args"`
 			Env     map[string]string `json:"env"`
+			URL     string            `json:"url"`
 		} `json:"mcpServers"`
 	}
 	if err := json.Unmarshal(raw, &doc); err != nil {
@@ -588,14 +604,14 @@ func readMCPConfig(path string) (map[string]MCPCatalogEntry, error) {
 	out := make(map[string]MCPCatalogEntry, len(doc.MCPServers))
 	for name, cfg := range doc.MCPServers {
 		name = strings.TrimSpace(name)
-		if name == "" || strings.TrimSpace(cfg.Command) == "" {
+		if name == "" || (strings.TrimSpace(cfg.Command) == "" && strings.TrimSpace(cfg.URL) == "") {
 			continue
 		}
 		env := make(map[string]string, len(cfg.Env))
 		for k, v := range cfg.Env {
 			env[k] = v
 		}
-		out[name] = MCPCatalogEntry{Name: name, Command: cfg.Command, Args: cfg.Args, Env: env}
+		out[name] = MCPCatalogEntry{Name: name, Command: cfg.Command, Args: cfg.Args, Env: env, URL: strings.TrimSpace(cfg.URL)}
 	}
 	return out, nil
 }

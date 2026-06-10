@@ -2,10 +2,12 @@ package mcpproxy
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"strings"
@@ -19,12 +21,14 @@ const (
 	envEnvJSON       = "MCP_PROXY_ENV_JSON"
 	envAllowedJSON   = "MCP_PROXY_ALLOWED_TOOLS_JSON"
 	envAllowAllTools = "MCP_PROXY_ALLOW_ALL_TOOLS"
+	envURL           = "MCP_PROXY_URL"
 )
 
 type Config struct {
 	Command       string
 	Args          []string
 	Env           map[string]string
+	URL           string
 	AllowedTools  map[string]struct{}
 	AllowAllTools bool
 }
@@ -51,10 +55,26 @@ func ConfigEnv(command string, args []string, env map[string]string, allowedTool
 	}
 }
 
+// ConfigEnvURL produces proxy env vars for a URL-based MCP server.
+func ConfigEnvURL(url string, allowedTools []string, allowAll bool) []string {
+	if allowedTools == nil {
+		allowedTools = []string{}
+	}
+	toolsRaw, _ := json.Marshal(allowedTools)
+	return []string{
+		envURL + "=" + url,
+		envAllowedJSON + "=" + string(toolsRaw),
+		envAllowAllTools + "=" + fmt.Sprintf("%t", allowAll),
+	}
+}
+
 func LoadConfigFromEnv() (Config, error) {
-	cfg := Config{Command: strings.TrimSpace(os.Getenv(envCommand))}
-	if cfg.Command == "" {
-		return cfg, fmt.Errorf("%s is required", envCommand)
+	cfg := Config{
+		Command: strings.TrimSpace(os.Getenv(envCommand)),
+		URL:     strings.TrimSpace(os.Getenv(envURL)),
+	}
+	if cfg.Command == "" && cfg.URL == "" {
+		return cfg, fmt.Errorf("%s or %s is required", envCommand, envURL)
 	}
 	_ = json.Unmarshal([]byte(os.Getenv(envArgsJSON)), &cfg.Args)
 	_ = json.Unmarshal([]byte(os.Getenv(envEnvJSON)), &cfg.Env)
@@ -72,6 +92,116 @@ func LoadConfigFromEnv() (Config, error) {
 }
 
 func Run(ctx context.Context, cfg Config, stdin io.Reader, stdout, stderr io.Writer) error {
+	if cfg.URL != "" {
+		return runHTTP(ctx, cfg, stdin, stdout, stderr)
+	}
+	return runStdio(ctx, cfg, stdin, stdout, stderr)
+}
+
+func runHTTP(ctx context.Context, cfg Config, stdin io.Reader, stdout, stderr io.Writer) error {
+	var writeMu sync.Mutex
+	writeLine := func(w io.Writer, line []byte) error {
+		writeMu.Lock()
+		defer writeMu.Unlock()
+		if _, err := w.Write(line); err != nil {
+			return err
+		}
+		if len(line) == 0 || line[len(line)-1] != '\n' {
+			_, err := w.Write([]byte("\n"))
+			return err
+		}
+		return nil
+	}
+
+	client := &http.Client{}
+	scanner := bufio.NewScanner(stdin)
+	scanner.Buffer(make([]byte, 0, 64*1024), 64*1024*1024)
+	for scanner.Scan() {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		line := append([]byte(nil), scanner.Bytes()...)
+		action, blockedTool, id := inspectClientLine(cfg, line)
+		if action == "block" {
+			if err := writeLine(stdout, blockedToolResponse(id, blockedTool)); err != nil {
+				return err
+			}
+			continue
+		}
+		req, err := http.NewRequestWithContext(ctx, "POST", cfg.URL, bytes.NewReader(line))
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := client.Do(req)
+		if err != nil {
+			// Network error: return JSON-RPC error to keep session alive.
+			reqID := extractJSONRPCID(line)
+			if err2 := writeLine(stdout, httpErrorResponse(reqID, fmt.Sprintf("http: %v", err))); err2 != nil {
+				return err2
+			}
+			if stderr != nil {
+				_, _ = fmt.Fprintf(stderr, "[mcp-proxy-http] request to %s failed: %v\n", cfg.URL, err)
+			}
+			continue
+		}
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			reqID := extractJSONRPCID(line)
+			if err2 := writeLine(stdout, httpErrorResponse(reqID, "read response body failed")); err2 != nil {
+				return err2
+			}
+			continue
+		}
+		if resp.StatusCode >= 400 {
+			if stderr != nil {
+				_, _ = fmt.Fprintf(stderr, "[mcp-proxy-http] %s returned %d: %s\n", cfg.URL, resp.StatusCode, body)
+			}
+			reqID := extractJSONRPCID(line)
+			if err := writeLine(stdout, httpErrorResponse(reqID, fmt.Sprintf("upstream returned status %d", resp.StatusCode))); err != nil {
+				return err
+			}
+			continue
+		}
+		body = bytes.TrimSpace(body)
+		if len(body) == 0 {
+			continue
+		}
+		body = filterToolsList(cfg, body)
+		if err := writeLine(stdout, body); err != nil {
+			return err
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func extractJSONRPCID(line []byte) any {
+	var msg struct {
+		ID any `json:"id"`
+	}
+	_ = json.Unmarshal(line, &msg)
+	return msg.ID
+}
+
+func httpErrorResponse(id any, msg string) []byte {
+	raw, _ := json.Marshal(map[string]any{
+		"jsonrpc": "2.0",
+		"id":      id,
+		"error": map[string]any{
+			"code":    -32002,
+			"message": msg,
+		},
+	})
+	return raw
+}
+
+func runStdio(ctx context.Context, cfg Config, stdin io.Reader, stdout, stderr io.Writer) error {
 	cmd := exec.CommandContext(ctx, cfg.Command, cfg.Args...)
 	cmd.Env = os.Environ()
 	for k, v := range cfg.Env {

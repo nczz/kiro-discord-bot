@@ -62,9 +62,10 @@ type AgentOptions struct {
 // MCPServerConfig is passed to Kiro ACP session/new and session/load.
 type MCPServerConfig struct {
 	Name          string            `json:"name"`
-	Command       string            `json:"command"`
+	Command       string            `json:"command,omitempty"`
 	Args          []string          `json:"args,omitempty"`
 	Env           map[string]string `json:"env,omitempty"`
+	URL           string            `json:"url,omitempty"`
 	DisabledTools []string          `json:"disabledTools,omitempty"`
 }
 
@@ -74,6 +75,14 @@ type mcpEnvVariable struct {
 }
 
 func (c MCPServerConfig) MarshalJSON() ([]byte, error) {
+	// URL-based MCP server (streamable HTTP transport).
+	if c.URL != "" {
+		return json.Marshal(struct {
+			Name string `json:"name"`
+			URL  string `json:"url"`
+		}{Name: c.Name, URL: c.URL})
+	}
+	// Command-based MCP server (stdio transport).
 	args := c.Args
 	if args == nil {
 		args = []string{}

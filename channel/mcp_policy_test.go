@@ -148,6 +148,50 @@ func TestReadMCPConfigCatalog(t *testing.T) {
 	}
 }
 
+func TestReadMCPConfigURLType(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mcp.json")
+	if err := os.WriteFile(path, []byte(`{"mcpServers":{"meta-ads":{"url":"http://127.0.0.1:18900"},"cli-tool":{"command":"/bin/echo"}}}`), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	entries, err := readMCPConfig(path)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 entries, got %d: %+v", len(entries), entries)
+	}
+	meta, ok := entries["meta-ads"]
+	if !ok {
+		t.Fatalf("missing meta-ads entry")
+	}
+	if meta.URL != "http://127.0.0.1:18900" || meta.Command != "" {
+		t.Fatalf("unexpected meta-ads entry: %+v", meta)
+	}
+	cli, ok := entries["cli-tool"]
+	if !ok {
+		t.Fatalf("missing cli-tool entry")
+	}
+	if cli.Command != "/bin/echo" || cli.URL != "" {
+		t.Fatalf("unexpected cli-tool entry: %+v", cli)
+	}
+}
+
+func TestToACPServerURLType(t *testing.T) {
+	p := defaultMCPPolicy("guild-1", "channel-1", "meta-ads").ApplyPreset("full")
+	entry := MCPCatalogEntry{Name: "meta-ads", URL: "http://127.0.0.1:18900"}
+	cfg := p.ToACPServer(entry, "/tmp/bot", "guild-1", "channel-1")
+
+	if cfg.Name != "meta-ads" || cfg.Command != "/tmp/bot" || len(cfg.Args) != 1 || cfg.Args[0] != "mcp-proxy" {
+		t.Fatalf("URL type should still use proxy: %+v", cfg)
+	}
+	if cfg.Env["MCP_PROXY_URL"] != "http://127.0.0.1:18900" {
+		t.Fatalf("expected MCP_PROXY_URL env, got %+v", cfg.Env)
+	}
+	if _, hasCommand := cfg.Env["MCP_PROXY_COMMAND"]; hasCommand {
+		t.Fatalf("URL type should not have MCP_PROXY_COMMAND: %+v", cfg.Env)
+	}
+}
+
 func TestManagerAgentOptionsApplyChannelMCPPolicy(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "mcp.json")

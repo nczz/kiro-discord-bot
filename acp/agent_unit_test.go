@@ -68,6 +68,24 @@ func TestSessionParamsIncludesMCPServers(t *testing.T) {
 	}
 }
 
+func TestMCPServerConfigMarshalJSONURLType(t *testing.T) {
+	cfg := MCPServerConfig{Name: "meta-ads", URL: "http://127.0.0.1:18900"}
+	raw, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var got map[string]string
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got["name"] != "meta-ads" || got["url"] != "http://127.0.0.1:18900" {
+		t.Fatalf("unexpected json: %s", raw)
+	}
+	if _, hasCommand := got["command"]; hasCommand {
+		t.Fatalf("URL type should not emit command field: %s", raw)
+	}
+}
+
 func TestSessionParamsSerializesEmptyMCPServersArray(t *testing.T) {
 	params := sessionParams("/tmp/project", "", nil)
 	raw, err := json.Marshal(params)
