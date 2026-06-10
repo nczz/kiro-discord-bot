@@ -1660,7 +1660,7 @@ func (m *Manager) preflightAgentOptions() acp.AgentOptions {
 }
 
 // StartTempAgent starts a temporary agent (for cron jobs).
-func (m *Manager) StartTempAgent(name, cwd, model string) (*acp.Agent, error) {
+func (m *Manager) StartTempAgent(name, cwd, model, channelID string) (*acp.Agent, error) {
 	if strings.TrimSpace(cwd) == "" {
 		cwd = m.defaultCWD
 	}
@@ -1669,7 +1669,7 @@ func (m *Manager) StartTempAgent(name, cwd, model string) (*acp.Agent, error) {
 	if err != nil {
 		return nil, err
 	}
-	return acp.StartAgent(name, m.kiroCLI, cwd, model, m.agentOptsForChannel(""))
+	return acp.StartAgent(name, m.kiroCLI, cwd, model, m.agentOptsForChannel(channelID))
 }
 
 // SendCommand sends a slash command (e.g. /compact, /clear) to the channel's agent.

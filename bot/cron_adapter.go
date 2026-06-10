@@ -22,8 +22,8 @@ type cronAdapter struct {
 
 var _ heartbeat.CronDeps = (*cronAdapter)(nil)
 
-func (a *cronAdapter) StartTempAgent(name, cwd, model string) (*acp.Agent, error) {
-	return a.bot.manager.StartTempAgent(name, cwd, model)
+func (a *cronAdapter) StartTempAgent(name, cwd, model, channelID string) (*acp.Agent, error) {
+	return a.bot.manager.StartTempAgent(name, cwd, model, channelID)
 }
 
 func (a *cronAdapter) StopTempAgent(agent *acp.Agent) {

@@ -30,7 +30,7 @@ type CronHistory struct {
 
 // CronDeps abstracts dependencies for the cron task.
 type CronDeps interface {
-	StartTempAgent(name, cwd, model string) (*acp.Agent, error)
+	StartTempAgent(name, cwd, model, channelID string) (*acp.Agent, error)
 	StopTempAgent(agent *acp.Agent)
 	AskAgentInThread(ctx context.Context, agent *acp.Agent, channelID, threadName, threadID, prompt, mentionID, createdByID string) (response string, usedThreadID string, responseSent bool, err error)
 	RecordAgentUsage(agent *acp.Agent, job *CronJob, threadID, status string)
@@ -171,7 +171,7 @@ func (c *CronTask) execute(job *CronJob, now time.Time) {
 
 	// Start temp agent with model
 	cwd := job.CWD
-	agent, err := c.deps.StartTempAgent(agentName, cwd, job.Model)
+	agent, err := c.deps.StartTempAgent(agentName, cwd, job.Model, job.ChannelID)
 	if err != nil {
 		log.Printf("[cron] start agent for %s failed: %v", job.ID, err)
 		c.deps.Notify(job.ChannelID, L.Getf("cron.exec.start_failed", label, job.Name, err.Error()))

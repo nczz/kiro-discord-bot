@@ -67,7 +67,7 @@ var ErrScheduleUncertain = fmt.Errorf("schedule_uncertain")
 // parseCronPrompt uses a temp agent to parse natural language into a structured cron job.
 // Retries up to 3 times with specific error feedback on validation failure.
 func (b *Bot) parseCronPrompt(ctx context.Context, input string) (*ParsedCronJob, error) {
-	agent, err := b.manager.StartTempAgent("cron-parse", b.manager.DefaultCWD(), "")
+	agent, err := b.manager.StartTempAgent("cron-parse", b.manager.DefaultCWD(), "", "")
 	if err != nil {
 		return nil, fmt.Errorf("start agent: %w", err)
 	}

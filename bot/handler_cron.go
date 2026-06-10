@@ -271,15 +271,17 @@ func (b *Bot) handleCronButton(ds *discordgo.Session, i *discordgo.InteractionCr
 		b.updateCronCard(ds, i, job, L.Getf("cron.running", job.Name))
 	case "delete":
 		_ = b.cronStore.Remove(jobID)
-		_ = ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		if err := ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseUpdateMessage,
 			Data: &discordgo.InteractionResponseData{
 				Content:    L.Getf("cron.deleted", job.Name),
 				Components: []discordgo.MessageComponent{},
 			},
-		})
+		}); err != nil {
+			log.Printf("[interaction] cron delete respond failed: %v", err)
+		}
 	case "edit":
-		_ = ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		if err := ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseModal,
 			Data: &discordgo.InteractionResponseData{
 				CustomID: "cron_edit_modal_" + jobID,
@@ -337,7 +339,9 @@ func (b *Bot) handleCronButton(ds *discordgo.Session, i *discordgo.InteractionCr
 					}},
 				},
 			},
-		})
+		}); err != nil {
+			log.Printf("[interaction] cron edit modal respond failed: %v", err)
+		}
 	}
 }
 
@@ -390,13 +394,15 @@ func buildCronCard(job *heartbeat.CronJob) (string, []discordgo.MessageComponent
 func (b *Bot) updateCronCard(ds *discordgo.Session, i *discordgo.InteractionCreate, job *heartbeat.CronJob, statusMsg string) {
 	content, components := buildCronCard(job)
 	content = statusMsg + "\n\n" + content
-	_ = ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+	if err := ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseUpdateMessage,
 		Data: &discordgo.InteractionResponseData{
 			Content:    content,
 			Components: components,
 		},
-	})
+	}); err != nil {
+		log.Printf("[interaction] cron card update failed: %v (content_len=%d)", err, len(content))
+	}
 }
 
 // handleCronRun handles /cron-run <name>
@@ -663,10 +669,12 @@ func (b *Bot) handleCronPromptButton(ds *discordgo.Session, i *discordgo.Interac
 	customID := i.MessageComponentData().CustomID
 
 	if customID == "cronp_cancel" {
-		_ = ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		if err := ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseUpdateMessage,
 			Data: &discordgo.InteractionResponseData{Content: "❌ " + L.Get("cancel.success"), Components: []discordgo.MessageComponent{}},
-		})
+		}); err != nil {
+			log.Printf("[interaction] cronp_cancel respond failed: %v", err)
+		}
 		return
 	}
 
@@ -717,11 +725,13 @@ func (b *Bot) handleCronPromptButton(ds *discordgo.Session, i *discordgo.Interac
 	}
 
 	desc := heartbeat.DescribeSchedule(result.Schedule)
-	_ = ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+	if err := ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseUpdateMessage,
 		Data: &discordgo.InteractionResponseData{
 			Content:    L.Getf("cron.prompt.created", result.Name, result.Schedule, desc),
 			Components: []discordgo.MessageComponent{},
 		},
-	})
+	}); err != nil {
+		log.Printf("[interaction] cronp_confirm respond failed: %v", err)
+	}
 }

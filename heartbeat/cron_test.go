@@ -21,7 +21,7 @@ type fakeCronDeps struct {
 	noThread      bool
 }
 
-func (f *fakeCronDeps) StartTempAgent(string, string, string) (*acp.Agent, error) {
+func (f *fakeCronDeps) StartTempAgent(string, string, string, string) (*acp.Agent, error) {
 	return &acp.Agent{}, nil
 }
 
