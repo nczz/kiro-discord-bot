@@ -115,7 +115,7 @@ func isKnownBangCommand(name, content string) bool {
 	}
 	switch name {
 	case "resume", "pause", "back", "silent", "thread", "reset", "status", "usage", "doctor", "audit", "mcp", "cancel", "interrupt",
-		"close-thread", "compact", "clear", "cwd", "start", "agent", "model", "models", "memory", "flashmemory", "cron":
+		"close-thread", "compact", "clear", "cwd", "start", "agent", "model", "models", "memory", "flashmemory", "cron", "help":
 		return true
 	case "remind":
 		return strings.HasPrefix(strings.TrimSpace(content), "!remind ")
@@ -557,6 +557,8 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 		b.cmdThreadMode(ctx)
 	case content == "!reset":
 		b.cmdReset(ctx)
+	case content == "!help":
+		b.cmdHelp(ctx)
 	case content == "!status":
 		b.cmdStatus(ctx)
 	case content == "!usage" || strings.HasPrefix(content, "!usage "):
@@ -761,6 +763,9 @@ func (b *Bot) handleThreadMessage(ds *discordgo.Session, m *discordgo.MessageCre
 	case content == "!reset":
 		b.cmdReset(ctx)
 		return
+	case content == "!help":
+		b.cmdHelp(ctx)
+		return
 	case content == "!model":
 		b.cmdModel(ctx)
 		return
@@ -846,6 +851,7 @@ func buildSlashCommands() []*discordgo.ApplicationCommand {
 			{Type: discordgo.ApplicationCommandOptionString, Name: "cwd", Description: L.Get("cmd.start.opt.cwd"), Required: true},
 		}},
 		{Name: "reset", Description: L.Get("cmd.reset.desc")},
+		{Name: "help", Description: L.Get("cmd.help.desc")},
 		{Name: "status", Description: L.Get("cmd.status.desc")},
 		{Name: "usage", Description: L.Get("cmd.usage.desc"), Options: []*discordgo.ApplicationCommandOption{
 			{Type: discordgo.ApplicationCommandOptionUser, Name: "user", Description: L.Get("cmd.usage.opt.user"), Required: false},
@@ -1159,6 +1165,8 @@ func (b *Bot) handleSlashCommand(ds *discordgo.Session, i *discordgo.Interaction
 			b.cmdStart(ctx)
 		case "reset":
 			b.cmdReset(ctx)
+		case "help":
+			b.cmdHelp(ctx)
 		case "status":
 			b.cmdStatus(ctx)
 		case "usage":

@@ -515,6 +515,10 @@ func doctorEnvLine(label, key, unset string) string {
 
 // --- Commands with different channel/thread behavior ---
 
+func (b *Bot) cmdHelp(ctx cmdCtx) {
+	ctx.reply(usageMessage())
+}
+
 func (b *Bot) cmdReset(ctx cmdCtx) {
 	if ctx.inThread {
 		if err := b.manager.ResetThreadAgent(ctx.targetID); err != nil {
@@ -529,7 +533,6 @@ func (b *Bot) cmdReset(ctx cmdCtx) {
 		ctx.reply(L.Getf("error.reset_failed", commandErrorString(err)))
 	} else {
 		ctx.reply(L.Get("reset.success"))
-		ctx.reply(usageMessage())
 	}
 }
 
@@ -841,7 +844,6 @@ func (b *Bot) cmdStart(ctx cmdCtx) {
 		ctx.reply(commandError(err))
 	} else {
 		ctx.reply(L.Getf("start.success", cwd))
-		ctx.reply(usageMessage())
 	}
 }
 

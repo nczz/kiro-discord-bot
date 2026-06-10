@@ -1,5 +1,5 @@
 {
-  "usage_message": "🤖 **Agent is ready!** Available commands:\n\n```\n!status   — Check agent status\n!usage    — Show credit usage report\n!doctor   — Run deployment diagnostics\n!cancel   — Cancel current task\n!interrupt — Interrupt a stuck current task\n!cwd          — Show working directory\n!cwd <dir>    — Set working directory (takes effect on !reset)\n!reset    — Restart agent session\n!start <dir>  — Bind a project directory\n!pause    — Switch to @mention inline mode\n!back     — Resume full-listen thread mode\n!thread   — Show or set new-thread behavior\n!resume   — Re-display last truncated response\n!model          — Show current model\n!model <model>  — Switch model (auto-restarts agent)\n!models         — List available models\n!agent          — List agent modes\n!agent <mode>   — Switch agent mode\n!mcp            — Manage channel MCP policy\n!memory         — Manage persistent memory rules\n!flashmemory    — Manage session flash memory\n```\nSend any message to chat with the agent.",
+  "usage_message": "📖 **Available commands:**\n\n```\n/help              — Show this command list\n/status            — Check agent status\n/usage             — Show credit usage report\n/doctor            — Run deployment diagnostics\n/cancel            — Cancel current task\n/interrupt         — Interrupt a stuck task\n/cwd               — Show or set working directory\n/reset             — Restart agent session\n/start             — Bind a project directory\n/pause             — Switch to @mention inline mode\n/back              — Resume full-listen thread mode\n/thread            — Show or set new-thread behavior\n/resume            — Re-display last truncated response\n/model             — Show or switch model\n/models            — List available models\n/agent             — List or switch agent mode\n/mcp               — Manage channel MCP policy\n/memory            — Manage persistent memory rules\n/flashmemory       — Manage session flash memory\n/compact           — Compact conversation context\n/clear             — Clear conversation history\n```\nAll commands also work with `!` prefix (e.g. `!help`, `!reset`).\nSend any message to chat with the agent.",
   "error.generic": "❌ %s",
   "error.no_active_session": "❌ No active session",
   "error.thread_only": "❌ This command can only be used inside a thread.",
@@ -98,6 +98,7 @@
   "cmd.start.desc": "Bind project directory and start agent",
   "cmd.start.opt.cwd": "Project directory path",
   "cmd.reset.desc": "Restart the agent",
+  "cmd.help.desc": "Show available commands",
   "cmd.status.desc": "Check agent status",
   "cmd.usage.desc": "Show credit usage report",
   "cmd.usage.opt.user": "User to report (leave empty for top users)",
