@@ -22,6 +22,30 @@ func TestSplitDiscordMessagePrefersNewline(t *testing.T) {
 	}
 }
 
+func TestSplitDiscordMessageDemotesHeadings(t *testing.T) {
+	parts := splitDiscordMessage("# Title\n\nbody", 50)
+	if len(parts) != 1 || parts[0] != "**Title**\n\nbody" {
+		t.Fatalf("parts = %#v, want heading demoted", parts)
+	}
+}
+
+func TestReplyLongWithMetadataPrefixesOutsideCodeBlock(t *testing.T) {
+	var withMeta []string
+	ctx := cmdCtx{
+		replyWithMetadata: func(msg string, metadata map[string]any) {
+			withMeta = append(withMeta, msg)
+		},
+	}
+	content := "```go\n" + strings.Repeat("fmt.Println(1)\n", 180) + "```"
+	replyLongWithMetadata(ctx, content, nil)
+	if len(withMeta) < 2 {
+		t.Fatalf("replies = %d, want multiple", len(withMeta))
+	}
+	if !strings.HasPrefix(withMeta[1], "(2/") || !strings.Contains(withMeta[1], "\n```go\n") {
+		t.Fatalf("prefix/code block placement = %q", withMeta[1])
+	}
+}
+
 func TestSplitDiscordMessageKeepsLimit(t *testing.T) {
 	msg := strings.Repeat("x", 25)
 	parts := splitDiscordMessage(msg, 10)

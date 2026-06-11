@@ -1,8 +1,9 @@
 package bot
 
 import (
-	"strconv"
 	"strings"
+
+	"github.com/nczz/kiro-discord-bot/internal/discordfmt"
 )
 
 const discordReplyLimit = 1900
@@ -34,7 +35,7 @@ func replyLongWithMetadata(ctx cmdCtx, content string, metadata map[string]any) 
 }
 
 func formatReplyPart(idx, total int, content string) string {
-	return strings.TrimSpace("(" + strconv.Itoa(idx+1) + "/" + strconv.Itoa(total) + ") " + content)
+	return discordfmt.WithPartPrefix(content, idx, total)
 }
 
 func replyPartMetadata(metadata map[string]any, partIndex, partTotal int) map[string]any {
@@ -54,38 +55,5 @@ func splitDiscordMessage(content string, limit int) []string {
 	if limit <= 0 {
 		limit = discordReplyLimit
 	}
-	var parts []string
-	for len(content) > limit {
-		idx := bestDiscordSplit(content, limit)
-		part := strings.TrimSpace(content[:idx])
-		if part != "" {
-			parts = append(parts, part)
-		}
-		content = strings.TrimSpace(content[idx:])
-	}
-	if strings.TrimSpace(content) != "" {
-		parts = append(parts, strings.TrimSpace(content))
-	}
-	return parts
-}
-
-func bestDiscordSplit(content string, limit int) int {
-	window := content[:limit]
-	for _, sep := range []string{"\n\n", "\n", " "} {
-		if idx := strings.LastIndex(window, sep); idx >= limit/3 {
-			return idx + len(sep)
-		}
-	}
-	idx := limit
-	for idx > 0 && !isUTF8Start(content[idx]) {
-		idx--
-	}
-	if idx == 0 {
-		return limit
-	}
-	return idx
-}
-
-func isUTF8Start(b byte) bool {
-	return b < 0x80 || b >= 0xC0
+	return discordfmt.Split(content, limit)
 }

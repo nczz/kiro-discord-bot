@@ -19,33 +19,6 @@ import (
 	L "github.com/nczz/kiro-discord-bot/locale"
 )
 
-func TestCodeBlockState(t *testing.T) {
-	tests := []struct {
-		name    string
-		input   string
-		wantIn  bool
-		wantLng string
-	}{
-		{"no blocks", "hello world", false, ""},
-		{"open block", "text\n```go\nfunc main() {", true, "go"},
-		{"closed block", "```go\ncode\n```", false, ""},
-		{"open no lang", "text\n```\ncode", true, ""},
-		{"two blocks closed", "```\na\n```\n```python\nb\n```", false, ""},
-		{"two blocks second open", "```\na\n```\n```js\nb", true, "js"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			lang, inBlock := codeBlockState(tt.input)
-			if inBlock != tt.wantIn {
-				t.Errorf("inBlock = %v, want %v", inBlock, tt.wantIn)
-			}
-			if lang != tt.wantLng {
-				t.Errorf("lang = %q, want %q", lang, tt.wantLng)
-			}
-		})
-	}
-}
-
 func TestSplitMessage_Short(t *testing.T) {
 	msg := "hello world"
 	parts := splitMessage(msg, 100)
@@ -65,6 +38,14 @@ func TestSplitMessage_ParagraphBoundary(t *testing.T) {
 	}
 	if parts[0] != p1 {
 		t.Errorf("part[0] = %q, want %q", parts[0], p1)
+	}
+}
+
+func TestSplitMessage_DemotesHeadings(t *testing.T) {
+	msg := "# Title\n\nbody"
+	parts := splitMessage(msg, 100)
+	if len(parts) != 1 || strings.Contains(parts[0], "# Title") || !strings.Contains(parts[0], "**Title**") {
+		t.Fatalf("parts = %#v, want heading demoted", parts)
 	}
 }
 

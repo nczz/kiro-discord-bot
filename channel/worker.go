@@ -12,11 +12,11 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/nczz/kiro-discord-bot/acp"
 	"github.com/nczz/kiro-discord-bot/audit"
+	"github.com/nczz/kiro-discord-bot/internal/discordfmt"
 	"github.com/nczz/kiro-discord-bot/internal/secrets"
 	"github.com/nczz/kiro-discord-bot/internal/textutil"
 	L "github.com/nczz/kiro-discord-bot/locale"
@@ -1157,7 +1157,7 @@ func editMessage(ds *discordgo.Session, channelID, msgID, content string) {
 }
 
 func sendLong(ds *discordgo.Session, channelID, placeholderID, content string) {
-	const limit = 1990
+	const limit = 1980
 	parts := splitMessage(content, limit)
 	if len(parts) == 0 {
 		editMessage(ds, channelID, placeholderID, L.Get("worker.empty_response"))
@@ -1171,15 +1171,14 @@ func sendLong(ds *discordgo.Session, channelID, placeholderID, content string) {
 	editMessage(ds, channelID, placeholderID, prefix+parts[0])
 
 	for i := 1; i < len(parts); i++ {
-		label := fmt.Sprintf("(%d/%d) ", i+1, len(parts))
-		_, _ = ds.ChannelMessageSend(channelID, secrets.RedactEnv(label+parts[i]))
+		_, _ = ds.ChannelMessageSend(channelID, secrets.RedactEnv(discordfmt.WithPartPrefix(parts[i], i, len(parts))))
 	}
 }
 
 // SendLongThread sends a long message to a thread, auto-splitting at Discord's limit.
 func SendLongThread(ds *discordgo.Session, threadID, content string) (int, error) {
 	content = secrets.RedactEnv(content)
-	const limit = 1990
+	const limit = 1980
 	parts := splitMessage(content, limit)
 	sentCount := 0
 	var firstErr error
@@ -1198,14 +1197,14 @@ func SendLongThread(ds *discordgo.Session, threadID, content string) (int, error
 
 func SendLongReply(ds *discordgo.Session, channelID, messageID, content string) {
 	content = secrets.RedactEnv(content)
-	const limit = 1990
+	const limit = 1980
 	parts := splitMessage(content, limit)
 	if len(parts) == 0 {
 		parts = []string{L.Get("worker.empty_response")}
 	}
 	for i, p := range parts {
 		if len(parts) > 1 {
-			p = fmt.Sprintf("(%d/%d) %s", i+1, len(parts), p)
+			p = discordfmt.WithPartPrefix(p, i, len(parts))
 		}
 		ref := &discordgo.MessageReference{MessageID: messageID, ChannelID: channelID}
 		if _, err := ds.ChannelMessageSendReply(channelID, p, ref); err != nil {
@@ -1215,79 +1214,7 @@ func SendLongReply(ds *discordgo.Session, channelID, messageID, content string) 
 }
 
 func splitMessage(s string, limit int) []string {
-	var parts []string
-	for len(s) > limit {
-		idx := findSplitPoint(s, limit)
-		part := s[:idx]
-
-		// If we're splitting inside a code block, close it and reopen in next part
-		lang, inBlock := codeBlockState(part)
-		if inBlock {
-			part += "\n```"
-		}
-		parts = append(parts, part)
-
-		s = s[idx:]
-		if len(s) > 0 && s[0] == '\n' {
-			s = s[1:]
-		}
-		if inBlock {
-			s = "```" + lang + "\n" + s
-		}
-	}
-	if s != "" {
-		parts = append(parts, s)
-	}
-	return parts
-}
-
-// findSplitPoint finds the best split index within limit, preferring paragraph > newline > utf8 boundary.
-func findSplitPoint(s string, limit int) int {
-	chunk := s[:limit]
-
-	// Prefer paragraph boundary (double newline)
-	if idx := strings.LastIndex(chunk, "\n\n"); idx >= limit/3 {
-		return idx
-	}
-	// Then single newline
-	if idx := strings.LastIndex(chunk, "\n"); idx >= limit/3 {
-		return idx
-	}
-	// Fallback: UTF-8 safe boundary
-	idx := limit
-	for idx > 0 && !utf8.RuneStart(s[idx]) {
-		idx--
-	}
-	return idx
-}
-
-// codeBlockState returns whether the text ends inside an unclosed code block,
-// and the language tag if any.
-func codeBlockState(s string) (lang string, inBlock bool) {
-	for {
-		idx := strings.Index(s, "```")
-		if idx < 0 {
-			return lang, inBlock
-		}
-		if !inBlock {
-			inBlock = true
-			// Extract language tag (chars after ``` until newline or end)
-			rest := s[idx+3:]
-			if nl := strings.IndexByte(rest, '\n'); nl >= 0 {
-				lang = rest[:nl]
-			} else {
-				lang = rest
-			}
-			// Clean: lang should be a simple word, no spaces
-			if strings.ContainsAny(lang, " \t`") {
-				lang = ""
-			}
-		} else {
-			inBlock = false
-			lang = ""
-		}
-		s = s[idx+3:]
-	}
+	return discordfmt.Split(s, limit)
 }
 
 func truncateUTF8(s string, maxBytes int) string {
