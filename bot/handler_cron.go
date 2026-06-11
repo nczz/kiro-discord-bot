@@ -147,6 +147,7 @@ func (b *Bot) handleCronModalSubmit(ds *discordgo.Session, i *discordgo.Interact
 		respondInteraction(ds, i, L.Getf("error.save_failed", err.Error()))
 		return
 	}
+	b.cronTask.RecalcNextRun(job)
 
 	respondInteraction(ds, i, L.Getf("cron.created",
 		name, cronExpr, heartbeat.DescribeSchedule(cronExpr), truncate(prompt, 200)))
@@ -203,6 +204,7 @@ func (b *Bot) handleCronEditSubmit(ds *discordgo.Session, i *discordgo.Interacti
 		respondInteraction(ds, i, L.Getf("error.save_failed", err.Error()))
 		return
 	}
+	b.cronTask.RecalcNextRun(job)
 
 	respondInteraction(ds, i, L.Getf("cron.updated",
 		job.Name, cronExpr, heartbeat.DescribeSchedule(cronExpr), truncate(job.Prompt, 200)))
@@ -723,6 +725,7 @@ func (b *Bot) handleCronPromptButton(ds *discordgo.Session, i *discordgo.Interac
 		respondInteraction(ds, i, L.Getf("error.save_failed", err.Error()))
 		return
 	}
+	b.cronTask.RecalcNextRun(job)
 
 	desc := heartbeat.DescribeSchedule(result.Schedule)
 	if err := ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{

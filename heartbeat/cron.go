@@ -265,6 +265,29 @@ func (c *CronTask) advanceNextRun(job *CronJob, after time.Time) {
 	}
 }
 
+// RecalcNextRun recomputes next_run for a single job based on current time and timezone.
+func (c *CronTask) RecalcNextRun(job *CronJob) {
+	sched, err := c.parser.Parse(job.Schedule)
+	if err != nil {
+		return
+	}
+	job.NextRun = sched.Next(time.Now().In(c.location)).Format(time.RFC3339)
+	if err := c.store.Update(job); err != nil {
+		log.Printf("[cron] recalc next run for %s: %v", job.ID, err)
+	}
+}
+
+// RecalcAll recomputes next_run for all enabled jobs. Called on startup to fix timezone drift.
+func (c *CronTask) RecalcAll() {
+	for _, job := range c.store.All() {
+		if !job.Enabled || job.OneShot {
+			continue
+		}
+		c.RecalcNextRun(job)
+	}
+	log.Printf("[cron] recalculated next_run for all enabled jobs")
+}
+
 func (c *CronTask) historyPath(jobID string) string {
 	dir := filepath.Join(c.dataDir, "cron", jobID)
 	_ = os.MkdirAll(dir, 0755)
