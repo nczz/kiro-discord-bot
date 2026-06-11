@@ -12,6 +12,7 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
+	"github.com/nczz/kiro-discord-bot/internal/botegress"
 	"github.com/robfig/cron/v3"
 )
 
@@ -43,6 +44,46 @@ func NewServer() *server.MCPServer {
 			}
 			raw, _ := json.MarshalIndent(rows, "", "  ")
 			return mcp.NewToolResultText(string(raw)), nil
+		},
+	)
+	s.AddTool(
+		writeTool("bot_send_message", "Send a Discord message through the bot-controlled safe egress queue. The main bot redacts secrets before delivery.", false),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			channelID, _ := req.RequireString("channel_id")
+			if err := validateBoundChannel(channelID); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			content, _ := req.RequireString("content")
+			id, err := botegress.WritePending(dataDir(), botegress.Action{
+				Action:    botegress.ActionSendMessage,
+				ChannelID: channelID,
+				Content:   content,
+			})
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			return mcp.NewToolResultText(fmt.Sprintf("Message queued for safe Discord delivery (%s).", id)), nil
+		},
+	)
+	s.AddTool(
+		writeTool("bot_send_file", "Send a local text file through the bot-controlled safe egress queue. The main bot uploads only a redacted sanitized copy.", false),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			channelID, _ := req.RequireString("channel_id")
+			if err := validateBoundChannel(channelID); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			filePath, _ := req.RequireString("file_path")
+			content, _ := req.RequireString("content")
+			id, err := botegress.WritePending(dataDir(), botegress.Action{
+				Action:    botegress.ActionSendFile,
+				ChannelID: channelID,
+				FilePath:  filePath,
+				Content:   content,
+			})
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			return mcp.NewToolResultText(fmt.Sprintf("File queued for safe Discord delivery (%s).", id)), nil
 		},
 	)
 	s.AddTool(
@@ -124,6 +165,21 @@ func writeTool(name, description string, destructive bool) mcp.Tool {
 		mcp.WithOpenWorldHintAnnotation(false),
 	)
 	switch name {
+	case "bot_send_message":
+		for _, opt := range []mcp.ToolOption{
+			mcp.WithString("channel_id", mcp.Required(), mcp.Description("Discord channel ID from context")),
+			mcp.WithString("content", mcp.Required(), mcp.Description("Message content to deliver after bot-side redaction")),
+		} {
+			opt(&t)
+		}
+	case "bot_send_file":
+		for _, opt := range []mcp.ToolOption{
+			mcp.WithString("channel_id", mcp.Required(), mcp.Description("Discord channel ID from context")),
+			mcp.WithString("file_path", mcp.Required(), mcp.Description("Local text file path to sanitize and upload")),
+			mcp.WithString("content", mcp.Description("Optional message content to send with the sanitized file")),
+		} {
+			opt(&t)
+		}
 	case "bot_create_cron":
 		for _, opt := range []mcp.ToolOption{
 			mcp.WithString("name", mcp.Required(), mcp.Description("Short name for the scheduled task")),
@@ -177,6 +233,15 @@ func dataDir() string {
 		return dir
 	}
 	return "./data"
+}
+
+func validateBoundChannel(channelID string) error {
+	bound := strings.TrimSpace(os.Getenv("BOT_TOOLS_CHANNEL_ID"))
+	channelID = strings.TrimSpace(channelID)
+	if bound == "" || channelID == bound {
+		return nil
+	}
+	return fmt.Errorf("channel_id %s is not allowed for this bot-tools session", channelID)
 }
 
 func dataSummary(root string) (summary, error) {

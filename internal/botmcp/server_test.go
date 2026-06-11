@@ -68,6 +68,22 @@ func TestReadOnlyToolAnnotations(t *testing.T) {
 }
 
 func TestWriteToolAnnotations(t *testing.T) {
+	sendMessageTool := writeTool("bot_send_message", "send", false)
+	if sendMessageTool.Annotations.ReadOnlyHint == nil || *sendMessageTool.Annotations.ReadOnlyHint {
+		t.Fatalf("send message readOnlyHint = %+v, want false", sendMessageTool.Annotations.ReadOnlyHint)
+	}
+	if sendMessageTool.Annotations.DestructiveHint == nil || *sendMessageTool.Annotations.DestructiveHint {
+		t.Fatalf("send message destructiveHint = %+v, want false", sendMessageTool.Annotations.DestructiveHint)
+	}
+
+	sendFileTool := writeTool("bot_send_file", "file", false)
+	if sendFileTool.Annotations.ReadOnlyHint == nil || *sendFileTool.Annotations.ReadOnlyHint {
+		t.Fatalf("send file readOnlyHint = %+v, want false", sendFileTool.Annotations.ReadOnlyHint)
+	}
+	if sendFileTool.Annotations.DestructiveHint == nil || *sendFileTool.Annotations.DestructiveHint {
+		t.Fatalf("send file destructiveHint = %+v, want false", sendFileTool.Annotations.DestructiveHint)
+	}
+
 	createTool := writeTool("bot_create_cron", "create", false)
 	if createTool.Annotations.ReadOnlyHint == nil || *createTool.Annotations.ReadOnlyHint {
 		t.Fatalf("create readOnlyHint = %+v, want false", createTool.Annotations.ReadOnlyHint)
@@ -85,6 +101,16 @@ func TestWriteToolAnnotations(t *testing.T) {
 	}
 	if deleteTool.Annotations.OpenWorldHint == nil || *deleteTool.Annotations.OpenWorldHint {
 		t.Fatalf("delete openWorldHint = %+v, want false", deleteTool.Annotations.OpenWorldHint)
+	}
+}
+
+func TestValidateBoundChannel(t *testing.T) {
+	t.Setenv("BOT_TOOLS_CHANNEL_ID", "channel-1")
+	if err := validateBoundChannel("channel-1"); err != nil {
+		t.Fatalf("matching channel rejected: %v", err)
+	}
+	if err := validateBoundChannel("channel-2"); err == nil {
+		t.Fatal("mismatched channel accepted")
 	}
 }
 

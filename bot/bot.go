@@ -129,6 +129,7 @@ func NewFromConfig(cfg BotConfig) (*Bot, error) {
 	n := botNotifier{bot: b}
 	hb.Register(heartbeat.NewHealthTask(&healthAdapter{n}))
 	hb.Register(heartbeat.NewCleanupTask(cfg.DataDir, cfg.AttRetainDays))
+	hb.Register(newSafeEgressTask(b))
 	cronTask := heartbeat.NewCronTask(cronStore, &cronAdapter{n}, cfg.DataDir, cfg.CronTimezone, cfg.GuildID)
 	cronTask.RecalcAll()
 	hb.Register(cronTask)

@@ -17,6 +17,7 @@ import (
 	"github.com/bwmarrin/discordgo"
 	"github.com/nczz/kiro-discord-bot/acp"
 	"github.com/nczz/kiro-discord-bot/audit"
+	"github.com/nczz/kiro-discord-bot/internal/textutil"
 	L "github.com/nczz/kiro-discord-bot/locale"
 )
 
@@ -2515,7 +2516,7 @@ func formatDiscordThreadContext(header string, messages []*discordgo.Message, cu
 			break
 		}
 		if maxMessageChars > 0 && len(content) > maxMessageChars {
-			content = content[:maxMessageChars] + "...(truncated)"
+			content = textutil.TruncateUTF8Bytes(content, maxMessageChars) + "...(truncated)"
 		}
 		author := "unknown"
 		if msg.Author != nil {

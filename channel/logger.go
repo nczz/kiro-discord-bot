@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/nczz/kiro-discord-bot/internal/textutil"
 )
 
 // ChatEntry is a single line in the chat JSONL log.
@@ -157,7 +159,7 @@ func (l *ChatLogger) BuildContextPromptBudget(channelID string, maxTurns, maxCha
 		content := e.Content
 		if reserved[i] < len(content) {
 			if reserved[i] > 50 {
-				content = content[:reserved[i]] + "…(truncated)"
+				content = textutil.TruncateUTF8Bytes(content, reserved[i]) + "…(truncated)"
 			} else {
 				content = "(omitted)"
 			}

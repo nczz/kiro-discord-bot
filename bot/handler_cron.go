@@ -11,6 +11,8 @@ import (
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/nczz/kiro-discord-bot/heartbeat"
+	"github.com/nczz/kiro-discord-bot/internal/secrets"
+	"github.com/nczz/kiro-discord-bot/internal/textutil"
 	L "github.com/nczz/kiro-discord-bot/locale"
 )
 
@@ -226,6 +228,7 @@ func (b *Bot) handleCronList(ds *discordgo.Session, i *discordgo.InteractionCrea
 
 	for index, job := range jobs {
 		content, components := buildCronCard(job)
+		content = secrets.RedactEnv(content)
 		sent, err := ds.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{
 			Content:    content,
 			Components: components,
@@ -395,7 +398,7 @@ func buildCronCard(job *heartbeat.CronJob) (string, []discordgo.MessageComponent
 // updateCronCard updates the button message in-place with refreshed job state + status line.
 func (b *Bot) updateCronCard(ds *discordgo.Session, i *discordgo.InteractionCreate, job *heartbeat.CronJob, statusMsg string) {
 	content, components := buildCronCard(job)
-	content = statusMsg + "\n\n" + content
+	content = secrets.RedactEnv(statusMsg + "\n\n" + content)
 	if err := ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseUpdateMessage,
 		Data: &discordgo.InteractionResponseData{
@@ -422,6 +425,7 @@ func (b *Bot) handleCronRun(ds *discordgo.Session, i *discordgo.InteractionCreat
 }
 
 func (b *Bot) respondInteractionForCommand(ds *discordgo.Session, i *discordgo.InteractionCreate, auditCtx cmdCtx, command, msg string, metadata map[string]any) {
+	msg = secrets.RedactEnv(msg)
 	err := ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseChannelMessageWithSource,
 		Data: &discordgo.InteractionResponseData{Content: msg},
@@ -430,11 +434,13 @@ func (b *Bot) respondInteractionForCommand(ds *discordgo.Session, i *discordgo.I
 }
 
 func (b *Bot) followupInteractionForCommand(ds *discordgo.Session, i *discordgo.InteractionCreate, auditCtx cmdCtx, command, msg string, metadata map[string]any) {
+	msg = secrets.RedactEnv(msg)
 	sent, err := ds.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{Content: msg})
 	b.recordCommandResponseDelivery(auditCtx, command, "slash", "sent", msg, metadata, sent, err)
 }
 
 func respondInteraction(ds *discordgo.Session, i *discordgo.InteractionCreate, msg string) {
+	msg = secrets.RedactEnv(msg)
 	if err := ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseChannelMessageWithSource,
 		Data: &discordgo.InteractionResponseData{Content: msg},
@@ -443,11 +449,15 @@ func respondInteraction(ds *discordgo.Session, i *discordgo.InteractionCreate, m
 	}
 }
 
+func sendChannelMessage(ds *discordgo.Session, channelID, msg string) (*discordgo.Message, error) {
+	return ds.ChannelMessageSend(channelID, secrets.RedactEnv(msg))
+}
+
 func truncate(s string, n int) string {
 	if len(s) <= n {
 		return s
 	}
-	return s[:n] + "..."
+	return textutil.TruncateUTF8Bytes(s, n) + "..."
 }
 
 // handleCronTextCommand handles !cron text commands.
@@ -456,7 +466,7 @@ func (b *Bot) handleCronTextCommand(ds *discordgo.Session, channelID, guildID, u
 	case content == "!cron list":
 		jobs := b.cronStore.ListByChannel(channelID)
 		if len(jobs) == 0 {
-			ds.ChannelMessageSend(channelID, L.Get("cron.list.empty"))
+			sendChannelMessage(ds, channelID, L.Get("cron.list.empty"))
 			return
 		}
 		var sb strings.Builder
@@ -472,22 +482,22 @@ func (b *Bot) handleCronTextCommand(ds *discordgo.Session, channelID, guildID, u
 			sb.WriteString(fmt.Sprintf("%d. %s **%s** — %s\n   Prompt: %s\n",
 				i+1, status, job.Name, job.ScheduleHuman, truncate(job.Prompt, 80)))
 		}
-		ds.ChannelMessageSend(channelID, sb.String())
+		sendChannelMessage(ds, channelID, sb.String())
 
 	case strings.HasPrefix(content, "!cron run "):
 		name := strings.TrimSpace(strings.TrimPrefix(content, "!cron run "))
 		job, ok := b.cronStore.FindByName(channelID, name)
 		if !ok {
-			ds.ChannelMessageSend(channelID, L.Getf("cron.not_found", name))
+			sendChannelMessage(ds, channelID, L.Getf("cron.not_found", name))
 			return
 		}
-		ds.ChannelMessageSend(channelID, L.Getf("cron.running", job.Name))
+		sendChannelMessage(ds, channelID, L.Getf("cron.running", job.Name))
 		job.RunOnce = true
 		_ = b.cronStore.Update(job)
 		b.cronTask.RunNow(job.ID)
 
 	default:
-		ds.ChannelMessageSend(channelID, L.Get("cron.usage"))
+		sendChannelMessage(ds, channelID, L.Get("cron.usage"))
 	}
 }
 
@@ -552,7 +562,7 @@ func (b *Bot) handleRemindText(ds *discordgo.Session, channelID, guildID, userID
 	// Find first space after time portion
 	parts := strings.SplitN(content, " ", 2)
 	if len(parts) < 2 {
-		ds.ChannelMessageSend(channelID, L.Get("remind.usage"))
+		sendChannelMessage(ds, channelID, L.Get("remind.usage"))
 		return
 	}
 
@@ -579,7 +589,7 @@ func (b *Bot) handleRemindText(ds *discordgo.Session, channelID, guildID, userID
 		}
 	}
 	if !found || prompt == "" {
-		ds.ChannelMessageSend(channelID, L.Get("error.parse_time_or_empty"))
+		sendChannelMessage(ds, channelID, L.Get("error.parse_time_or_empty"))
 		return
 	}
 
@@ -599,11 +609,11 @@ func (b *Bot) handleRemindText(ds *discordgo.Session, channelID, guildID, userID
 		HistoryLimit:  0,
 	}
 	if err := b.cronStore.Add(job); err != nil {
-		ds.ChannelMessageSend(channelID, L.Getf("error.save_failed", err.Error()))
+		sendChannelMessage(ds, channelID, L.Getf("error.save_failed", err.Error()))
 		return
 	}
 
-	ds.ChannelMessageSend(channelID, L.Getf("remind.created",
+	sendChannelMessage(ds, channelID, L.Getf("remind.created",
 		target.Format("2006/01/02 15:04"), prompt))
 }
 
@@ -632,7 +642,7 @@ func (b *Bot) handleCronPrompt(ds *discordgo.Session, i *discordgo.InteractionCr
 
 	// Show parsed result with confirm/cancel buttons
 	desc := heartbeat.DescribeSchedule(result.Schedule)
-	msg := L.Getf("cron.prompt.confirm", result.Name, result.Schedule, desc, result.Prompt)
+	msg := secrets.RedactEnv(L.Getf("cron.prompt.confirm", result.Name, result.Schedule, desc, result.Prompt))
 
 	// Store parsed data in button custom ID (JSON-encoded, compact)
 	payload, _ := json.Marshal(result)
@@ -728,10 +738,11 @@ func (b *Bot) handleCronPromptButton(ds *discordgo.Session, i *discordgo.Interac
 	b.cronTask.RecalcNextRun(job)
 
 	desc := heartbeat.DescribeSchedule(result.Schedule)
+	content := secrets.RedactEnv(L.Getf("cron.prompt.created", result.Name, result.Schedule, desc))
 	if err := ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseUpdateMessage,
 		Data: &discordgo.InteractionResponseData{
-			Content:    L.Getf("cron.prompt.created", result.Name, result.Schedule, desc),
+			Content:    content,
 			Components: []discordgo.MessageComponent{},
 		},
 	}); err != nil {

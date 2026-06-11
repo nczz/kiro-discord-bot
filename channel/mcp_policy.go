@@ -567,6 +567,10 @@ func (p MCPChannelPolicy) ToACPServer(entry MCPCatalogEntry, proxyCommand string
 		for k, v := range entry.Env {
 			env[k] = v
 		}
+		if entry.Name == "bot-tools" {
+			env["BOT_TOOLS_CHANNEL_ID"] = channelID
+			env["BOT_TOOLS_GUILD_ID"] = guildID
+		}
 		envItems = mcpproxy.ConfigEnv(entry.Command, entry.Args, env, allowedTools, p.AllowAllTools)
 	}
 	for _, item := range envItems {

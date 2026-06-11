@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/nczz/kiro-discord-bot/acp"
@@ -882,6 +883,19 @@ func TestTruncateDiscordMessageContent(t *testing.T) {
 	got := truncateDiscordMessageContent(strings.Repeat("x", 20), 10)
 	if got != "xxxxxxx..." {
 		t.Fatalf("truncated content = %q", got)
+	}
+}
+
+func TestCronTruncateDoesNotSplitUTF8(t *testing.T) {
+	got := truncate("以加一個中文字", 8)
+	if !utf8.ValidString(got) {
+		t.Fatalf("truncated content is not valid UTF-8: %q", got)
+	}
+	if strings.ContainsRune(got, utf8.RuneError) {
+		t.Fatalf("truncated content contains replacement rune: %q", got)
+	}
+	if got != "以加..." {
+		t.Fatalf("truncated content = %q, want %q", got, "以加...")
 	}
 }
 

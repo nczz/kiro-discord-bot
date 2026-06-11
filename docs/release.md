@@ -56,7 +56,7 @@ printf '%s\n%s\n%s\n' \
   | DATA_DIR="$(mktemp -d)" go run . mcp-bot
 ```
 
-The output should include `serverInfo.name="bot-tools"` and the tools `bot_data_summary`, `bot_list_channel_data`, `bot_list_cron`, `bot_create_cron`, and `bot_delete_cron` with read/write/destructive annotations matching their behavior.
+The output should include `serverInfo.name="bot-tools"` and the tools `bot_data_summary`, `bot_list_channel_data`, `bot_list_cron`, `bot_send_message`, `bot_send_file`, `bot_create_cron`, and `bot_delete_cron` with read/write/destructive annotations matching their behavior.
 
 ## Deployment Safety
 

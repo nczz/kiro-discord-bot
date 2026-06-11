@@ -14,6 +14,7 @@ import (
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/nczz/kiro-discord-bot/channel"
+	"github.com/nczz/kiro-discord-bot/internal/secrets"
 	L "github.com/nczz/kiro-discord-bot/locale"
 	"github.com/nczz/kiro-discord-bot/stt"
 )
@@ -277,7 +278,7 @@ func (b *Bot) warnIfAttachmentsLarge(ds *discordgo.Session, channelID string, pa
 	// base64 expansion ≈ ×1.37, use ×1.5 as safety margin
 	if int64(float64(total)*1.5) > int64(limit) {
 		mb := total / (1024 * 1024)
-		ds.ChannelMessageSend(channelID, L.Getf("warn.attachments_large", mb, limit/(1024*1024)))
+		ds.ChannelMessageSend(channelID, secrets.RedactEnv(L.Getf("warn.attachments_large", mb, limit/(1024*1024))))
 	}
 }
 
@@ -650,7 +651,7 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 		}
 		if err := b.manager.Enqueue(ds, job); err != nil {
 			ds.MessageReactionRemove(m.ChannelID, m.ID, "⏳", "@me")
-			ds.ChannelMessageSend(m.ChannelID, L.Getf("error.generic", err.Error()))
+			ds.ChannelMessageSend(m.ChannelID, secrets.RedactEnv(L.Getf("error.generic", err.Error())))
 		}
 	}
 }
@@ -663,7 +664,7 @@ func (b *Bot) handleThreadUpdate(ds *discordgo.Session, t *discordgo.ThreadUpdat
 			if deferred {
 				log.Printf("[handler] thread %s archived while agent is active; scheduled stop after current job", t.ID)
 				if t.ParentID != "" {
-					_, _ = ds.ChannelMessageSend(t.ParentID, L.Getf("thread_agent.archive_deferred", t.ID))
+					_, _ = ds.ChannelMessageSend(t.ParentID, secrets.RedactEnv(L.Getf("thread_agent.archive_deferred", t.ID)))
 				}
 			} else if stopped {
 				log.Printf("[handler] thread %s archived, stopping thread agent", t.ID)
@@ -680,12 +681,14 @@ func (b *Bot) handleThreadMessage(ds *discordgo.Session, m *discordgo.MessageCre
 	auditCtx := ctxForAudit(parentChannelID, threadID, true, m.GuildID, m.Author.ID, m.Author.Username)
 	auditCtx.messageID = m.ID
 	reply := func(msg string) {
+		msg = secrets.RedactEnv(msg)
 		sent, err := ds.ChannelMessageSend(threadID, msg)
 		if isKnownCommand {
 			b.recordCommandResponseDelivery(auditCtx, bangCommand, "thread_message", "sent", msg, nil, sent, err)
 		}
 	}
 	replyWithMetadata := func(msg string, metadata map[string]any) {
+		msg = secrets.RedactEnv(msg)
 		sent, err := ds.ChannelMessageSend(threadID, msg)
 		if isKnownCommand {
 			b.recordCommandResponseDelivery(auditCtx, bangCommand, "thread_message", "sent", msg, metadata, sent, err)
@@ -841,7 +844,7 @@ func (b *Bot) handleThreadMessage(ds *discordgo.Session, m *discordgo.MessageCre
 	}
 	if err := b.manager.EnqueueThread(ds, job, parentChannelID); err != nil {
 		ds.MessageReactionRemove(threadID, m.ID, "⏳", "@me")
-		ds.ChannelMessageSend(threadID, commandError(err))
+		ds.ChannelMessageSend(threadID, secrets.RedactEnv(commandError(err)))
 	}
 }
 
@@ -1011,7 +1014,7 @@ func (b *Bot) handleAutocomplete(ds *discordgo.Session, i *discordgo.Interaction
 	for _, job := range jobs {
 		if typed == "" || strings.Contains(strings.ToLower(job.Name), typed) {
 			choices = append(choices, &discordgo.ApplicationCommandOptionChoice{
-				Name:  job.Name,
+				Name:  secrets.RedactEnv(job.Name),
 				Value: job.Name,
 			})
 		}
@@ -1147,10 +1150,12 @@ func (b *Bot) handleSlashCommand(ds *discordgo.Session, i *discordgo.Interaction
 	})
 	b.recordInteractionResponseDelivery(auditCtx, data.Name, "deferred", "", discordgo.InteractionResponseDeferredChannelMessageWithSource, nil, err)
 	reply := func(msg string) {
+		msg = secrets.RedactEnv(msg)
 		sent, err := ds.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{Content: msg})
 		b.recordCommandResponseDelivery(auditCtx, data.Name, "slash", "sent", msg, nil, sent, err)
 	}
 	replyWithMetadata := func(msg string, metadata map[string]any) {
+		msg = secrets.RedactEnv(msg)
 		sent, err := ds.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{Content: msg})
 		b.recordCommandResponseDelivery(auditCtx, data.Name, "slash", "sent", msg, metadata, sent, err)
 	}

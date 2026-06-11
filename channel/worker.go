@@ -17,6 +17,8 @@ import (
 	"github.com/bwmarrin/discordgo"
 	"github.com/nczz/kiro-discord-bot/acp"
 	"github.com/nczz/kiro-discord-bot/audit"
+	"github.com/nczz/kiro-discord-bot/internal/secrets"
+	"github.com/nczz/kiro-discord-bot/internal/textutil"
 	L "github.com/nczz/kiro-discord-bot/locale"
 )
 
@@ -421,7 +423,7 @@ func (w *Worker) execute(job *Job) {
 
 	// Post initial status in thread
 	if job.Transcript != "" {
-		ds.ChannelMessageSend(threadID, L.Get("stt.prefix")+job.Transcript)
+		ds.ChannelMessageSend(threadID, secrets.RedactEnv(L.Get("stt.prefix")+job.Transcript))
 	}
 	SendProcessMessage(ds, threadID, "🔄 "+L.Get("worker.processing"))
 
@@ -482,7 +484,7 @@ func (w *Worker) execute(job *Job) {
 			if evt.RawOutput != "" && evt.Status == "completed" {
 				out := evt.RawOutput
 				if len(out) > 1900 {
-					out = out[:1900] + L.Get("tool.output_truncated")
+					out = truncateUTF8(out, 1900) + L.Get("tool.output_truncated")
 				}
 				SendProcessMessage(ds, threadID, "```\n"+out+"\n```")
 			} else if evt.Status == "failed" {
@@ -490,7 +492,7 @@ func (w *Worker) execute(job *Job) {
 				if evt.RawOutput != "" {
 					o := evt.RawOutput
 					if len(o) > 500 {
-						o = o[:500] + "..."
+						o = truncateUTF8(o, 500) + "..."
 					}
 					msg += "\n```\n" + o + "\n```"
 				}
@@ -507,7 +509,7 @@ func (w *Worker) execute(job *Job) {
 			// Accumulate thought chunks — send as a single collapsed block would be ideal,
 			// but Discord doesn't support spoiler streaming. Just prefix with 💭.
 			if len(text) > 1900 {
-				text = text[:1900] + "…"
+				text = truncateUTF8(text, 1900) + "…"
 			}
 			SendProcessMessage(ds, threadID, "💭 "+EscapeDiscordMarkdown(text))
 		},
@@ -576,7 +578,7 @@ func (w *Worker) execute(job *Job) {
 
 			// Warn if context usage is high
 			if usage := w.agent.ContextUsage(); usage >= 90 {
-				ds.ChannelMessageSend(threadID, "⚠️ "+L.Getf("context.usage_warning", usage))
+				ds.ChannelMessageSend(threadID, secrets.RedactEnv("⚠️ "+L.Getf("context.usage_warning", usage)))
 			}
 
 			finishJob()
@@ -598,7 +600,7 @@ func (w *Worker) execute(job *Job) {
 			w.channelID, job.Username, job.MessageID, time.Since(startTime).Round(time.Millisecond), err)
 		if !w.isSilent() {
 			msg := L.Getf("error.agent_read", err)
-			ds.ChannelMessageSend(threadID, msg)
+			ds.ChannelMessageSend(threadID, secrets.RedactEnv(msg))
 			swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "⚠️")
 			swapReaction(ds, job.ChannelID, job.MessageID, "⚙️", "⚠️")
 		}
@@ -1147,6 +1149,7 @@ func (w *Worker) executeFallback(job *Job) {
 }
 
 func editMessage(ds *discordgo.Session, channelID, msgID, content string) {
+	content = secrets.RedactEnv(content)
 	if len(content) > 2000 {
 		content = truncateUTF8(content, 1997) + "..."
 	}
@@ -1169,12 +1172,13 @@ func sendLong(ds *discordgo.Session, channelID, placeholderID, content string) {
 
 	for i := 1; i < len(parts); i++ {
 		label := fmt.Sprintf("(%d/%d) ", i+1, len(parts))
-		_, _ = ds.ChannelMessageSend(channelID, label+parts[i])
+		_, _ = ds.ChannelMessageSend(channelID, secrets.RedactEnv(label+parts[i]))
 	}
 }
 
 // SendLongThread sends a long message to a thread, auto-splitting at Discord's limit.
 func SendLongThread(ds *discordgo.Session, threadID, content string) (int, error) {
+	content = secrets.RedactEnv(content)
 	const limit = 1990
 	parts := splitMessage(content, limit)
 	sentCount := 0
@@ -1193,6 +1197,7 @@ func SendLongThread(ds *discordgo.Session, threadID, content string) (int, error
 }
 
 func SendLongReply(ds *discordgo.Session, channelID, messageID, content string) {
+	content = secrets.RedactEnv(content)
 	const limit = 1990
 	parts := splitMessage(content, limit)
 	if len(parts) == 0 {
@@ -1286,13 +1291,7 @@ func codeBlockState(s string) (lang string, inBlock bool) {
 }
 
 func truncateUTF8(s string, maxBytes int) string {
-	if len(s) <= maxBytes {
-		return s
-	}
-	for maxBytes > 0 && !utf8.RuneStart(s[maxBytes]) {
-		maxBytes--
-	}
-	return s[:maxBytes]
+	return textutil.TruncateUTF8Bytes(s, maxBytes)
 }
 
 // ToolKindIcon returns the emoji icon for a tool kind.
@@ -1386,6 +1385,7 @@ func SendProcessMessage(ds *discordgo.Session, channelID, content string) (*disc
 	if ds == nil || channelID == "" || content == "" {
 		return nil, nil
 	}
+	content = secrets.RedactEnv(content)
 	msg, err := ds.ChannelMessageSendComplex(channelID, &discordgo.MessageSend{
 		Content:         content,
 		AllowedMentions: &discordgo.MessageAllowedMentions{},

@@ -12,6 +12,7 @@ import (
 	"github.com/bwmarrin/discordgo"
 	"github.com/nczz/kiro-discord-bot/audit"
 	"github.com/nczz/kiro-discord-bot/channel"
+	"github.com/nczz/kiro-discord-bot/internal/secrets"
 	L "github.com/nczz/kiro-discord-bot/locale"
 )
 
@@ -33,11 +34,12 @@ type cmdCtx struct {
 
 func (ctx cmdCtx) sendReply(msg string) {
 	if ctx.reply != nil {
-		ctx.reply(msg)
+		ctx.reply(secrets.RedactEnv(msg))
 	}
 }
 
 func (ctx cmdCtx) sendReplyWithMetadata(msg string, metadata map[string]any) {
+	msg = secrets.RedactEnv(msg)
 	if ctx.replyWithMetadata != nil {
 		ctx.replyWithMetadata(msg, metadata)
 		return

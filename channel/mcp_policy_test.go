@@ -266,6 +266,9 @@ func TestManagerBuiltinMCPRequiresExplicitPolicy(t *testing.T) {
 	if targetEnv["DATA_DIR"] != dir {
 		t.Fatalf("builtin env missing data dir: %+v", targetEnv)
 	}
+	if targetEnv["BOT_TOOLS_CHANNEL_ID"] != "channel-1" || targetEnv["BOT_TOOLS_GUILD_ID"] != "guild-1" {
+		t.Fatalf("builtin env missing channel binding: %+v", targetEnv)
+	}
 
 	if err := m.SetMCPPolicy("channel-1", "user-1", "bot-tools", false, "full"); err != nil {
 		t.Fatalf("disable builtin policy: %v", err)

@@ -1,0 +1,131 @@
+package botegress
+
+import (
+	"bytes"
+	"fmt"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/nczz/kiro-discord-bot/internal/secrets"
+)
+
+const MaxSanitizableFileBytes int64 = 5 * 1024 * 1024
+
+var textExtensions = map[string]bool{
+	".bash": true, ".cfg": true, ".conf": true, ".csv": true, ".env": true,
+	".go": true, ".ini": true, ".json": true, ".log": true, ".md": true,
+	".py": true, ".sh": true, ".sql": true, ".text": true, ".toml": true,
+	".tsv": true, ".txt": true, ".xml": true, ".yaml": true, ".yml": true,
+}
+
+var sensitivePathFragments = []string{
+	"/.env",
+	"/.kiro/",
+	"/kiro-runtime/",
+	"/settings/mcp.json",
+	"/credentials",
+	"/id_rsa",
+	"/id_ed25519",
+	"/discord",
+}
+
+// SanitizedFile is a temporary redacted file ready for Discord upload.
+type SanitizedFile struct {
+	Path           string
+	DisplayName    string
+	RedactionCount int
+	SensitivePath  bool
+}
+
+func PrepareSanitizedFile(path string, redactor *secrets.Redactor, tempRoot string) (SanitizedFile, error) {
+	if redactor == nil {
+		redactor = &secrets.Redactor{}
+	}
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return SanitizedFile{}, fmt.Errorf("file_path is required")
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return SanitizedFile{}, fmt.Errorf("resolve file path: %w", err)
+	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		return SanitizedFile{}, fmt.Errorf("stat file: %w", err)
+	}
+	if info.IsDir() {
+		return SanitizedFile{}, fmt.Errorf("directories cannot be sent as files")
+	}
+	if info.Size() > MaxSanitizableFileBytes {
+		return SanitizedFile{}, fmt.Errorf("file exceeds sanitizable size limit (%d bytes)", MaxSanitizableFileBytes)
+	}
+	raw, err := os.ReadFile(abs)
+	if err != nil {
+		return SanitizedFile{}, fmt.Errorf("read file: %w", err)
+	}
+	if !isTextFile(abs, raw) {
+		return SanitizedFile{}, fmt.Errorf("file type is not safely redactable as text")
+	}
+	original := string(raw)
+	redacted := redactor.Redact(original)
+	if err := os.MkdirAll(tempRoot, 0700); err != nil {
+		return SanitizedFile{}, fmt.Errorf("create sanitized temp dir: %w", err)
+	}
+	displayName := safeDisplayName(filepath.Base(abs), redactor)
+	outPath := filepath.Join(tempRoot, displayName)
+	if err := os.WriteFile(outPath, []byte(redacted), 0600); err != nil {
+		return SanitizedFile{}, fmt.Errorf("write sanitized file: %w", err)
+	}
+	return SanitizedFile{
+		Path:           outPath,
+		DisplayName:    displayName,
+		RedactionCount: strings.Count(redacted, "[REDACTED"),
+		SensitivePath:  isSensitivePath(abs),
+	}, nil
+}
+
+func isTextFile(path string, raw []byte) bool {
+	if bytes.IndexByte(raw, 0) >= 0 {
+		return false
+	}
+	ext := strings.ToLower(filepath.Ext(path))
+	base := strings.ToLower(filepath.Base(path))
+	if textExtensions[ext] || base == ".env" || strings.HasPrefix(base, ".env.") {
+		return true
+	}
+	sample := raw
+	if len(sample) > 512 {
+		sample = sample[:512]
+	}
+	ctype := http.DetectContentType(sample)
+	return strings.HasPrefix(ctype, "text/")
+}
+
+func safeDisplayName(name string, redactor *secrets.Redactor) string {
+	if redactor == nil {
+		redactor = &secrets.Redactor{}
+	}
+	name = filepath.Base(strings.TrimSpace(name))
+	if name == "." || name == "" {
+		name = "file"
+	}
+	name = redactor.Redact(name)
+	name = strings.NewReplacer("/", "_", "\\", "_", ":", "_").Replace(name)
+	if name == "" || strings.Contains(name, "[REDACTED") {
+		return "redacted-file.txt"
+	}
+	return name
+}
+
+func isSensitivePath(path string) bool {
+	clean := strings.ToLower(filepath.ToSlash(filepath.Clean(path)))
+	for _, frag := range sensitivePathFragments {
+		if strings.Contains(clean, frag) {
+			return true
+		}
+	}
+	ext := strings.ToLower(filepath.Ext(clean))
+	return ext == ".pem" || ext == ".key" || ext == ".p12" || ext == ".pfx"
+}

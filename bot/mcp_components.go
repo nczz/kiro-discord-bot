@@ -12,6 +12,7 @@ import (
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/nczz/kiro-discord-bot/channel"
+	"github.com/nczz/kiro-discord-bot/internal/secrets"
 	L "github.com/nczz/kiro-discord-bot/locale"
 )
 
@@ -25,6 +26,7 @@ const (
 
 func (b *Bot) sendMCPManagePanel(ds *discordgo.Session, i *discordgo.InteractionCreate, ctx cmdCtx) {
 	content, components := b.buildMCPManagePanel(ctx.channelID, "")
+	content = secrets.RedactEnv(content)
 	sent, err := ds.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{
 		Content:    content,
 		Components: components,
@@ -49,6 +51,7 @@ func (b *Bot) handleMCPComponent(ds *discordgo.Session, i *discordgo.Interaction
 		Type: discordgo.InteractionResponseDeferredMessageUpdate,
 	})
 	edit := func(content string, components []discordgo.MessageComponent) {
+		content = secrets.RedactEnv(content)
 		if _, err := ds.InteractionResponseEdit(i.Interaction, webhookEdit(content, components)); err != nil {
 			log.Printf("[mcp-ui] interaction edit failed action=%s channel=%s content_len=%d components=%d: %v", action, channelID, len(content), len(components), err)
 		}
@@ -579,6 +582,7 @@ func truncateDiscordComponentText(s string, max int) string {
 }
 
 func respondInteractionEphemeral(ds *discordgo.Session, i *discordgo.InteractionCreate, msg string) {
+	msg = secrets.RedactEnv(msg)
 	_ = ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseChannelMessageWithSource,
 		Data: &discordgo.InteractionResponseData{

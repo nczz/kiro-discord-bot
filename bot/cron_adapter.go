@@ -13,6 +13,7 @@ import (
 	"github.com/nczz/kiro-discord-bot/audit"
 	"github.com/nczz/kiro-discord-bot/channel"
 	"github.com/nczz/kiro-discord-bot/heartbeat"
+	"github.com/nczz/kiro-discord-bot/internal/textutil"
 	L "github.com/nczz/kiro-discord-bot/locale"
 )
 
@@ -231,7 +232,7 @@ func (a *cronAdapter) AskAgentInThread(ctx context.Context, agent *acp.Agent, ch
 			if evt.RawOutput != "" && evt.Status == "completed" {
 				out := evt.RawOutput
 				if len(out) > 1900 {
-					out = out[:1900] + L.Get("tool.output_truncated")
+					out = textutil.TruncateUTF8Bytes(out, 1900) + L.Get("tool.output_truncated")
 				}
 				channel.SendProcessMessage(ds, threadID, "```\n"+out+"\n```")
 			} else if evt.Status == "failed" {
@@ -239,7 +240,7 @@ func (a *cronAdapter) AskAgentInThread(ctx context.Context, agent *acp.Agent, ch
 				if evt.RawOutput != "" {
 					o := evt.RawOutput
 					if len(o) > 500 {
-						o = o[:500] + "..."
+						o = textutil.TruncateUTF8Bytes(o, 500) + "..."
 					}
 					msg += "\n```\n" + o + "\n```"
 				}
@@ -251,7 +252,7 @@ func (a *cronAdapter) AskAgentInThread(ctx context.Context, agent *acp.Agent, ch
 				return
 			}
 			if len(text) > 1900 {
-				text = text[:1900] + "…"
+				text = textutil.TruncateUTF8Bytes(text, 1900) + "…"
 			}
 			channel.SendProcessMessage(ds, threadID, "💭 "+channel.EscapeDiscordMarkdown(text))
 		},
