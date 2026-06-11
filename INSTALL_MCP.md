@@ -2,6 +2,8 @@
 
 This project includes a Go-based Discord MCP Server (`cmd/mcp-discord/`) that gives the kiro agent direct access to Discord — read messages, send messages, list channels, search, add reactions, etc.
 
+This guide is only for the optional `mcp-discord` catalog server. The built-in `bot-tools` server is served by the main bot binary through the `mcp-bot` subcommand, is registered automatically in the bot catalog, and does not need to be built or registered through `~/.kiro/settings/mcp.json`.
+
 ## Install Steps
 
 > **Note:** Replace `<PROJECT_DIR>` with the absolute path of this project directory (run `pwd` to get it).

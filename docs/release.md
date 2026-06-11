@@ -44,6 +44,20 @@ RUN_ACP_SMOKE=1 KIRO_CLI=/Users/chun/.local/bin/kiro-cli scripts/release-preflig
 
 The ACP smoke currently runs `TestPreflightCheck`, which validates spawn, initialize, `session/new`, prompt/response, and stop.
 
+## Built-in MCP Smoke Test
+
+Run this when touching MCP policy, `main.go` subcommands, `internal/botmcp`, or cron pending ingestion. It validates that the built binary can start the built-in `bot-tools` MCP server and answer `tools/list` over stdio.
+
+```bash
+printf '%s\n%s\n%s\n' \
+  '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"smoke","version":"1"}}}' \
+  '{"jsonrpc":"2.0","method":"notifications/initialized","params":{}}' \
+  '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}' \
+  | DATA_DIR="$(mktemp -d)" go run . mcp-bot
+```
+
+The output should include `serverInfo.name="bot-tools"` and the tools `bot_data_summary`, `bot_list_channel_data`, `bot_list_cron`, `bot_create_cron`, and `bot_delete_cron` with read/write/destructive annotations matching their behavior.
+
 ## Deployment Safety
 
 Before touching an existing service:

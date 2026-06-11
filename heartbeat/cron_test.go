@@ -219,6 +219,48 @@ func TestCronRecalcAllRefreshesFutureNextRun(t *testing.T) {
 	}
 }
 
+func TestCronTaskRunIngestsPendingWhenNoJobsExist(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewCronStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pendingDir := filepath.Join(dir, "cron", "pending")
+	if err := os.MkdirAll(pendingDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	writePendingAction(t, filepath.Join(pendingDir, "create.json"), PendingAction{
+		Action: "create",
+		Job: &PendingJob{
+			Name:      "Morning check",
+			Schedule:  "0 9 * * *",
+			Prompt:    "run health check",
+			ChannelID: "channel-1",
+			GuildID:   "guild-1",
+			CreatedBy: "agent",
+		},
+	})
+	task := NewCronTask(store, &fakeCronDeps{}, dir, "Asia/Taipei", "guild-1")
+
+	if !task.ShouldRun(time.Now()) {
+		t.Fatal("cron task should run even with no stored jobs so pending actions can be ingested")
+	}
+	if err := task.Run(); err != nil {
+		t.Fatal(err)
+	}
+
+	jobs := store.ListByChannel("channel-1")
+	if len(jobs) != 1 {
+		t.Fatalf("jobs = %+v, want one pending-created job", jobs)
+	}
+	if jobs[0].NextRun == "" {
+		t.Fatalf("next_run was not calculated for pending-created job: %+v", jobs[0])
+	}
+	if _, err := os.Stat(filepath.Join(pendingDir, "create.json")); !os.IsNotExist(err) {
+		t.Fatalf("pending action should be removed after ingest, stat err=%v", err)
+	}
+}
+
 func TestCronStoreIngestPendingValidatesAndCreatesJobs(t *testing.T) {
 	dir := t.TempDir()
 	store, err := NewCronStore(dir)

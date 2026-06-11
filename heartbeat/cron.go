@@ -67,7 +67,8 @@ func NewCronTask(store *CronStore, deps CronDeps, dataDir string, tz string, gui
 func (c *CronTask) Name() string { return "cron" }
 
 func (c *CronTask) ShouldRun(_ time.Time) bool {
-	return len(c.store.All()) > 0
+	// Pending MCP cron actions must be ingested even before any jobs exist.
+	return true
 }
 
 func (c *CronTask) Run() error {
