@@ -13,6 +13,7 @@ import (
 	"github.com/nczz/kiro-discord-bot/audit"
 	"github.com/nczz/kiro-discord-bot/bot"
 	"github.com/nczz/kiro-discord-bot/channel"
+	"github.com/nczz/kiro-discord-bot/internal/botmcp"
 	"github.com/nczz/kiro-discord-bot/locale"
 	"github.com/nczz/kiro-discord-bot/mcpproxy"
 )
@@ -24,6 +25,12 @@ func main() {
 			log.Fatal(err)
 		}
 		if err := mcpproxy.Run(context.Background(), cfg, os.Stdin, os.Stdout, os.Stderr); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "mcp-bot" {
+		if err := botmcp.Run(); err != nil {
 			log.Fatal(err)
 		}
 		return

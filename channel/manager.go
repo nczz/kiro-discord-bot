@@ -236,6 +236,20 @@ func (m *Manager) SetBotID(botID string) {
 	}
 }
 
+// RegisterBuiltinMCP registers a builtin MCP server in the catalog.
+func (m *Manager) RegisterBuiltinMCP(name string, args []string, env map[string]string) {
+	if m.mcpPolicies == nil || m.mcpProxyCommand == "" {
+		return
+	}
+	m.mcpPolicies.RegisterBuiltin(MCPCatalogEntry{
+		Name:    name,
+		Command: m.mcpProxyCommand,
+		Args:    args,
+		Env:     env,
+		Source:  "builtin",
+	})
+}
+
 const (
 	sessionTargetChannel = "channel"
 	sessionTargetThread  = "thread"
@@ -755,9 +769,10 @@ func (m *Manager) MCPServerViews(channelID string) ([]MCPServerView, error) {
 		return nil, fmt.Errorf("refresh mcp catalog: %w", err)
 	}
 	catalog := m.mcpPolicies.Catalog()
+	ctx := context.Background()
 	views := make([]MCPServerView, 0, len(catalog))
 	for _, entry := range catalog {
-		p, err := m.mcpPolicies.GetPolicy(context.Background(), m.guildID, channelID, entry.Name)
+		p, err := m.mcpPolicies.GetPolicy(ctx, m.guildID, channelID, entry.Name)
 		if err != nil {
 			return nil, err
 		}

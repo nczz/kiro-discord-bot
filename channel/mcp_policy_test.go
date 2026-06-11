@@ -228,6 +228,53 @@ func TestManagerAgentOptionsApplyChannelMCPPolicy(t *testing.T) {
 	}
 }
 
+func TestManagerBuiltinMCPRequiresExplicitPolicy(t *testing.T) {
+	dir := t.TempDir()
+	m := NewManager(ManagerConfig{DataDir: dir, GuildID: "guild-1"})
+	defer m.StopAll()
+
+	m.RegisterBuiltinMCP("bot-tools", []string{"mcp-bot"}, map[string]string{"DATA_DIR": dir})
+
+	opts := m.agentOptsForChannel("channel-1")
+	if len(opts.MCPServers) != 0 {
+		t.Fatalf("builtin MCP must not be injected without explicit policy: %+v", opts.MCPServers)
+	}
+
+	views, err := m.MCPServerViews("channel-1")
+	if err != nil {
+		t.Fatalf("server views: %v", err)
+	}
+	var botTools *MCPServerView
+	for i := range views {
+		if views[i].Name == "bot-tools" {
+			botTools = &views[i]
+			break
+		}
+	}
+	if botTools == nil || botTools.Policy.Enabled {
+		t.Fatalf("builtin should be visible but disabled by default: %+v", views)
+	}
+
+	if err := m.SetMCPPolicy("channel-1", "user-1", "bot-tools", true, "full"); err != nil {
+		t.Fatalf("enable builtin policy: %v", err)
+	}
+	opts = m.agentOptsForChannel("channel-1")
+	if len(opts.MCPServers) != 1 || opts.MCPServers[0].Name != "bot-tools" {
+		t.Fatalf("explicitly enabled builtin should be injected: %+v", opts.MCPServers)
+	}
+	targetEnv := proxyTargetEnv(t, opts.MCPServers[0].Env)
+	if targetEnv["DATA_DIR"] != dir {
+		t.Fatalf("builtin env missing data dir: %+v", targetEnv)
+	}
+
+	if err := m.SetMCPPolicy("channel-1", "user-1", "bot-tools", false, "full"); err != nil {
+		t.Fatalf("disable builtin policy: %v", err)
+	}
+	if got := m.agentOptsForChannel("channel-1").MCPServers; len(got) != 0 {
+		t.Fatalf("explicit disabled builtin must not be injected: %+v", got)
+	}
+}
+
 func TestLegacyMCPMigrationDoesNotEnableFreshInstall(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "mcp.json")

@@ -71,6 +71,15 @@ func (c *CronTask) ShouldRun(_ time.Time) bool {
 }
 
 func (c *CronTask) Run() error {
+	// Ingest pending actions from MCP bot-tools.
+	if created := c.store.IngestPending(); len(created) > 0 {
+		for _, id := range created {
+			if job, ok := c.store.Get(id); ok {
+				c.RecalcNextRun(job)
+			}
+		}
+	}
+
 	now := time.Now().In(c.location)
 	for _, job := range c.store.All() {
 		if !job.Enabled && !job.RunOnce {
@@ -267,23 +276,38 @@ func (c *CronTask) advanceNextRun(job *CronJob, after time.Time) {
 
 // RecalcNextRun recomputes next_run for a single job based on current time and timezone.
 func (c *CronTask) RecalcNextRun(job *CronJob) {
+	c.recalcNextRunAfter(job, time.Now().In(c.location))
+}
+
+func (c *CronTask) recalcNextRunAfter(job *CronJob, after time.Time) {
 	sched, err := c.parser.Parse(job.Schedule)
 	if err != nil {
 		return
 	}
-	job.NextRun = sched.Next(time.Now().In(c.location)).Format(time.RFC3339)
+	job.NextRun = sched.Next(after.In(c.location)).Format(time.RFC3339)
 	if err := c.store.Update(job); err != nil {
 		log.Printf("[cron] recalc next run for %s: %v", job.ID, err)
 	}
 }
 
-// RecalcAll recomputes next_run for all enabled jobs. Called on startup to fix timezone drift.
+// RecalcAll recomputes future next_run values for all enabled jobs. Overdue
+// jobs keep their persisted next_run so the next scheduler tick can run them.
 func (c *CronTask) RecalcAll() {
+	c.recalcAllAt(time.Now().In(c.location))
+}
+
+func (c *CronTask) recalcAllAt(now time.Time) {
 	for _, job := range c.store.All() {
 		if !job.Enabled || job.OneShot {
 			continue
 		}
-		c.RecalcNextRun(job)
+		if job.NextRun != "" {
+			nextRun, err := time.ParseInLocation(time.RFC3339, job.NextRun, c.location)
+			if err == nil && !now.Before(nextRun) {
+				continue
+			}
+		}
+		c.recalcNextRunAfter(job, now)
 	}
 	log.Printf("[cron] recalculated next_run for all enabled jobs")
 }

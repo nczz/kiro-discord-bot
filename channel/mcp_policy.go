@@ -28,6 +28,7 @@ type MCPCatalogEntry struct {
 	Env     map[string]string
 	URL     string
 	Source  string
+	Builtin bool
 }
 
 type MCPChannelPolicy struct {
@@ -53,9 +54,10 @@ type MCPToolInfo struct {
 }
 
 type MCPPolicyStore struct {
-	mu      sync.RWMutex
-	db      *sql.DB
-	catalog map[string]MCPCatalogEntry
+	mu       sync.RWMutex
+	db       *sql.DB
+	catalog  map[string]MCPCatalogEntry
+	builtins []MCPCatalogEntry
 }
 
 func OpenMCPPolicyStore(dataDir string) (*MCPPolicyStore, error) {
@@ -275,9 +277,34 @@ func (s *MCPPolicyStore) RefreshCatalog(ctx context.Context) error {
 	}
 	catalog := loadMCPCatalog()
 	s.mu.Lock()
+	for _, b := range s.builtins {
+		catalog[b.Name] = b
+	}
 	s.catalog = catalog
 	s.mu.Unlock()
 	return s.upsertCatalog(ctx, catalog)
+}
+
+// RegisterBuiltin adds a builtin MCP server that persists across RefreshCatalog calls.
+func (s *MCPPolicyStore) RegisterBuiltin(entry MCPCatalogEntry) {
+	if s == nil {
+		return
+	}
+	entry.Builtin = true
+	s.mu.Lock()
+	replaced := false
+	for i := range s.builtins {
+		if s.builtins[i].Name == entry.Name {
+			s.builtins[i] = entry
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		s.builtins = append(s.builtins, entry)
+	}
+	s.catalog[entry.Name] = entry
+	s.mu.Unlock()
 }
 
 func (s *MCPPolicyStore) upsertCatalog(ctx context.Context, catalog map[string]MCPCatalogEntry) error {
