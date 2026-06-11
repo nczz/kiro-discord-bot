@@ -14,7 +14,7 @@ Most AI bots start from zero every conversation. kiro-discord-bot is different:
 
 📂 **Knows your code** — Each channel binds to a project directory. The agent reads/writes code, runs tests, manages infrastructure — in your actual repo.
 
-📐 **Follows your architecture** — Steering files (`.kiro/steering/*.md`) define module boundaries, build commands, and rules the agent must follow.
+📐 **Carries reusable context** — Steering files (`.kiro/steering/*.md`) can inject project background, collaboration preferences, repeated workflows, safety limits, build commands, and architecture rules into the agent.
 
 🔧 **Grows capabilities** — MCP plugins extend what the agent can do: Discord operations, image/video generation, any API you need.
 
@@ -32,8 +32,8 @@ Day 3  — Teach it your rules
          !memory add Always respond in Traditional Chinese
          !memory add Commit messages in English, conventional commits format
 
-Day 7  — Add steering files for architecture boundaries
-         .kiro/steering/project.md → build commands, module rules, never-do list
+Day 7  — Add agent context for repeated work
+         .kiro/steering/project.md → workflow, references, safety notes, build commands
 
 Day 14 — Set up autonomous schedules
          /cron → Daily 9am server health check, compare with yesterday
@@ -324,7 +324,7 @@ The bot needs explicit permission in each channel it should respond to:
 | `/audit [limit]` | Show recent raw/semantic audit events for the current channel or thread |
 | `/mcp manage` | Open the interactive MCP policy panel, including tool scan and tool-level allow/remove controls |
 | `/mcp <action> [value]` | Show or update channel MCP policy. Actions: `status`, `enable`, `disable` |
-| `/steering <status|create|edit>` | Manage the current channel project's `.kiro/steering/<project>.md` file |
+| `/steering <status|create|edit>` | Manage the current channel project's agent context file at `.kiro/steering/<project>.md` |
 | `/cancel` | Cancel the currently running task |
 | `/interrupt` | Interrupt a stuck current task; starts with `/cancel`, then tries a process interrupt if still active |
 | `/cwd` | Open the private project/CWD panel; choose or create a project without typing a full path |
@@ -775,7 +775,7 @@ The agent will read the guide, build the binary, update `mcp.json`, and prompt y
 
 📂 **懂你的 code** — 每個頻道綁定一個專案目錄，agent 能讀寫程式碼、跑測試、操作基礎設施。
 
-📐 **遵守架構** — Steering 文件（`.kiro/steering/*.md`）定義模組邊界、build 指令、禁止事項。
+📐 **注入可重複 context** — Steering 文件（`.kiro/steering/*.md`）可把專案背景、協作偏好、重複流程、安全限制、build 指令與架構規則注入 agent。
 
 🔧 **能擴充** — MCP 插件擴展 agent 能力：Discord 操作、圖片/影片生成、任何 API。
 
@@ -793,8 +793,8 @@ Day 3  — 教它你的規矩
          !memory add 永遠用繁體中文回答
          !memory add commit message 一律用英文，遵循 conventional commits
 
-Day 7  — 加入 steering 文件，定義專案架構邊界
-         .kiro/steering/project.md → build 指令、模組規則、禁止事項
+Day 7  — 加入 agent context，處理重複協作資訊
+         .kiro/steering/project.md → 工作流程、參考資料、安全注意事項、build 指令
 
 Day 14 — 設定自動化排程
          /cron → 每天 9 點檢查伺服器健康狀態，跟昨天比較
@@ -875,7 +875,7 @@ RUN_ACP_SMOKE=1 KIRO_CLI=/Users/chun/.local/bin/kiro-cli scripts/release-preflig
 | `/audit [limit]` | 查看目前頻道或討論串最近的 raw/semantic 稽核事件 |
 | `/mcp manage` | 開啟互動式 MCP 權限面板，包含工具掃描與工具層級允許/移除控制 |
 | `/mcp <action> [value]` | 查詢或更新此頻道的 MCP policy。Action：`status`、`enable`、`disable` |
-| `/steering <status|create|edit>` | 管理目前頻道專案的 `.kiro/steering/<project>.md` 規範檔 |
+| `/steering <status|create|edit>` | 管理目前頻道專案的 agent context 檔：`.kiro/steering/<project>.md` |
 | `/cancel` | 取消目前執行中的任務 |
 | `/interrupt` | 中斷卡住的目前任務；先執行取消，仍未結束才嘗試進程層中斷 |
 | `/cwd` | 開啟 private 專案/CWD 面板；不用輸入完整路徑即可選擇或建立專案 |
@@ -905,7 +905,7 @@ RUN_ACP_SMOKE=1 KIRO_CLI=/Users/chun/.local/bin/kiro-cli scripts/release-preflig
 
 頻道設定與排程指令必須在父層頻道使用：`/start`、`/cwd`、`/steering`、`/agent`、`/resume`、`/cron`、`/cron-list`、`/cron-run`、`/cron-prompt`、`/remind`。
 
-新的父層頻道必須先完成初始化才會啟動 agent。未初始化頻道中的第一則一般訊息會被暫停，並提示頻道管理員開啟 private `/cwd` 初始化面板。初次設定只能選擇或建立 `DEFAULT_CWD` 底下的專案；初始化面板會列出 `DEFAULT_CWD` 第一層目錄，並在碰到 Discord select-menu 上限時自動分頁。選擇專案後會先進入確認步驟，按下確認後才會變更頻道 CWD。建立新專案時也會自動建立 `.kiro/steering/`。初始化完成後，成功訊息會收斂 CWD 設定流程，只保留 private shortcuts 讓管理員檢視此頻道的 MCP 工具開放設定與建立 agent context 檔。會啟動 agent 或改變 agent 執行上下文的指令會在初始化前被拒絕，例如 `/start`、`/reset`、`/compact`、`/clear`、model/agent 切換、MCP policy 變更、專案規範變更、agent memory 變更、`/cron`、`/cron-run`、`/cron-prompt` 與 agent-backed reminder。完成初始化後，管理員仍可用 `/cwd` 作為進階操作，依一般 cwd allowlist policy 切換到其他允許路徑。
+新的父層頻道必須先完成初始化才會啟動 agent。未初始化頻道中的第一則一般訊息會被暫停，並提示頻道管理員開啟 private `/cwd` 初始化面板。初次設定只能選擇或建立 `DEFAULT_CWD` 底下的專案；初始化面板會列出 `DEFAULT_CWD` 第一層目錄，並在碰到 Discord select-menu 上限時自動分頁。選擇專案後會先進入確認步驟，按下確認後才會變更頻道 CWD。建立新專案時也會自動建立 `.kiro/steering/`。初始化完成後，成功訊息會收斂 CWD 設定流程，只保留 private shortcuts 讓管理員檢視此頻道的 MCP 工具開放設定與建立 agent context 檔。會啟動 agent 或改變 agent 執行上下文的指令會在初始化前被拒絕，例如 `/start`、`/reset`、`/compact`、`/clear`、model/agent 切換、MCP policy 變更、agent context 變更、agent memory 變更、`/cron`、`/cron-run`、`/cron-prompt` 與 agent-backed reminder。完成初始化後，管理員仍可用 `/cwd` 作為進階操作，依一般 cwd allowlist policy 切換到其他允許路徑。
 
 **討論串專用指令**（在 thread 中使用）：
 
