@@ -30,8 +30,9 @@ func (b *Bot) sendMCPManagePanel(ds *discordgo.Session, i *discordgo.Interaction
 	sent, err := ds.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{
 		Content:    content,
 		Components: components,
+		Flags:      discordgo.MessageFlagsEphemeral,
 	})
-	b.recordCommandResponseDelivery(ctx, "mcp", "slash", "sent", content, map[string]any{"has_components": true, "mcp_ui": "manage"}, sent, err)
+	b.recordCommandResponseDelivery(ctx, "mcp", "slash", "sent", content, map[string]any{"has_components": true, "mcp_ui": "manage", "ephemeral": true}, sent, err)
 }
 
 func (b *Bot) handleMCPComponent(ds *discordgo.Session, i *discordgo.InteractionCreate) {

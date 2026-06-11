@@ -32,6 +32,8 @@ type CronHistory struct {
 type CronDeps interface {
 	StartTempAgent(name, cwd, model, channelID string) (*acp.Agent, error)
 	StopTempAgent(agent *acp.Agent)
+	ChannelInitialized(channelID string) bool
+	ChannelCWD(channelID string) string
 	AskAgentInThread(ctx context.Context, agent *acp.Agent, channelID, threadName, threadID, prompt, mentionID, createdByID string) (response string, usedThreadID string, responseSent bool, err error)
 	RecordAgentUsage(agent *acp.Agent, job *CronJob, threadID, status string)
 	RecordAgentResponse(agent *acp.Agent, job *CronJob, threadID, status, content string, responseSent bool)
@@ -172,6 +174,23 @@ func (c *CronTask) execute(job *CronJob, now time.Time) {
 	}
 	log.Printf("[cron] executing job %s (%s)", job.ID, job.Name)
 
+	if !c.deps.ChannelInitialized(job.ChannelID) {
+		msg := L.Getf("setup.required.command", "cron")
+		log.Printf("[cron] blocked job %s (%s): channel %s is not initialized", job.ID, job.Name, job.ChannelID)
+		c.deps.Notify(job.ChannelID, msg)
+		if !job.OneShot {
+			c.saveHistory(job.ID, CronHistory{
+				Timestamp: now.Format(time.RFC3339), Prompt: job.Prompt, Response: msg, Status: "error",
+				DurationSec: int(time.Since(start).Seconds()),
+			})
+		}
+		if job.RunOnce {
+			job.RunOnce = false
+		}
+		c.finishJob(job, now)
+		return
+	}
+
 	// Load history (skip for one-shot)
 	var history []CronHistory
 	if !job.OneShot {
@@ -179,8 +198,9 @@ func (c *CronTask) execute(job *CronJob, now time.Time) {
 	}
 	prompt := c.buildPrompt(job, history)
 
-	// Start temp agent with model
-	cwd := job.CWD
+	// Start temp agent with the current channel CWD. CronJob.CWD is kept only for
+	// backward-compatible JSON loading and is intentionally ignored.
+	cwd := c.deps.ChannelCWD(job.ChannelID)
 	agent, err := c.deps.StartTempAgent(agentName, cwd, job.Model, job.ChannelID)
 	if err != nil {
 		log.Printf("[cron] start agent for %s failed: %v", job.ID, err)

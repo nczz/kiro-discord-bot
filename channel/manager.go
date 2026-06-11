@@ -360,6 +360,9 @@ func (m *Manager) sessionKey(targetType, targetID string) string {
 }
 
 func (m *Manager) getChannelSession(channelID string) (*Session, bool) {
+	if m.store == nil {
+		return nil, false
+	}
 	key := m.sessionKey(sessionTargetChannel, channelID)
 	if key != "" {
 		if sess, ok := m.store.Get(key); ok {
@@ -373,6 +376,9 @@ func (m *Manager) getChannelSession(channelID string) (*Session, bool) {
 }
 
 func (m *Manager) setChannelSession(channelID string, sess *Session) error {
+	if m.store == nil {
+		return fmt.Errorf("session store unavailable")
+	}
 	key := m.sessionKey(sessionTargetChannel, channelID)
 	if key == "" {
 		return fmt.Errorf("empty channel session key")
@@ -388,10 +394,16 @@ func (m *Manager) setChannelSession(channelID string, sess *Session) error {
 }
 
 func (m *Manager) getThreadSession(threadID string) (*Session, bool) {
+	if m.store == nil {
+		return nil, false
+	}
 	return m.store.Get(m.sessionKey(sessionTargetThread, threadID))
 }
 
 func (m *Manager) setThreadSession(threadID, parentChannelID string, sess *Session) error {
+	if m.store == nil {
+		return fmt.Errorf("session store unavailable")
+	}
 	key := m.sessionKey(sessionTargetThread, threadID)
 	if key == "" {
 		return fmt.Errorf("empty thread session key")
@@ -437,21 +449,9 @@ func parseCwdRoots(raw string) []string {
 
 // ValidateCWD checks whether cwd exists and is inside ALLOWED_CWD_ROOTS when configured.
 func (m *Manager) ValidateCWD(cwd string) (string, error) {
-	if strings.TrimSpace(cwd) == "" {
-		return "", fmt.Errorf("working directory is empty")
-	}
-	abs, err := filepath.Abs(cwd)
+	real, err := m.validateExistingDir(cwd)
 	if err != nil {
-		return "", fmt.Errorf("resolve working directory: %w", err)
-	}
-	real, err := filepath.EvalSymlinks(abs)
-	if err != nil {
-		return "", fmt.Errorf("working directory not found: %s", cwd)
-	}
-	if fi, err := os.Stat(real); err != nil {
-		return "", fmt.Errorf("working directory not found: %s", cwd)
-	} else if !fi.IsDir() {
-		return "", fmt.Errorf("working directory is not a directory: %s", cwd)
+		return "", err
 	}
 	if len(m.allowedCwdRoots) == 0 {
 		return real, nil
@@ -1122,10 +1122,19 @@ func (m *Manager) StartAt(channelID, cwd string) error {
 
 // CWD returns the current working directory for a channel.
 func (m *Manager) CWD(channelID string) string {
-	if sess, ok := m.getChannelSession(channelID); ok && sess.CWD != "" {
-		return L.Getf("cwd.current", sess.CWD)
+	cwd := m.CWDPath(channelID)
+	if cwd != m.defaultCWD {
+		return L.Getf("cwd.current", cwd)
 	}
-	return L.Getf("cwd.default", m.defaultCWD)
+	return L.Getf("cwd.default", cwd)
+}
+
+// CWDPath returns the effective working directory path for a channel.
+func (m *Manager) CWDPath(channelID string) string {
+	if sess, ok := m.getChannelSession(channelID); ok && strings.TrimSpace(sess.CWD) != "" {
+		return sess.CWD
+	}
+	return m.defaultCWD
 }
 
 // SetCWD updates the working directory for a channel (takes effect on next reset).

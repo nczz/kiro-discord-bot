@@ -57,16 +57,6 @@ func (b *Bot) handleCronModal(ds *discordgo.Session, i *discordgo.InteractionCre
 				}},
 				discordgo.ActionsRow{Components: []discordgo.MessageComponent{
 					discordgo.TextInput{
-						CustomID:    "cron_cwd",
-						Label:       L.Get("cron.modal.cwd"),
-						Style:       discordgo.TextInputShort,
-						Placeholder: L.Get("cron.modal.cwd_ph"),
-						Required:    false,
-						MaxLength:   200,
-					},
-				}},
-				discordgo.ActionsRow{Components: []discordgo.MessageComponent{
-					discordgo.TextInput{
 						CustomID:    "cron_model",
 						Label:       L.Get("cron.modal.model"),
 						Style:       discordgo.TextInputShort,
@@ -83,6 +73,10 @@ func (b *Bot) handleCronModal(ds *discordgo.Session, i *discordgo.InteractionCre
 
 // handleCronModalSubmit processes the modal form submission.
 func (b *Bot) handleCronModalSubmit(ds *discordgo.Session, i *discordgo.InteractionCreate) {
+	if !b.manager.ChannelInitialized(i.ChannelID) {
+		respondInteraction(ds, i, L.Getf("setup.required.command", "/cron"))
+		return
+	}
 	data := i.ModalSubmitData()
 	fields := map[string]string{}
 	for _, row := range data.Components {
@@ -102,16 +96,7 @@ func (b *Bot) handleCronModalSubmit(ds *discordgo.Session, i *discordgo.Interact
 	name := fields["cron_name"]
 	scheduleInput := fields["cron_schedule"]
 	prompt := fields["cron_prompt"]
-	cwd := fields["cron_cwd"]
 	model := fields["cron_model"]
-	if strings.TrimSpace(cwd) != "" {
-		var err error
-		cwd, err = b.manager.ValidateCWD(cwd)
-		if err != nil {
-			respondInteraction(ds, i, L.Getf("error.generic", err.Error()))
-			return
-		}
-	}
 
 	// Parse schedule
 	cronExpr, err := heartbeat.ParseSchedule(scheduleInput)
@@ -138,7 +123,6 @@ func (b *Bot) handleCronModalSubmit(ds *discordgo.Session, i *discordgo.Interact
 		Schedule:      cronExpr,
 		ScheduleHuman: scheduleInput,
 		Prompt:        prompt,
-		CWD:           cwd,
 		Model:         model,
 		HistoryLimit:  10,
 		Enabled:       true,
@@ -160,6 +144,10 @@ func (b *Bot) handleCronEditSubmit(ds *discordgo.Session, i *discordgo.Interacti
 	job, ok := b.cronStore.Get(jobID)
 	if !ok {
 		respondInteraction(ds, i, L.Get("cron.not_found"))
+		return
+	}
+	if !b.manager.ChannelInitialized(job.ChannelID) {
+		respondInteraction(ds, i, L.Getf("setup.required.command", "/cron"))
 		return
 	}
 
@@ -190,16 +178,7 @@ func (b *Bot) handleCronEditSubmit(ds *discordgo.Session, i *discordgo.Interacti
 	job.Schedule = cronExpr
 	job.ScheduleHuman = scheduleInput
 	job.Prompt = fields["cron_prompt"]
-	cwd := fields["cron_cwd"]
-	if strings.TrimSpace(cwd) != "" {
-		var err error
-		cwd, err = b.manager.ValidateCWD(cwd)
-		if err != nil {
-			respondInteraction(ds, i, L.Getf("error.generic", err.Error()))
-			return
-		}
-	}
-	job.CWD = cwd
+	job.CWD = ""
 	job.Model = fields["cron_model"]
 
 	if err := b.cronStore.Update(job); err != nil {
@@ -215,10 +194,13 @@ func (b *Bot) handleCronEditSubmit(ds *discordgo.Session, i *discordgo.Interacti
 // handleCronList responds to /cron-list with a list of jobs and action buttons.
 func (b *Bot) handleCronList(ds *discordgo.Session, i *discordgo.InteractionCreate, auditCtx cmdCtx) {
 	const command = "cron-list"
+	visibility := commandResponseVisibility(command, "")
 	err := ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
+		Data: &discordgo.InteractionResponseData{Flags: commandInteractionFlags(visibility)},
 	})
-	b.recordInteractionResponseDelivery(auditCtx, command, "deferred", "", discordgo.InteractionResponseDeferredChannelMessageWithSource, nil, err)
+	visibilityMetadata := commandVisibilityMetadata(visibility)
+	b.recordInteractionResponseDelivery(auditCtx, command, "deferred", "", discordgo.InteractionResponseDeferredChannelMessageWithSource, visibilityMetadata, err)
 
 	jobs := b.cronStore.ListByChannel(i.ChannelID)
 	if len(jobs) == 0 {
@@ -232,8 +214,9 @@ func (b *Bot) handleCronList(ds *discordgo.Session, i *discordgo.InteractionCrea
 		sent, err := ds.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{
 			Content:    content,
 			Components: components,
+			Flags:      commandInteractionFlags(visibility),
 		})
-		b.recordCommandResponseDelivery(auditCtx, command, "slash", "sent", content, map[string]any{"part_index": index + 1, "part_total": len(jobs), "has_components": true}, sent, err)
+		b.recordCommandResponseDelivery(auditCtx, command, "slash", "sent", content, mergeMetadata(map[string]any{"part_index": index + 1, "part_total": len(jobs), "has_components": true}, visibilityMetadata), sent, err)
 	}
 }
 
@@ -266,10 +249,18 @@ func (b *Bot) handleCronButton(ds *discordgo.Session, i *discordgo.InteractionCr
 		_ = b.cronStore.Update(job)
 		b.updateCronCard(ds, i, job, L.Getf("cron.paused", job.Name))
 	case "resume":
+		if !b.manager.ChannelInitialized(job.ChannelID) {
+			respondInteraction(ds, i, L.Getf("setup.required.command", "/cron"))
+			return
+		}
 		job.Enabled = true
 		_ = b.cronStore.Update(job)
 		b.updateCronCard(ds, i, job, L.Getf("cron.resumed", job.Name))
 	case "run":
+		if !b.manager.ChannelInitialized(job.ChannelID) {
+			respondInteraction(ds, i, L.Getf("setup.required.command", "/cron-run"))
+			return
+		}
 		job.RunOnce = true
 		_ = b.cronStore.Update(job)
 		b.cronTask.RunNow(job.ID)
@@ -286,6 +277,10 @@ func (b *Bot) handleCronButton(ds *discordgo.Session, i *discordgo.InteractionCr
 			log.Printf("[interaction] cron delete respond failed: %v", err)
 		}
 	case "edit":
+		if !b.manager.ChannelInitialized(job.ChannelID) {
+			respondInteraction(ds, i, L.Getf("setup.required.command", "/cron"))
+			return
+		}
 		if err := ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseModal,
 			Data: &discordgo.InteractionResponseData{
@@ -320,16 +315,6 @@ func (b *Bot) handleCronButton(ds *discordgo.Session, i *discordgo.InteractionCr
 							Value:     job.Prompt,
 							Required:  true,
 							MaxLength: 2000,
-						},
-					}},
-					discordgo.ActionsRow{Components: []discordgo.MessageComponent{
-						discordgo.TextInput{
-							CustomID:  "cron_cwd",
-							Label:     L.Get("cron.modal.cwd"),
-							Style:     discordgo.TextInputShort,
-							Value:     job.CWD,
-							Required:  false,
-							MaxLength: 200,
 						},
 					}},
 					discordgo.ActionsRow{Components: []discordgo.MessageComponent{
@@ -426,16 +411,26 @@ func (b *Bot) handleCronRun(ds *discordgo.Session, i *discordgo.InteractionCreat
 
 func (b *Bot) respondInteractionForCommand(ds *discordgo.Session, i *discordgo.InteractionCreate, auditCtx cmdCtx, command, msg string, metadata map[string]any) {
 	msg = secrets.RedactEnv(msg)
+	visibility := commandResponseVisibility(command, "")
+	metadata = mergeMetadata(metadata, commandVisibilityMetadata(visibility))
 	err := ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{Content: msg},
+		Data: &discordgo.InteractionResponseData{
+			Content: msg,
+			Flags:   commandInteractionFlags(visibility),
+		},
 	})
 	b.recordInteractionResponseDelivery(auditCtx, command, "sent", msg, discordgo.InteractionResponseChannelMessageWithSource, metadata, err)
 }
 
 func (b *Bot) followupInteractionForCommand(ds *discordgo.Session, i *discordgo.InteractionCreate, auditCtx cmdCtx, command, msg string, metadata map[string]any) {
 	msg = secrets.RedactEnv(msg)
-	sent, err := ds.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{Content: msg})
+	visibility := commandResponseVisibility(command, "")
+	metadata = mergeMetadata(metadata, commandVisibilityMetadata(visibility))
+	sent, err := ds.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{
+		Content: msg,
+		Flags:   commandInteractionFlags(visibility),
+	})
 	b.recordCommandResponseDelivery(auditCtx, command, "slash", "sent", msg, metadata, sent, err)
 }
 
@@ -443,7 +438,10 @@ func respondInteraction(ds *discordgo.Session, i *discordgo.InteractionCreate, m
 	msg = secrets.RedactEnv(msg)
 	if err := ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{Content: msg},
+		Data: &discordgo.InteractionResponseData{
+			Content: msg,
+			Flags:   discordgo.MessageFlagsEphemeral,
+		},
 	}); err != nil {
 		log.Printf("[interaction] respond failed: %v (content_len=%d)", err, len(msg))
 	}
@@ -485,6 +483,10 @@ func (b *Bot) handleCronTextCommand(ds *discordgo.Session, channelID, guildID, u
 		sendChannelMessage(ds, channelID, sb.String())
 
 	case strings.HasPrefix(content, "!cron run "):
+		if !b.manager.ChannelInitialized(channelID) {
+			sendChannelMessage(ds, channelID, L.Getf("setup.required.command", "!cron run"))
+			return
+		}
 		name := strings.TrimSpace(strings.TrimPrefix(content, "!cron run "))
 		job, ok := b.cronStore.FindByName(channelID, name)
 		if !ok {
@@ -558,6 +560,10 @@ func (b *Bot) handleRemindText(ds *discordgo.Session, channelID, guildID, userID
 		useAgent = true
 		content = strings.TrimPrefix(content, "--agent ")
 	}
+	if useAgent && !b.manager.ChannelInitialized(channelID) {
+		sendChannelMessage(ds, channelID, L.Getf("setup.required.command", "!remind --agent"))
+		return
+	}
 
 	// Find first space after time portion
 	parts := strings.SplitN(content, " ", 2)
@@ -620,11 +626,14 @@ func (b *Bot) handleRemindText(ds *discordgo.Session, channelID, guildID, userID
 // handleCronPrompt handles /cron-prompt <description>
 func (b *Bot) handleCronPrompt(ds *discordgo.Session, i *discordgo.InteractionCreate, auditCtx cmdCtx, input string) {
 	const command = "cron-prompt"
+	visibility := commandResponseVisibility(command, "")
 	// Deferred response — parsing takes a few seconds
 	err := ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
+		Data: &discordgo.InteractionResponseData{Flags: commandInteractionFlags(visibility)},
 	})
-	b.recordInteractionResponseDelivery(auditCtx, command, "deferred", "", discordgo.InteractionResponseDeferredChannelMessageWithSource, nil, err)
+	visibilityMetadata := commandVisibilityMetadata(visibility)
+	b.recordInteractionResponseDelivery(auditCtx, command, "deferred", "", discordgo.InteractionResponseDeferredChannelMessageWithSource, visibilityMetadata, err)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
@@ -658,6 +667,7 @@ func (b *Bot) handleCronPrompt(ds *discordgo.Session, i *discordgo.InteractionCr
 
 	sent, err := ds.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{
 		Content: msg,
+		Flags:   commandInteractionFlags(visibility),
 		Components: []discordgo.MessageComponent{
 			discordgo.ActionsRow{Components: []discordgo.MessageComponent{
 				discordgo.Button{
@@ -673,7 +683,7 @@ func (b *Bot) handleCronPrompt(ds *discordgo.Session, i *discordgo.InteractionCr
 			}},
 		},
 	})
-	b.recordCommandResponseDelivery(auditCtx, command, "slash", "sent", msg, map[string]any{"has_components": true, "parse_status": "ok"}, sent, err)
+	b.recordCommandResponseDelivery(auditCtx, command, "slash", "sent", msg, mergeMetadata(map[string]any{"has_components": true, "parse_status": "ok"}, visibilityMetadata), sent, err)
 }
 
 // handleCronPromptButton handles confirm/cancel buttons from /cron-prompt.
@@ -691,6 +701,10 @@ func (b *Bot) handleCronPromptButton(ds *discordgo.Session, i *discordgo.Interac
 	}
 
 	if !strings.HasPrefix(customID, "cronp_confirm_") {
+		return
+	}
+	if !b.manager.ChannelInitialized(i.ChannelID) {
+		respondInteraction(ds, i, L.Getf("setup.required.command", "/cron-prompt"))
 		return
 	}
 

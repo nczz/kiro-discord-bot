@@ -13,6 +13,10 @@ import (
 
 type fakeCronDeps struct {
 	askErr        error
+	channelCWD    string
+	uninitialized bool
+	startCalls    int
+	startCWD      string
 	recordCalls   int
 	recordJobID   string
 	recordThread  string
@@ -24,11 +28,24 @@ type fakeCronDeps struct {
 	noThread      bool
 }
 
-func (f *fakeCronDeps) StartTempAgent(string, string, string, string) (*acp.Agent, error) {
+func (f *fakeCronDeps) StartTempAgent(_, cwd, _, _ string) (*acp.Agent, error) {
+	f.startCalls++
+	f.startCWD = cwd
 	return &acp.Agent{}, nil
 }
 
 func (f *fakeCronDeps) StopTempAgent(*acp.Agent) {}
+
+func (f *fakeCronDeps) ChannelInitialized(string) bool {
+	return !f.uninitialized
+}
+
+func (f *fakeCronDeps) ChannelCWD(string) string {
+	if f.channelCWD == "" {
+		return "/channel/default"
+	}
+	return f.channelCWD
+}
 
 func (f *fakeCronDeps) AskAgentInThread(context.Context, *acp.Agent, string, string, string, string, string, string) (string, string, bool, error) {
 	threadID := "thread-1"
@@ -91,6 +108,58 @@ func TestCronExecuteRecordsAgentUsage(t *testing.T) {
 	}
 	if !deps.responseSent {
 		t.Fatal("responseSent = false, want true")
+	}
+}
+
+func TestCronExecuteUsesCurrentChannelCWD(t *testing.T) {
+	store, err := NewCronStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	deps := &fakeCronDeps{channelCWD: "/projects/current"}
+	task := NewCronTask(store, deps, t.TempDir(), "Asia/Taipei", "guild-1")
+	job := &CronJob{
+		ID:        "job-1",
+		Name:      "Daily",
+		ChannelID: "channel-1",
+		GuildID:   "guild-1",
+		Schedule:  "0 0 * * *",
+		Prompt:    "Run",
+		CWD:       "/legacy/job/cwd",
+		Enabled:   true,
+	}
+
+	task.execute(job, time.Date(2026, 5, 28, 12, 0, 0, 0, task.location))
+
+	if deps.startCWD != "/projects/current" {
+		t.Fatalf("StartTempAgent cwd = %q, want current channel cwd", deps.startCWD)
+	}
+}
+
+func TestCronExecuteBlocksUninitializedChannel(t *testing.T) {
+	store, err := NewCronStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	deps := &fakeCronDeps{uninitialized: true}
+	task := NewCronTask(store, deps, t.TempDir(), "Asia/Taipei", "guild-1")
+	job := &CronJob{
+		ID:        "job-1",
+		Name:      "Daily",
+		ChannelID: "channel-1",
+		GuildID:   "guild-1",
+		Schedule:  "0 0 * * *",
+		Prompt:    "Run",
+		Enabled:   true,
+	}
+
+	task.execute(job, time.Date(2026, 5, 28, 12, 0, 0, 0, task.location))
+
+	if deps.startCalls != 0 {
+		t.Fatalf("StartTempAgent calls = %d, want no agent start", deps.startCalls)
+	}
+	if deps.recordCalls != 0 || deps.responseCalls != 0 {
+		t.Fatalf("record calls = %d/%d, want no agent records", deps.recordCalls, deps.responseCalls)
 	}
 }
 

@@ -31,6 +31,14 @@ func (a *cronAdapter) StopTempAgent(agent *acp.Agent) {
 	a.bot.manager.StopTempAgent(agent)
 }
 
+func (a *cronAdapter) ChannelInitialized(channelID string) bool {
+	return a.bot.manager.ChannelInitialized(channelID)
+}
+
+func (a *cronAdapter) ChannelCWD(channelID string) string {
+	return a.bot.manager.CWDPath(channelID)
+}
+
 func (a *cronAdapter) RecordAgentUsage(agent *acp.Agent, job *heartbeat.CronJob, threadID, status string) {
 	if agent == nil || job == nil {
 		return

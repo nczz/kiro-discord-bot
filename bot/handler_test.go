@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -34,6 +35,37 @@ func (f failingDiscordTransport) RoundTrip(req *http.Request) (*http.Response, e
 	}, nil
 }
 
+type countingDiscordTransport struct {
+	mu    sync.Mutex
+	count int
+}
+
+func (c *countingDiscordTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	c.mu.Lock()
+	if req.Method == http.MethodPost && strings.Contains(req.URL.Path, "/channels/channel-1/messages") {
+		c.count++
+	}
+	c.mu.Unlock()
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Status:     "200 OK",
+		Header:     make(http.Header),
+		Body: io.NopCloser(strings.NewReader(`{
+			"id":"response-1",
+			"channel_id":"channel-1",
+			"content":"ok",
+			"author":{"id":"bot-1","username":"bot","discriminator":"0000","bot":true}
+		}`)),
+		Request: req,
+	}, nil
+}
+
+func (c *countingDiscordTransport) Count() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.count
+}
+
 func newFailingDiscordSession(t *testing.T) *discordgo.Session {
 	t.Helper()
 	ds, err := discordgo.New("Bot test")
@@ -53,8 +85,12 @@ func newAuditTestBot(t *testing.T) (*Bot, string, func()) {
 		t.Fatalf("open audit store: %v", err)
 	}
 	recorder := audit.NewRecorder(store, 100, nil, false)
+	sessionStore, err := channel.NewSessionStore(filepath.Join(dir, "data"))
+	if err != nil {
+		t.Fatalf("open session store: %v", err)
+	}
 	b := &Bot{
-		manager:       channel.NewManager(channel.ManagerConfig{DataDir: filepath.Join(dir, "data")}),
+		manager:       channel.NewManager(channel.ManagerConfig{DataDir: filepath.Join(dir, "data"), Store: sessionStore}),
 		auditRecorder: recorder,
 		seen:          newSeenMessages(),
 	}
@@ -138,7 +174,7 @@ func waitBotAuditEvents(t *testing.T, dbPath, eventType string, minCount int) []
 
 func testPeerPermissionSession(t *testing.T, channelOneOverwrites []*discordgo.PermissionOverwrite) *discordgo.Session {
 	t.Helper()
-	ds := &discordgo.Session{State: discordgo.NewState()}
+	ds := &discordgo.Session{State: discordgo.NewState(), Ratelimiter: discordgo.NewRatelimiter()}
 	ds.State.User = &discordgo.User{ID: "bot-1", Bot: true}
 	basePerms := int64(discordgo.PermissionViewChannel | discordgo.PermissionSendMessages | discordgo.PermissionSendMessagesInThreads)
 	guild := &discordgo.Guild{
@@ -153,6 +189,7 @@ func testPeerPermissionSession(t *testing.T, channelOneOverwrites []*discordgo.P
 	for _, member := range []*discordgo.Member{
 		{GuildID: "guild-1", User: &discordgo.User{ID: "bot-1", Bot: true}},
 		{GuildID: "guild-1", User: &discordgo.User{ID: "bot-2", Bot: true}},
+		{GuildID: "guild-1", User: &discordgo.User{ID: "viewer"}},
 	} {
 		if err := ds.State.MemberAdd(member); err != nil {
 			t.Fatalf("MemberAdd: %v", err)
@@ -665,12 +702,56 @@ func TestUserCanManageAuditTargetFallsBackToThreadParent(t *testing.T) {
 	}
 }
 
+func TestCwdCommandRequiresChannelManager(t *testing.T) {
+	L.Load("en")
+	ds := testPeerPermissionSession(t, []*discordgo.PermissionOverwrite{
+		userMemberManageOverwrite("manager", discordgo.PermissionManageChannels),
+	})
+	if err := ds.State.MemberAdd(&discordgo.Member{GuildID: "guild-1", User: &discordgo.User{ID: "manager"}}); err != nil {
+		t.Fatalf("MemberAdd manager: %v", err)
+	}
+	if err := ds.State.MemberAdd(&discordgo.Member{GuildID: "guild-1", User: &discordgo.User{ID: "viewer"}}); err != nil {
+		t.Fatalf("MemberAdd viewer: %v", err)
+	}
+	store, err := channel.NewSessionStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewSessionStore: %v", err)
+	}
+	b := &Bot{
+		discord: ds,
+		manager: channel.NewManager(channel.ManagerConfig{DataDir: t.TempDir(), Store: store}),
+	}
+
+	var viewerReplies []string
+	b.cmdCwd(cmdCtx{
+		channelID: "channel-1",
+		targetID:  "channel-1",
+		userID:    "viewer",
+		reply:     func(msg string) { viewerReplies = append(viewerReplies, msg) },
+	})
+	if len(viewerReplies) != 1 || viewerReplies[0] != L.Get("cwd.forbidden") {
+		t.Fatalf("viewer replies = %#v, want cwd forbidden", viewerReplies)
+	}
+
+	var managerReplies []string
+	b.cmdCwd(cmdCtx{
+		channelID: "channel-1",
+		targetID:  "channel-1",
+		userID:    "manager",
+		reply:     func(msg string) { managerReplies = append(managerReplies, msg) },
+	})
+	if len(managerReplies) != 1 || !strings.Contains(managerReplies[0], "Current CWD") {
+		t.Fatalf("manager replies = %#v, want current cwd", managerReplies)
+	}
+}
+
 func TestSlashCommandsIncludeAgentAndUsage(t *testing.T) {
 	foundAgent := false
 	foundUsage := false
 	foundInterrupt := false
 	foundThread := false
 	foundMCP := false
+	foundSteering := false
 	for _, cmd := range buildSlashCommands() {
 		if cmd.Name == "mcp" {
 			foundMCP = true
@@ -701,6 +782,16 @@ func TestSlashCommandsIncludeAgentAndUsage(t *testing.T) {
 			}
 			continue
 		}
+		if cmd.Name == "steering" {
+			foundSteering = true
+			if len(cmd.Options) != 3 {
+				t.Fatalf("/steering should expose 3 subcommands, got %+v", cmd.Options)
+			}
+			if cmd.Options[0].Name != "status" || cmd.Options[1].Name != "create" || cmd.Options[2].Name != "edit" {
+				t.Fatalf("/steering subcommands = %+v", cmd.Options)
+			}
+			continue
+		}
 		if cmd.Name == "thread" {
 			foundThread = true
 			if len(cmd.Options) != 1 || cmd.Options[0].Name != "mode" {
@@ -727,8 +818,65 @@ func TestSlashCommandsIncludeAgentAndUsage(t *testing.T) {
 			t.Fatalf("/agent options = %+v, want optional mode", cmd.Options)
 		}
 	}
-	if !foundAgent || !foundUsage || !foundInterrupt || !foundThread || !foundMCP {
-		t.Fatal("expected /agent, /usage, /interrupt, /thread, and /mcp slash commands to be registered")
+	if !foundAgent || !foundUsage || !foundInterrupt || !foundThread || !foundMCP || !foundSteering {
+		t.Fatal("expected /agent, /usage, /interrupt, /thread, /mcp, and /steering slash commands to be registered")
+	}
+}
+
+func TestSlashCommandsApplyVisibilityAndPermissionPolicy(t *testing.T) {
+	managed := map[string]bool{
+		"audit": true, "mcp": true, "cwd": true, "start": true, "agent": true,
+		"steering": true,
+		"cron":     true, "cron-list": true, "cron-run": true, "cron-prompt": true,
+		"memory": true, "flashmemory": true, "clear": true,
+	}
+	for _, cmd := range buildSlashCommands() {
+		if cmd.Contexts == nil || len(*cmd.Contexts) != 1 || (*cmd.Contexts)[0] != discordgo.InteractionContextGuild {
+			t.Fatalf("/%s contexts = %+v, want guild-only", cmd.Name, cmd.Contexts)
+		}
+		if managed[cmd.Name] {
+			if cmd.DefaultMemberPermissions == nil || *cmd.DefaultMemberPermissions != int64(discordgo.PermissionManageChannels) {
+				t.Fatalf("/%s default member permissions = %v, want ManageChannels", cmd.Name, cmd.DefaultMemberPermissions)
+			}
+			continue
+		}
+		if cmd.DefaultMemberPermissions != nil {
+			t.Fatalf("/%s should not have default member permissions, got %d", cmd.Name, *cmd.DefaultMemberPermissions)
+		}
+	}
+}
+
+func TestCommandRequiresInitializedChannelPolicy(t *testing.T) {
+	tests := []struct {
+		name string
+		args string
+		want bool
+	}{
+		{name: "start", want: true},
+		{name: "reset", want: true},
+		{name: "compact", want: true},
+		{name: "clear", want: true},
+		{name: "cron", want: true},
+		{name: "cron-run", want: true},
+		{name: "cron-prompt", want: true},
+		{name: "model", want: false},
+		{name: "model", args: "claude-sonnet", want: true},
+		{name: "agent", want: false},
+		{name: "agent", args: "autopilot", want: true},
+		{name: "memory", args: "list", want: false},
+		{name: "memory", args: "add project rules", want: true},
+		{name: "flashmemory", args: "clear", want: true},
+		{name: "mcp", args: "status", want: false},
+		{name: "mcp", args: "manage", want: true},
+		{name: "mcp", args: "enable server:bot-tools", want: true},
+		{name: "steering", args: "status", want: true},
+		{name: "status", want: false},
+		{name: "doctor", want: false},
+	}
+	for _, tt := range tests {
+		if got := commandRequiresInitializedChannel(tt.name, tt.args); got != tt.want {
+			t.Fatalf("commandRequiresInitializedChannel(%q, %q) = %v, want %v", tt.name, tt.args, got, tt.want)
+		}
 	}
 }
 
@@ -783,6 +931,101 @@ func TestBuildMCPManagePanel(t *testing.T) {
 	actionRow, ok := components[1].(discordgo.ActionsRow)
 	if !ok || len(actionRow.Components) != 2 {
 		t.Fatalf("action row should contain full and disable buttons: %+v", components[1])
+	}
+}
+
+func TestBuildCWDPanelListsDefaultProjects(t *testing.T) {
+	L.Load("en")
+	root := filepath.Join(t.TempDir(), "projects")
+	project := filepath.Join(root, "kiro-discord-bot")
+	if err := os.MkdirAll(filepath.Join(project, ".git"), 0755); err != nil {
+		t.Fatalf("mkdir project marker: %v", err)
+	}
+	store, err := channel.NewSessionStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("session store: %v", err)
+	}
+	m := channel.NewManager(channel.ManagerConfig{DefaultCWD: root, Store: store})
+	b := &Bot{manager: m}
+
+	content, components := b.buildCWDPanel("channel-1", "")
+	if !strings.Contains(content, "Channel project setup") || !strings.Contains(content, "Select one of 1 discovered project") {
+		t.Fatalf("unexpected cwd panel content:\n%s", content)
+	}
+	if len(components) != 2 {
+		t.Fatalf("components len = %d, want select + actions", len(components))
+	}
+	row, ok := components[0].(discordgo.ActionsRow)
+	if !ok || len(row.Components) != 1 {
+		t.Fatalf("first row should contain select menu: %+v", components[0])
+	}
+	menu, ok := row.Components[0].(discordgo.SelectMenu)
+	if !ok {
+		t.Fatalf("first component should be select menu: %+v", row.Components[0])
+	}
+	if len(menu.Options) != 1 || menu.Options[0].Value != "kiro-discord-bot" {
+		t.Fatalf("menu options = %+v, want project relative value", menu.Options)
+	}
+}
+
+func TestCWDSetupCompleteOffersMCPAndSteeringNextSteps(t *testing.T) {
+	L.Load("en")
+	msg := cwdSetupCompleteMessage("Channel initialized.")
+	if !strings.Contains(msg, "Channel initialized.") || !strings.Contains(msg, "review MCP tool access") || !strings.Contains(msg, "project steering") {
+		t.Fatalf("unexpected complete message: %q", msg)
+	}
+
+	components := cwdSetupCompleteComponents("channel-1")
+	if len(components) != 1 {
+		t.Fatalf("components len = %d, want one action row", len(components))
+	}
+	row, ok := components[0].(discordgo.ActionsRow)
+	if !ok || len(row.Components) != 2 {
+		t.Fatalf("completion row should contain exactly two buttons: %+v", components[0])
+	}
+	mcpButton, ok := row.Components[0].(discordgo.Button)
+	if !ok {
+		t.Fatalf("completion component should be a button: %+v", row.Components[0])
+	}
+	if mcpButton.CustomID != "cwdui:mcp:channel-1" || mcpButton.Label != "Review MCP settings" {
+		t.Fatalf("unexpected mcp button: %+v", mcpButton)
+	}
+	steeringButton, ok := row.Components[1].(discordgo.Button)
+	if !ok {
+		t.Fatalf("completion component should be a button: %+v", row.Components[1])
+	}
+	if steeringButton.CustomID != "steerui:create:channel-1" || steeringButton.Label != "Create project steering" {
+		t.Fatalf("unexpected steering button: %+v", steeringButton)
+	}
+}
+
+func TestChannelSetupPromptCooldownSuppressesRepeatedUserPrompts(t *testing.T) {
+	L.Load("en")
+	ds := testPeerPermissionSession(t, nil)
+	transport := &countingDiscordTransport{}
+	ds.Client = &http.Client{Transport: transport}
+
+	now := time.Date(2026, 6, 11, 12, 0, 0, 0, time.UTC)
+	b := &Bot{
+		setupPromptCooldown: newSetupPromptCooldown(func() time.Time { return now }),
+	}
+	msg := &discordgo.MessageCreate{Message: &discordgo.Message{
+		ID:        "message-1",
+		ChannelID: "channel-1",
+		GuildID:   "guild-1",
+		Author:    &discordgo.User{ID: "viewer", Username: "viewer"},
+	}}
+
+	b.sendChannelSetupPrompt(ds, msg)
+	b.sendChannelSetupPrompt(ds, msg)
+	if got := transport.Count(); got != 1 {
+		t.Fatalf("sent setup prompts = %d, want 1 within cooldown", got)
+	}
+
+	now = now.Add(setupPromptCooldownDuration + time.Second)
+	b.sendChannelSetupPrompt(ds, msg)
+	if got := transport.Count(); got != 2 {
+		t.Fatalf("sent setup prompts = %d, want 2 after cooldown expires", got)
 	}
 }
 
@@ -930,7 +1173,7 @@ func collectMCPComponentCustomIDs(components []discordgo.MessageComponent) []str
 }
 
 func TestChannelOnlySlashCommands(t *testing.T) {
-	for _, name := range []string{"start", "cwd", "agent", "resume", "cron", "cron-list", "cron-run", "cron-prompt", "remind"} {
+	for _, name := range []string{"start", "cwd", "steering", "agent", "resume", "cron", "cron-list", "cron-run", "cron-prompt", "remind"} {
 		if !isChannelOnlySlashCommand(name) {
 			t.Fatalf("expected /%s to be channel-only", name)
 		}
@@ -1178,6 +1421,9 @@ func TestHandleBangCommandRecordsDeliveryFailure(t *testing.T) {
 	L.Load("en")
 	b, dbPath, cleanup := newAuditTestBot(t)
 	defer cleanup()
+	if err := b.manager.SetCWD("channel-1", t.TempDir()); err != nil {
+		t.Fatalf("initialize channel cwd: %v", err)
+	}
 	ds := newFailingDiscordSession(t)
 
 	b.handleMessage(ds, &discordgo.MessageCreate{Message: &discordgo.Message{
@@ -1230,6 +1476,39 @@ func TestHandleSlashCommandRecordsFollowupDeliveryFailure(t *testing.T) {
 	}
 }
 
+func TestPrivateSlashCommandRecordsEphemeralDeferredResponse(t *testing.T) {
+	L.Load("en")
+	b, dbPath, cleanup := newAuditTestBot(t)
+	defer cleanup()
+	ds := newFailingDiscordSession(t)
+
+	b.handleSlashCommand(ds, &discordgo.InteractionCreate{Interaction: &discordgo.Interaction{
+		ID:        "interaction-private",
+		Type:      discordgo.InteractionApplicationCommand,
+		GuildID:   "guild-1",
+		ChannelID: "channel-1",
+		Token:     "token-1",
+		Member:    &discordgo.Member{User: &discordgo.User{ID: "user-1", Username: "mxp"}},
+		Data: discordgo.ApplicationCommandInteractionData{
+			Name: "status",
+		},
+	}})
+
+	events := waitBotAuditEvents(t, dbPath, "bot_command_response_failed", 2)
+	var foundDeferred bool
+	for _, evt := range events {
+		if evt.Command == "status" && evt.Status == "error" && evt.Metadata["interaction_response_type"] == fmt.Sprintf("%d", discordgo.InteractionResponseDeferredChannelMessageWithSource) {
+			foundDeferred = true
+			if evt.Metadata["ephemeral"] != true {
+				t.Fatalf("event = %+v, want ephemeral deferred response metadata", evt)
+			}
+		}
+	}
+	if !foundDeferred {
+		t.Fatalf("events = %+v, want failed deferred status response", events)
+	}
+}
+
 func TestHandleSlashCommandRecordsInitialRejectionDeliveryFailure(t *testing.T) {
 	L.Load("en")
 	b, dbPath, cleanup := newAuditTestBot(t)
@@ -1266,6 +1545,9 @@ func TestHandleSlashCronModalRecordsDeliveryFailure(t *testing.T) {
 	L.Load("en")
 	b, dbPath, cleanup := newAuditTestBot(t)
 	defer cleanup()
+	if err := b.manager.SetCWD("channel-1", t.TempDir()); err != nil {
+		t.Fatalf("initialize channel cwd: %v", err)
+	}
 	ds := newFailingDiscordSession(t)
 
 	b.handleSlashCommand(ds, &discordgo.InteractionCreate{Interaction: &discordgo.Interaction{
@@ -1286,6 +1568,30 @@ func TestHandleSlashCronModalRecordsDeliveryFailure(t *testing.T) {
 	}
 	if evt.Metadata["modal_custom_id"] != "cron_add_modal" || evt.Metadata["interaction_response_type"] == "" {
 		t.Fatalf("event = %+v, want modal delivery metadata", evt)
+	}
+}
+
+func TestHandleSlashCronRequiresInitializedChannel(t *testing.T) {
+	L.Load("en")
+	b, dbPath, cleanup := newAuditTestBot(t)
+	defer cleanup()
+	ds := newFailingDiscordSession(t)
+
+	b.handleSlashCommand(ds, &discordgo.InteractionCreate{Interaction: &discordgo.Interaction{
+		ID:        "interaction-cron-uninitialized",
+		Type:      discordgo.InteractionApplicationCommand,
+		GuildID:   "guild-1",
+		ChannelID: "channel-1",
+		Token:     "token-1",
+		Member:    &discordgo.Member{User: &discordgo.User{ID: "user-1", Username: "mxp"}},
+		Data: discordgo.ApplicationCommandInteractionData{
+			Name: "cron",
+		},
+	}})
+
+	evt := waitBotAuditEvent(t, dbPath, "bot_command_response_failed")
+	if evt.Command != "cron" || evt.Metadata["rejected_reason"] != "channel_uninitialized" {
+		t.Fatalf("event = %+v, want uninitialized cron rejection", evt)
 	}
 }
 

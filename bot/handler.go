@@ -115,7 +115,7 @@ func isKnownBangCommand(name, content string) bool {
 		return false
 	}
 	switch name {
-	case "resume", "pause", "back", "silent", "thread", "reset", "status", "usage", "doctor", "audit", "mcp", "cancel", "interrupt",
+	case "resume", "pause", "back", "silent", "thread", "reset", "status", "usage", "doctor", "audit", "mcp", "steering", "cancel", "interrupt",
 		"close-thread", "compact", "clear", "cwd", "start", "agent", "model", "models", "memory", "flashmemory", "cron", "help":
 		return true
 	case "remind":
@@ -540,6 +540,20 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 	}
 	if isKnownCommand {
 		b.recordCommandInvoked(ctx, bangCommand, "message", m.ID, "")
+	}
+	if isKnownCommand {
+		gateArgs := strings.TrimSpace(strings.TrimPrefix(content, "!"+bangCommand))
+		if bangCommand == "remind" {
+			if strings.HasPrefix(gateArgs, "--agent ") && !b.requireInitializedCommand(ctx, "!remind --agent") {
+				b.recordCommandCompleted(ctx, bangCommand, "message", "rejected", "channel_uninitialized")
+				return
+			}
+		} else if commandRequiresInitializedChannel(bangCommand, gateArgs) && !b.requireInitializedCommand(ctx, "!"+bangCommand) {
+			b.recordCommandCompleted(ctx, bangCommand, "message", "rejected", "channel_uninitialized")
+			return
+		}
+	}
+	if isKnownCommand {
 		defer b.recordCommandCompleted(ctx, bangCommand, "message", "completed", "")
 	}
 
@@ -573,6 +587,9 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 	case content == "!mcp" || strings.HasPrefix(content, "!mcp "):
 		ctx.args = strings.TrimSpace(strings.TrimPrefix(content, "!mcp"))
 		b.cmdMCP(ctx)
+	case content == "!steering" || strings.HasPrefix(content, "!steering "):
+		ctx.args = strings.TrimSpace(strings.TrimPrefix(content, "!steering"))
+		b.cmdSteering(ctx)
 	case content == "!cancel":
 		b.cmdCancel(ctx)
 	case content == "!interrupt":
@@ -615,6 +632,11 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 	case strings.HasPrefix(content, "!remind "):
 		b.handleRemindText(ds, m.ChannelID, m.GuildID, m.Author.ID, m.Author.Username, strings.TrimPrefix(content, "!remind "))
 	default:
+		if !b.manager.ChannelInitialized(m.ChannelID) {
+			b.sendChannelSetupPrompt(ds, m)
+			return
+		}
+
 		// Immediate feedback
 		_ = ds.MessageReactionAdd(m.ChannelID, m.ID, "⏳")
 
@@ -707,6 +729,20 @@ func (b *Bot) handleThreadMessage(ds *discordgo.Session, m *discordgo.MessageCre
 	}
 	if isKnownCommand {
 		b.recordCommandInvoked(ctx, bangCommand, "thread_message", m.ID, "")
+	}
+	if isKnownCommand && !isChannelOnlySlashCommand(bangCommand) {
+		gateArgs := strings.TrimSpace(strings.TrimPrefix(content, "!"+bangCommand))
+		if commandRequiresInitializedChannel(bangCommand, gateArgs) && !b.requireInitializedCommand(ctx, "!"+bangCommand) {
+			b.recordCommandCompleted(ctx, bangCommand, "thread_message", "rejected", "channel_uninitialized")
+			return
+		}
+	}
+	if isKnownCommand && isChannelOnlySlashCommand(bangCommand) {
+		ctx.reply(L.Get("error.channel_only"))
+		b.recordCommandCompleted(ctx, bangCommand, "thread_message", "rejected", "channel_only")
+		return
+	}
+	if isKnownCommand {
 		defer b.recordCommandCompleted(ctx, bangCommand, "thread_message", "completed", "")
 	}
 
@@ -783,6 +819,10 @@ func (b *Bot) handleThreadMessage(ds *discordgo.Session, m *discordgo.MessageCre
 		ctx.args = strings.TrimSpace(strings.TrimPrefix(content, "!cwd"))
 		b.cmdCwd(ctx)
 		return
+	case content == "!steering" || strings.HasPrefix(content, "!steering "):
+		ctx.args = strings.TrimSpace(strings.TrimPrefix(content, "!steering"))
+		b.cmdSteering(ctx)
+		return
 	case content == "!start" || strings.HasPrefix(content, "!start "):
 		ctx.args = strings.TrimSpace(strings.TrimPrefix(content, "!start"))
 		b.cmdStart(ctx)
@@ -804,6 +844,11 @@ func (b *Bot) handleThreadMessage(ds *discordgo.Session, m *discordgo.MessageCre
 	case strings.HasPrefix(content, "!flashmemory"):
 		ctx.args = strings.TrimSpace(strings.TrimPrefix(content, "!flashmemory"))
 		b.cmdFlashMemory(ctx)
+		return
+	}
+
+	if !b.manager.ChannelInitialized(parentChannelID) {
+		b.sendThreadSetupPrompt(ds, m, parentChannelID)
 		return
 	}
 
@@ -849,7 +894,7 @@ func (b *Bot) handleThreadMessage(ds *discordgo.Session, m *discordgo.MessageCre
 }
 
 func buildSlashCommands() []*discordgo.ApplicationCommand {
-	return []*discordgo.ApplicationCommand{
+	commands := []*discordgo.ApplicationCommand{
 		{Name: "start", Description: L.Get("cmd.start.desc"), Options: []*discordgo.ApplicationCommandOption{
 			{Type: discordgo.ApplicationCommandOptionString, Name: "cwd", Description: L.Get("cmd.start.opt.cwd"), Required: true},
 		}},
@@ -864,6 +909,7 @@ func buildSlashCommands() []*discordgo.ApplicationCommand {
 			{Type: discordgo.ApplicationCommandOptionInteger, Name: "limit", Description: L.Get("cmd.audit.opt.limit"), Required: false},
 		}},
 		{Name: "mcp", Description: L.Get("cmd.mcp.desc"), Options: mcpSlashOptions()},
+		{Name: "steering", Description: L.Get("cmd.steering.desc"), Options: steeringSlashOptions()},
 		{Name: "cancel", Description: L.Get("cmd.cancel.desc")},
 		{Name: "interrupt", Description: L.Get("cmd.interrupt.desc")},
 		{Name: "cwd", Description: L.Get("cmd.cwd.desc"), Options: []*discordgo.ApplicationCommandOption{
@@ -933,6 +979,10 @@ func buildSlashCommands() []*discordgo.ApplicationCommand {
 			{Type: discordgo.ApplicationCommandOptionString, Name: "value", Description: L.Get("cmd.flashmemory.opt.value"), Required: false},
 		}},
 	}
+	for _, cmd := range commands {
+		applySlashCommandPolicy(cmd)
+	}
+	return commands
 }
 
 func mcpSlashOptions() []*discordgo.ApplicationCommandOption {
@@ -1043,11 +1093,19 @@ func (b *Bot) handleInteraction(ds *discordgo.Session, i *discordgo.InteractionC
 			b.handleCronModalSubmit(ds, i)
 		} else if strings.HasPrefix(customID, "cron_edit_modal_") {
 			b.handleCronEditSubmit(ds, i, strings.TrimPrefix(customID, "cron_edit_modal_"))
+		} else if strings.HasPrefix(customID, cwdCustomPrefix+":newmodal:") {
+			b.handleCWDModalSubmit(ds, i, strings.TrimPrefix(customID, cwdCustomPrefix+":newmodal:"))
+		} else if strings.HasPrefix(customID, steeringCustomPrefix+":modal:") {
+			b.handleSteeringModalSubmit(ds, i, strings.TrimPrefix(customID, steeringCustomPrefix+":modal:"))
 		}
 	case discordgo.InteractionMessageComponent:
 		customID := i.MessageComponentData().CustomID
 		if strings.HasPrefix(customID, mcpCustomPrefix+":") {
 			b.handleMCPComponent(ds, i)
+		} else if strings.HasPrefix(customID, steeringCustomPrefix+":") {
+			b.handleSteeringComponent(ds, i)
+		} else if strings.HasPrefix(customID, cwdCustomPrefix+":") {
+			b.handleCWDComponent(ds, i)
 		} else if strings.HasPrefix(customID, "cronp_") {
 			b.handleCronPromptButton(ds, i)
 		} else if strings.HasPrefix(customID, "cron_") {
@@ -1105,9 +1163,12 @@ func (b *Bot) handleSlashCommand(ds *discordgo.Session, i *discordgo.Interaction
 		msg := L.Get("error.channel_only")
 		err := ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
-			Data: &discordgo.InteractionResponseData{Content: msg},
+			Data: &discordgo.InteractionResponseData{
+				Content: msg,
+				Flags:   discordgo.MessageFlagsEphemeral,
+			},
 		})
-		b.recordInteractionResponseDelivery(auditCtx, data.Name, "rejected", msg, discordgo.InteractionResponseChannelMessageWithSource, nil, err)
+		b.recordInteractionResponseDelivery(auditCtx, data.Name, "rejected", msg, discordgo.InteractionResponseChannelMessageWithSource, map[string]any{"ephemeral": true}, err)
 		b.recordCommandCompleted(auditCtx, data.Name, "slash", "rejected", "channel_only")
 		return
 	}
@@ -1115,6 +1176,10 @@ func (b *Bot) handleSlashCommand(ds *discordgo.Session, i *discordgo.Interaction
 	// Commands that need their own response type (not deferred)
 	switch data.Name {
 	case "cron":
+		if !b.requireInitializedInteraction(ds, i, auditCtx, data.Name) {
+			b.recordCommandCompleted(auditCtx, data.Name, "slash", "rejected", "channel_uninitialized")
+			return
+		}
 		b.handleCronModal(ds, i, auditCtx)
 		b.recordCommandCompleted(auditCtx, data.Name, "slash", "completed", "")
 		return
@@ -1123,11 +1188,19 @@ func (b *Bot) handleSlashCommand(ds *discordgo.Session, i *discordgo.Interaction
 		b.recordCommandCompleted(auditCtx, data.Name, "slash", "completed", "")
 		return
 	case "cron-run":
+		if !b.requireInitializedInteraction(ds, i, auditCtx, data.Name) {
+			b.recordCommandCompleted(auditCtx, data.Name, "slash", "rejected", "channel_uninitialized")
+			return
+		}
 		name := data.Options[0].StringValue()
 		b.handleCronRun(ds, i, auditCtx, name)
 		b.recordCommandCompleted(auditCtx, data.Name, "slash", "completed", "")
 		return
 	case "cron-prompt":
+		if !b.requireInitializedInteraction(ds, i, auditCtx, data.Name) {
+			b.recordCommandCompleted(auditCtx, data.Name, "slash", "rejected", "channel_uninitialized")
+			return
+		}
 		desc := data.Options[0].StringValue()
 		b.handleCronPrompt(ds, i, auditCtx, desc)
 		b.recordCommandCompleted(auditCtx, data.Name, "slash", "completed", "")
@@ -1139,25 +1212,57 @@ func (b *Bot) handleSlashCommand(ds *discordgo.Session, i *discordgo.Interaction
 		if len(data.Options) > 2 {
 			useAgent = data.Options[2].BoolValue()
 		}
+		if useAgent && !b.requireInitializedInteraction(ds, i, auditCtx, data.Name) {
+			b.recordCommandCompleted(auditCtx, data.Name, "slash", "rejected", "channel_uninitialized")
+			return
+		}
 		b.handleRemind(ds, i, auditCtx, timeStr, content, useAgent)
+		b.recordCommandCompleted(auditCtx, data.Name, "slash", "completed", "")
+		return
+	case "cwd":
+		b.handleCWDSlash(ds, i, auditCtx)
+		b.recordCommandCompleted(auditCtx, data.Name, "slash", "completed", "")
+		return
+	case "steering":
+		b.handleSteeringSlash(ds, i, auditCtx)
 		b.recordCommandCompleted(auditCtx, data.Name, "slash", "completed", "")
 		return
 	}
 
+	if commandRequiresInitializedChannel(data.Name, slashInitGateArgs(data)) && !b.requireInitializedInteraction(ds, i, auditCtx, data.Name) {
+		b.recordCommandCompleted(auditCtx, data.Name, "slash", "rejected", "channel_uninitialized")
+		return
+	}
+
 	// All other commands: acknowledge immediately to avoid 3-second timeout
+	argsForVisibility := ""
+	if data.Name == "mcp" {
+		argsForVisibility = mcpArgsFromSlashOptions(data.Options)
+	} else if data.Name == "steering" {
+		argsForVisibility = steeringArgsFromSlashOptions(data.Options)
+	}
+	visibility := commandResponseVisibility(data.Name, argsForVisibility)
 	err := ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
+		Data: &discordgo.InteractionResponseData{Flags: commandInteractionFlags(visibility)},
 	})
-	b.recordInteractionResponseDelivery(auditCtx, data.Name, "deferred", "", discordgo.InteractionResponseDeferredChannelMessageWithSource, nil, err)
+	visibilityMetadata := commandVisibilityMetadata(visibility)
+	b.recordInteractionResponseDelivery(auditCtx, data.Name, "deferred", "", discordgo.InteractionResponseDeferredChannelMessageWithSource, visibilityMetadata, err)
 	reply := func(msg string) {
 		msg = secrets.RedactEnv(msg)
-		sent, err := ds.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{Content: msg})
-		b.recordCommandResponseDelivery(auditCtx, data.Name, "slash", "sent", msg, nil, sent, err)
+		sent, err := ds.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{
+			Content: msg,
+			Flags:   commandInteractionFlags(visibility),
+		})
+		b.recordCommandResponseDelivery(auditCtx, data.Name, "slash", "sent", msg, visibilityMetadata, sent, err)
 	}
 	replyWithMetadata := func(msg string, metadata map[string]any) {
 		msg = secrets.RedactEnv(msg)
-		sent, err := ds.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{Content: msg})
-		b.recordCommandResponseDelivery(auditCtx, data.Name, "slash", "sent", msg, metadata, sent, err)
+		sent, err := ds.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{
+			Content: msg,
+			Flags:   commandInteractionFlags(visibility),
+		})
+		b.recordCommandResponseDelivery(auditCtx, data.Name, "slash", "sent", msg, mergeMetadata(metadata, visibilityMetadata), sent, err)
 	}
 	ctx := cmdCtx{channelID: channelID, targetID: rawChannelID, inThread: inThread, reply: reply, replyWithMetadata: replyWithMetadata, guildID: i.GuildID, userID: userID, username: username, interactionID: i.ID}
 
@@ -1195,6 +1300,9 @@ func (b *Bot) handleSlashCommand(ds *discordgo.Session, i *discordgo.Interaction
 				return
 			}
 			b.cmdMCP(ctx)
+		case "steering":
+			ctx.args = steeringArgsFromSlashOptions(data.Options)
+			b.cmdSteering(ctx)
 		case "cancel":
 			b.cmdCancel(ctx)
 		case "interrupt":

@@ -64,6 +64,7 @@ docs/release.md  → release and deployment safety checklist
 - **BotConfig 嵌入 ManagerConfig**：新增 Manager 設定只需改 `ManagerConfig` + `main.go` 兩處，不需逐欄位複製。
 - **Adapter 共用 botNotifier**：所有 heartbeat adapter 嵌入 `botNotifier`，Notify / IsSilent 不重複實作。
 - **CWD policy 在 Manager 層統一執行**：`/start`、`/cwd`、thread agents、cron temp agents 都必須走 `ValidateCWD`，不得在 handler 或 heartbeat 層自行繞過。
+- **Project steering 路徑在 Manager 層控管**：Discord `/steering` 與初始化完成 shortcut 只能操作目前 channel CWD 底下的 `.kiro/steering/<project>.md`，不得在 handler 層自行拼接任意使用者路徑。
 - **ACP tool permission 預設由本地策略決定**：只有 `TRUST_ALL_TOOLS=true` 或 `TRUST_TOOLS` 命中才 approve；未授權 tool permission request 要 deny。
 - **ACP feature gating**：`session/load`、image prompt 必須先檢查 agent 的 `agentCapabilities`；`session/set_model`、`session/set_mode` 必須先用 `session/new` 回傳的 available models/modes 驗證 ID。不能只信任 RPC success，kiro-cli 可能在下一個 prompt 才暴露 invalid model。
 - **Session continuity 優先用 session/load**：agent 重啟時，如果 store 中有 SessionID 且 agent 支援 `loadSession`，優先用 `session/load` 恢復完整對話歷史。失敗時 fallback 到 `session/new` + `historyPrefix`。

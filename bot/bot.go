@@ -16,28 +16,30 @@ import (
 )
 
 type Bot struct {
-	discord            *discordgo.Session
-	manager            *channel.Manager
-	guildID            string
-	dataDir            string
-	hb                 *heartbeat.Heartbeat
-	hbCancel           context.CancelFunc
-	cronStore          *heartbeat.CronStore
-	cronTask           *heartbeat.CronTask
-	auditRecorder      *audit.Recorder
-	cronTimezone       string
-	version            string
-	downloadClient     *http.Client
-	attachmentMaxBytes int64
-	seen               *seenMessages
-	sttClient          *stt.Client
-	sttMaxDuration     int
-	peerMu             sync.RWMutex
-	peers              []BotPeer
-	manualPeers        []BotPeer
-	peerPermMu         sync.Mutex
-	peerPermCache      map[string]peerPermissionCacheEntry
-	cronPromptCache    cronPromptStore // parsed cron jobs awaiting button confirmation
+	discord             *discordgo.Session
+	manager             *channel.Manager
+	guildID             string
+	dataDir             string
+	hb                  *heartbeat.Heartbeat
+	hbCancel            context.CancelFunc
+	cronStore           *heartbeat.CronStore
+	cronTask            *heartbeat.CronTask
+	auditRecorder       *audit.Recorder
+	cronTimezone        string
+	version             string
+	downloadClient      *http.Client
+	attachmentMaxBytes  int64
+	seen                *seenMessages
+	sttClient           *stt.Client
+	sttMaxDuration      int
+	peerMu              sync.RWMutex
+	peers               []BotPeer
+	manualPeers         []BotPeer
+	peerPermMu          sync.Mutex
+	peerPermCache       map[string]peerPermissionCacheEntry
+	cronPromptCache     cronPromptStore // parsed cron jobs awaiting button confirmation
+	setupPromptMu       sync.Mutex
+	setupPromptCooldown *setupPromptCooldown
 }
 
 func New(cfg interface{ GetBotConfig() BotConfig }) (*Bot, error) {
@@ -102,14 +104,15 @@ func NewFromConfig(cfg BotConfig) (*Bot, error) {
 
 	manualPeers := parseBotPeers(cfg.BotPeers)
 	b := &Bot{discord: ds, manager: manager, guildID: cfg.GuildID, dataDir: cfg.DataDir, cronTimezone: cfg.CronTimezone, version: cfg.BotVersion,
-		downloadClient:     &http.Client{Timeout: time.Duration(cfg.DownloadTimeoutSec) * time.Second},
-		attachmentMaxBytes: cfg.AttachmentMaxBytes,
-		seen:               newSeenMessages(),
-		sttMaxDuration:     cfg.STTMaxDurationSec,
-		peers:              activeBotPeers(manualPeers),
-		manualPeers:        manualPeers,
-		peerPermCache:      make(map[string]peerPermissionCacheEntry),
-		auditRecorder:      auditRecorder,
+		downloadClient:      &http.Client{Timeout: time.Duration(cfg.DownloadTimeoutSec) * time.Second},
+		attachmentMaxBytes:  cfg.AttachmentMaxBytes,
+		seen:                newSeenMessages(),
+		sttMaxDuration:      cfg.STTMaxDurationSec,
+		peers:               activeBotPeers(manualPeers),
+		manualPeers:         manualPeers,
+		peerPermCache:       make(map[string]peerPermissionCacheEntry),
+		auditRecorder:       auditRecorder,
+		setupPromptCooldown: newSetupPromptCooldown(nil),
 	}
 	if cfg.STTEnabled && cfg.STTAPIKey != "" {
 		b.sttClient = stt.New(cfg.STTProvider, cfg.STTAPIKey, cfg.STTModel, cfg.STTLanguage)

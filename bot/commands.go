@@ -67,7 +67,7 @@ func channelOnly(ctx cmdCtx) bool {
 
 func isChannelOnlySlashCommand(name string) bool {
 	switch name {
-	case "start", "cwd", "agent", "resume", "cron", "cron-list", "cron-run", "cron-prompt", "remind":
+	case "start", "cwd", "steering", "agent", "resume", "cron", "cron-list", "cron-run", "cron-prompt", "remind":
 		return true
 	default:
 		return false
@@ -851,6 +851,10 @@ func (b *Bot) cmdStart(ctx cmdCtx) {
 
 func (b *Bot) cmdCwd(ctx cmdCtx) {
 	if channelOnly(ctx) {
+		return
+	}
+	if !b.userCanManageAuditTarget(b.discord, ctx.userID, ctx.targetID) {
+		ctx.reply(L.Get("cwd.forbidden"))
 		return
 	}
 	if ctx.args == "" {
