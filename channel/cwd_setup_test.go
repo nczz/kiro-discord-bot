@@ -1,6 +1,7 @@
 package channel
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -115,6 +116,34 @@ func TestListDefaultProjectsListsFirstLevelDirectoriesAndMarksGit(t *testing.T) 
 	}
 }
 
+func TestListDefaultProjectsReturnsAllFirstLevelDirectories(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "projects")
+	if err := os.MkdirAll(root, 0755); err != nil {
+		t.Fatalf("mkdir root: %v", err)
+	}
+	for i := 1; i <= 30; i++ {
+		name := fmt.Sprintf("project-%02d", i)
+		if i == 30 {
+			name = "unicode-project-測試-30"
+		}
+		if err := os.MkdirAll(filepath.Join(root, name), 0755); err != nil {
+			t.Fatalf("mkdir project %s: %v", name, err)
+		}
+	}
+	m := newCWDSetupTestManager(t, root)
+
+	projects, err := m.ListDefaultProjects()
+	if err != nil {
+		t.Fatalf("ListDefaultProjects: %v", err)
+	}
+	if len(projects) != 30 {
+		t.Fatalf("projects len = %d, want all first-level dirs", len(projects))
+	}
+	if projects[len(projects)-1].Relative != "unicode-project-測試-30" {
+		t.Fatalf("last project = %q, want unicode project included", projects[len(projects)-1].Relative)
+	}
+}
+
 func TestChannelInitializedAcceptsLegacySession(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "projects")
 	if err := os.MkdirAll(root, 0755); err != nil {
@@ -175,5 +204,41 @@ func TestChannelSteeringFileLifecycle(t *testing.T) {
 	}
 	if status.Size == 0 {
 		t.Fatalf("status = %+v, want size", status)
+	}
+}
+
+func TestBuildSteeringContentUsesDraftInput(t *testing.T) {
+	content := BuildSteeringContent("customer-portal", SteeringDraft{
+		Background:   "Serve customer support workflows\nReduce manual lookup time",
+		WorkingStyle: "Answer in Traditional Chinese\nState assumptions first",
+		References:   "docs/faq.md\ngo test ./...",
+		Constraints:  "Do not commit generated secrets",
+	})
+
+	for _, want := range []string{
+		"inclusion: always",
+		"# customer-portal Agent Context",
+		"## 背景與目標",
+		"- Serve customer support workflows",
+		"- Reduce manual lookup time",
+		"## 希望 agent 記住的工作方式",
+		"- Answer in Traditional Chinese",
+		"- State assumptions first",
+		"## 常用資訊、路徑或驗證方式",
+		"- docs/faq.md",
+		"- go test ./...",
+		"## 限制、禁忌與安全注意事項",
+		"- Do not commit generated secrets",
+		"不要在 steering 檔案中放入 API key",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("content missing %q:\n%s", want, content)
+		}
+	}
+	if strings.Contains(content, "TODO") {
+		t.Fatalf("content should be generated from draft without TODO placeholders:\n%s", content)
+	}
+	if strings.Contains(content, "其他補充 context") {
+		t.Fatalf("empty optional sections should be omitted:\n%s", content)
 	}
 }

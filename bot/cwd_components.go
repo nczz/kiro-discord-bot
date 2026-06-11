@@ -1,8 +1,11 @@
 package bot
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"log"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/bwmarrin/discordgo"
@@ -12,8 +15,9 @@ import (
 )
 
 const (
-	cwdCustomPrefix = "cwdui"
-	cwdMaxOptions   = 25
+	cwdCustomPrefix   = "cwdui"
+	cwdPageSize       = 25
+	cwdProjectTokenID = "p_"
 )
 
 func (b *Bot) handleCWDSlash(ds *discordgo.Session, i *discordgo.InteractionCreate, auditCtx cmdCtx) {
@@ -57,6 +61,10 @@ func (b *Bot) sendCWDPanel(ds *discordgo.Session, i *discordgo.InteractionCreate
 }
 
 func (b *Bot) buildCWDPanel(channelID, prefix string) (string, []discordgo.MessageComponent) {
+	return b.buildCWDPanelPage(channelID, prefix, 0)
+}
+
+func (b *Bot) buildCWDPanelPage(channelID, prefix string, page int) (string, []discordgo.MessageComponent) {
 	var sb strings.Builder
 	if prefix != "" {
 		sb.WriteString(prefix)
@@ -70,58 +78,61 @@ func (b *Bot) buildCWDPanel(channelID, prefix string) (string, []discordgo.Messa
 		sb.WriteString(L.Getf("cwd.setup.default_root", filepath.Base(root)))
 	} else {
 		sb.WriteString(commandError(err))
-		return sb.String(), []discordgo.MessageComponent{cwdActionButtons(channelID)}
+		return sb.String(), []discordgo.MessageComponent{cwdActionButtons(channelID, 0, 0)}
 	}
 
 	projects, err := b.manager.ListDefaultProjects()
 	if err != nil {
 		sb.WriteString("\n")
 		sb.WriteString(commandError(err))
-		return sb.String(), []discordgo.MessageComponent{cwdActionButtons(channelID)}
+		return sb.String(), []discordgo.MessageComponent{cwdActionButtons(channelID, 0, 0)}
 	}
 	if len(projects) == 0 {
 		sb.WriteString("\n")
 		sb.WriteString(L.Get("cwd.setup.no_projects"))
-		return sb.String(), []discordgo.MessageComponent{cwdActionButtons(channelID)}
+		return sb.String(), []discordgo.MessageComponent{cwdActionButtons(channelID, 0, 0)}
 	}
 	sb.WriteString("\n")
 	sb.WriteString(L.Getf("cwd.setup.project_count", len(projects)))
-	options := cwdProjectOptions(projects)
+	page = normalizeCWDProjectPage(page, len(projects))
+	start, end := cwdProjectPageBounds(len(projects), page)
+	sb.WriteString("\n")
+	sb.WriteString(L.Getf("cwd.setup.project_page", start+1, end, len(projects)))
+	options := cwdProjectOptions(projects[start:end])
 	if len(options) == 0 {
 		sb.WriteString("\n")
 		sb.WriteString(L.Get("cwd.setup.no_selectable_projects"))
-		return sb.String(), []discordgo.MessageComponent{cwdActionButtons(channelID)}
+		return sb.String(), []discordgo.MessageComponent{cwdActionButtons(channelID, page, len(projects))}
 	}
 	return sb.String(), []discordgo.MessageComponent{
-		cwdProjectSelect(channelID, options),
-		cwdActionButtons(channelID),
+		cwdProjectSelect(channelID, page, options),
+		cwdActionButtons(channelID, page, len(projects)),
 	}
 }
 
 func cwdProjectOptions(projects []channel.ProjectOption) []discordgo.SelectMenuOption {
 	options := []discordgo.SelectMenuOption{}
 	for _, project := range projects {
-		if len(options) >= cwdMaxOptions {
+		if len(options) >= cwdPageSize {
 			break
 		}
-		value := project.Relative
-		if strings.TrimSpace(value) == "" || len(value) > 100 {
+		if strings.TrimSpace(project.Relative) == "" {
 			continue
 		}
 		options = append(options, discordgo.SelectMenuOption{
 			Label:       truncateDiscordComponentText(project.Name, 100),
 			Description: truncateDiscordComponentText(project.Description, 100),
-			Value:       value,
+			Value:       cwdProjectToken(project.Relative),
 		})
 	}
 	return options
 }
 
-func cwdProjectSelect(channelID string, options []discordgo.SelectMenuOption) discordgo.MessageComponent {
+func cwdProjectSelect(channelID string, page int, options []discordgo.SelectMenuOption) discordgo.MessageComponent {
 	return discordgo.ActionsRow{Components: []discordgo.MessageComponent{
 		discordgo.SelectMenu{
 			MenuType:    discordgo.StringSelectMenu,
-			CustomID:    cwdComponentID("select", channelID),
+			CustomID:    cwdComponentID("select", channelID, strconv.Itoa(page)),
 			Placeholder: L.Get("cwd.setup.select_placeholder"),
 			MaxValues:   1,
 			Options:     options,
@@ -129,8 +140,8 @@ func cwdProjectSelect(channelID string, options []discordgo.SelectMenuOption) di
 	}}
 }
 
-func cwdActionButtons(channelID string) discordgo.MessageComponent {
-	return discordgo.ActionsRow{Components: []discordgo.MessageComponent{
+func cwdActionButtons(channelID string, page, total int) discordgo.MessageComponent {
+	components := []discordgo.MessageComponent{
 		discordgo.Button{
 			Label:    L.Get("cwd.setup.btn.new"),
 			Style:    discordgo.PrimaryButton,
@@ -139,9 +150,27 @@ func cwdActionButtons(channelID string) discordgo.MessageComponent {
 		discordgo.Button{
 			Label:    L.Get("cwd.setup.btn.refresh"),
 			Style:    discordgo.SecondaryButton,
-			CustomID: cwdComponentID("refresh", channelID),
+			CustomID: cwdComponentID("refresh", channelID, strconv.Itoa(page)),
 		},
-	}}
+	}
+	if total > cwdPageSize {
+		_, end := cwdProjectPageBounds(total, page)
+		components = append(components,
+			discordgo.Button{
+				Label:    L.Get("cwd.setup.btn.prev"),
+				Style:    discordgo.SecondaryButton,
+				CustomID: cwdComponentID("page", channelID, strconv.Itoa(page-1)),
+				Disabled: page <= 0,
+			},
+			discordgo.Button{
+				Label:    L.Get("cwd.setup.btn.next"),
+				Style:    discordgo.SecondaryButton,
+				CustomID: cwdComponentID("page", channelID, strconv.Itoa(page+1)),
+				Disabled: end >= total,
+			},
+		)
+	}
+	return discordgo.ActionsRow{Components: components}
 }
 
 func (b *Bot) handleCWDComponent(ds *discordgo.Session, i *discordgo.InteractionCreate) {
@@ -182,13 +211,30 @@ func (b *Bot) handleCWDComponent(ds *discordgo.Session, i *discordgo.Interaction
 		ctx.interactionID = i.ID
 		b.sendMCPManagePanel(ds, i, ctx)
 	case "refresh":
-		b.updateCWDComponentPanel(ds, i, channelID, "")
+		b.updateCWDComponentPanel(ds, i, channelID, "", parseCWDPage(parts, 3))
+	case "page":
+		b.updateCWDComponentPanel(ds, i, channelID, "", parseCWDPage(parts, 3))
 	case "select":
 		if len(data.Values) == 0 {
 			respondInteractionEphemeral(ds, i, L.Get("error.expired"))
 			return
 		}
-		rel := data.Values[0]
+		rel := b.resolveCWDProjectToken(data.Values[0])
+		if rel == "" {
+			respondInteractionEphemeral(ds, i, L.Get("error.expired"))
+			return
+		}
+		b.confirmCWDSelection(ds, i, channelID, rel, data.Values[0], parseCWDPage(parts, 3))
+	case "confirm":
+		if len(parts) < 4 {
+			respondInteractionEphemeral(ds, i, L.Get("error.expired"))
+			return
+		}
+		rel := b.resolveCWDProjectToken(parts[3])
+		if rel == "" {
+			respondInteractionEphemeral(ds, i, L.Get("error.expired"))
+			return
+		}
 		root, err := b.manager.DefaultProjectRoot()
 		if err != nil {
 			respondInteractionEphemeral(ds, i, commandError(err))
@@ -201,6 +247,8 @@ func (b *Bot) handleCWDComponent(ds *discordgo.Session, i *discordgo.Interaction
 			return
 		}
 		b.completeCWDSetupInteraction(ds, i, channelID, L.Getf("cwd.setup.initialized", filepath.Base(real)))
+	case "back":
+		b.updateCWDComponentPanel(ds, i, channelID, "", parseCWDPage(parts, 3))
 	case "new":
 		if err := ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseModal,
@@ -226,8 +274,44 @@ func (b *Bot) handleCWDComponent(ds *discordgo.Session, i *discordgo.Interaction
 	}
 }
 
-func (b *Bot) updateCWDComponentPanel(ds *discordgo.Session, i *discordgo.InteractionCreate, channelID, prefix string) {
-	content, components := b.buildCWDPanel(channelID, prefix)
+func (b *Bot) confirmCWDSelection(ds *discordgo.Session, i *discordgo.InteractionCreate, channelID, rel, token string, page int) {
+	root, err := b.manager.DefaultProjectRoot()
+	if err != nil {
+		respondInteractionEphemeral(ds, i, commandError(err))
+		return
+	}
+	path := filepath.Join(root, rel)
+	content := secrets.RedactEnv(L.Getf("cwd.setup.confirm", rel, path))
+	if err := ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseUpdateMessage,
+		Data: &discordgo.InteractionResponseData{
+			Content: content,
+			Components: []discordgo.MessageComponent{
+				cwdConfirmButtons(channelID, token, page),
+			},
+		},
+	}); err != nil {
+		log.Printf("[cwd-ui] confirm selection update failed channel=%s: %v", channelID, err)
+	}
+}
+
+func cwdConfirmButtons(channelID, token string, page int) discordgo.MessageComponent {
+	return discordgo.ActionsRow{Components: []discordgo.MessageComponent{
+		discordgo.Button{
+			Label:    L.Get("cwd.setup.btn.confirm"),
+			Style:    discordgo.PrimaryButton,
+			CustomID: cwdComponentID("confirm", channelID, token, strconv.Itoa(page)),
+		},
+		discordgo.Button{
+			Label:    L.Get("cwd.setup.btn.back"),
+			Style:    discordgo.SecondaryButton,
+			CustomID: cwdComponentID("back", channelID, strconv.Itoa(page)),
+		},
+	}}
+}
+
+func (b *Bot) updateCWDComponentPanel(ds *discordgo.Session, i *discordgo.InteractionCreate, channelID, prefix string, page int) {
+	content, components := b.buildCWDPanelPage(channelID, prefix, page)
 	content = secrets.RedactEnv(content)
 	if err := ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseUpdateMessage,
@@ -354,6 +438,59 @@ func (b *Bot) sendThreadSetupPrompt(ds *discordgo.Session, m *discordgo.MessageC
 
 func cwdComponentID(parts ...string) string {
 	return cwdCustomPrefix + ":" + strings.Join(parts, ":")
+}
+
+func parseCWDPage(parts []string, index int) int {
+	if len(parts) <= index {
+		return 0
+	}
+	page, err := strconv.Atoi(parts[index])
+	if err != nil {
+		return 0
+	}
+	return page
+}
+
+func normalizeCWDProjectPage(page, total int) int {
+	if page < 0 || total <= 0 {
+		return 0
+	}
+	last := (total - 1) / cwdPageSize
+	if page > last {
+		return last
+	}
+	return page
+}
+
+func cwdProjectPageBounds(total, page int) (int, int) {
+	page = normalizeCWDProjectPage(page, total)
+	start := page * cwdPageSize
+	if start > total {
+		start = total
+	}
+	end := start + cwdPageSize
+	if end > total {
+		end = total
+	}
+	return start, end
+}
+
+func cwdProjectToken(relative string) string {
+	sum := sha256.Sum256([]byte(relative))
+	return cwdProjectTokenID + hex.EncodeToString(sum[:])[:16]
+}
+
+func (b *Bot) resolveCWDProjectToken(token string) string {
+	projects, err := b.manager.ListDefaultProjects()
+	if err != nil {
+		return ""
+	}
+	for _, project := range projects {
+		if token == cwdProjectToken(project.Relative) || token == project.Relative {
+			return project.Relative
+		}
+	}
+	return ""
 }
 
 func (b *Bot) allowSetupPrompt(key string) bool {

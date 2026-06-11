@@ -1095,6 +1095,8 @@ func (b *Bot) handleInteraction(ds *discordgo.Session, i *discordgo.InteractionC
 			b.handleCronEditSubmit(ds, i, strings.TrimPrefix(customID, "cron_edit_modal_"))
 		} else if strings.HasPrefix(customID, cwdCustomPrefix+":newmodal:") {
 			b.handleCWDModalSubmit(ds, i, strings.TrimPrefix(customID, cwdCustomPrefix+":newmodal:"))
+		} else if strings.HasPrefix(customID, steeringCustomPrefix+":create_modal:") {
+			b.handleSteeringCreateModalSubmit(ds, i, strings.TrimPrefix(customID, steeringCustomPrefix+":create_modal:"))
 		} else if strings.HasPrefix(customID, steeringCustomPrefix+":modal:") {
 			b.handleSteeringModalSubmit(ds, i, strings.TrimPrefix(customID, steeringCustomPrefix+":modal:"))
 		}

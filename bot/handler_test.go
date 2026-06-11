@@ -963,15 +963,161 @@ func TestBuildCWDPanelListsDefaultProjects(t *testing.T) {
 	if !ok {
 		t.Fatalf("first component should be select menu: %+v", row.Components[0])
 	}
-	if len(menu.Options) != 1 || menu.Options[0].Value != "kiro-discord-bot" {
-		t.Fatalf("menu options = %+v, want project relative value", menu.Options)
+	if len(menu.Options) != 1 || menu.Options[0].Value != cwdProjectToken("kiro-discord-bot") {
+		t.Fatalf("menu options = %+v, want project token value", menu.Options)
+	}
+	if menu.CustomID != "cwdui:select:channel-1:0" {
+		t.Fatalf("select custom id = %q, want page-scoped select id", menu.CustomID)
+	}
+	if got := b.resolveCWDProjectToken(menu.Options[0].Value); got != "kiro-discord-bot" {
+		t.Fatalf("resolved project token = %q, want relative project path", got)
+	}
+}
+
+func TestBuildCWDPanelPaginatesDefaultProjects(t *testing.T) {
+	L.Load("en")
+	root := filepath.Join(t.TempDir(), "projects")
+	for i := 1; i <= 30; i++ {
+		name := fmt.Sprintf("project-%02d", i)
+		if i == 30 {
+			name = "unicode-project-測試-30"
+		}
+		if err := os.MkdirAll(filepath.Join(root, name), 0755); err != nil {
+			t.Fatalf("mkdir project %s: %v", name, err)
+		}
+	}
+	store, err := channel.NewSessionStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("session store: %v", err)
+	}
+	b := &Bot{manager: channel.NewManager(channel.ManagerConfig{DefaultCWD: root, Store: store})}
+
+	content, components := b.buildCWDPanelPage("channel-1", "", 0)
+	if !strings.Contains(content, "Select one of 30 discovered project") || !strings.Contains(content, "Showing projects 1-25 of 30") {
+		t.Fatalf("unexpected first page content:\n%s", content)
+	}
+	firstMenu := cwdPanelSelectMenu(t, components)
+	if len(firstMenu.Options) != cwdPageSize {
+		t.Fatalf("first page option count = %d, want %d", len(firstMenu.Options), cwdPageSize)
+	}
+	firstButtons := cwdPanelButtons(t, components)
+	if len(firstButtons) != 4 {
+		t.Fatalf("first page buttons = %+v, want new/refresh/prev/next", firstButtons)
+	}
+	if !firstButtons[2].Disabled || firstButtons[3].Disabled {
+		t.Fatalf("first page prev/next disabled state = prev:%v next:%v, want prev disabled and next enabled", firstButtons[2].Disabled, firstButtons[3].Disabled)
+	}
+
+	content, components = b.buildCWDPanelPage("channel-1", "", 1)
+	if !strings.Contains(content, "Showing projects 26-30 of 30") {
+		t.Fatalf("unexpected second page content:\n%s", content)
+	}
+	secondMenu := cwdPanelSelectMenu(t, components)
+	if len(secondMenu.Options) != 5 {
+		t.Fatalf("second page option count = %d, want 5", len(secondMenu.Options))
+	}
+	foundUnicode := false
+	for _, option := range secondMenu.Options {
+		if option.Label == "unicode-project-測試-30" {
+			foundUnicode = true
+			if got := b.resolveCWDProjectToken(option.Value); got != "unicode-project-測試-30" {
+				t.Fatalf("resolved unicode token = %q, want unicode project", got)
+			}
+		}
+	}
+	if !foundUnicode {
+		t.Fatalf("second page options = %+v, want unicode project", secondMenu.Options)
+	}
+	secondButtons := cwdPanelButtons(t, components)
+	if secondButtons[2].Disabled || !secondButtons[3].Disabled {
+		t.Fatalf("second page prev/next disabled state = prev:%v next:%v, want prev enabled and next disabled", secondButtons[2].Disabled, secondButtons[3].Disabled)
+	}
+}
+
+func cwdPanelSelectMenu(t *testing.T, components []discordgo.MessageComponent) discordgo.SelectMenu {
+	t.Helper()
+	if len(components) < 1 {
+		t.Fatalf("components len = %d, want select row", len(components))
+	}
+	row, ok := components[0].(discordgo.ActionsRow)
+	if !ok || len(row.Components) != 1 {
+		t.Fatalf("first row should contain select menu: %+v", components[0])
+	}
+	menu, ok := row.Components[0].(discordgo.SelectMenu)
+	if !ok {
+		t.Fatalf("first component should be select menu: %+v", row.Components[0])
+	}
+	return menu
+}
+
+func cwdPanelButtons(t *testing.T, components []discordgo.MessageComponent) []discordgo.Button {
+	t.Helper()
+	if len(components) < 2 {
+		t.Fatalf("components len = %d, want action row", len(components))
+	}
+	row, ok := components[1].(discordgo.ActionsRow)
+	if !ok {
+		t.Fatalf("second row should contain action buttons: %+v", components[1])
+	}
+	buttons := make([]discordgo.Button, 0, len(row.Components))
+	for _, component := range row.Components {
+		button, ok := component.(discordgo.Button)
+		if !ok {
+			t.Fatalf("action component should be a button: %+v", component)
+		}
+		buttons = append(buttons, button)
+	}
+	return buttons
+}
+
+func TestCWDConfirmButtonsPreserveProjectTokenAndPage(t *testing.T) {
+	L.Load("en")
+	token := cwdProjectToken("unicode-project-測試")
+	row, ok := cwdConfirmButtons("channel-1", token, 1).(discordgo.ActionsRow)
+	if !ok || len(row.Components) != 2 {
+		t.Fatalf("confirm row = %+v, want confirm and back buttons", row)
+	}
+	confirmButton, ok := row.Components[0].(discordgo.Button)
+	if !ok {
+		t.Fatalf("confirm component should be button: %+v", row.Components[0])
+	}
+	if confirmButton.CustomID != "cwdui:confirm:channel-1:"+token+":1" {
+		t.Fatalf("confirm custom id = %q, want token and page", confirmButton.CustomID)
+	}
+	backButton, ok := row.Components[1].(discordgo.Button)
+	if !ok {
+		t.Fatalf("back component should be button: %+v", row.Components[1])
+	}
+	if backButton.CustomID != "cwdui:back:channel-1:1" {
+		t.Fatalf("back custom id = %q, want original page", backButton.CustomID)
+	}
+}
+
+func TestCWDProjectOptionsUseTokensForUnicodeProjectNames(t *testing.T) {
+	L.Load("en")
+	name := strings.Repeat("測試專案", 12)
+	projects := []channel.ProjectOption{{
+		Name:        name,
+		Relative:    name,
+		Description: name + " | .git",
+	}}
+
+	options := cwdProjectOptions(projects)
+	if len(options) != 1 {
+		t.Fatalf("options = %+v, want unicode project to remain selectable", options)
+	}
+	if options[0].Label == "" || !strings.Contains(options[0].Label, "測試專案") {
+		t.Fatalf("label = %q, want visible unicode project name", options[0].Label)
+	}
+	if options[0].Value == name || !strings.HasPrefix(options[0].Value, cwdProjectTokenID) || len(options[0].Value) > 100 {
+		t.Fatalf("value = %q, want short project token", options[0].Value)
 	}
 }
 
 func TestCWDSetupCompleteOffersMCPAndSteeringNextSteps(t *testing.T) {
 	L.Load("en")
 	msg := cwdSetupCompleteMessage("Channel initialized.")
-	if !strings.Contains(msg, "Channel initialized.") || !strings.Contains(msg, "review MCP tool access") || !strings.Contains(msg, "project steering") {
+	if !strings.Contains(msg, "Channel initialized.") || !strings.Contains(msg, "review MCP tool access") || !strings.Contains(msg, "agent context") {
 		t.Fatalf("unexpected complete message: %q", msg)
 	}
 
@@ -994,8 +1140,46 @@ func TestCWDSetupCompleteOffersMCPAndSteeringNextSteps(t *testing.T) {
 	if !ok {
 		t.Fatalf("completion component should be a button: %+v", row.Components[1])
 	}
-	if steeringButton.CustomID != "steerui:create:channel-1" || steeringButton.Label != "Create project steering" {
+	if steeringButton.CustomID != "steerui:create:channel-1" || steeringButton.Label != "Create agent context" {
 		t.Fatalf("unexpected steering button: %+v", steeringButton)
+	}
+}
+
+func TestSteeringCreateModalRowsCollectReusableContext(t *testing.T) {
+	L.Load("en")
+	rows := []discordgo.MessageComponent{
+		steeringTextInputRow("background", "Background and goals", "Project or recurring task", true),
+		steeringTextInputRow("working_style", "How the agent should work", "Reply style", false),
+		steeringTextInputRow("references", "Common info or checks", "Commands and docs", false),
+		steeringTextInputRow("constraints", "Limits and safety notes", "Do-not-touch files", false),
+		steeringTextInputRow("extra", "Other context", "Anything reusable", false),
+	}
+	wantIDs := []string{"background", "working_style", "references", "constraints", "extra"}
+	for idx, rowComponent := range rows {
+		row, ok := rowComponent.(discordgo.ActionsRow)
+		if !ok || len(row.Components) != 1 {
+			t.Fatalf("row %d = %+v, want one text input", idx, rowComponent)
+		}
+		input, ok := row.Components[0].(discordgo.TextInput)
+		if !ok {
+			t.Fatalf("row %d component = %+v, want text input", idx, row.Components[0])
+		}
+		if input.CustomID != wantIDs[idx] {
+			t.Fatalf("row %d custom id = %q, want %q", idx, input.CustomID, wantIDs[idx])
+		}
+		if input.Style != discordgo.TextInputParagraph || input.MaxLength != steeringDraftLimit {
+			t.Fatalf("row %d input config = %+v, want paragraph with draft limit", idx, input)
+		}
+	}
+	backgroundRow := rows[0].(discordgo.ActionsRow)
+	backgroundInput := backgroundRow.Components[0].(discordgo.TextInput)
+	if !backgroundInput.Required {
+		t.Fatal("background input should be required")
+	}
+	workingStyleRow := rows[1].(discordgo.ActionsRow)
+	workingStyleInput := workingStyleRow.Components[0].(discordgo.TextInput)
+	if workingStyleInput.Required {
+		t.Fatal("optional steering inputs should not be required")
 	}
 }
 

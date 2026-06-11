@@ -14,6 +14,7 @@ import (
 const (
 	steeringCustomPrefix = "steerui"
 	steeringModalLimit   = 4000
+	steeringDraftLimit   = 600
 )
 
 func (b *Bot) cmdSteering(ctx cmdCtx) {
@@ -33,7 +34,7 @@ func (b *Bot) cmdSteering(ctx cmdCtx) {
 	case "status":
 		ctx.reply(b.steeringStatusMessage(ctx.channelID))
 	case "create":
-		ctx.reply(b.createSteeringFileMessage(ctx.channelID))
+		ctx.reply(L.Get("steering.create.slash_only"))
 	case "edit":
 		ctx.reply(L.Get("steering.edit.slash_only"))
 	default:
@@ -60,7 +61,7 @@ func (b *Bot) handleSteeringSlash(ds *discordgo.Session, i *discordgo.Interactio
 	case "edit":
 		b.openSteeringEditModal(ds, i, auditCtx.channelID)
 	case "create":
-		b.respondInteractionForCommand(ds, i, auditCtx, command, b.createSteeringFileMessage(auditCtx.channelID), map[string]any{"steering_action": "create"})
+		b.openSteeringCreateModal(ds, i, auditCtx.channelID)
 	default:
 		b.respondInteractionForCommand(ds, i, auditCtx, command, b.steeringStatusMessage(auditCtx.channelID), map[string]any{"steering_action": "status"})
 	}
@@ -85,12 +86,65 @@ func (b *Bot) handleSteeringComponent(ds *discordgo.Session, i *discordgo.Intera
 	}
 	switch action {
 	case "create":
-		respondInteractionEphemeral(ds, i, b.createSteeringFileMessage(channelID))
+		b.openSteeringCreateModal(ds, i, channelID)
 	case "edit":
 		b.openSteeringEditModal(ds, i, channelID)
 	default:
 		respondInteractionEphemeral(ds, i, L.Get("error.expired"))
 	}
+}
+
+func (b *Bot) handleSteeringCreateModalSubmit(ds *discordgo.Session, i *discordgo.InteractionCreate, channelID string) {
+	userID, _ := interactionUser(i)
+	if !b.userCanManageAuditTarget(ds, userID, channelID) {
+		respondInteractionEphemeral(ds, i, L.Get("steering.forbidden"))
+		return
+	}
+	if !b.manager.ChannelInitialized(channelID) {
+		respondInteractionEphemeral(ds, i, L.Getf("setup.required.command", "/steering"))
+		return
+	}
+	draft := channel.SteeringDraft{}
+	for _, row := range i.ModalSubmitData().Components {
+		actionRow, ok := row.(*discordgo.ActionsRow)
+		if !ok {
+			continue
+		}
+		for _, component := range actionRow.Components {
+			input, ok := component.(*discordgo.TextInput)
+			if !ok {
+				continue
+			}
+			switch input.CustomID {
+			case "background":
+				draft.Background = input.Value
+			case "working_style":
+				draft.WorkingStyle = input.Value
+			case "references":
+				draft.References = input.Value
+			case "constraints":
+				draft.Constraints = input.Value
+			case "extra":
+				draft.Extra = input.Value
+			}
+		}
+	}
+	status, err := b.manager.ChannelSteeringStatus(channelID)
+	if err != nil {
+		respondInteractionEphemeral(ds, i, commandError(err))
+		return
+	}
+	if status.Exists {
+		respondInteractionEphemeral(ds, i, steeringExistsMessage(status))
+		return
+	}
+	content := channel.BuildSteeringContent(status.ProjectName, draft)
+	status, err = b.manager.WriteChannelSteeringFile(channelID, content)
+	if err != nil {
+		respondInteractionEphemeral(ds, i, commandError(err))
+		return
+	}
+	respondInteractionEphemeral(ds, i, steeringCreatedMessage(status))
 }
 
 func (b *Bot) handleSteeringModalSubmit(ds *discordgo.Session, i *discordgo.InteractionCreate, channelID string) {
@@ -118,6 +172,47 @@ func (b *Bot) handleSteeringModalSubmit(ds *discordgo.Session, i *discordgo.Inte
 		return
 	}
 	respondInteractionEphemeral(ds, i, steeringSavedMessage(status))
+}
+
+func (b *Bot) openSteeringCreateModal(ds *discordgo.Session, i *discordgo.InteractionCreate, channelID string) {
+	status, err := b.manager.ChannelSteeringStatus(channelID)
+	if err != nil {
+		respondInteractionEphemeral(ds, i, commandError(err))
+		return
+	}
+	if status.Exists {
+		respondInteractionEphemeral(ds, i, steeringExistsMessage(status))
+		return
+	}
+	if err := ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseModal,
+		Data: &discordgo.InteractionResponseData{
+			CustomID: steeringComponentID("create_modal", channelID),
+			Title:    truncateDiscordComponentText(L.Get("steering.create.modal.title"), 45),
+			Components: []discordgo.MessageComponent{
+				steeringTextInputRow("background", L.Get("steering.create.modal.background"), L.Get("steering.create.modal.background_ph"), true),
+				steeringTextInputRow("working_style", L.Get("steering.create.modal.working_style"), L.Get("steering.create.modal.working_style_ph"), false),
+				steeringTextInputRow("references", L.Get("steering.create.modal.references"), L.Get("steering.create.modal.references_ph"), false),
+				steeringTextInputRow("constraints", L.Get("steering.create.modal.constraints"), L.Get("steering.create.modal.constraints_ph"), false),
+				steeringTextInputRow("extra", L.Get("steering.create.modal.extra"), L.Get("steering.create.modal.extra_ph"), false),
+			},
+		},
+	}); err != nil {
+		log.Printf("[steering-ui] create modal failed channel=%s: %v", channelID, err)
+	}
+}
+
+func steeringTextInputRow(customID, label, placeholder string, required bool) discordgo.MessageComponent {
+	return discordgo.ActionsRow{Components: []discordgo.MessageComponent{
+		discordgo.TextInput{
+			CustomID:    customID,
+			Label:       truncateDiscordComponentText(label, 45),
+			Placeholder: truncateDiscordComponentText(placeholder, 100),
+			Style:       discordgo.TextInputParagraph,
+			Required:    required,
+			MaxLength:   steeringDraftLimit,
+		},
+	}}
 }
 
 func (b *Bot) openSteeringEditModal(ds *discordgo.Session, i *discordgo.InteractionCreate, channelID string) {
@@ -158,17 +253,6 @@ func (b *Bot) openSteeringEditModal(ds *discordgo.Session, i *discordgo.Interact
 	}); err != nil {
 		log.Printf("[steering-ui] modal failed channel=%s: %v", channelID, err)
 	}
-}
-
-func (b *Bot) createSteeringFileMessage(channelID string) string {
-	status, created, err := b.manager.EnsureChannelSteeringFile(channelID)
-	if err != nil {
-		return commandError(err)
-	}
-	if created {
-		return steeringCreatedMessage(status)
-	}
-	return steeringExistsMessage(status)
 }
 
 func (b *Bot) steeringStatusMessage(channelID string) string {

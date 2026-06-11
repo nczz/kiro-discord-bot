@@ -10,10 +10,6 @@ import (
 	"unicode"
 )
 
-const (
-	maxProjectOptions = 25
-)
-
 var safeProjectNameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$`)
 
 type ProjectOption struct {
@@ -29,6 +25,14 @@ type SteeringFileStatus struct {
 	Path        string
 	Exists      bool
 	Size        int64
+}
+
+type SteeringDraft struct {
+	Background   string
+	WorkingStyle string
+	References   string
+	Constraints  string
+	Extra        string
 }
 
 func (m *Manager) ChannelInitialized(channelID string) bool {
@@ -123,9 +127,6 @@ func (m *Manager) ListDefaultProjects() ([]ProjectOption, error) {
 			Relative:    name,
 			Description: projectDescription(path, name),
 		})
-		if len(projects) >= maxProjectOptions {
-			break
-		}
 	}
 	sort.Slice(projects, func(i, j int) bool {
 		return strings.ToLower(projects[i].Relative) < strings.ToLower(projects[j].Relative)
@@ -304,31 +305,69 @@ func projectSteeringFileName(projectName string) string {
 }
 
 func defaultSteeringTemplate(projectName string) string {
+	return BuildSteeringContent(projectName, SteeringDraft{})
+}
+
+func BuildSteeringContent(projectName string, draft SteeringDraft) string {
 	projectName = strings.TrimSpace(projectName)
 	if projectName == "" {
 		projectName = "Project"
 	}
-	return fmt.Sprintf(`---
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf(`---
 inclusion: always
 ---
 
-# %s 專案規範
+# %s Agent Context
+`, projectName))
 
-## 專案目標
-- TODO: 描述此專案的產品目標、主要使用者與成功條件。
+	writeSteeringSection(&sb, "背景與目標", draft.Background)
+	writeSteeringSection(&sb, "希望 agent 記住的工作方式", draft.WorkingStyle)
+	writeSteeringSection(&sb, "常用資訊、路徑或驗證方式", draft.References)
+	writeSteeringSection(&sb, "限制、禁忌與安全注意事項", draft.Constraints)
+	writeSteeringSection(&sb, "其他補充 context", draft.Extra)
 
-## 技術棧
-- TODO: 記錄主要語言、框架、資料庫、外部服務與版本限制。
-
-## 架構原則
-- TODO: 說明目錄分層、模組邊界、命名慣例與不可違反的設計約束。
-
-## 開發與驗證
-- TODO: 記錄常用建置、測試、lint、部署或本機啟動指令。
-
+	sb.WriteString(`
 ## 安全與敏感資料
 - 不要在 steering 檔案中放入 API key、token、password 或其他機敏資料。
-`, projectName)
+`)
+	return sb.String()
+}
+
+func writeSteeringSection(sb *strings.Builder, title, value string) {
+	value = steeringDraftText(value)
+	if value == "" {
+		return
+	}
+	sb.WriteString("\n## ")
+	sb.WriteString(title)
+	sb.WriteString("\n")
+	sb.WriteString(value)
+	sb.WriteString("\n")
+}
+
+func steeringDraftText(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	lines := strings.Split(value, "\n")
+	out := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		if strings.HasPrefix(line, "- ") {
+			out = append(out, line)
+			continue
+		}
+		out = append(out, "- "+line)
+	}
+	if len(out) == 0 {
+		return ""
+	}
+	return strings.Join(out, "\n")
 }
 
 func (m *Manager) validateExistingDir(cwd string) (string, error) {
