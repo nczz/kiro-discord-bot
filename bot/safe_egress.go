@@ -58,20 +58,24 @@ func (t *safeEgressTask) DrainChannel(channelID string) int {
 		if strings.TrimSpace(action.ChannelID) != channelID {
 			continue
 		}
-		t.processAndRemove(action)
-		delivered++
+		if t.processAndRemove(action) {
+			delivered++
+		}
 	}
 	return delivered
 }
 
-func (t *safeEgressTask) processAndRemove(action botegress.Action) {
+func (t *safeEgressTask) processAndRemove(action botegress.Action) bool {
+	delivered := true
 	if err := t.process(action); err != nil {
+		delivered = false
 		log.Printf("[safe-egress] action %s failed: %v", action.ID, err)
 		t.sendSafeFailure(action, err)
 	}
 	if err := botegress.RemovePending(t.bot.dataDir, action.ID); err != nil {
 		log.Printf("[safe-egress] remove action %s: %v", action.ID, err)
 	}
+	return delivered
 }
 
 func (t *safeEgressTask) process(action botegress.Action) error {

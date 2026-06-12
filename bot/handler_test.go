@@ -147,7 +147,9 @@ func TestSafeEgressDrainChannelFlushesOnlyMatchingPendingActions(t *testing.T) {
 		t.Fatalf("write channel pending: %v", err)
 	}
 
-	task.DrainChannel("thread-1")
+	if delivered := task.DrainChannel("thread-1"); delivered != 1 {
+		t.Fatalf("DrainChannel delivered = %d, want 1", delivered)
+	}
 
 	paths, bodies := rt.Snapshot()
 	if len(paths) != 1 || !strings.Contains(paths[0], "/channels/thread-1/messages") || !strings.Contains(bodies[0], "thread payload") {
@@ -159,6 +161,34 @@ func TestSafeEgressDrainChannelFlushesOnlyMatchingPendingActions(t *testing.T) {
 	}
 	if len(actions) != 1 || actions[0].ID != "b-channel" || actions[0].ChannelID != "channel-1" {
 		t.Fatalf("unexpected remaining pending actions: %+v", actions)
+	}
+}
+
+func TestSafeEgressDrainChannelCountsOnlySuccessfulDeliveries(t *testing.T) {
+	dir := t.TempDir()
+	ds := newFailingDiscordSession(t)
+	b := &Bot{discord: ds, dataDir: dir}
+	task := newSafeEgressTask(b)
+
+	if _, err := botegress.WritePending(dir, botegress.Action{
+		ID:        "failing-message",
+		Action:    botegress.ActionSendMessage,
+		ChannelID: "thread-1",
+		Content:   "thread payload",
+		CreatedAt: "2026-01-01T00:00:00Z",
+	}); err != nil {
+		t.Fatalf("write pending: %v", err)
+	}
+
+	if delivered := task.DrainChannel("thread-1"); delivered != 0 {
+		t.Fatalf("DrainChannel delivered = %d, want 0 for failed Discord delivery", delivered)
+	}
+	actions, err := botegress.ReadPending(dir)
+	if err != nil {
+		t.Fatalf("read pending: %v", err)
+	}
+	if len(actions) != 0 {
+		t.Fatalf("failed pending action should still be removed after safe failure handling: %+v", actions)
 	}
 }
 
