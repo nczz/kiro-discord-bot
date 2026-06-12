@@ -12,6 +12,7 @@ import (
 	"github.com/nczz/kiro-discord-bot/audit"
 	"github.com/nczz/kiro-discord-bot/channel"
 	"github.com/nczz/kiro-discord-bot/heartbeat"
+	"github.com/nczz/kiro-discord-bot/internal/paths"
 	"github.com/nczz/kiro-discord-bot/stt"
 )
 
@@ -73,6 +74,13 @@ type BotConfig struct {
 }
 
 func NewFromConfig(cfg BotConfig) (*Bot, error) {
+	dataDir, err := paths.DataDir(cfg.DataDir)
+	if err != nil {
+		return nil, fmt.Errorf("resolve data dir: %w", err)
+	}
+	cfg.DataDir = dataDir
+	cfg.ManagerConfig.DataDir = dataDir
+
 	ds, err := discordgo.New("Bot " + cfg.DiscordToken)
 	if err != nil {
 		return nil, err

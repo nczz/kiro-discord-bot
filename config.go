@@ -4,6 +4,8 @@ import (
 	"log"
 	"os"
 	"strconv"
+
+	"github.com/nczz/kiro-discord-bot/internal/paths"
 )
 
 type Config struct {
@@ -95,6 +97,11 @@ func loadConfig() *Config {
 	if cfg.ThreadAgentMax <= 0 {
 		log.Fatalf("THREAD_AGENT_MAX must be greater than 0, got %d", cfg.ThreadAgentMax)
 	}
+	dataDir, err := paths.DataDir(cfg.DataDir)
+	if err != nil {
+		log.Fatalf("resolve DATA_DIR: %v", err)
+	}
+	cfg.DataDir = dataDir
 	return cfg
 }
 
