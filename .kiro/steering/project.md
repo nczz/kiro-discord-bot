@@ -12,7 +12,7 @@ description: Use for ANY code change, build, debug, or architecture question in 
 - Test: `go test ./...`
 - Single package test: `go test ./acp/`
 - Release preflight: `scripts/release-preflight.sh`
-- Local ACP smoke: `RUN_ACP_SMOKE=1 KIRO_CLI=/Users/chun/.local/bin/kiro-cli scripts/release-preflight.sh`
+- Local ACP smoke: `RUN_ACP_SMOKE=1 KIRO_CLI=$(which kiro-cli) scripts/release-preflight.sh`
 - Run: `systemctl start kiro-discord-bot` (systemd, recommended) or `export $(grep -v '^#' .env | xargs) && ./kiro-discord-bot` (manual)
 - Config: bot settings from `.env`, see `config.go` `loadConfig()`; Discord MCP-only settings are read in `cmd/mcp-discord/`
 - Diagnostics: `/doctor` or `!doctor` checks `kiro-cli`, default cwd, cwd allowlist, data dir writeability, and ACP preflight
@@ -74,9 +74,10 @@ docs/release.md  → release and deployment safety checklist
 ## Collaboration（協作方式）
 
 - **語言**：繁體中文溝通，commit message 用英文 conventional commits
-- **版本慣例**：`vX.Y`（遞增 minor），用 `git tag` + `git push origin <tag>`
+- **版本慣例**：`vX.Y.Z` — minor 遞增代表功能新增或行為變更；patch 遞增代表 bug fix 或文件修正。用 `git tag vX.Y.Z` + `git push origin vX.Y.Z` 觸發 GoReleaser。
 - **功能性變更先討論**：先提方案和 tradeoff，確認方向後再實作。簡單 bug fix 或明確指令可直接動手。
 - **完成後主動審視**：功能完成後主動提出重構建議或維護性改善，不需等使用者問。
+- **測試要求**：新增功能或 bug fix 應附帶對應測試。至少 exported function + 關鍵邏輯路徑要有覆蓋。純 refactoring 或文件變更免測試。
 
 ## NEVER
 
@@ -107,7 +108,7 @@ docs/release.md  → release and deployment safety checklist
 - [ ] `INSTALL_MCP.md` + `.kiro/steering/discord-mcp.md`：Discord MCP 行為或安全邊界改變時同步
 - [ ] `docs/release.md` + `scripts/release-preflight.sh`：發布門檻或部署流程改變時同步
 - [ ] `.github/workflows/preflight.yml`：preflight 腳本或 CI 門檻改變時同步
-- [ ] 新增 env var 路徑：`config.go` → `ManagerConfig`（或 `BotConfig`）→ `main.go` → README → `.env.example`
+- [ ] 新增 env var 完整路徑：`config.go` → `ManagerConfig` / `BotConfig`（若影響 runtime）→ `main.go` → `channel/doctor_env.go` (envSpecs) → `locale/lang/en.json` + `zh-TW.json` (doctor.env.desc.*) → README.md → `.env.example`
 - [ ] 新增 Discord MCP-only env var：`cmd/mcp-discord` → README → `.env.example` → `INSTALL_MCP.md`
 
 ## Verification（驗證閉環）

@@ -1740,6 +1740,8 @@ func (m *Manager) Doctor(ctx context.Context) string {
 		sb.WriteString(L.Get("doctor.acp_preflight.ok"))
 	}
 
+	sb.WriteString(m.doctorRuntimeOverview())
+
 	return sb.String()
 }
 

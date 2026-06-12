@@ -269,10 +269,10 @@ bot 也會註冊內建的 `bot-tools` MCP catalog entry，由同一支 bot binar
 | Tool | 權限提示 | 說明 |
 |------|----------|------|
 | `bot_data_summary` | 唯讀 | 摘要 data directory 中繼資訊，不回傳訊息內容 |
-| `bot_list_channel_data` | 唯讀 | 列出 channel data directory 與中繼檔案是否存在 |
+| `bot_list_channel_data` | 唯讀 | 列出 channel data directory、中繼檔案是否存在，以及 bot 已觀測到的公開頻道/討論串名稱 |
 | `bot_list_cron` | 唯讀 | 列出指定頻道的排程任務 |
-| `bot_send_message` | 寫入、非破壞性 | 佇列化 Discord 訊息，由 bot 端做 secret redaction 後送到綁定頻道 |
-| `bot_send_file` | 寫入、非破壞性 | 佇列化本機文字檔，由 bot 端產生 sanitized copy 後上傳 |
+| `bot_send_message` | 寫入、非破壞性 | 佇列化 Discord 訊息，由 bot 端做 secret redaction 後送到目前 channel 或 thread target |
+| `bot_send_file` | 寫入、非破壞性 | 佇列化本機文字檔，由 bot 端產生 sanitized copy 後上傳到目前 channel 或 thread target |
 | `bot_create_cron` | 寫入、非破壞性 | 佇列化建立 recurring cron job，等待 scheduler ingest |
 | `bot_delete_cron` | 寫入、破壞性 | 佇列化刪除 cron job；只有 job 所屬頻道相符才會刪除 |
 
