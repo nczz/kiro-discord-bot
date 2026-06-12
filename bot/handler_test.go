@@ -1461,6 +1461,16 @@ func TestCronTruncateDoesNotSplitUTF8(t *testing.T) {
 	}
 }
 
+func TestBuildPromptDocumentsCronOwnerChannelScope(t *testing.T) {
+	got := buildPromptThread("create cron", nil, "channel-1", "thread-1", "guild-1", "alice", "")
+	if !strings.Contains(got, "For cron management tools, use channel_id as the owning parent channel ID") {
+		t.Fatalf("prompt missing cron owner scope guidance:\n%s", got)
+	}
+	if !strings.Contains(got, "channel_id=channel-1 thread_id=thread-1") {
+		t.Fatalf("prompt missing channel/thread context:\n%s", got)
+	}
+}
+
 func TestMCPComponentIDParsesLegacyEscapedServerNames(t *testing.T) {
 	id := "mcpui:apply:channel-1:vendor%3Acontext%2Fserver:full"
 	parts := parseMCPComponentID(id)

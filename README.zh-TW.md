@@ -229,7 +229,7 @@ Kiro model provider
 - **討論串互動**：在 bot 建立的 thread 中發訊息，會自動啟動獨立的 thread agent 接續討論。thread 會保存建立當下的監聽模式；父頻道後續切換 `/thread off` 不會讓舊 thread 被動改成 mention-only。若父頻道已是 `/thread off`，手動建立或未知來源的 thread 預設 mention-only，直到在該 thread 內 `/back`。非 active agent 閒置超過 `THREAD_AGENT_IDLE_SEC` 或非 active thread 歸檔時自動關閉，再次發訊息可重新啟動。容量上限不會自動關閉任何 thread agent；如果名額已滿，bot 會列出 active/inactive 狀態與 inactive 候選，讓使用者執行 `/close-thread thread_id:<id>` 關閉指定 inactive agent。active work 不會因 idle cleanup、歸檔事件或 thread agent 容量上限被強制終止；active thread 若被歸檔，會在目前 job 回到 idle 後關閉；`THREAD_AGENT_IDLE_SEC=0` 可停用討論串閒置清理。
 - **取消與中斷**：`/cancel` 只送出 ACP `session/cancel` 取消目前任務；`/interrupt` 會先做同樣的 soft cancel，短暫等待後若同一任務仍在執行，才嘗試對 agent process group 送 `SIGINT`，用來中斷卡住的工具子程序。若同一任務仍卡住，重複 `/interrupt` 可再嘗試一次 `SIGINT`。它不會清除已保存的 session metadata，也不會關閉 Discord thread；若 agent 因中斷退出，下一則訊息會走既有的重啟與 `session/load` 流程
 - **長回覆格式**：bot 會依 Discord 訊息限制自動分段，並先轉成 Discord-safe Markdown；標題會降級為粗體文字，code block 跨段時會自動補上關閉與重新開啟 fence，分段前綴會放在 code block 外。
-- **Cron jobs**：排程定義存於 `DATA_DIR/cron/cron.json`，執行歷史存於 `DATA_DIR/cron/<jobID>/history.jsonl`。Cron 設定不再要求輸入工作目錄；排程 agent 一律使用所屬頻道當下的 CWD，因此管理員變更 `/cwd` 後，該頻道後續 cron 執行也會跟著切換。Agent-backed cron 執行一律建立或重用專屬 Discord thread；進度、最終回覆，以及內建 `bot_send_message` / `bot_send_file` safe egress 都會送到該 cron thread，父頻道只會收到執行連結。未初始化頻道不能建立、恢復、手動執行或到點執行 agent-backed cron job。`bot-tools` 會把 cron 建立/刪除請求先寫成 `DATA_DIR/cron/pending/` 內的 JSON action，由 `CronTask` 在 scheduler tick 驗證與 ingest；無效 action 會被移除，刪除 action 只會刪除同一頻道擁有的 job。
+- **Cron jobs**：排程定義存於 `DATA_DIR/cron/cron.json`，執行歷史存於 `DATA_DIR/cron/<jobID>/history.jsonl`。Cron 設定不再要求輸入工作目錄；排程 agent 一律使用所屬頻道當下的 CWD，因此管理員變更 `/cwd` 後，該頻道後續 cron 執行也會跟著切換。Agent-backed cron 執行一律建立或重用專屬 Discord thread；進度、最終回覆，以及內建 `bot_send_message` / `bot_send_file` safe egress 都會送到該 cron thread，父頻道只會收到執行連結。Cron 管理工具一律以所屬父頻道作為 job scope；若 agent 傳入目前 thread target 作為 `channel_id`，bot-tools 會正規化回綁定的父頻道。未初始化頻道不能建立、恢復、手動執行或到點執行 agent-backed cron job。`bot-tools` 會把 cron 建立/刪除請求先寫成 `DATA_DIR/cron/pending/` 內的 JSON action，由 `CronTask` 在 scheduler tick 驗證與 ingest；無效 action 會被移除，刪除 action 只會刪除同一頻道擁有的 job。
 - **多 bot 模式**：bot 啟動時會用完整 Discord guild member list 自動偵測同 server 內其他 bot，並盡量補上 bot role。`BOT_PEERS` 只需要用來覆蓋偵測結果、補上偵測不到的 bot、手動加入 role-only peer，或用 `!userID` 排除無關 bot；格式為 `Name:userID`、`Name:userID:roleID`、`Name::roleID` 或 `!userID`。自動 multi-bot mention-only 會在另一個 peer bot 對目前頻道或討論串具有實際可回應權限時啟用，包含直接在頻道發訊息，或建立公開討論串並在討論串內回覆；權限來源可以是明確 channel overwrite、繼承 role 權限或 `@everyone` 權限。自動偵測到的 role-only peer 仍不會單獨觸發 mention-only，除非用 `BOT_PEERS=Name::roleID` 手動指定。請用真正的 Discord mention（例如 `<@111111111111111111>` 或 Discord 介面的提及選單），若偵測或設定了 role ID，role mention（例如 `<@&222222222222222222>`）也會路由到目標 bot；純文字 `@BuildBot` 不一定會觸發。若要讓其中一個 bot 暫時恢復完整監聽，對該 bot 在主頻道執行 `/back` 或 `!back`，該主頻道底下的討論串也會繼承；若只想讓某條討論串回到 mention-only，可在該討論串執行 `/pause` 或 `!pause`
 - **Bot 交接限制**：bot 產生的訊息預設不會觸發另一個 bot。只有在討論串內、明確 tag 目標 bot、原始任務訊息已有完成反應（`✅`），且內容不是進度、錯誤、逾時或空輸出時，才會被視為有效交接。一般討論串任務會帶入近期 Discord 討論串訊息作為 bounded context；通過 gate 的跨 bot 交接會帶入較長的 thread transcript 作為 handoff context，讓被交辦 bot 先掌握任務、先前決策、相關檔案、結果與剩餘工作
 - **Slash command 範圍**：指令以 guild scope 註冊，但 bot 會拒絕在自己沒有讀寫權限的頻道或討論串中執行。管理型 slash command 會設定 Discord default member permissions，讓一般使用者預設不會在 command picker 看到；若還要做到 channel-specific 的指令選單隱藏，需要在 Discord app command permissions 設定，或用具備 `applications.commands.permissions.update` scope 的 OAuth2 token 同步權限
@@ -270,11 +270,11 @@ bot 也會註冊內建的 `bot-tools` MCP catalog entry，由同一支 bot binar
 |------|----------|------|
 | `bot_data_summary` | 唯讀 | 摘要 data directory 中繼資訊，不回傳訊息內容 |
 | `bot_list_channel_data` | 唯讀 | 列出 channel data directory、中繼檔案是否存在，以及 bot 已觀測到的公開頻道/討論串名稱 |
-| `bot_list_cron` | 唯讀 | 列出指定頻道的排程任務 |
+| `bot_list_cron` | 唯讀 | 列出所屬父頻道的排程任務；傳入 thread ID 時會正規化回父頻道 |
 | `bot_send_message` | 寫入、非破壞性 | 佇列化 Discord 訊息，由 bot 端做 secret redaction 後送到目前 channel 或 thread target |
 | `bot_send_file` | 寫入、非破壞性 | 佇列化本機文字檔，由 bot 端產生 sanitized copy 後上傳到目前 channel 或 thread target |
-| `bot_create_cron` | 寫入、非破壞性 | 佇列化建立 recurring cron job，等待 scheduler ingest |
-| `bot_delete_cron` | 寫入、破壞性 | 佇列化刪除 cron job；只有 job 所屬頻道相符才會刪除 |
+| `bot_create_cron` | 寫入、非破壞性 | 佇列化建立 recurring cron job；傳入 thread ID 時會正規化回所屬父頻道 |
+| `bot_delete_cron` | 寫入、破壞性 | 佇列化刪除 cron job；傳入 thread ID 時會正規化回父頻道，且只有 job 所屬頻道相符才會刪除 |
 
 頻道管理員可在 Discord 中管理目前頻道 policy：
 

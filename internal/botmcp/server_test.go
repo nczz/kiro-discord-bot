@@ -201,6 +201,35 @@ func TestDeliveryChannelPrefersDynamicTargetState(t *testing.T) {
 	}
 }
 
+func TestCronOwnerChannelNormalizesDynamicThreadTargetToBoundChannel(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "target.json")
+	if err := os.WriteFile(statePath, []byte(`{"target_channel_id":"thread-1"}`), 0644); err != nil {
+		t.Fatalf("write target state: %v", err)
+	}
+	t.Setenv("BOT_TOOLS_CHANNEL_ID", "channel-1")
+	t.Setenv("BOT_TOOLS_TARGET_CHANNEL_ID", "channel-1")
+	t.Setenv("BOT_TOOLS_TARGET_STATE_PATH", statePath)
+
+	got, err := cronOwnerChannelID("thread-1")
+	if err != nil {
+		t.Fatalf("cron owner rejected dynamic thread target: %v", err)
+	}
+	if got != "channel-1" {
+		t.Fatalf("cron owner = %q, want bound parent channel", got)
+	}
+}
+
+func TestCronOwnerChannelKeepsLegacyUnboundRequest(t *testing.T) {
+	got, err := cronOwnerChannelID("channel-legacy")
+	if err != nil {
+		t.Fatalf("cron owner rejected unbound legacy request: %v", err)
+	}
+	if got != "channel-legacy" {
+		t.Fatalf("cron owner = %q, want legacy requested channel", got)
+	}
+}
+
 func TestWritePendingRejectsInvalidActions(t *testing.T) {
 	dir := t.TempDir()
 	if err := writePending(dir, pendingAction{
@@ -259,6 +288,49 @@ func TestWritePendingCreateAndListCron(t *testing.T) {
 	entries, _ = os.ReadDir(pendingDir)
 	if len(entries) != 2 {
 		t.Fatalf("expected 2 pending files, got %d", len(entries))
+	}
+}
+
+func TestWritePendingCreateCronNormalizesThreadTargetToBoundChannel(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "target.json")
+	if err := os.WriteFile(statePath, []byte(`{"target_channel_id":"thread-1"}`), 0644); err != nil {
+		t.Fatalf("write target state: %v", err)
+	}
+	t.Setenv("BOT_TOOLS_CHANNEL_ID", "channel-1")
+	t.Setenv("BOT_TOOLS_TARGET_CHANNEL_ID", "channel-1")
+	t.Setenv("BOT_TOOLS_TARGET_STATE_PATH", statePath)
+
+	ownerChannelID, err := cronOwnerChannelID("thread-1")
+	if err != nil {
+		t.Fatalf("cron owner: %v", err)
+	}
+	if err := writePending(dir, pendingAction{
+		Action: "create",
+		Job: &pendingJob{
+			Name:      "daily-report",
+			Schedule:  "0 9 * * *",
+			Prompt:    "Generate report",
+			ChannelID: ownerChannelID,
+			GuildID:   "g1",
+		},
+	}); err != nil {
+		t.Fatalf("writePending: %v", err)
+	}
+
+	entries, err := os.ReadDir(filepath.Join(dir, "cron", "pending"))
+	if err != nil {
+		t.Fatalf("read pending dir: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("pending entries = %d, want 1", len(entries))
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "cron", "pending", entries[0].Name()))
+	if err != nil {
+		t.Fatalf("read pending: %v", err)
+	}
+	if strings.Contains(string(raw), `"thread-1"`) || !strings.Contains(string(raw), `"channel_id":"channel-1"`) {
+		t.Fatalf("pending create should be parent-scoped, got %s", raw)
 	}
 }
 

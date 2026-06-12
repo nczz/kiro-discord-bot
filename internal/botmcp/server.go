@@ -119,6 +119,10 @@ func NewServer() *server.MCPServer {
 			schedule, _ := req.RequireString("schedule")
 			prompt, _ := req.RequireString("prompt")
 			channelID, _ := req.RequireString("channel_id")
+			ownerChannelID, err := cronOwnerChannelID(channelID)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
 			guildID, _ := req.RequireString("guild_id")
 			createdBy, _ := req.RequireString("created_by")
 			action := pendingAction{
@@ -127,7 +131,7 @@ func NewServer() *server.MCPServer {
 					Name:      strings.TrimSpace(name),
 					Schedule:  strings.TrimSpace(schedule),
 					Prompt:    strings.TrimSpace(prompt),
-					ChannelID: strings.TrimSpace(channelID),
+					ChannelID: ownerChannelID,
 					GuildID:   strings.TrimSpace(guildID),
 					CreatedBy: strings.TrimSpace(createdBy),
 				},
@@ -144,7 +148,7 @@ func NewServer() *server.MCPServer {
 	s.AddTool(
 		mcp.NewTool(ToolListCron,
 			mcp.WithDescription("List scheduled cron jobs for a channel"),
-			mcp.WithString("channel_id", mcp.Required(), mcp.Description("Discord channel ID from context")),
+			mcp.WithString("channel_id", mcp.Required(), mcp.Description("Discord channel ID from context; thread IDs are normalized to the owning parent channel when bot-tools is bound to a channel")),
 			mcp.WithReadOnlyHintAnnotation(true),
 			mcp.WithDestructiveHintAnnotation(false),
 			mcp.WithIdempotentHintAnnotation(true),
@@ -152,7 +156,11 @@ func NewServer() *server.MCPServer {
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			channelID, _ := req.RequireString("channel_id")
-			jobs, err := listCronJobs(dataDir(), channelID)
+			ownerChannelID, err := cronOwnerChannelID(channelID)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			jobs, err := listCronJobs(dataDir(), ownerChannelID)
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
@@ -165,10 +173,14 @@ func NewServer() *server.MCPServer {
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			jobID, _ := req.RequireString("job_id")
 			channelID, _ := req.RequireString("channel_id")
+			ownerChannelID, err := cronOwnerChannelID(channelID)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
 			action := pendingAction{
 				Action:    "delete",
 				JobID:     strings.TrimSpace(jobID),
-				ChannelID: strings.TrimSpace(channelID),
+				ChannelID: ownerChannelID,
 			}
 			if err := validatePendingAction(action); err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
@@ -212,7 +224,7 @@ func writeTool(name, description string, destructive bool) mcp.Tool {
 			mcp.WithString("name", mcp.Required(), mcp.Description("Short name for the scheduled task")),
 			mcp.WithString("schedule", mcp.Required(), mcp.Description(cronpolicy.ScheduleFieldDescription(cronTZ))),
 			mcp.WithString("prompt", mcp.Required(), mcp.Description("The task prompt that the agent will execute on each run")),
-			mcp.WithString("channel_id", mcp.Required(), mcp.Description("Discord channel ID from context")),
+			mcp.WithString("channel_id", mcp.Required(), mcp.Description("Discord channel ID from context; thread IDs are normalized to the owning parent channel when bot-tools is bound to a channel")),
 			mcp.WithString("guild_id", mcp.Required(), mcp.Description("Discord guild ID from context")),
 			mcp.WithString("created_by", mcp.Description("Username of the requester")),
 		} {
@@ -221,7 +233,7 @@ func writeTool(name, description string, destructive bool) mcp.Tool {
 	case ToolDeleteCron:
 		for _, opt := range []mcp.ToolOption{
 			mcp.WithString("job_id", mcp.Required(), mcp.Description("The cron job ID to delete")),
-			mcp.WithString("channel_id", mcp.Required(), mcp.Description("Discord channel ID from context")),
+			mcp.WithString("channel_id", mcp.Required(), mcp.Description("Discord channel ID from context; thread IDs are normalized to the owning parent channel when bot-tools is bound to a channel")),
 		} {
 			opt(&t)
 		}
@@ -288,6 +300,16 @@ func deliveryChannelID(requested string) string {
 		return target
 	}
 	return strings.TrimSpace(requested)
+}
+
+func cronOwnerChannelID(requested string) (string, error) {
+	if err := validateBoundChannel(requested); err != nil {
+		return "", err
+	}
+	if bound := strings.TrimSpace(os.Getenv("BOT_TOOLS_CHANNEL_ID")); bound != "" {
+		return bound, nil
+	}
+	return strings.TrimSpace(requested), nil
 }
 
 func currentTargetStateChannelID() string {

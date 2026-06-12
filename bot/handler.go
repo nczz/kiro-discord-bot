@@ -428,6 +428,7 @@ func buildPrompt(text string, attachments []string, channelID, guildID, username
 func buildPromptThread(text string, attachments []string, channelID, threadID, guildID, username, peerContext string) string {
 	var sb strings.Builder
 	sb.WriteString("[Discord bot environment] Your responses are automatically forwarded to a Discord thread. Each message is split at 2000 chars. Tool execution details are also shown.\n")
+	sb.WriteString("For cron management tools, use channel_id as the owning parent channel ID; use thread_id only for thread-targeted Discord messages.\n")
 	if threadID != "" {
 		sb.WriteString(fmt.Sprintf("[Discord context] channel_id=%s thread_id=%s guild_id=%s user=%s\n\n", channelID, threadID, guildID, username))
 	} else {
