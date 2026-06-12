@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/nczz/kiro-discord-bot/heartbeat"
+	"github.com/nczz/kiro-discord-bot/internal/cronpolicy"
 )
 
 // ParsedCronJob holds the structured result from natural language parsing.
@@ -73,14 +74,11 @@ func (b *Bot) parseCronPrompt(ctx context.Context, input string) (*ParsedCronJob
 	}
 	defer b.manager.StopTempAgent(agent)
 
-	tz := b.cronTimezone
-	if tz == "" {
-		tz = time.Now().Location().String()
-	}
+	tzPolicy := cronpolicy.SchedulePolicy(b.cronTimezone)
 
 	systemPrompt := fmt.Sprintf(`You are a cron job configuration parser. Extract structured data from the user's natural language request.
 
-Timezone: %s
+Timezone policy: %s
 
 Return ONLY a JSON object with these fields:
 - "name": short descriptive task name (max 50 chars, in the user's language)
@@ -98,7 +96,7 @@ Example output: {"name":"月報產生","schedule":"0 10 5 * *","prompt":"產生�
 Example input: "幫我做一個好看的網站"
 Example output: {"name":"建立網站","schedule":"?","prompt":"建立一個好看的網站"}
 
-IMPORTANT: Return ONLY the JSON object. No markdown, no explanation, no extra text.`, tz)
+IMPORTANT: Return ONLY the JSON object. No markdown, no explanation, no extra text.`, tzPolicy)
 
 	prompt := systemPrompt + "\n\nUser request: " + input
 

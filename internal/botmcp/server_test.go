@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/nczz/kiro-discord-bot/internal/channelmeta"
+	"github.com/nczz/kiro-discord-bot/internal/cronpolicy"
 )
 
 func TestDataSummaryAndChannelListAreMetadataOnly(t *testing.T) {
@@ -93,7 +94,7 @@ func TestDefaultSafeToolNamesExcludeDestructiveTools(t *testing.T) {
 func TestCreateCronToolDocumentsBotTimezone(t *testing.T) {
 	t.Setenv("CRON_TIMEZONE", "Asia/Taipei")
 
-	tool := writeTool(ToolCreateCron, createCronToolDescription(cronTimezone()), false)
+	tool := writeTool(ToolCreateCron, cronpolicy.CreateToolDescription(cronpolicy.TimezoneName("Asia/Taipei")), false)
 
 	if !strings.Contains(tool.Description, "Asia/Taipei") || !strings.Contains(tool.Description, "Do not convert user-local times to UTC") {
 		t.Fatalf("tool description does not include cron timezone: %q", tool.Description)
