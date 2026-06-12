@@ -68,7 +68,7 @@ type Manager struct {
 	// Channel agent idle tracking
 	channelLastActivity map[string]time.Time
 	channelAgentIdleSec int
-	safeEgressDrain     func(targetChannelID string)
+	safeEgressDrain     func(targetChannelID string) int
 }
 
 // threadAgentEntry tracks a per-thread agent and its metadata.
@@ -241,7 +241,7 @@ func (m *Manager) SetBotID(botID string) {
 }
 
 // SetSafeEgressDrain sets a hook used by workers to flush bot-tools egress before final replies.
-func (m *Manager) SetSafeEgressDrain(fn func(targetChannelID string)) {
+func (m *Manager) SetSafeEgressDrain(fn func(targetChannelID string) int) {
 	m.mu.Lock()
 	m.safeEgressDrain = fn
 	m.mu.Unlock()

@@ -41,24 +41,27 @@ func (t *safeEgressTask) Run() error {
 	return nil
 }
 
-func (t *safeEgressTask) DrainChannel(channelID string) {
+func (t *safeEgressTask) DrainChannel(channelID string) int {
 	channelID = strings.TrimSpace(channelID)
 	if channelID == "" {
-		return
+		return 0
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	actions, err := botegress.ReadPending(t.bot.dataDir)
 	if err != nil {
 		log.Printf("[safe-egress] drain channel=%s read pending: %v", channelID, err)
-		return
+		return 0
 	}
+	delivered := 0
 	for _, action := range actions {
 		if strings.TrimSpace(action.ChannelID) != channelID {
 			continue
 		}
 		t.processAndRemove(action)
+		delivered++
 	}
+	return delivered
 }
 
 func (t *safeEgressTask) processAndRemove(action botegress.Action) {

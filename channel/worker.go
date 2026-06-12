@@ -91,7 +91,7 @@ type Worker struct {
 	onActivity      func()      // called during work to signal liveness (prevents idle cleanup)
 	onIdle          func() bool // called when a job finishes; true means the worker was stopped
 	onThreadCreated func(threadID string, mentionOnly bool)
-	onBeforeFinal   func(targetChannelID string)
+	onBeforeFinal   func(targetChannelID string) int
 
 	memoryPrefix func() string // returns memory+flash prefix to inject into prompts
 
@@ -145,7 +145,7 @@ func (w *Worker) OnThreadCreatedFunc(fn func(threadID string, mentionOnly bool))
 }
 
 // OnBeforeFinalResponseFunc sets a callback invoked before the worker sends its final response.
-func (w *Worker) OnBeforeFinalResponseFunc(fn func(targetChannelID string)) { w.onBeforeFinal = fn }
+func (w *Worker) OnBeforeFinalResponseFunc(fn func(targetChannelID string) int) { w.onBeforeFinal = fn }
 
 // SetBotToolsTargetStatePath sets the dynamic target state used by bot-tools safe egress.
 func (w *Worker) SetBotToolsTargetStatePath(path string) { w.botToolsTargetStatePath = path }
@@ -171,6 +171,20 @@ func (w *Worker) Enqueue(job *Job) error {
 	default:
 		return fmt.Errorf("queue full")
 	}
+}
+
+func (w *Worker) drainBeforeFinal(targetChannelID string) int {
+	if w.onBeforeFinal == nil {
+		return 0
+	}
+	return w.onBeforeFinal(targetChannelID)
+}
+
+func suppressGenericKiroErrorAfterEgress(err error, ctxErr error, delivered int) bool {
+	if err == nil || ctxErr != nil || delivered == 0 {
+		return false
+	}
+	return strings.Contains(err.Error(), "Kiro failed to generate a response")
 }
 
 func (w *Worker) QueueLen() int {
@@ -549,8 +563,21 @@ func (w *Worker) execute(job *Job) {
 				log.Printf("[worker %s] job error | user=%s msg=%s elapsed=%s ctxErr=%v err=%v",
 					w.channelID, job.Username, job.MessageID, time.Since(startTime).Round(time.Millisecond), ctxErr, askErr)
 				errorContent := "❌ " + errMsg
-				if w.onBeforeFinal != nil {
-					w.onBeforeFinal(threadID)
+				delivered := w.drainBeforeFinal(threadID)
+				if suppressGenericKiroErrorAfterEgress(askErr, ctxErr, delivered) {
+					log.Printf("[worker %s] suppressing generic Kiro error after safe egress delivery | user=%s msg=%s delivered=%d",
+						w.channelID, job.Username, job.MessageID, delivered)
+					swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "✅")
+					swapReaction(ds, job.ChannelID, job.MessageID, "⚙️", "✅")
+					w.auditJobEvent("agent_job_completed", job, threadID, "success", map[string]any{
+						"elapsed_ms":              time.Since(startTime).Milliseconds(),
+						"safe_egress_deliveries":  delivered,
+						"suppressed_agent_error":  askErr.Error(),
+						"suppressed_error_reason": "safe_egress_delivered",
+					})
+					w.recordUsage(job, threadID, "success")
+					finishJob()
+					return
 				}
 				SendLongThread(ds, threadID, AppendMetricsFooter(errorContent, w.agent.TurnMetrics()))
 				swapReaction(ds, job.ChannelID, job.MessageID, "🔄", emoji)
@@ -576,9 +603,7 @@ func (w *Worker) execute(job *Job) {
 			swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "✅")
 			swapReaction(ds, job.ChannelID, job.MessageID, "⚙️", "✅")
 			// Mark the origin done before final text so tagged peer bots see a completed source.
-			if w.onBeforeFinal != nil {
-				w.onBeforeFinal(threadID)
-			}
+			w.drainBeforeFinal(threadID)
 			SendLongThread(ds, threadID, AppendMetricsFooter(response, w.agent.TurnMetrics()))
 			w.auditResponseEvent(job, threadID, "success", response)
 
@@ -868,8 +893,20 @@ func (w *Worker) executeInline(job *Job) {
 				log.Printf("[worker %s] inline job error | user=%s msg=%s elapsed=%s ctxErr=%v err=%v",
 					w.channelID, job.Username, job.MessageID, time.Since(startTime).Round(time.Millisecond), ctxErr, askErr)
 				errorContent := "❌ " + errMsg
-				if w.onBeforeFinal != nil {
-					w.onBeforeFinal(job.ChannelID)
+				delivered := w.drainBeforeFinal(job.ChannelID)
+				if suppressGenericKiroErrorAfterEgress(askErr, ctxErr, delivered) {
+					log.Printf("[worker %s] suppressing inline generic Kiro error after safe egress delivery | user=%s msg=%s delivered=%d",
+						w.channelID, job.Username, job.MessageID, delivered)
+					w.auditJobEvent("agent_job_completed", job, "", "success", map[string]any{
+						"delivery_mode":           DeliveryInline.String(),
+						"elapsed_ms":              time.Since(startTime).Milliseconds(),
+						"safe_egress_deliveries":  delivered,
+						"suppressed_agent_error":  askErr.Error(),
+						"suppressed_error_reason": "safe_egress_delivered",
+					})
+					w.recordUsage(job, "", "success")
+					finishJob("✅")
+					return
 				}
 				SendLongReply(ds, job.ChannelID, job.MessageID, AppendMetricsFooter(errorContent, w.agent.TurnMetrics()))
 				if w.logger != nil {
@@ -891,9 +928,7 @@ func (w *Worker) executeInline(job *Job) {
 				response = L.Get("worker.empty_response")
 			}
 			responseWithMetrics := AppendMetricsFooter(response, w.agent.TurnMetrics())
-			if w.onBeforeFinal != nil {
-				w.onBeforeFinal(job.ChannelID)
-			}
+			w.drainBeforeFinal(job.ChannelID)
 			SendLongReply(ds, job.ChannelID, job.MessageID, responseWithMetrics)
 			w.auditResponseEvent(job, "", "success", response)
 			if w.logger != nil {
@@ -924,9 +959,7 @@ func (w *Worker) executeInline(job *Job) {
 			return
 		}
 		errMsg := L.Getf("error.agent_read", err)
-		if w.onBeforeFinal != nil {
-			w.onBeforeFinal(job.ChannelID)
-		}
+		w.drainBeforeFinal(job.ChannelID)
 		SendLongReply(ds, job.ChannelID, job.MessageID, errMsg)
 		if w.logger != nil {
 			w.logger.Log(w.channelID, ChatEntry{Role: "assistant", Content: errMsg, Model: w.model})
@@ -1163,13 +1196,20 @@ func (w *Worker) executeFallback(job *Job) {
 			errMsg += "\n```\n" + stderr + "\n```"
 		}
 		logContent = "❌ " + errMsg
-		if w.onBeforeFinal != nil {
-			w.onBeforeFinal(job.ChannelID)
+		delivered := w.drainBeforeFinal(job.ChannelID)
+		if suppressGenericKiroErrorAfterEgress(askErr, ctx.Err(), delivered) {
+			log.Printf("[worker %s] suppressing fallback generic Kiro error after safe egress delivery | user=%s msg=%s delivered=%d",
+				w.channelID, job.Username, job.MessageID, delivered)
+			swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "✅")
+			w.auditResponseEvent(job, "", "success", "")
+			w.recordUsage(job, "", "success")
+			logContent = ""
+		} else {
+			sendLong(ds, job.ChannelID, replyMsg.ID, AppendMetricsFooter(logContent, w.agent.TurnMetrics()))
+			swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "❌")
+			w.auditResponseEvent(job, "", "error", logContent)
+			w.recordUsage(job, "", "error")
 		}
-		sendLong(ds, job.ChannelID, replyMsg.ID, AppendMetricsFooter(logContent, w.agent.TurnMetrics()))
-		swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "❌")
-		w.auditResponseEvent(job, "", "error", logContent)
-		w.recordUsage(job, "", "error")
 	} else {
 		if response == "" {
 			response = L.Get("worker.empty_response")
@@ -1177,9 +1217,7 @@ func (w *Worker) executeFallback(job *Job) {
 		logContent = response
 		swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "✅")
 		responseWithMetrics := AppendMetricsFooter(response, w.agent.TurnMetrics())
-		if w.onBeforeFinal != nil {
-			w.onBeforeFinal(job.ChannelID)
-		}
+		w.drainBeforeFinal(job.ChannelID)
 		sendLong(ds, job.ChannelID, replyMsg.ID, responseWithMetrics)
 		w.auditResponseEvent(job, "", "success", response)
 		w.recordUsage(job, "", "success")

@@ -3,6 +3,7 @@ package channel
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"io"
 	"math"
 	"net/http"
@@ -734,7 +735,7 @@ func TestWorkerThreadDrainsBotToolsBeforeFinalResponse(t *testing.T) {
 	w.SetBotToolsTargetStatePath(statePath)
 
 	var drainedTarget string
-	w.OnBeforeFinalResponseFunc(func(targetChannelID string) {
+	w.OnBeforeFinalResponseFunc(func(targetChannelID string) int {
 		drainedTarget = targetChannelID
 		raw, err := os.ReadFile(statePath)
 		if err != nil {
@@ -749,6 +750,7 @@ func TestWorkerThreadDrainsBotToolsBeforeFinalResponse(t *testing.T) {
 				t.Fatalf("final response was sent before safe egress drain: %q", body)
 			}
 		}
+		return 0
 	})
 
 	w.execute(&Job{
@@ -786,7 +788,7 @@ func TestWorkerAutoCreatedThreadUpdatesBotToolsTargetState(t *testing.T) {
 		createdThread = threadID
 	})
 	var drainedTarget string
-	w.OnBeforeFinalResponseFunc(func(targetChannelID string) {
+	w.OnBeforeFinalResponseFunc(func(targetChannelID string) int {
 		drainedTarget = targetChannelID
 		raw, err := os.ReadFile(statePath)
 		if err != nil {
@@ -795,6 +797,7 @@ func TestWorkerAutoCreatedThreadUpdatesBotToolsTargetState(t *testing.T) {
 		if !strings.Contains(string(raw), `"target_channel_id":"thread-1"`) {
 			t.Fatalf("target state = %s, want thread-1", raw)
 		}
+		return 0
 	})
 
 	w.execute(&Job{
@@ -814,6 +817,43 @@ func TestWorkerAutoCreatedThreadUpdatesBotToolsTargetState(t *testing.T) {
 	}
 	if drainedTarget != "thread-1" {
 		t.Fatalf("drained target = %q, want thread-1", drainedTarget)
+	}
+}
+
+func TestWorkerSuppressesGenericKiroErrorAfterSafeEgressDelivery(t *testing.T) {
+	L.Load("en")
+	rt := &recordingRoundTripper{}
+	ds := testDiscordSession(rt)
+	agent := &fakeWorkerAgent{}
+	w := newWorker("ch1", agent, 1, 30, 1, 1440, nil, "")
+
+	var drainedTarget string
+	w.OnBeforeFinalResponseFunc(func(targetChannelID string) int {
+		drainedTarget = targetChannelID
+		return 1
+	})
+
+	w.execute(&Job{
+		ChannelID: "ch1",
+		ThreadID:  "thread-1",
+		MessageID: "m1",
+		Prompt:    "hello",
+		Session:   ds,
+	})
+	cb := agent.Callbacks()
+	if cb.OnComplete == nil {
+		t.Fatal("expected thread callbacks to be registered")
+	}
+	cb.OnComplete("", errors.New(`rpc error -32603: Internal error | data: "Kiro failed to generate a response"`))
+
+	if drainedTarget != "thread-1" {
+		t.Fatalf("drained target = %q, want thread-1", drainedTarget)
+	}
+	_, bodies := rt.Snapshot()
+	for _, body := range bodies {
+		if strings.Contains(body, "Kiro failed to generate a response") || strings.Contains(body, "❌") {
+			t.Fatalf("generic Kiro error should be suppressed after safe egress delivery, body=%q", body)
+		}
 	}
 }
 

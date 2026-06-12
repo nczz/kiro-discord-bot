@@ -73,7 +73,7 @@ func NewServer() *server.MCPServer {
 		},
 	)
 	s.AddTool(
-		writeTool(ToolSendMessage, "Send a Discord message through the bot-controlled safe egress queue. The main bot redacts secrets before delivery.", false),
+		writeTool(ToolSendMessage, "Send a separate Discord message through the bot-controlled safe egress queue. Do not use this for ordinary replies or final answers; normal assistant text is already delivered by the bot. Use this only when explicitly asked to send an extra Discord message, notify another target, hand off to another bot, or perform scheduled/cron egress. The main bot redacts secrets before delivery.", false),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			channelID, _ := req.RequireString("channel_id")
 			if err := validateBoundChannel(channelID); err != nil {
@@ -206,7 +206,7 @@ func writeTool(name, description string, destructive bool) mcp.Tool {
 	case ToolSendMessage:
 		for _, opt := range []mcp.ToolOption{
 			mcp.WithString("channel_id", mcp.Required(), mcp.Description("Discord channel ID from context")),
-			mcp.WithString("content", mcp.Required(), mcp.Description("Message content to deliver after bot-side redaction")),
+			mcp.WithString("content", mcp.Required(), mcp.Description("Separate Discord message content to deliver after bot-side redaction; not for ordinary final replies")),
 		} {
 			opt(&t)
 		}
