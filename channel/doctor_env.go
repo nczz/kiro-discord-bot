@@ -158,3 +158,27 @@ func defaultIfEmpty(v, def string) string {
 	}
 	return v
 }
+
+func (m *Manager) doctorListenModeConsistency() string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	var issues []string
+	for ch, paused := range m.paused {
+		if !paused {
+			continue
+		}
+		if enabled, ok := m.threadMode[ch]; ok && enabled {
+			issues = append(issues, L.Getf("doctor.listen_mode.inconsistent", ch))
+		}
+	}
+	if len(issues) == 0 {
+		return "\n" + L.Get("doctor.listen_mode.ok")
+	}
+	var sb strings.Builder
+	sb.WriteString("\n" + L.Get("doctor.listen_mode.header"))
+	for _, issue := range issues {
+		sb.WriteString(issue)
+	}
+	return sb.String()
+}

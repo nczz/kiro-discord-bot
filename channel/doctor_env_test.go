@@ -87,3 +87,42 @@ func TestDoctorRuntimeOverviewShowsEffectiveDefaultsWhenEnvUnset(t *testing.T) {
 		}
 	}
 }
+
+func TestDoctorListenModeConsistencyReportsOk(t *testing.T) {
+	L.Load("en")
+	m := NewManager(ManagerConfig{})
+	m.Pause("channel-1")
+	m.SetThreadMode("channel-1", false)
+	m.Back("channel-2")
+	m.SetThreadMode("channel-2", true)
+
+	got := m.doctorListenModeConsistency()
+	if !strings.Contains(got, "listen mode: consistent") {
+		t.Fatalf("doctor listen mode consistency = %q, want ok message", got)
+	}
+	if strings.Contains(got, "inconsistency") {
+		t.Fatalf("doctor listen mode consistency reported unexpected issue:\n%s", got)
+	}
+}
+
+func TestDoctorListenModeConsistencyReportsPausedThreadModeOn(t *testing.T) {
+	L.Load("en")
+	m := NewManager(ManagerConfig{})
+	m.Pause("channel-1")
+	m.SetThreadMode("channel-1", true)
+	m.Back("channel-2")
+	m.SetThreadMode("channel-2", true)
+
+	got := m.doctorListenModeConsistency()
+	for _, want := range []string{
+		"listen mode inconsistency",
+		"channel channel-1: paused=true but threadMode=on",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("doctor listen mode consistency missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "channel channel-2") {
+		t.Fatalf("doctor listen mode consistency reported full-listen channel as inconsistent:\n%s", got)
+	}
+}

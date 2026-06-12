@@ -115,6 +115,7 @@ docs/release.md  → release and deployment safety checklist
 - [ ] `.github/workflows/preflight.yml`：preflight 腳本或 CI 門檻改變時同步
 - [ ] 新增 env var 完整路徑：`config.go` → `ManagerConfig` / `BotConfig`（若影響 runtime）→ `main.go` → `channel/doctor_env.go` (envSpecs) → `locale/lang/en.json` + `zh-TW.json` (doctor.env.desc.*) → README.md → `.env.example`
 - [ ] 新增 Discord MCP-only env var：`cmd/mcp-discord` → README → `.env.example` → `INSTALL_MCP.md`
+- [ ] `docs/listen-mode-matrix.md`：修改 pause/back/thread-mode/requiresHumanMention 邏輯時同步
 
 ## Verification（驗證閉環）
 

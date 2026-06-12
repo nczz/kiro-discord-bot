@@ -765,18 +765,104 @@ func TestMultiBotMentionOnlyCanBeOpenedByBack(t *testing.T) {
 	}
 	ds := testPeerPermissionSession(t, nil)
 
-	if !b.requiresHumanMention(ds, "channel-1", "", "bot-1") {
+	if needed, _ := b.requiresHumanMention(ds, "channel-1", "", "bot-1"); !needed {
 		t.Fatal("effective multi-bot channel should require mention by default")
 	}
 
 	b.manager.Back("channel-1")
-	if b.requiresHumanMention(ds, "channel-1", "", "bot-1") {
+	if needed, _ := b.requiresHumanMention(ds, "channel-1", "", "bot-1"); needed {
 		t.Fatal("/back should open full-listen mode for the target channel")
 	}
 
 	b.manager.Pause("channel-1")
-	if !b.requiresHumanMention(ds, "channel-1", "", "bot-1") {
+	if needed, _ := b.requiresHumanMention(ds, "channel-1", "", "bot-1"); !needed {
 		t.Fatal("/pause should restore mention-only mode")
+	}
+}
+
+func TestRequiresHumanMentionReasons(t *testing.T) {
+	ds := testPeerPermissionSession(t, nil)
+
+	tests := []struct {
+		name       string
+		setup      func(*channel.Manager)
+		targetID   string
+		parentID   string
+		peers      string
+		wantNeeded bool
+		wantReason string
+	}{
+		{
+			name:       "paused override",
+			setup:      func(m *channel.Manager) { m.Pause("channel-1") },
+			targetID:   "channel-1",
+			peers:      "M5Bot:bot-1,ChunBot:bot-2",
+			wantNeeded: true,
+			wantReason: "paused",
+		},
+		{
+			name:       "thread snapshot mention",
+			setup:      func(m *channel.Manager) { m.SetThreadListenMode("thread-1", true) },
+			targetID:   "thread-1",
+			parentID:   "channel-1",
+			peers:      "M5Bot:bot-1,ChunBot:bot-2",
+			wantNeeded: true,
+			wantReason: "thread_snapshot_mention",
+		},
+		{
+			name:       "unknown thread inherits parent thread mode off",
+			setup:      func(m *channel.Manager) { m.SetThreadMode("channel-1", false) },
+			targetID:   "thread-1",
+			parentID:   "channel-1",
+			peers:      "M5Bot:bot-1,ChunBot:bot-2",
+			wantNeeded: true,
+			wantReason: "thread_inherit",
+		},
+		{
+			name:       "channel thread mode off",
+			setup:      func(m *channel.Manager) { m.SetThreadMode("channel-1", false) },
+			targetID:   "channel-1",
+			peers:      "M5Bot:bot-1,ChunBot:bot-2",
+			wantNeeded: true,
+			wantReason: "thread_mode_off",
+		},
+		{
+			name:       "multi bot parent paused",
+			setup:      func(m *channel.Manager) { m.Pause("channel-1") },
+			targetID:   "thread-1",
+			parentID:   "channel-1",
+			peers:      "M5Bot:bot-1,ChunBot:bot-2",
+			wantNeeded: true,
+			wantReason: "multi_bot_parent_paused",
+		},
+		{
+			name:       "multi bot",
+			targetID:   "channel-1",
+			peers:      "M5Bot:bot-1,ChunBot:bot-2",
+			wantNeeded: true,
+			wantReason: "multi_bot",
+		},
+		{
+			name:       "no responding peer",
+			targetID:   "channel-1",
+			peers:      "M5Bot:bot-1",
+			wantNeeded: false,
+			wantReason: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			manager := channel.NewManager(channel.ManagerConfig{})
+			if tt.setup != nil {
+				tt.setup(manager)
+			}
+			b := &Bot{peers: parseBotPeers(tt.peers), manager: manager}
+			gotNeeded, gotReason := b.requiresHumanMention(ds, tt.targetID, tt.parentID, "bot-1")
+			if gotNeeded != tt.wantNeeded || gotReason != tt.wantReason {
+				t.Fatalf("requiresHumanMention() = (%v, %q), want (%v, %q)", gotNeeded, gotReason, tt.wantNeeded, tt.wantReason)
+			}
+		})
 	}
 }
 
@@ -787,22 +873,22 @@ func TestThreadMentionModeInheritsParentBack(t *testing.T) {
 	}
 	ds := testPeerPermissionSession(t, nil)
 
-	if !b.requiresHumanMention(ds, "thread-1", "channel-1", "bot-1") {
+	if needed, _ := b.requiresHumanMention(ds, "thread-1", "channel-1", "bot-1"); !needed {
 		t.Fatal("thread should require mention by default when peer bot has effective thread access")
 	}
 
 	b.manager.Back("channel-1")
-	if b.requiresHumanMention(ds, "thread-1", "channel-1", "bot-1") {
+	if needed, _ := b.requiresHumanMention(ds, "thread-1", "channel-1", "bot-1"); needed {
 		t.Fatal("thread should inherit parent /back full-listen override")
 	}
 
 	b.manager.Pause("thread-1")
-	if !b.requiresHumanMention(ds, "thread-1", "channel-1", "bot-1") {
+	if needed, _ := b.requiresHumanMention(ds, "thread-1", "channel-1", "bot-1"); !needed {
 		t.Fatal("thread /pause should override parent /back")
 	}
 
 	b.manager.Back("thread-1")
-	if b.requiresHumanMention(ds, "thread-1", "channel-1", "bot-1") {
+	if needed, _ := b.requiresHumanMention(ds, "thread-1", "channel-1", "bot-1"); needed {
 		t.Fatal("thread /back should restore full-listen override")
 	}
 }
@@ -816,7 +902,7 @@ func TestThreadListenSnapshotOutlivesParentThreadModeChange(t *testing.T) {
 	b.manager.SetThreadListenMode("thread-1", false)
 	b.manager.SetThreadMode("channel-1", false)
 
-	if b.requiresHumanMention(ds, "thread-1", "channel-1", "bot-1") {
+	if needed, _ := b.requiresHumanMention(ds, "thread-1", "channel-1", "bot-1"); needed {
 		t.Fatal("full-listen thread snapshot should not become mention-only when parent thread mode is turned off")
 	}
 }
@@ -826,7 +912,7 @@ func TestUnknownThreadUsesParentThreadModeOffMentionOnly(t *testing.T) {
 	ds := testPeerPermissionSession(t, nil)
 	b.manager.SetThreadMode("channel-1", false)
 
-	if !b.requiresHumanMention(ds, "thread-1", "channel-1", "bot-1") {
+	if needed, _ := b.requiresHumanMention(ds, "thread-1", "channel-1", "bot-1"); !needed {
 		t.Fatal("unknown thread under thread-mode-off parent should require mention")
 	}
 }
@@ -863,14 +949,14 @@ func TestMultiBotMentionOnlyIsChannelScoped(t *testing.T) {
 		t.Fatalf("Channel: %v", err)
 	}
 
-	if b.requiresHumanMention(ds, "channel-1", "", "bot-1") {
+	if needed, _ := b.requiresHumanMention(ds, "channel-1", "", "bot-1"); needed {
 		t.Fatal("peer without effective channel access should not force mention-only")
 	}
-	if !b.requiresHumanMention(ds, "channel-2", "", "bot-1") {
+	if needed, _ := b.requiresHumanMention(ds, "channel-2", "", "bot-1"); !needed {
 		t.Fatal("peer with inherited effective channel access should force mention-only")
 	}
 	ch2.PermissionOverwrites = []*discordgo.PermissionOverwrite{botMemberAllowOverwrite("bot-2")}
-	if !b.requiresHumanMention(ds, "channel-2", "", "bot-1") {
+	if needed, _ := b.requiresHumanMention(ds, "channel-2", "", "bot-1"); !needed {
 		t.Fatal("peer with explicit channel allow should force mention-only")
 	}
 }
@@ -882,7 +968,7 @@ func TestPeerExplicitViewOverwriteForcesMentionOnlyWhenEffectiveSendAllows(t *te
 	}
 	ds := testPeerPermissionSession(t, []*discordgo.PermissionOverwrite{botMemberViewOverwrite("bot-2")})
 
-	if !b.requiresHumanMention(ds, "channel-1", "", "bot-1") {
+	if needed, _ := b.requiresHumanMention(ds, "channel-1", "", "bot-1"); !needed {
 		t.Fatal("peer with explicit channel view allow and effective send permission should force mention-only")
 	}
 }
@@ -894,7 +980,7 @@ func TestPeerThreadReplyPermissionsForceMentionOnlyWithoutChannelSend(t *testing
 	}
 	ds := testPeerPermissionSession(t, []*discordgo.PermissionOverwrite{botMemberThreadReplyOverwrite("bot-2")})
 
-	if !b.requiresHumanMention(ds, "channel-1", "", "bot-1") {
+	if needed, _ := b.requiresHumanMention(ds, "channel-1", "", "bot-1"); !needed {
 		t.Fatal("peer that can create and reply in threads should force mention-only even without channel SendMessages")
 	}
 }
@@ -906,7 +992,7 @@ func TestPeerThreadPermissionsForceMentionOnlyInThreadWithoutParentChannelSend(t
 	}
 	ds := testPeerPermissionSession(t, []*discordgo.PermissionOverwrite{botMemberThreadReplyOverwrite("bot-2")})
 
-	if !b.requiresHumanMention(ds, "thread-1", "channel-1", "bot-1") {
+	if needed, _ := b.requiresHumanMention(ds, "thread-1", "channel-1", "bot-1"); !needed {
 		t.Fatal("peer that can reply in the thread should force mention-only even without parent channel SendMessages")
 	}
 }
@@ -921,7 +1007,7 @@ func TestRoleOnlyPeerRequiresExplicitChannelAllow(t *testing.T) {
 	}
 	ds := testPeerPermissionSession(t, nil)
 
-	if b.requiresHumanMention(ds, "channel-1", "", "bot-1") {
+	if needed, _ := b.requiresHumanMention(ds, "channel-1", "", "bot-1"); needed {
 		t.Fatal("role-only peer without explicit channel allow should not force mention-only")
 	}
 	ch, err := ds.State.Channel("channel-1")
@@ -929,7 +1015,7 @@ func TestRoleOnlyPeerRequiresExplicitChannelAllow(t *testing.T) {
 		t.Fatalf("Channel: %v", err)
 	}
 	ch.PermissionOverwrites = []*discordgo.PermissionOverwrite{botRoleAllowOverwrite("role-2")}
-	if !b.requiresHumanMention(ds, "channel-1", "", "bot-1") {
+	if needed, _ := b.requiresHumanMention(ds, "channel-1", "", "bot-1"); !needed {
 		t.Fatal("manual role-only peer with explicit channel allow should force mention-only")
 	}
 }
@@ -944,7 +1030,7 @@ func TestDiscoveredRoleOnlyPeerDoesNotForceMentionOnly(t *testing.T) {
 	}
 	ds := testPeerPermissionSession(t, []*discordgo.PermissionOverwrite{botRoleAllowOverwrite("role-2")})
 
-	if b.requiresHumanMention(ds, "channel-1", "", "bot-1") {
+	if needed, _ := b.requiresHumanMention(ds, "channel-1", "", "bot-1"); needed {
 		t.Fatal("auto-discovered role-only peer should not force mention-only")
 	}
 }

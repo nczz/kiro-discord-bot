@@ -497,9 +497,11 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 		return
 	}
 
-	if !m.Author.Bot && b.requiresHumanMention(ds, m.ChannelID, parentChannelID, selfID) && !isCommand && !isMentioned {
-		log.Printf("[handler] ignored human msg reason=multi_bot_mention_only channel=%s thread=%t msg=%s", m.ChannelID, parentChannelID != "", m.ID)
-		return
+	if !m.Author.Bot && !isCommand && !isMentioned {
+		if mentionRequired, mentionReason := b.requiresHumanMention(ds, m.ChannelID, parentChannelID, selfID); mentionRequired {
+			log.Printf("[handler] ignored human msg reason=%s channel=%s thread=%t msg=%s", mentionReason, m.ChannelID, parentChannelID != "", m.ID)
+			return
+		}
 	}
 
 	// In pause mode, only respond to commands or mentions.
@@ -680,8 +682,8 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 			Transcript:        transcript,
 			Source:            "message",
 			DeliveryMode:      deliveryMode,
-			ThreadMentionOnly: b.requiresHumanMention(ds, m.ChannelID, "", selfID),
 		}
+		job.ThreadMentionOnly, _ = b.requiresHumanMention(ds, m.ChannelID, "", selfID)
 		if err := b.manager.Enqueue(ds, job); err != nil {
 			ds.MessageReactionRemove(m.ChannelID, m.ID, "⏳", "@me")
 			_, _ = sendDiscordText(ds, m.ChannelID, L.Getf("error.generic", err.Error()), nil)

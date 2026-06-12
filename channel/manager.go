@@ -1766,6 +1766,7 @@ func (m *Manager) Doctor(ctx context.Context) string {
 	}
 
 	sb.WriteString(m.doctorRuntimeOverview())
+	sb.WriteString(m.doctorListenModeConsistency())
 
 	return sb.String()
 }

@@ -460,40 +460,43 @@ func (b *Bot) stripLeadingPeerMentions(content string) string {
 	}
 }
 
-func (b *Bot) requiresHumanMention(ds *discordgo.Session, targetID, parentChannelID, selfID string) bool {
+func (b *Bot) requiresHumanMention(ds *discordgo.Session, targetID, parentChannelID, selfID string) (bool, string) {
 	if b.manager != nil {
 		if b.manager.HasMentionOnlyOverride(targetID) {
-			return true
+			return true, "paused"
 		}
 		if b.manager.HasFullListenOverride(targetID) {
-			return false
+			return false, ""
 		}
 		if parentChannelID != "" {
 			if mode, ok := b.manager.ThreadListenSnapshot(targetID); ok {
-				return mode == "mention"
+				if mode == "mention" {
+					return true, "thread_snapshot_mention"
+				}
+				return false, ""
 			}
 			if b.manager.ThreadMentionOnly(targetID, parentChannelID) {
-				return true
+				return true, "thread_inherit"
 			}
 		} else if !b.manager.ThreadModeEnabled(targetID) {
-			return true
+			return true, "thread_mode_off"
 		}
 	}
 	if !b.channelMultiBotMode(ds, targetID, selfID) {
-		return false
+		return false, ""
 	}
 	if b.manager == nil {
-		return true
+		return true, "multi_bot"
 	}
 	if parentChannelID != "" {
 		if b.manager.HasMentionOnlyOverride(parentChannelID) {
-			return true
+			return true, "multi_bot_parent_paused"
 		}
 		if b.manager.HasFullListenOverride(parentChannelID) {
-			return false
+			return false, ""
 		}
 	}
-	return true
+	return true, "multi_bot"
 }
 
 func (b *Bot) peerPromptContext(selfID string) string {
