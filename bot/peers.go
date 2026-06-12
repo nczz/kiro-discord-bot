@@ -376,9 +376,9 @@ func (b *Bot) messageMentionsSelf(m *discordgo.MessageCreate, content, selfID st
 	return false
 }
 
-func (b *Bot) humanMessageAddressesSelf(content, selfID string) bool {
+func (b *Bot) humanMessageAddressesSelf(m *discordgo.MessageCreate, content, selfID string) bool {
 	content = strings.TrimSpace(content)
-	if content == "" || !b.messageMentionsSelf(nil, content, selfID) {
+	if content == "" || !b.messageMentionsSelf(m, content, selfID) {
 		return false
 	}
 	leading := b.leadingMentionPeerIDs(content)

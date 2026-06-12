@@ -611,10 +611,21 @@ func TestHumanMessageAddressesSelfOnlyWhenSelfIsAddressed(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := b.humanMessageAddressesSelf(tt.content, tt.selfID); got != tt.want {
+			if got := b.humanMessageAddressesSelf(nil, tt.content, tt.selfID); got != tt.want {
 				t.Fatalf("humanMessageAddressesSelf() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestHumanMessageAddressesSelfUsesStructuredMentions(t *testing.T) {
+	b := &Bot{peers: parseBotPeers("M5Bot:bot-1:role-1,ChunBot:bot-2:role-2")}
+	msg := &discordgo.MessageCreate{Message: &discordgo.Message{
+		Content:  "@M5Bot handle this",
+		Mentions: []*discordgo.User{{ID: "bot-1"}},
+	}}
+	if !b.humanMessageAddressesSelf(msg, msg.Content, "bot-1") {
+		t.Fatal("expected structured Discord mention to address self")
 	}
 }
 
