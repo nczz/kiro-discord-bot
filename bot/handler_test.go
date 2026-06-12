@@ -486,6 +486,53 @@ func TestMentionsOtherPeer(t *testing.T) {
 	}
 }
 
+func TestStripLeadingPeerMentions(t *testing.T) {
+	b := &Bot{peers: parseBotPeers("M5Bot:bot-1:role-1,ChunBot:bot-2:role-2,ReviewBot:bot-3")}
+
+	tests := []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{
+			name:    "multiple leading user mentions",
+			content: "<@bot-2> <@!bot-3> hi",
+			want:    "hi",
+		},
+		{
+			name:    "leading role mention",
+			content: "<@&role-2> hi",
+			want:    "hi",
+		},
+		{
+			name:    "preserves non-leading handoff mention",
+			content: "please ask <@bot-2> to review",
+			want:    "please ask <@bot-2> to review",
+		},
+		{
+			name:    "unknown leading mention remains",
+			content: "<@unknown> hi",
+			want:    "<@unknown> hi",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := b.stripLeadingPeerMentions(tt.content); got != tt.want {
+				t.Fatalf("stripLeadingPeerMentions() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestHumanMultiBotLeadingMentionsBecomeTaskText(t *testing.T) {
+	b := &Bot{peers: parseBotPeers("M5Bot:bot-1:role-1,ChunBot:bot-2:role-2")}
+	content := b.stripOwnMentions("<@bot-1> <@bot-2> hi", "bot-1")
+	content = b.stripLeadingPeerMentions(content)
+	if content != "hi" {
+		t.Fatalf("normalized content = %q, want hi", content)
+	}
+}
+
 func TestIsBotGeneratedNonResult(t *testing.T) {
 	tests := []struct {
 		content string

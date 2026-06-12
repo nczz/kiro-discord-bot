@@ -386,6 +386,25 @@ func (b *Bot) stripOwnMentions(content, selfID string) string {
 	return strings.TrimSpace(content)
 }
 
+func (b *Bot) stripLeadingPeerMentions(content string) string {
+	for {
+		next := strings.TrimSpace(content)
+		for _, p := range b.peerSnapshot() {
+			if p.ID != "" {
+				next = strings.TrimSpace(strings.TrimPrefix(next, "<@"+p.ID+">"))
+				next = strings.TrimSpace(strings.TrimPrefix(next, "<@!"+p.ID+">"))
+			}
+			if p.RoleID != "" {
+				next = strings.TrimSpace(strings.TrimPrefix(next, "<@&"+p.RoleID+">"))
+			}
+		}
+		if next == strings.TrimSpace(content) {
+			return next
+		}
+		content = next
+	}
+}
+
 func (b *Bot) requiresHumanMention(ds *discordgo.Session, targetID, parentChannelID, selfID string) bool {
 	if b.manager != nil {
 		if b.manager.HasMentionOnlyOverride(targetID) {

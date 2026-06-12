@@ -505,6 +505,9 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 	// Strip mention prefix if present
 	if isMentioned {
 		content = b.stripOwnMentions(content, selfID)
+		if !m.Author.Bot {
+			content = b.stripLeadingPeerMentions(content)
+		}
 	}
 
 	// Check if message is from a thread — route to thread agent
