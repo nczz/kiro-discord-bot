@@ -502,6 +502,31 @@ func (m *Manager) agentOptsForChannel(channelID string) acp.AgentOptions {
 	return m.agentOptsForTarget(channelID, channelID)
 }
 
+func (m *Manager) agentOptsForTempChannel(name, channelID string) acp.AgentOptions {
+	opts := m.agentOptsForChannel(channelID)
+	statePath := botToolsTargetStatePath(m.dataDir, name)
+	if statePath == "" {
+		return opts
+	}
+	for i := range opts.MCPServers {
+		if opts.MCPServers[i].Name == "bot-tools" {
+			var targetEnv map[string]string
+			if err := json.Unmarshal([]byte(opts.MCPServers[i].Env["MCP_PROXY_ENV_JSON"]), &targetEnv); err != nil {
+				log.Printf("[mcp-policy] decode temp bot-tools env: %v", err)
+				continue
+			}
+			targetEnv["BOT_TOOLS_TARGET_STATE_PATH"] = statePath
+			raw, err := json.Marshal(targetEnv)
+			if err != nil {
+				log.Printf("[mcp-policy] encode temp bot-tools env: %v", err)
+				continue
+			}
+			opts.MCPServers[i].Env["MCP_PROXY_ENV_JSON"] = string(raw)
+		}
+	}
+	return opts
+}
+
 func (m *Manager) agentOptsForTarget(channelID, targetChannelID string) acp.AgentOptions {
 	opts := m.agentOpts()
 	if m.agentRuntimeHome != "" {
@@ -1764,7 +1789,7 @@ func (m *Manager) StartTempAgent(name, cwd, model, channelID string) (*acp.Agent
 	if err != nil {
 		return nil, err
 	}
-	return acp.StartAgent(name, m.kiroCLI, cwd, model, m.agentOptsForChannel(channelID))
+	return acp.StartAgent(name, m.kiroCLI, cwd, model, m.agentOptsForTempChannel(name, channelID))
 }
 
 // SendCommand sends a slash command (e.g. /compact, /clear) to the channel's agent.

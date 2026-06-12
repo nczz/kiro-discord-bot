@@ -48,3 +48,14 @@ func clearBotToolsTargetState(path string) {
 	}
 	_ = os.Remove(path)
 }
+
+// SetBotToolsTargetState binds channel-scoped bot-tools egress to a live target
+// such as an auto-created task thread.
+func (m *Manager) SetBotToolsTargetState(channelID, targetChannelID string) error {
+	return writeBotToolsTargetState(botToolsTargetStatePath(m.dataDir, channelID), targetChannelID)
+}
+
+// ClearBotToolsTargetState removes a channel's dynamic bot-tools egress target.
+func (m *Manager) ClearBotToolsTargetState(channelID string) {
+	clearBotToolsTargetState(botToolsTargetStatePath(m.dataDir, channelID))
+}

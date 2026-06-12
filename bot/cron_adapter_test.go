@@ -4,12 +4,16 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"net/http"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/bwmarrin/discordgo"
 	"github.com/nczz/kiro-discord-bot/acp"
 	"github.com/nczz/kiro-discord-bot/audit"
 	"github.com/nczz/kiro-discord-bot/heartbeat"
+	"github.com/nczz/kiro-discord-bot/internal/botegress"
 )
 
 func TestCronAdapterRecordAgentResponseDistinguishesUnsentFailure(t *testing.T) {
@@ -90,5 +94,42 @@ func TestCronAdapterRecordAgentResponseStoresSentResponse(t *testing.T) {
 	}
 	if _, ok := evt.Metadata["failure_stage"]; ok {
 		t.Fatalf("event metadata = %+v, failure_stage should be absent for sent responses", evt.Metadata)
+	}
+}
+
+func TestCronAdapterDrainSafeEgressFlushesThreadTarget(t *testing.T) {
+	dir := t.TempDir()
+	rt := &recordingDiscordTransport{}
+	ds, err := discordgo.New("Bot test")
+	if err != nil {
+		t.Fatalf("new discord session: %v", err)
+	}
+	ds.Client = &http.Client{Transport: rt}
+	b := &Bot{discord: ds, dataDir: dir}
+	b.safeEgress = newSafeEgressTask(b)
+	adapter := &cronAdapter{botNotifier{bot: b}}
+
+	if _, err := botegress.WritePending(dir, botegress.Action{
+		ID:        "cron-thread",
+		Action:    botegress.ActionSendMessage,
+		ChannelID: "thread-1",
+		Content:   "cron tool payload",
+		CreatedAt: "2026-06-12T00:00:00Z",
+	}); err != nil {
+		t.Fatalf("write pending: %v", err)
+	}
+
+	adapter.drainSafeEgress("thread-1")
+
+	paths, bodies := rt.Snapshot()
+	if len(paths) != 1 || !strings.Contains(paths[0], "/channels/thread-1/messages") || !strings.Contains(bodies[0], "cron tool payload") {
+		t.Fatalf("unexpected drained calls: paths=%v bodies=%v", paths, bodies)
+	}
+	actions, err := botegress.ReadPending(dir)
+	if err != nil {
+		t.Fatalf("read pending: %v", err)
+	}
+	if len(actions) != 0 {
+		t.Fatalf("pending actions = %+v, want empty", actions)
 	}
 }

@@ -23,6 +23,7 @@ type Bot struct {
 	dataDir             string
 	hb                  *heartbeat.Heartbeat
 	hbCancel            context.CancelFunc
+	safeEgress          *safeEgressTask
 	cronStore           *heartbeat.CronStore
 	cronTask            *heartbeat.CronTask
 	auditRecorder       *audit.Recorder
@@ -147,6 +148,7 @@ func NewFromConfig(cfg BotConfig) (*Bot, error) {
 	hb.Register(heartbeat.NewHealthTask(&healthAdapter{n}))
 	hb.Register(heartbeat.NewCleanupTask(cfg.DataDir, cfg.AttRetainDays))
 	safeEgress := newSafeEgressTask(b)
+	b.safeEgress = safeEgress
 	manager.SetSafeEgressDrain(safeEgress.DrainChannel)
 	hb.Register(safeEgress)
 	cronTask := heartbeat.NewCronTask(cronStore, &cronAdapter{n}, cfg.DataDir, cfg.CronTimezone, cfg.GuildID)

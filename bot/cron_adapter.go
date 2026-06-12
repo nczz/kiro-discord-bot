@@ -162,6 +162,15 @@ func (a *cronAdapter) AskAgentInThread(ctx context.Context, agent *acp.Agent, ch
 		ds.ChannelMessageSend(threadID, fmt.Sprintf("── %s ──", time.Now().Format("01/02 15:04")))
 	}
 
+	targetStateKey := channelID
+	if agent != nil && strings.TrimSpace(agent.Name) != "" {
+		targetStateKey = agent.Name
+	}
+	if err := a.bot.manager.SetBotToolsTargetState(targetStateKey, threadID); err != nil {
+		log.Printf("[cron-adapter] write bot-tools target state key=%s channel=%s target=%s: %v", targetStateKey, channelID, threadID, err)
+	}
+	defer a.bot.manager.ClearBotToolsTargetState(targetStateKey)
+
 	// Add creator to thread so they get notifications
 	if createdByID != "" {
 		_ = ds.ThreadMemberAdd(threadID, createdByID)
@@ -276,6 +285,7 @@ func (a *cronAdapter) AskAgentInThread(ctx context.Context, agent *acp.Agent, ch
 				if statusMsgID != "" {
 					ds.ChannelMessageEdit(threadID, statusMsgID, L.Getf("cron.progress.failed", elapsed, count))
 				}
+				a.drainSafeEgress(threadID)
 				sentCount, sendErr := channel.SendLongThread(ds, threadID, channel.AppendMetricsFooter("❌ "+errMsg, agent.TurnMetrics()))
 				if sendErr != nil {
 					log.Printf("[cron] failed to send agent error response thread=%s: %v", threadID, sendErr)
@@ -294,6 +304,7 @@ func (a *cronAdapter) AskAgentInThread(ctx context.Context, agent *acp.Agent, ch
 			if mentionID != "" {
 				ds.ChannelMessageSend(threadID, fmt.Sprintf("<@%s>", mentionID))
 			}
+			a.drainSafeEgress(threadID)
 			sentCount, sendErr := channel.SendLongThread(ds, threadID, channel.AppendMetricsFooter(response, agent.TurnMetrics()))
 			if sendErr != nil {
 				log.Printf("[cron] failed to send agent response thread=%s: %v", threadID, sendErr)
@@ -316,6 +327,13 @@ func (a *cronAdapter) AskAgentInThread(ctx context.Context, agent *acp.Agent, ch
 	// Block until complete
 	r := <-done
 	return r.response, threadID, r.responseSent, r.err
+}
+
+func (a *cronAdapter) drainSafeEgress(threadID string) {
+	if a == nil || a.bot == nil || a.bot.safeEgress == nil {
+		return
+	}
+	a.bot.safeEgress.DrainChannel(threadID)
 }
 
 func boolPtr(b bool) *bool { return &b }

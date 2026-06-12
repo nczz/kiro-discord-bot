@@ -301,6 +301,29 @@ func TestManagerBuiltinMCPRequiresExplicitPolicy(t *testing.T) {
 	if targetEnv["BOT_TOOLS_TARGET_STATE_PATH"] != filepath.Join(dir, "bot-tools-targets", "channel-1.json") {
 		t.Fatalf("builtin env missing dynamic target state path: %+v", targetEnv)
 	}
+	if err := m.SetBotToolsTargetState("channel-1", "thread-1"); err != nil {
+		t.Fatalf("set target state: %v", err)
+	}
+	raw, err := os.ReadFile(targetEnv["BOT_TOOLS_TARGET_STATE_PATH"])
+	if err != nil {
+		t.Fatalf("read target state: %v", err)
+	}
+	if !strings.Contains(string(raw), `"target_channel_id":"thread-1"`) {
+		t.Fatalf("target state = %s, want thread-1", raw)
+	}
+	m.ClearBotToolsTargetState("channel-1")
+	if _, err := os.Stat(targetEnv["BOT_TOOLS_TARGET_STATE_PATH"]); !os.IsNotExist(err) {
+		t.Fatalf("target state should be cleared, stat err=%v", err)
+	}
+
+	tempOpts := m.agentOptsForTempChannel("cron-job-1", "channel-1")
+	tempEnv := proxyTargetEnv(t, tempOpts.MCPServers[0].Env)
+	if tempEnv["BOT_TOOLS_CHANNEL_ID"] != "channel-1" || tempEnv["BOT_TOOLS_TARGET_CHANNEL_ID"] != "channel-1" {
+		t.Fatalf("temp builtin env missing channel binding: %+v", tempEnv)
+	}
+	if tempEnv["BOT_TOOLS_TARGET_STATE_PATH"] != filepath.Join(dir, "bot-tools-targets", "cron-job-1.json") {
+		t.Fatalf("temp target state path = %q, want cron-specific path", tempEnv["BOT_TOOLS_TARGET_STATE_PATH"])
+	}
 
 	threadOpts := m.agentOptsForTarget("channel-1", "thread-1")
 	threadEnv := proxyTargetEnv(t, threadOpts.MCPServers[0].Env)
