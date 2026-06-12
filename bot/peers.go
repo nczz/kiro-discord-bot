@@ -376,6 +376,61 @@ func (b *Bot) messageMentionsSelf(m *discordgo.MessageCreate, content, selfID st
 	return false
 }
 
+func (b *Bot) humanMessageAddressesSelf(content, selfID string) bool {
+	content = strings.TrimSpace(content)
+	if content == "" || !b.messageMentionsSelf(nil, content, selfID) {
+		return false
+	}
+	leading := b.leadingMentionPeerIDs(content)
+	if len(leading) == 0 {
+		return true
+	}
+	for _, id := range leading {
+		if id == selfID {
+			return true
+		}
+	}
+	return false
+}
+
+func (b *Bot) leadingMentionPeerIDs(content string) []string {
+	var ids []string
+	for {
+		content = strings.TrimSpace(content)
+		if content == "" {
+			return ids
+		}
+		matched := false
+		for _, p := range b.peerSnapshot() {
+			if p.ID != "" {
+				for _, token := range []string{"<@" + p.ID + ">", "<@!" + p.ID + ">"} {
+					if strings.HasPrefix(content, token) {
+						ids = append(ids, p.ID)
+						content = strings.TrimSpace(strings.TrimPrefix(content, token))
+						matched = true
+						break
+					}
+				}
+				if matched {
+					break
+				}
+			}
+			if p.RoleID != "" {
+				token := "<@&" + p.RoleID + ">"
+				if strings.HasPrefix(content, token) {
+					ids = append(ids, p.ID)
+					content = strings.TrimSpace(strings.TrimPrefix(content, token))
+					matched = true
+					break
+				}
+			}
+		}
+		if !matched {
+			return ids
+		}
+	}
+}
+
 func (b *Bot) stripOwnMentions(content, selfID string) string {
 	content = stripSelfMentions(content, selfID)
 	for _, p := range b.peerSnapshot() {

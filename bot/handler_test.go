@@ -563,6 +563,61 @@ func TestHumanMultiBotLeadingMentionsBecomeTaskText(t *testing.T) {
 	}
 }
 
+func TestHumanMessageAddressesSelfOnlyWhenSelfIsAddressed(t *testing.T) {
+	b := &Bot{peers: parseBotPeers("M5Bot:bot-1:role-1,ChunBot:bot-2:role-2,KiroAgent:bot-3:role-3")}
+
+	tests := []struct {
+		name    string
+		content string
+		selfID  string
+		want    bool
+	}{
+		{
+			name:    "self in leading mention block",
+			content: "<@bot-1> <@bot-2> hi",
+			selfID:  "bot-1",
+			want:    true,
+		},
+		{
+			name:    "second leading mention is also addressed",
+			content: "<@bot-1> <@bot-2> hi",
+			selfID:  "bot-2",
+			want:    true,
+		},
+		{
+			name:    "self mention in task body is target not addressee",
+			content: "<@bot-2> 幫我出一個數學題給 <@bot-1> 解",
+			selfID:  "bot-1",
+			want:    false,
+		},
+		{
+			name:    "addressed peer should process target mention",
+			content: "<@bot-2> 幫我出一個數學題給 <@bot-1> 解",
+			selfID:  "bot-2",
+			want:    true,
+		},
+		{
+			name:    "role target in task body is not addressee",
+			content: "<@&role-2> 幫我出一個數學題給 <@&role-1> 解",
+			selfID:  "bot-1",
+			want:    false,
+		},
+		{
+			name:    "no leading peer remains compatible",
+			content: "請問 <@bot-1> 這題怎麼解",
+			selfID:  "bot-1",
+			want:    true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := b.humanMessageAddressesSelf(tt.content, tt.selfID); got != tt.want {
+				t.Fatalf("humanMessageAddressesSelf() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestIsBotGeneratedNonResult(t *testing.T) {
 	tests := []struct {
 		content string

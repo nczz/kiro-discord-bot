@@ -492,6 +492,10 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 		log.Printf("[handler] ignored human msg reason=other_peer_mentioned channel=%s thread=%t msg=%s", m.ChannelID, parentChannelID != "", m.ID)
 		return
 	}
+	if !m.Author.Bot && isMentioned && !b.humanMessageAddressesSelf(content, selfID) {
+		log.Printf("[handler] ignored human msg reason=self_mentioned_as_task_target channel=%s thread=%t msg=%s", m.ChannelID, parentChannelID != "", m.ID)
+		return
+	}
 
 	if !m.Author.Bot && b.requiresHumanMention(ds, m.ChannelID, parentChannelID, selfID) && !isCommand && !isMentioned {
 		log.Printf("[handler] ignored human msg reason=multi_bot_mention_only channel=%s thread=%t msg=%s", m.ChannelID, parentChannelID != "", m.ID)
