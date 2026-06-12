@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -48,6 +49,7 @@ func DefaultSafeToolNames() []string {
 // NewServer builds the built-in bot tools MCP server.
 func NewServer() *server.MCPServer {
 	s := server.NewMCPServer("bot-tools", "1.0.0", server.WithToolCapabilities(false))
+	cronTZ := cronTimezone()
 	s.AddTool(
 		readOnlyTool(ToolDataSummary, "Summarize the bot data directory without returning message content"),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -111,7 +113,7 @@ func NewServer() *server.MCPServer {
 		},
 	)
 	s.AddTool(
-		writeTool(ToolCreateCron, "Create a scheduled recurring task in this Discord channel. Use when the user wants something to run periodically (daily, weekly, etc.). The schedule must be a 5-field cron expression.", false),
+		writeTool(ToolCreateCron, createCronToolDescription(cronTZ), false),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			name, _ := req.RequireString("name")
 			schedule, _ := req.RequireString("schedule")
@@ -205,9 +207,10 @@ func writeTool(name, description string, destructive bool) mcp.Tool {
 			opt(&t)
 		}
 	case ToolCreateCron:
+		cronTZ := cronTimezone()
 		for _, opt := range []mcp.ToolOption{
 			mcp.WithString("name", mcp.Required(), mcp.Description("Short name for the scheduled task")),
-			mcp.WithString("schedule", mcp.Required(), mcp.Description("5-field cron expression (e.g. '0 9 * * *' for daily at 9am)")),
+			mcp.WithString("schedule", mcp.Required(), mcp.Description(fmt.Sprintf("5-field cron expression in the bot cron timezone %s. Do not convert to UTC. Example: '0 9 * * *' means 09:00 in %s.", cronTZ, cronTZ))),
 			mcp.WithString("prompt", mcp.Required(), mcp.Description("The task prompt that the agent will execute on each run")),
 			mcp.WithString("channel_id", mcp.Required(), mcp.Description("Discord channel ID from context")),
 			mcp.WithString("guild_id", mcp.Required(), mcp.Description("Discord guild ID from context")),
@@ -224,6 +227,20 @@ func writeTool(name, description string, destructive bool) mcp.Tool {
 		}
 	}
 	return t
+}
+
+func cronTimezone() string {
+	if tz := strings.TrimSpace(os.Getenv("CRON_TIMEZONE")); tz != "" {
+		return tz
+	}
+	if name := time.Now().Location().String(); strings.TrimSpace(name) != "" {
+		return name
+	}
+	return "the service process local timezone"
+}
+
+func createCronToolDescription(cronTZ string) string {
+	return fmt.Sprintf("Create a scheduled recurring task in this Discord channel. Use when the user wants something to run periodically (daily, weekly, etc.). The schedule must be a 5-field cron expression interpreted in the bot cron timezone %s. Do not convert user-local times to UTC; for example, if the user asks for 12:30 in this timezone, use '30 12 * * *'.", cronTZ)
 }
 
 func readOnlyTool(name, description string) mcp.Tool {

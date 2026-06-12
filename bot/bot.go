@@ -109,7 +109,11 @@ func NewFromConfig(cfg BotConfig) (*Bot, error) {
 
 	cfg.ManagerConfig.Store = store
 	manager := channel.NewManager(cfg.ManagerConfig)
-	manager.RegisterBuiltinMCP("bot-tools", []string{"mcp-bot"}, map[string]string{"DATA_DIR": cfg.DataDir})
+	manager.RegisterBuiltinMCP("bot-tools", []string{"mcp-bot"}, map[string]string{
+		"DATA_DIR":       cfg.DataDir,
+		"CRON_TIMEZONE":  cfg.CronTimezone,
+		"USAGE_TIMEZONE": cfg.UsageTimezone,
+	})
 
 	manualPeers := parseBotPeers(cfg.BotPeers)
 	b := &Bot{discord: ds, manager: manager, guildID: cfg.GuildID, dataDir: cfg.DataDir, cronTimezone: cfg.CronTimezone, version: cfg.BotVersion,

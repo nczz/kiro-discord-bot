@@ -255,7 +255,11 @@ func TestManagerBuiltinMCPRequiresExplicitPolicy(t *testing.T) {
 	m := NewManager(ManagerConfig{DataDir: dir, GuildID: "guild-1"})
 	defer m.StopAll()
 
-	m.RegisterBuiltinMCP("bot-tools", []string{"mcp-bot"}, map[string]string{"DATA_DIR": dir})
+	m.RegisterBuiltinMCP("bot-tools", []string{"mcp-bot"}, map[string]string{
+		"DATA_DIR":       dir,
+		"CRON_TIMEZONE":  "Asia/Taipei",
+		"USAGE_TIMEZONE": "Asia/Taipei",
+	})
 
 	opts := m.agentOptsForChannel("channel-1")
 	if len(opts.MCPServers) != 0 {
@@ -288,6 +292,9 @@ func TestManagerBuiltinMCPRequiresExplicitPolicy(t *testing.T) {
 	if targetEnv["DATA_DIR"] != dir {
 		t.Fatalf("builtin env missing data dir: %+v", targetEnv)
 	}
+	if targetEnv["CRON_TIMEZONE"] != "Asia/Taipei" || targetEnv["USAGE_TIMEZONE"] != "Asia/Taipei" {
+		t.Fatalf("builtin env missing timezones: %+v", targetEnv)
+	}
 	if targetEnv["BOT_TOOLS_CHANNEL_ID"] != "channel-1" || targetEnv["BOT_TOOLS_TARGET_CHANNEL_ID"] != "channel-1" || targetEnv["BOT_TOOLS_GUILD_ID"] != "guild-1" {
 		t.Fatalf("builtin env missing channel binding: %+v", targetEnv)
 	}
@@ -299,6 +306,9 @@ func TestManagerBuiltinMCPRequiresExplicitPolicy(t *testing.T) {
 	threadEnv := proxyTargetEnv(t, threadOpts.MCPServers[0].Env)
 	if threadEnv["BOT_TOOLS_CHANNEL_ID"] != "channel-1" || threadEnv["BOT_TOOLS_TARGET_CHANNEL_ID"] != "thread-1" {
 		t.Fatalf("builtin env missing thread target binding: %+v", threadEnv)
+	}
+	if threadEnv["CRON_TIMEZONE"] != "Asia/Taipei" || threadEnv["USAGE_TIMEZONE"] != "Asia/Taipei" {
+		t.Fatalf("thread builtin env missing timezones: %+v", threadEnv)
 	}
 	if threadEnv["BOT_TOOLS_TARGET_STATE_PATH"] != "" {
 		t.Fatalf("thread agent should use fixed target without dynamic state path: %+v", threadEnv)

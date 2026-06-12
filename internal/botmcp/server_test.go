@@ -3,6 +3,7 @@ package botmcp
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/nczz/kiro-discord-bot/internal/channelmeta"
@@ -86,6 +87,24 @@ func TestDefaultSafeToolNamesExcludeDestructiveTools(t *testing.T) {
 	}
 	if !seen[ToolSendMessage] || !seen[ToolSendFile] {
 		t.Fatalf("safe egress tools missing from default safe tools: %+v", tools)
+	}
+}
+
+func TestCreateCronToolDocumentsBotTimezone(t *testing.T) {
+	t.Setenv("CRON_TIMEZONE", "Asia/Taipei")
+
+	tool := writeTool(ToolCreateCron, createCronToolDescription(cronTimezone()), false)
+
+	if !strings.Contains(tool.Description, "Asia/Taipei") || !strings.Contains(tool.Description, "Do not convert user-local times to UTC") {
+		t.Fatalf("tool description does not include cron timezone: %q", tool.Description)
+	}
+	schedule, ok := tool.InputSchema.Properties["schedule"].(map[string]any)
+	if !ok {
+		t.Fatalf("schedule schema missing: %+v", tool.InputSchema.Properties["schedule"])
+	}
+	desc, _ := schedule["description"].(string)
+	if !strings.Contains(desc, "Asia/Taipei") || !strings.Contains(desc, "Do not convert to UTC") {
+		t.Fatalf("schedule description should pin bot timezone and forbid UTC conversion: %q", desc)
 	}
 }
 
