@@ -13,6 +13,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/nczz/kiro-discord-bot/internal/botegress"
+	"github.com/nczz/kiro-discord-bot/internal/channelmeta"
 	"github.com/robfig/cron/v3"
 )
 
@@ -21,11 +22,34 @@ func Run() error {
 	return server.ServeStdio(NewServer(), server.WithErrorLogger(log.New(os.Stderr, "[mcp-bot] ", log.LstdFlags)))
 }
 
+const (
+	ToolDataSummary     = "bot_data_summary"
+	ToolListChannelData = "bot_list_channel_data"
+	ToolSendMessage     = "bot_send_message"
+	ToolSendFile        = "bot_send_file"
+	ToolCreateCron      = "bot_create_cron"
+	ToolListCron        = "bot_list_cron"
+	ToolDeleteCron      = "bot_delete_cron"
+)
+
+// DefaultSafeToolNames returns the bot-tools allowlist enabled during first channel setup.
+// New tools must opt into this list deliberately; being non-destructive is not enough.
+func DefaultSafeToolNames() []string {
+	return []string{
+		ToolDataSummary,
+		ToolListChannelData,
+		ToolListCron,
+		ToolSendMessage,
+		ToolSendFile,
+		ToolCreateCron,
+	}
+}
+
 // NewServer builds the built-in bot tools MCP server.
 func NewServer() *server.MCPServer {
 	s := server.NewMCPServer("bot-tools", "1.0.0", server.WithToolCapabilities(false))
 	s.AddTool(
-		readOnlyTool("bot_data_summary", "Summarize the bot data directory without returning message content"),
+		readOnlyTool(ToolDataSummary, "Summarize the bot data directory without returning message content"),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			summary, err := dataSummary(dataDir())
 			if err != nil {
@@ -36,7 +60,7 @@ func NewServer() *server.MCPServer {
 		},
 	)
 	s.AddTool(
-		readOnlyTool("bot_list_channel_data", "List channel data directories and metadata file presence without returning message content"),
+		readOnlyTool(ToolListChannelData, "List channel data directories and metadata file presence without returning message content"),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			rows, err := listChannelData(dataDir())
 			if err != nil {
@@ -47,7 +71,7 @@ func NewServer() *server.MCPServer {
 		},
 	)
 	s.AddTool(
-		writeTool("bot_send_message", "Send a Discord message through the bot-controlled safe egress queue. The main bot redacts secrets before delivery.", false),
+		writeTool(ToolSendMessage, "Send a Discord message through the bot-controlled safe egress queue. The main bot redacts secrets before delivery.", false),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			channelID, _ := req.RequireString("channel_id")
 			if err := validateBoundChannel(channelID); err != nil {
@@ -56,7 +80,7 @@ func NewServer() *server.MCPServer {
 			content, _ := req.RequireString("content")
 			id, err := botegress.WritePending(dataDir(), botegress.Action{
 				Action:    botegress.ActionSendMessage,
-				ChannelID: channelID,
+				ChannelID: deliveryChannelID(channelID),
 				Content:   content,
 			})
 			if err != nil {
@@ -66,7 +90,7 @@ func NewServer() *server.MCPServer {
 		},
 	)
 	s.AddTool(
-		writeTool("bot_send_file", "Send a local text file through the bot-controlled safe egress queue. The main bot uploads only a redacted sanitized copy.", false),
+		writeTool(ToolSendFile, "Send a local text file through the bot-controlled safe egress queue. The main bot uploads only a redacted sanitized copy.", false),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			channelID, _ := req.RequireString("channel_id")
 			if err := validateBoundChannel(channelID); err != nil {
@@ -76,7 +100,7 @@ func NewServer() *server.MCPServer {
 			content, _ := req.RequireString("content")
 			id, err := botegress.WritePending(dataDir(), botegress.Action{
 				Action:    botegress.ActionSendFile,
-				ChannelID: channelID,
+				ChannelID: deliveryChannelID(channelID),
 				FilePath:  filePath,
 				Content:   content,
 			})
@@ -87,7 +111,7 @@ func NewServer() *server.MCPServer {
 		},
 	)
 	s.AddTool(
-		writeTool("bot_create_cron", "Create a scheduled recurring task in this Discord channel. Use when the user wants something to run periodically (daily, weekly, etc.). The schedule must be a 5-field cron expression.", false),
+		writeTool(ToolCreateCron, "Create a scheduled recurring task in this Discord channel. Use when the user wants something to run periodically (daily, weekly, etc.). The schedule must be a 5-field cron expression.", false),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			name, _ := req.RequireString("name")
 			schedule, _ := req.RequireString("schedule")
@@ -116,7 +140,7 @@ func NewServer() *server.MCPServer {
 		},
 	)
 	s.AddTool(
-		mcp.NewTool("bot_list_cron",
+		mcp.NewTool(ToolListCron,
 			mcp.WithDescription("List scheduled cron jobs for a channel"),
 			mcp.WithString("channel_id", mcp.Required(), mcp.Description("Discord channel ID from context")),
 			mcp.WithReadOnlyHintAnnotation(true),
@@ -135,7 +159,7 @@ func NewServer() *server.MCPServer {
 		},
 	)
 	s.AddTool(
-		writeTool("bot_delete_cron", "Delete a scheduled cron job by ID", true),
+		writeTool(ToolDeleteCron, "Delete a scheduled cron job by ID", true),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			jobID, _ := req.RequireString("job_id")
 			channelID, _ := req.RequireString("channel_id")
@@ -165,14 +189,14 @@ func writeTool(name, description string, destructive bool) mcp.Tool {
 		mcp.WithOpenWorldHintAnnotation(false),
 	)
 	switch name {
-	case "bot_send_message":
+	case ToolSendMessage:
 		for _, opt := range []mcp.ToolOption{
 			mcp.WithString("channel_id", mcp.Required(), mcp.Description("Discord channel ID from context")),
 			mcp.WithString("content", mcp.Required(), mcp.Description("Message content to deliver after bot-side redaction")),
 		} {
 			opt(&t)
 		}
-	case "bot_send_file":
+	case ToolSendFile:
 		for _, opt := range []mcp.ToolOption{
 			mcp.WithString("channel_id", mcp.Required(), mcp.Description("Discord channel ID from context")),
 			mcp.WithString("file_path", mcp.Required(), mcp.Description("Local text file path to sanitize and upload")),
@@ -180,7 +204,7 @@ func writeTool(name, description string, destructive bool) mcp.Tool {
 		} {
 			opt(&t)
 		}
-	case "bot_create_cron":
+	case ToolCreateCron:
 		for _, opt := range []mcp.ToolOption{
 			mcp.WithString("name", mcp.Required(), mcp.Description("Short name for the scheduled task")),
 			mcp.WithString("schedule", mcp.Required(), mcp.Description("5-field cron expression (e.g. '0 9 * * *' for daily at 9am)")),
@@ -191,7 +215,7 @@ func writeTool(name, description string, destructive bool) mcp.Tool {
 		} {
 			opt(&t)
 		}
-	case "bot_delete_cron":
+	case ToolDeleteCron:
 		for _, opt := range []mcp.ToolOption{
 			mcp.WithString("job_id", mcp.Required(), mcp.Description("The cron job ID to delete")),
 			mcp.WithString("channel_id", mcp.Required(), mcp.Description("Discord channel ID from context")),
@@ -213,19 +237,26 @@ func readOnlyTool(name, description string) mcp.Tool {
 }
 
 type summary struct {
-	DataDir        string `json:"data_dir"`
-	SessionsFile   bool   `json:"sessions_file"`
-	ChannelDirs    int    `json:"channel_dirs"`
-	CronStore      bool   `json:"cron_store"`
-	AuditDB        bool   `json:"audit_db"`
-	MCPPolicyDB    bool   `json:"mcp_policy_db"`
-	KiroRuntimeDir bool   `json:"kiro_runtime_dir"`
+	DataDir                string `json:"data_dir"`
+	SessionsFile           bool   `json:"sessions_file"`
+	ChannelDirs            int    `json:"channel_dirs"`
+	CronStore              bool   `json:"cron_store"`
+	AuditDB                bool   `json:"audit_db"`
+	MCPPolicyDB            bool   `json:"mcp_policy_db"`
+	KiroAgentRuntimeDir    bool   `json:"kiro_agent_runtime_dir"`
+	LegacyKiroRuntimeDir   bool   `json:"legacy_kiro_runtime_dir"`
+	RuntimeMCPConfig       bool   `json:"runtime_mcp_config"`
+	RuntimeCLISettingsFile bool   `json:"runtime_cli_settings_file"`
 }
 
 type channelData struct {
-	ChannelID  string `json:"channel_id"`
-	ChatLog    bool   `json:"chat_log"`
-	MemoryFile bool   `json:"memory_file"`
+	ChannelID       string `json:"channel_id"`
+	Name            string `json:"name,omitempty"`
+	Type            string `json:"type,omitempty"`
+	ParentChannelID string `json:"parent_channel_id,omitempty"`
+	ParentName      string `json:"parent_name,omitempty"`
+	ChatLog         bool   `json:"chat_log"`
+	MemoryFile      bool   `json:"memory_file"`
 }
 
 func dataDir() string {
@@ -237,11 +268,41 @@ func dataDir() string {
 
 func validateBoundChannel(channelID string) error {
 	bound := strings.TrimSpace(os.Getenv("BOT_TOOLS_CHANNEL_ID"))
+	target := strings.TrimSpace(os.Getenv("BOT_TOOLS_TARGET_CHANNEL_ID"))
+	currentTarget := currentTargetStateChannelID()
 	channelID = strings.TrimSpace(channelID)
-	if bound == "" || channelID == bound {
+	if bound == "" || channelID == bound || (target != "" && channelID == target) || (currentTarget != "" && channelID == currentTarget) {
 		return nil
 	}
 	return fmt.Errorf("channel_id %s is not allowed for this bot-tools session", channelID)
+}
+
+func deliveryChannelID(requested string) string {
+	if target := currentTargetStateChannelID(); target != "" {
+		return target
+	}
+	if target := strings.TrimSpace(os.Getenv("BOT_TOOLS_TARGET_CHANNEL_ID")); target != "" {
+		return target
+	}
+	return strings.TrimSpace(requested)
+}
+
+func currentTargetStateChannelID() string {
+	path := strings.TrimSpace(os.Getenv("BOT_TOOLS_TARGET_STATE_PATH"))
+	if path == "" {
+		return ""
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	var state struct {
+		TargetChannelID string `json:"target_channel_id"`
+	}
+	if err := json.Unmarshal(raw, &state); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(state.TargetChannelID)
 }
 
 func dataSummary(root string) (summary, error) {
@@ -250,14 +311,18 @@ func dataSummary(root string) (summary, error) {
 	if err != nil {
 		return summary{}, err
 	}
+	agentRuntimeDir := filepath.Join(root, "kiro-agent-runtime")
 	return summary{
-		DataDir:        root,
-		SessionsFile:   fileExists(filepath.Join(root, "sessions.json")),
-		ChannelDirs:    len(rows),
-		CronStore:      fileExists(filepath.Join(root, "cron", "cron.json")),
-		AuditDB:        fileExists(filepath.Join(root, "audit", "discord.sqlite")),
-		MCPPolicyDB:    fileExists(filepath.Join(root, "mcp", "policy.sqlite")),
-		KiroRuntimeDir: dirExists(filepath.Join(root, "kiro-runtime")),
+		DataDir:                root,
+		SessionsFile:           fileExists(filepath.Join(root, "sessions.json")),
+		ChannelDirs:            len(rows),
+		CronStore:              fileExists(filepath.Join(root, "cron", "cron.json")),
+		AuditDB:                fileExists(filepath.Join(root, "audit", "discord.sqlite")),
+		MCPPolicyDB:            fileExists(filepath.Join(root, "mcp", "policy.sqlite")),
+		KiroAgentRuntimeDir:    dirExists(agentRuntimeDir),
+		LegacyKiroRuntimeDir:   dirExists(filepath.Join(root, "kiro-runtime")),
+		RuntimeMCPConfig:       fileExists(filepath.Join(agentRuntimeDir, "settings", "mcp.json")),
+		RuntimeCLISettingsFile: fileExists(filepath.Join(agentRuntimeDir, "settings", "cli.json")),
 	}, nil
 }
 
@@ -269,16 +334,27 @@ func listChannelData(root string) ([]channelData, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read data dir: %w", err)
 	}
+	metadata, err := channelmeta.Read(root)
+	if err != nil {
+		return nil, err
+	}
 	var out []channelData
 	for _, entry := range entries {
 		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), "ch-") {
 			continue
 		}
 		dir := filepath.Join(root, entry.Name())
+		channelID := strings.TrimPrefix(entry.Name(), "ch-")
+		meta := metadata[channelID]
+		parent := metadata[meta.ParentChannelID]
 		out = append(out, channelData{
-			ChannelID:  strings.TrimPrefix(entry.Name(), "ch-"),
-			ChatLog:    fileExists(filepath.Join(dir, "chat.jsonl")),
-			MemoryFile: fileExists(filepath.Join(dir, "memory.json")),
+			ChannelID:       channelID,
+			Name:            meta.Name,
+			Type:            meta.Type,
+			ParentChannelID: meta.ParentChannelID,
+			ParentName:      parent.Name,
+			ChatLog:         fileExists(filepath.Join(dir, "chat.jsonl")),
+			MemoryFile:      fileExists(filepath.Join(dir, "memory.json")),
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ChannelID < out[j].ChannelID })

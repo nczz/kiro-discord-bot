@@ -27,6 +27,7 @@ type Bot struct {
 	auditRecorder       *audit.Recorder
 	cronTimezone        string
 	version             string
+	startedAt           time.Time
 	downloadClient      *http.Client
 	attachmentMaxBytes  int64
 	seen                *seenMessages
@@ -104,6 +105,7 @@ func NewFromConfig(cfg BotConfig) (*Bot, error) {
 
 	manualPeers := parseBotPeers(cfg.BotPeers)
 	b := &Bot{discord: ds, manager: manager, guildID: cfg.GuildID, dataDir: cfg.DataDir, cronTimezone: cfg.CronTimezone, version: cfg.BotVersion,
+		startedAt:           time.Now(),
 		downloadClient:      &http.Client{Timeout: time.Duration(cfg.DownloadTimeoutSec) * time.Second},
 		attachmentMaxBytes:  cfg.AttachmentMaxBytes,
 		seen:                newSeenMessages(),
@@ -132,7 +134,9 @@ func NewFromConfig(cfg BotConfig) (*Bot, error) {
 	n := botNotifier{bot: b}
 	hb.Register(heartbeat.NewHealthTask(&healthAdapter{n}))
 	hb.Register(heartbeat.NewCleanupTask(cfg.DataDir, cfg.AttRetainDays))
-	hb.Register(newSafeEgressTask(b))
+	safeEgress := newSafeEgressTask(b)
+	manager.SetSafeEgressDrain(safeEgress.DrainChannel)
+	hb.Register(safeEgress)
 	cronTask := heartbeat.NewCronTask(cronStore, &cronAdapter{n}, cfg.DataDir, cfg.CronTimezone, cfg.GuildID)
 	cronTask.RecalcAll()
 	hb.Register(cronTask)

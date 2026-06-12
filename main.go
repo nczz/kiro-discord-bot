@@ -14,6 +14,7 @@ import (
 	"github.com/nczz/kiro-discord-bot/bot"
 	"github.com/nczz/kiro-discord-bot/channel"
 	"github.com/nczz/kiro-discord-bot/internal/botmcp"
+	"github.com/nczz/kiro-discord-bot/internal/kirosettings"
 	"github.com/nczz/kiro-discord-bot/locale"
 	"github.com/nczz/kiro-discord-bot/mcpproxy"
 )
@@ -133,10 +134,15 @@ func preflightAgentOptions(cfg *Config) acp.AgentOptions {
 	if strings.TrimSpace(cfg.DataDir) == "" {
 		return opts
 	}
-	runtimeHome := filepath.Join(cfg.DataDir, "kiro-runtime")
+	runtimeHome := filepath.Join(cfg.DataDir, "kiro-agent-runtime")
 	if err := os.MkdirAll(runtimeHome, 0755); err != nil {
 		log.Printf("[preflight] create runtime KIRO_HOME: %v", err)
 	}
 	opts.Env = append(opts.Env, "KIRO_HOME="+runtimeHome)
+	if mcpConfig, err := kirosettings.EnsureRuntimeSettings(runtimeHome); err != nil {
+		log.Printf("[preflight] prepare runtime Kiro settings: %v", err)
+	} else {
+		opts.Env = append(opts.Env, "KIRO_MCP_CONFIG="+mcpConfig)
+	}
 	return opts
 }

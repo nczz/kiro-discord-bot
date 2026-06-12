@@ -91,12 +91,15 @@ type Worker struct {
 	onActivity      func()      // called during work to signal liveness (prevents idle cleanup)
 	onIdle          func() bool // called when a job finishes; true means the worker was stopped
 	onThreadCreated func(threadID string, mentionOnly bool)
+	onBeforeFinal   func(targetChannelID string)
 
 	memoryPrefix func() string // returns memory+flash prefix to inject into prompts
 
 	isSilent func() bool // returns true if silent mode is on (compact tool output)
 
 	historyPrefix string // prepended to first job's prompt, then cleared
+
+	botToolsTargetStatePath string
 }
 
 type workerAgent interface {
@@ -140,6 +143,12 @@ func (w *Worker) OnIdleFunc(fn func() bool) { w.onIdle = fn }
 func (w *Worker) OnThreadCreatedFunc(fn func(threadID string, mentionOnly bool)) {
 	w.onThreadCreated = fn
 }
+
+// OnBeforeFinalResponseFunc sets a callback invoked before the worker sends its final response.
+func (w *Worker) OnBeforeFinalResponseFunc(fn func(targetChannelID string)) { w.onBeforeFinal = fn }
+
+// SetBotToolsTargetStatePath sets the dynamic target state used by bot-tools safe egress.
+func (w *Worker) SetBotToolsTargetStatePath(path string) { w.botToolsTargetStatePath = path }
 
 // OnMemoryPrefixFunc sets a callback that returns memory rules to prepend to prompts.
 func (w *Worker) OnMemoryPrefixFunc(fn func() string) { w.memoryPrefix = fn }
@@ -362,6 +371,7 @@ func (w *Worker) execute(job *Job) {
 	var finishOnce sync.Once
 	finishJob := func() {
 		finishOnce.Do(func() {
+			clearBotToolsTargetState(w.botToolsTargetStatePath)
 			w.cancelMu.Lock()
 			w.cancelFn = nil
 			w.currentThreadID = ""
@@ -420,6 +430,9 @@ func (w *Worker) execute(job *Job) {
 	w.cancelMu.Lock()
 	w.currentThreadID = threadID
 	w.cancelMu.Unlock()
+	if err := writeBotToolsTargetState(w.botToolsTargetStatePath, threadID); err != nil {
+		log.Printf("[worker %s] write bot-tools target state: %v", w.channelID, err)
+	}
 
 	// Post initial status in thread
 	if job.Transcript != "" {
@@ -536,6 +549,9 @@ func (w *Worker) execute(job *Job) {
 				log.Printf("[worker %s] job error | user=%s msg=%s elapsed=%s ctxErr=%v err=%v",
 					w.channelID, job.Username, job.MessageID, time.Since(startTime).Round(time.Millisecond), ctxErr, askErr)
 				errorContent := "❌ " + errMsg
+				if w.onBeforeFinal != nil {
+					w.onBeforeFinal(threadID)
+				}
 				SendLongThread(ds, threadID, AppendMetricsFooter(errorContent, w.agent.TurnMetrics()))
 				swapReaction(ds, job.ChannelID, job.MessageID, "🔄", emoji)
 				swapReaction(ds, job.ChannelID, job.MessageID, "⚙️", emoji)
@@ -560,6 +576,9 @@ func (w *Worker) execute(job *Job) {
 			swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "✅")
 			swapReaction(ds, job.ChannelID, job.MessageID, "⚙️", "✅")
 			// Mark the origin done before final text so tagged peer bots see a completed source.
+			if w.onBeforeFinal != nil {
+				w.onBeforeFinal(threadID)
+			}
 			SendLongThread(ds, threadID, AppendMetricsFooter(response, w.agent.TurnMetrics()))
 			w.auditResponseEvent(job, threadID, "success", response)
 
@@ -763,6 +782,7 @@ func (w *Worker) executeInline(job *Job) {
 		return true
 	}
 	finishJob := func(finalEmoji string) {
+		clearBotToolsTargetState(w.botToolsTargetStatePath)
 		pulse.Finish(finalEmoji)
 		w.cancelMu.Lock()
 		w.cancelFn = nil
@@ -785,6 +805,9 @@ func (w *Worker) executeInline(job *Job) {
 			Content:     job.Prompt,
 			Attachments: job.Attachments,
 		})
+	}
+	if err := writeBotToolsTargetState(w.botToolsTargetStatePath, job.ChannelID); err != nil {
+		log.Printf("[worker %s] write inline bot-tools target state: %v", w.channelID, err)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(w.askTimeoutSec)*time.Second)
@@ -845,6 +868,9 @@ func (w *Worker) executeInline(job *Job) {
 				log.Printf("[worker %s] inline job error | user=%s msg=%s elapsed=%s ctxErr=%v err=%v",
 					w.channelID, job.Username, job.MessageID, time.Since(startTime).Round(time.Millisecond), ctxErr, askErr)
 				errorContent := "❌ " + errMsg
+				if w.onBeforeFinal != nil {
+					w.onBeforeFinal(job.ChannelID)
+				}
 				SendLongReply(ds, job.ChannelID, job.MessageID, AppendMetricsFooter(errorContent, w.agent.TurnMetrics()))
 				if w.logger != nil {
 					w.logger.Log(w.channelID, ChatEntry{Role: "assistant", Content: errorContent, Model: w.model})
@@ -865,6 +891,9 @@ func (w *Worker) executeInline(job *Job) {
 				response = L.Get("worker.empty_response")
 			}
 			responseWithMetrics := AppendMetricsFooter(response, w.agent.TurnMetrics())
+			if w.onBeforeFinal != nil {
+				w.onBeforeFinal(job.ChannelID)
+			}
 			SendLongReply(ds, job.ChannelID, job.MessageID, responseWithMetrics)
 			w.auditResponseEvent(job, "", "success", response)
 			if w.logger != nil {
@@ -895,6 +924,9 @@ func (w *Worker) executeInline(job *Job) {
 			return
 		}
 		errMsg := L.Getf("error.agent_read", err)
+		if w.onBeforeFinal != nil {
+			w.onBeforeFinal(job.ChannelID)
+		}
 		SendLongReply(ds, job.ChannelID, job.MessageID, errMsg)
 		if w.logger != nil {
 			w.logger.Log(w.channelID, ChatEntry{Role: "assistant", Content: errMsg, Model: w.model})
@@ -1086,6 +1118,7 @@ func isThreadAlreadyCreated(err error) bool {
 func (w *Worker) executeFallback(job *Job) {
 	ds := job.Session
 	defer func() {
+		clearBotToolsTargetState(w.botToolsTargetStatePath)
 		w.cancelMu.Lock()
 		w.cancelFn = nil
 		w.currentThreadID = ""
@@ -1097,6 +1130,9 @@ func (w *Worker) executeFallback(job *Job) {
 		w.cancelMu.Unlock()
 		w.signalIdle()
 	}()
+	if err := writeBotToolsTargetState(w.botToolsTargetStatePath, job.ChannelID); err != nil {
+		log.Printf("[worker %s] write fallback bot-tools target state: %v", w.channelID, err)
+	}
 
 	replyMsg, err := ds.ChannelMessageSendReply(job.ChannelID, "🔄 "+L.Get("worker.processing"), &discordgo.MessageReference{
 		MessageID: job.MessageID, ChannelID: job.ChannelID,
@@ -1127,6 +1163,9 @@ func (w *Worker) executeFallback(job *Job) {
 			errMsg += "\n```\n" + stderr + "\n```"
 		}
 		logContent = "❌ " + errMsg
+		if w.onBeforeFinal != nil {
+			w.onBeforeFinal(job.ChannelID)
+		}
 		sendLong(ds, job.ChannelID, replyMsg.ID, AppendMetricsFooter(logContent, w.agent.TurnMetrics()))
 		swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "❌")
 		w.auditResponseEvent(job, "", "error", logContent)
@@ -1138,6 +1177,9 @@ func (w *Worker) executeFallback(job *Job) {
 		logContent = response
 		swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "✅")
 		responseWithMetrics := AppendMetricsFooter(response, w.agent.TurnMetrics())
+		if w.onBeforeFinal != nil {
+			w.onBeforeFinal(job.ChannelID)
+		}
 		sendLong(ds, job.ChannelID, replyMsg.ID, responseWithMetrics)
 		w.auditResponseEvent(job, "", "success", response)
 		w.recordUsage(job, "", "success")

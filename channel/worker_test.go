@@ -295,6 +295,10 @@ func (rt *recordingRoundTripper) RoundTrip(req *http.Request) (*http.Response, e
 
 	status := http.StatusNoContent
 	respBody := ""
+	if req.Method == http.MethodPost && strings.Contains(req.URL.Path, "/threads") {
+		status = http.StatusOK
+		respBody = `{"id":"thread-1","channel_id":"thread-1","parent_id":"ch1","name":"thread","type":11}`
+	}
 	if req.Method == http.MethodPost && strings.HasSuffix(req.URL.Path, "/messages") {
 		status = http.StatusOK
 		respBody = `{"id":"reply-1","channel_id":"ch1","content":"ok"}`
@@ -717,6 +721,99 @@ func TestWorkerThreadDeliveryAppendsMetricsToFinalResponse(t *testing.T) {
 	}
 	if finalPosts != 1 {
 		t.Fatalf("thread final posts = %d, want 1; requests=%v bodies=%v", finalPosts, reqs, bodies)
+	}
+}
+
+func TestWorkerThreadDrainsBotToolsBeforeFinalResponse(t *testing.T) {
+	L.Load("en")
+	rt := &recordingRoundTripper{}
+	ds := testDiscordSession(rt)
+	agent := &fakeWorkerAgent{}
+	w := newWorker("ch1", agent, 1, 30, 1, 1440, nil, "")
+	statePath := filepath.Join(t.TempDir(), "target.json")
+	w.SetBotToolsTargetStatePath(statePath)
+
+	var drainedTarget string
+	w.OnBeforeFinalResponseFunc(func(targetChannelID string) {
+		drainedTarget = targetChannelID
+		raw, err := os.ReadFile(statePath)
+		if err != nil {
+			t.Fatalf("target state missing before final response: %v", err)
+		}
+		if !strings.Contains(string(raw), `"target_channel_id":"thread-1"`) {
+			t.Fatalf("target state = %s, want thread-1", raw)
+		}
+		_, bodies := rt.Snapshot()
+		for _, body := range bodies {
+			if strings.Contains(body, "final response") {
+				t.Fatalf("final response was sent before safe egress drain: %q", body)
+			}
+		}
+	})
+
+	w.execute(&Job{
+		ChannelID: "ch1",
+		ThreadID:  "thread-1",
+		MessageID: "m1",
+		Prompt:    "hello",
+		Session:   ds,
+	})
+	cb := agent.Callbacks()
+	if cb.OnComplete == nil {
+		t.Fatal("expected thread callbacks to be registered")
+	}
+	cb.OnComplete("final response", nil)
+
+	if drainedTarget != "thread-1" {
+		t.Fatalf("drained target = %q, want thread-1", drainedTarget)
+	}
+	if _, err := os.Stat(statePath); !os.IsNotExist(err) {
+		t.Fatalf("target state should be cleared after final response, stat err=%v", err)
+	}
+}
+
+func TestWorkerAutoCreatedThreadUpdatesBotToolsTargetState(t *testing.T) {
+	L.Load("en")
+	rt := &recordingRoundTripper{}
+	ds := testDiscordSession(rt)
+	agent := &fakeWorkerAgent{}
+	w := newWorker("ch1", agent, 1, 30, 1, 1440, nil, "")
+	statePath := filepath.Join(t.TempDir(), "target.json")
+	w.SetBotToolsTargetStatePath(statePath)
+
+	var createdThread string
+	w.OnThreadCreatedFunc(func(threadID string, mentionOnly bool) {
+		createdThread = threadID
+	})
+	var drainedTarget string
+	w.OnBeforeFinalResponseFunc(func(targetChannelID string) {
+		drainedTarget = targetChannelID
+		raw, err := os.ReadFile(statePath)
+		if err != nil {
+			t.Fatalf("target state missing before final response: %v", err)
+		}
+		if !strings.Contains(string(raw), `"target_channel_id":"thread-1"`) {
+			t.Fatalf("target state = %s, want thread-1", raw)
+		}
+	})
+
+	w.execute(&Job{
+		ChannelID: "ch1",
+		MessageID: "m1",
+		Prompt:    "hello",
+		Session:   ds,
+	})
+	cb := agent.Callbacks()
+	if cb.OnComplete == nil {
+		t.Fatal("expected thread callbacks to be registered")
+	}
+	cb.OnComplete("final response", nil)
+
+	if createdThread != "thread-1" {
+		t.Fatalf("created thread = %q, want thread-1", createdThread)
+	}
+	if drainedTarget != "thread-1" {
+		t.Fatalf("drained target = %q, want thread-1", drainedTarget)
 	}
 }
 

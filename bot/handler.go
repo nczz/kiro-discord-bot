@@ -15,6 +15,7 @@ import (
 	"github.com/bwmarrin/discordgo"
 	"github.com/nczz/kiro-discord-bot/channel"
 	"github.com/nczz/kiro-discord-bot/internal/secrets"
+	"github.com/nczz/kiro-discord-bot/internal/textutil"
 	L "github.com/nczz/kiro-discord-bot/locale"
 	"github.com/nczz/kiro-discord-bot/stt"
 )
@@ -252,8 +253,8 @@ func registerThreadParent(threadID, parentChannelID string) {
 	threadParentMu.Unlock()
 }
 
-func (b *Bot) statusWithSTT(channelID string) string {
-	s := b.manager.Status(channelID)
+func (b *Bot) statusWithRuntime(s string) string {
+	s += "\n" + L.Getf("status.bot_uptime", textutil.FormatUptime(time.Since(b.startedAt)))
 	if b.sttClient != nil {
 		s += "\nSTT: `" + b.sttClient.Model() + "`"
 	}
@@ -456,6 +457,7 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 	if !b.isMyGuild(m.GuildID) {
 		return
 	}
+	b.recordChannelMetadata(ds, m.ChannelID, m.GuildID)
 	selfID := ds.State.User.ID
 	if shouldIgnoreMessage(m, selfID) {
 		return
@@ -1082,6 +1084,7 @@ func (b *Bot) handleInteraction(ds *discordgo.Session, i *discordgo.InteractionC
 	if !b.isMyGuild(i.GuildID) {
 		return
 	}
+	b.recordChannelMetadata(ds, i.ChannelID, i.GuildID)
 	switch i.Type {
 	case discordgo.InteractionApplicationCommand:
 		b.handleSlashCommand(ds, i)

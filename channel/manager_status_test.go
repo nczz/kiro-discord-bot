@@ -44,6 +44,39 @@ func TestThreadStatusUsesThreadSession(t *testing.T) {
 	if !strings.Contains(got, "inactive") || !strings.Contains(got, "send a message to restart") {
 		t.Fatalf("ThreadStatus() should explain inactive stored thread session, got:\n%s", got)
 	}
+	if !strings.Contains(got, "Agent uptime: `n/a`") {
+		t.Fatalf("ThreadStatus() should include inactive agent uptime, got:\n%s", got)
+	}
+}
+
+func TestChannelStatusShowsInactiveStoredSession(t *testing.T) {
+	L.Load("en")
+	store, err := NewSessionStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new session store: %v", err)
+	}
+	m := NewManager(ManagerConfig{Store: store, BotVersion: "test-bot"})
+
+	if err := m.setChannelSession("channel-1", &Session{
+		AgentName: "channel-agent",
+		SessionID: "channel-session",
+		Model:     "channel-model",
+	}); err != nil {
+		t.Fatalf("set channel session: %v", err)
+	}
+
+	got := m.Status("channel-1")
+	for _, want := range []string{"channel-agent", "channel-", "channel-model", "inactive", "send a message to restart"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("Status() missing %q, got:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "unknown") {
+		t.Fatalf("Status() should not show unknown for stored inactive sessions, got:\n%s", got)
+	}
+	if !strings.Contains(got, "Agent uptime: `n/a`") {
+		t.Fatalf("Status() should include inactive agent uptime, got:\n%s", got)
+	}
 }
 
 func TestThreadStatusWithoutThreadSession(t *testing.T) {

@@ -17,6 +17,8 @@ import (
 	"github.com/bwmarrin/discordgo"
 	"github.com/nczz/kiro-discord-bot/acp"
 	"github.com/nczz/kiro-discord-bot/audit"
+	"github.com/nczz/kiro-discord-bot/internal/botmcp"
+	"github.com/nczz/kiro-discord-bot/internal/kirosettings"
 	"github.com/nczz/kiro-discord-bot/internal/textutil"
 	L "github.com/nczz/kiro-discord-bot/locale"
 )
@@ -60,12 +62,13 @@ type Manager struct {
 	trustAllTools      bool   // --trust-all-tools
 	trustTools         string // --trust-tools <names>
 	mcpPolicies        *MCPPolicyStore
-	kiroRuntimeHome    string
+	agentRuntimeHome   string
 	mcpProxyCommand    string
 
 	// Channel agent idle tracking
 	channelLastActivity map[string]time.Time
 	channelAgentIdleSec int
+	safeEgressDrain     func(targetChannelID string)
 }
 
 // threadAgentEntry tracks a per-thread agent and its metadata.
@@ -183,14 +186,14 @@ func NewManager(cfg ManagerConfig) *Manager {
 		agentProfile:        cfg.AgentProfile,
 		trustAllTools:       cfg.TrustAllTools,
 		trustTools:          cfg.TrustTools,
-		kiroRuntimeHome:     filepath.Join(cfg.DataDir, "kiro-runtime"),
+		agentRuntimeHome:    filepath.Join(cfg.DataDir, "kiro-agent-runtime"),
 	}
 	if exe, err := os.Executable(); err == nil {
 		m.mcpProxyCommand = exe
 	}
 	if cfg.DataDir != "" {
-		if err := os.MkdirAll(m.kiroRuntimeHome, 0755); err != nil {
-			log.Printf("[mcp-policy] create runtime home: %v", err)
+		if err := os.MkdirAll(m.agentRuntimeHome, 0755); err != nil {
+			log.Printf("[agent-runtime] create runtime home: %v", err)
 		}
 	}
 	if store, err := OpenMCPPolicyStore(cfg.DataDir); err != nil {
@@ -235,6 +238,13 @@ func (m *Manager) SetBotID(botID string) {
 			log.Printf("[mcp-policy] legacy migration: %v", err)
 		}
 	}
+}
+
+// SetSafeEgressDrain sets a hook used by workers to flush bot-tools egress before final replies.
+func (m *Manager) SetSafeEgressDrain(fn func(targetChannelID string)) {
+	m.mu.Lock()
+	m.safeEgressDrain = fn
+	m.mu.Unlock()
 }
 
 // RegisterBuiltinMCP registers a builtin MCP server in the catalog.
@@ -489,15 +499,28 @@ func (m *Manager) agentOpts() acp.AgentOptions {
 }
 
 func (m *Manager) agentOptsForChannel(channelID string) acp.AgentOptions {
+	return m.agentOptsForTarget(channelID, channelID)
+}
+
+func (m *Manager) agentOptsForTarget(channelID, targetChannelID string) acp.AgentOptions {
 	opts := m.agentOpts()
-	if m.kiroRuntimeHome != "" {
-		opts.Env = append(opts.Env, "KIRO_HOME="+m.kiroRuntimeHome)
+	if m.agentRuntimeHome != "" {
+		opts.Env = append(opts.Env, "KIRO_HOME="+m.agentRuntimeHome)
+		if cfgPath, err := kirosettings.EnsureRuntimeSettings(m.agentRuntimeHome); err != nil {
+			log.Printf("[agent-runtime] prepare isolated Kiro settings: %v", err)
+		} else {
+			opts.Env = append(opts.Env, "KIRO_MCP_CONFIG="+cfgPath)
+		}
 	}
-	opts.MCPServers = m.mcpServersForChannel(channelID)
+	opts.MCPServers = m.mcpServersForTarget(channelID, targetChannelID)
 	return opts
 }
 
 func (m *Manager) mcpServersForChannel(channelID string) []acp.MCPServerConfig {
+	return m.mcpServersForTarget(channelID, channelID)
+}
+
+func (m *Manager) mcpServersForTarget(channelID, targetChannelID string) []acp.MCPServerConfig {
 	if m.mcpPolicies == nil || strings.TrimSpace(channelID) == "" {
 		return nil
 	}
@@ -520,7 +543,7 @@ func (m *Manager) mcpServersForChannel(channelID string) []acp.MCPServerConfig {
 			log.Printf("[mcp-policy] server %s enabled for channel=%s but not found in catalog", policy.ServerName, channelID)
 			continue
 		}
-		servers = append(servers, policy.ToACPServer(entry, m.mcpProxyCommand, m.guildID, channelID))
+		servers = append(servers, policy.ToACPServer(entry, m.mcpProxyCommand, m.guildID, channelID, targetChannelID))
 	}
 	return servers
 }
@@ -660,22 +683,27 @@ func (m *Manager) Status(channelID string) string {
 
 	state := "unknown"
 	kiroVersion := ""
+	agentUptime := "n/a"
 	ctxUsage := 0.0
 	qLen := 0
 	if agent, ok := m.agents[channelID]; ok {
 		state = agent.State()
 		kiroVersion = agent.AgentVersion()
 		ctxUsage = agent.ContextUsage()
-		if !agent.IsAlive() {
+		if agent.IsAlive() {
+			agentUptime = textutil.FormatUptime(agent.Uptime())
+		} else {
 			state = "dead"
 		}
+	} else {
+		state = L.Get("status.inactive")
 	}
 
 	if w, ok := m.workers[channelID]; ok {
 		qLen = w.QueueLen()
 	}
 
-	return m.formatStatus(sess, state, qLen, kiroVersion, ctxUsage)
+	return m.formatStatus(sess, state, qLen, kiroVersion, agentUptime, ctxUsage)
 }
 
 // ThreadStatus returns the status string for a thread agent.
@@ -690,13 +718,16 @@ func (m *Manager) ThreadStatus(threadID string) string {
 
 	state := "unknown"
 	kiroVersion := ""
+	agentUptime := "n/a"
 	ctxUsage := 0.0
 	qLen := 0
 	if entry, ok := m.threadAgents[threadID]; ok {
 		state = entry.agent.State()
 		kiroVersion = entry.agent.AgentVersion()
 		ctxUsage = entry.agent.ContextUsage()
-		if !entry.agent.IsAlive() {
+		if entry.agent.IsAlive() {
+			agentUptime = textutil.FormatUptime(entry.agent.Uptime())
+		} else {
 			state = "dead"
 		}
 		qLen = entry.worker.QueueLen()
@@ -704,10 +735,10 @@ func (m *Manager) ThreadStatus(threadID string) string {
 		state = L.Get("status.inactive")
 	}
 
-	return m.formatStatus(sess, state, qLen, kiroVersion, ctxUsage)
+	return m.formatStatus(sess, state, qLen, kiroVersion, agentUptime, ctxUsage)
 }
 
-func (m *Manager) formatStatus(sess *Session, state string, qLen int, kiroVersion string, ctxUsage float64) string {
+func (m *Manager) formatStatus(sess *Session, state string, qLen int, kiroVersion, agentUptime string, ctxUsage float64) string {
 	sid := sess.SessionID
 	if len(sid) > 8 {
 		sid = sid[:8]
@@ -715,7 +746,10 @@ func (m *Manager) formatStatus(sess *Session, state string, qLen int, kiroVersio
 	if kiroVersion == "" {
 		kiroVersion = "n/a"
 	}
-	return L.Getf("status.format", sess.AgentName, state, qLen, sid, modelDisplay(sess.Model), kiroVersion, m.botVersion, ctxUsage)
+	if agentUptime == "" {
+		agentUptime = "n/a"
+	}
+	return L.Getf("status.format", sess.AgentName, state, qLen, sid, modelDisplay(sess.Model), kiroVersion, m.botVersion, agentUptime, ctxUsage)
 }
 
 // MCPCatalogStatus is a backward-compatible alias for the combined MCP checklist.
@@ -978,6 +1012,38 @@ func (m *Manager) SetMCPTool(channelID, userID, serverName, tool string, allowed
 		}
 		return p
 	})
+}
+
+func (m *Manager) EnableDefaultBotTools(channelID, userID string) error {
+	if m.mcpPolicies == nil {
+		return fmt.Errorf("mcp policy store is unavailable")
+	}
+	if err := m.mcpPolicies.RefreshCatalog(context.Background()); err != nil {
+		return fmt.Errorf("refresh mcp catalog: %w", err)
+	}
+	if _, ok := m.mcpPolicies.CatalogEntry("bot-tools"); !ok {
+		return fmt.Errorf("mcp server %q was not found in catalog", "bot-tools")
+	}
+	ctx := context.Background()
+	p, err := m.mcpPolicies.GetPolicy(ctx, m.guildID, channelID, "bot-tools")
+	if err != nil {
+		return err
+	}
+	p.Enabled = true
+	p.Preset = "safe-write"
+	p.ReadOnly = false
+	p.AllowAllTools = false
+	p.AllowDestructive = false
+	p.AllowedTools = botmcp.DefaultSafeToolNames()
+	p.UpdatedBy = userID
+	if err := validateMCPPolicyExposesTools(p); err != nil {
+		return err
+	}
+	if err := m.mcpPolicies.SetPolicy(ctx, p); err != nil {
+		return err
+	}
+	m.recordMCPPolicyEvent(channelID, userID, "policy", "updated", p, map[string]any{"action": "default_bot_tools"})
+	return nil
 }
 
 func (m *Manager) updateMCPPolicy(channelID, userID, serverName string, metadata map[string]any, mutate func(MCPChannelPolicy) MCPChannelPolicy) error {
@@ -1531,6 +1597,8 @@ func (m *Manager) startAgentAndWorker(channelID string) (*Worker, error) {
 	}
 
 	w := NewWorker(channelID, agent, m.queueBufSize, m.askTimeoutSec, m.streamUpdateSec, m.threadArchive, m.logger, model)
+	w.SetBotToolsTargetStatePath(botToolsTargetStatePath(m.dataDir, channelID))
+	w.OnBeforeFinalResponseFunc(m.safeEgressDrain)
 	w.SetUsageStore(m.usage)
 	w.SetAuditSink(m.audit)
 	w.OnThreadCreatedFunc(func(threadID string, mentionOnly bool) {
@@ -2136,7 +2204,7 @@ func (m *Manager) spawnThreadAgent(threadID, parentChannelID string, modelOverri
 	}
 
 	agentName := "thread-" + threadID
-	opts := m.agentOptsForChannel(parentChannelID)
+	opts := m.agentOptsForTarget(parentChannelID, threadID)
 	if hasThreadSession && threadSess.SessionID != "" {
 		opts.LoadSessionID = threadSess.SessionID
 	}
@@ -2180,6 +2248,7 @@ func (m *Manager) spawnThreadAgent(threadID, parentChannelID string, modelOverri
 	}
 
 	w := NewWorker("thread-"+threadID, agent, m.queueBufSize, m.askTimeoutSec, m.streamUpdateSec, 0, m.logger, model)
+	w.OnBeforeFinalResponseFunc(m.safeEgressDrain)
 	w.SetUsageStore(m.usage)
 	w.SetAuditSink(m.audit)
 	w.SetHistoryPrefix(historyCtx)

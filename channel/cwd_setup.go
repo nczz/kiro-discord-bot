@@ -4,13 +4,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 	"unicode"
 )
 
-var safeProjectNameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$`)
+const maxProjectNameRunes = 80
 
 type ProjectOption struct {
 	Name        string
@@ -140,8 +139,8 @@ func (m *Manager) CreateDefaultProject(name string) (ProjectOption, error) {
 		return ProjectOption{}, err
 	}
 	name = strings.TrimSpace(name)
-	if !safeProjectNameRE.MatchString(name) || strings.Contains(name, "..") {
-		return ProjectOption{}, fmt.Errorf("project name may only contain letters, numbers, dot, dash, and underscore")
+	if !validProjectName(name) {
+		return ProjectOption{}, fmt.Errorf("project name may only contain Unicode letters, numbers, dot, dash, and underscore")
 	}
 	path := filepath.Join(root, name)
 	clean := filepath.Clean(path)
@@ -172,6 +171,35 @@ func (m *Manager) CreateDefaultProject(name string) (ProjectOption, error) {
 		Relative:    name,
 		Description: projectDescription(real, name),
 	}, nil
+}
+
+func validProjectName(name string) bool {
+	if name == "" || strings.Contains(name, "..") {
+		return false
+	}
+	runeCount := 0
+	first := true
+	for _, r := range name {
+		runeCount++
+		if runeCount > maxProjectNameRunes {
+			return false
+		}
+		if unicode.IsControl(r) || unicode.IsSpace(r) || r == '/' || r == '\\' {
+			return false
+		}
+		if first {
+			first = false
+			if !unicode.IsLetter(r) && !unicode.IsDigit(r) {
+				return false
+			}
+			continue
+		}
+		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '.' || r == '_' || r == '-' {
+			continue
+		}
+		return false
+	}
+	return runeCount > 0
 }
 
 func EnsureProjectSteering(projectPath string) error {

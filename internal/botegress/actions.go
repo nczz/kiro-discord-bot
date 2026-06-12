@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 )
@@ -88,6 +89,12 @@ func ReadPending(dataDir string) ([]Action, error) {
 		}
 		actions = append(actions, action)
 	}
+	sort.SliceStable(actions, func(i, j int) bool {
+		if actions[i].CreatedAt == actions[j].CreatedAt {
+			return actions[i].ID < actions[j].ID
+		}
+		return actions[i].CreatedAt < actions[j].CreatedAt
+	})
 	return actions, nil
 }
 

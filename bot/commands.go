@@ -51,10 +51,10 @@ func (ctx cmdCtx) sendReplyWithMetadata(msg string, metadata map[string]any) {
 
 func (b *Bot) cmdStatus(ctx cmdCtx) {
 	if ctx.inThread {
-		ctx.reply(b.manager.ThreadStatus(ctx.targetID))
+		ctx.reply(b.statusWithRuntime(b.manager.ThreadStatus(ctx.targetID)))
 		return
 	}
-	ctx.reply(b.statusWithSTT(ctx.channelID))
+	ctx.reply(b.statusWithRuntime(b.manager.Status(ctx.channelID)))
 }
 
 func channelOnly(ctx cmdCtx) bool {

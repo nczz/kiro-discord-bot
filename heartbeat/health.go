@@ -29,7 +29,7 @@ func NewHealthTask(deps HealthDeps) *HealthTask {
 	return &HealthTask{deps: deps}
 }
 
-func (h *HealthTask) Name() string            { return "health" }
+func (h *HealthTask) Name() string               { return "health" }
 func (h *HealthTask) ShouldRun(_ time.Time) bool { return true }
 
 func (h *HealthTask) Run() error {

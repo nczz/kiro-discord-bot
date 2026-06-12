@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/nczz/kiro-discord-bot/acp"
+	"github.com/nczz/kiro-discord-bot/internal/botmcp"
 	L "github.com/nczz/kiro-discord-bot/locale"
 	_ "modernc.org/sqlite"
 )
@@ -18,6 +19,24 @@ import (
 func mcpServerConfigsContain(servers []acp.MCPServerConfig, name string) bool {
 	for _, server := range servers {
 		if server.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func agentEnvContainsPrefix(env []string, prefix string) bool {
+	for _, item := range env {
+		if strings.HasPrefix(item, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsString(items []string, want string) bool {
+	for _, item := range items {
+		if item == want {
 			return true
 		}
 	}
@@ -98,7 +117,7 @@ func TestMCPPolicySafeWritePresetIsGenericFailClosed(t *testing.T) {
 func TestMCPPolicyToACPServerPreservesCatalogEnvOnly(t *testing.T) {
 	p := defaultMCPPolicy("guild-1", "channel-1", "generic-tools").ApplyPreset("full")
 	entry := MCPCatalogEntry{Name: "generic-tools", Command: "/bin/echo", Env: map[string]string{"TOKEN": "secret"}}
-	cfg := p.ToACPServer(entry, "/tmp/bot", "guild-1", "channel-1")
+	cfg := p.ToACPServer(entry, "/tmp/bot", "guild-1", "channel-1", "channel-1")
 
 	if cfg.Name != "generic-tools" || cfg.Command != "/tmp/bot" || len(cfg.Args) != 1 || cfg.Args[0] != "mcp-proxy" {
 		t.Fatalf("unexpected acp config: %+v", cfg)
@@ -179,7 +198,7 @@ func TestReadMCPConfigURLType(t *testing.T) {
 func TestToACPServerURLType(t *testing.T) {
 	p := defaultMCPPolicy("guild-1", "channel-1", "meta-ads").ApplyPreset("full")
 	entry := MCPCatalogEntry{Name: "meta-ads", URL: "http://127.0.0.1:18900"}
-	cfg := p.ToACPServer(entry, "/tmp/bot", "guild-1", "channel-1")
+	cfg := p.ToACPServer(entry, "/tmp/bot", "guild-1", "channel-1", "thread-1")
 
 	if cfg.Name != "meta-ads" || cfg.Command != "/tmp/bot" || len(cfg.Args) != 1 || cfg.Args[0] != "mcp-proxy" {
 		t.Fatalf("URL type should still use proxy: %+v", cfg)
@@ -223,8 +242,11 @@ func TestManagerAgentOptionsApplyChannelMCPPolicy(t *testing.T) {
 	if len(injectedEnv) != 1 {
 		t.Fatalf("agent options should preserve only catalog env, got %+v", injectedEnv)
 	}
-	if len(opts.Env) != 1 || !strings.HasPrefix(opts.Env[0], "KIRO_HOME="+filepath.Join(dir, "kiro-runtime")) {
+	if !agentEnvContainsPrefix(opts.Env, "KIRO_HOME="+filepath.Join(dir, "kiro-agent-runtime")) {
 		t.Fatalf("isolated KIRO_HOME missing: %+v", opts.Env)
+	}
+	if !agentEnvContainsPrefix(opts.Env, "KIRO_MCP_CONFIG="+filepath.Join(dir, "kiro-agent-runtime", "settings", "mcp.json")) {
+		t.Fatalf("isolated KIRO_MCP_CONFIG missing: %+v", opts.Env)
 	}
 }
 
@@ -266,8 +288,20 @@ func TestManagerBuiltinMCPRequiresExplicitPolicy(t *testing.T) {
 	if targetEnv["DATA_DIR"] != dir {
 		t.Fatalf("builtin env missing data dir: %+v", targetEnv)
 	}
-	if targetEnv["BOT_TOOLS_CHANNEL_ID"] != "channel-1" || targetEnv["BOT_TOOLS_GUILD_ID"] != "guild-1" {
+	if targetEnv["BOT_TOOLS_CHANNEL_ID"] != "channel-1" || targetEnv["BOT_TOOLS_TARGET_CHANNEL_ID"] != "channel-1" || targetEnv["BOT_TOOLS_GUILD_ID"] != "guild-1" {
 		t.Fatalf("builtin env missing channel binding: %+v", targetEnv)
+	}
+	if targetEnv["BOT_TOOLS_TARGET_STATE_PATH"] != filepath.Join(dir, "bot-tools-targets", "channel-1.json") {
+		t.Fatalf("builtin env missing dynamic target state path: %+v", targetEnv)
+	}
+
+	threadOpts := m.agentOptsForTarget("channel-1", "thread-1")
+	threadEnv := proxyTargetEnv(t, threadOpts.MCPServers[0].Env)
+	if threadEnv["BOT_TOOLS_CHANNEL_ID"] != "channel-1" || threadEnv["BOT_TOOLS_TARGET_CHANNEL_ID"] != "thread-1" {
+		t.Fatalf("builtin env missing thread target binding: %+v", threadEnv)
+	}
+	if threadEnv["BOT_TOOLS_TARGET_STATE_PATH"] != "" {
+		t.Fatalf("thread agent should use fixed target without dynamic state path: %+v", threadEnv)
 	}
 
 	if err := m.SetMCPPolicy("channel-1", "user-1", "bot-tools", false, "full"); err != nil {
@@ -275,6 +309,56 @@ func TestManagerBuiltinMCPRequiresExplicitPolicy(t *testing.T) {
 	}
 	if got := m.agentOptsForChannel("channel-1").MCPServers; len(got) != 0 {
 		t.Fatalf("explicit disabled builtin must not be injected: %+v", got)
+	}
+}
+
+func TestManagerEnableDefaultBotToolsUsesSafeAllowlist(t *testing.T) {
+	dir := t.TempDir()
+	m := NewManager(ManagerConfig{DataDir: dir, GuildID: "guild-1"})
+	defer m.StopAll()
+
+	m.RegisterBuiltinMCP("bot-tools", []string{"mcp-bot"}, map[string]string{"DATA_DIR": dir})
+	if err := m.EnableDefaultBotTools("channel-1", "user-1"); err != nil {
+		t.Fatalf("enable default bot tools: %v", err)
+	}
+	p, err := m.mcpPolicies.GetPolicy(context.Background(), "guild-1", "channel-1", "bot-tools")
+	if err != nil {
+		t.Fatalf("get policy: %v", err)
+	}
+	if !p.Enabled || p.AllowAllTools || p.ReadOnly || p.AllowDestructive {
+		t.Fatalf("default bot-tools policy is not safe-write allowlist: %+v", p)
+	}
+	if tools := strings.Join(p.EffectiveTools(), ","); strings.Contains(tools, "bot_delete_cron") || !strings.Contains(tools, "bot_send_message") {
+		t.Fatalf("unexpected default tools: %q", tools)
+	}
+}
+
+func TestManagerEnableDefaultBotToolsOverwritesExistingFullPolicy(t *testing.T) {
+	dir := t.TempDir()
+	m := NewManager(ManagerConfig{DataDir: dir, GuildID: "guild-1"})
+	defer m.StopAll()
+
+	m.RegisterBuiltinMCP("bot-tools", []string{"mcp-bot"}, map[string]string{"DATA_DIR": dir})
+	if err := m.SetMCPPolicy("channel-1", "user-1", "bot-tools", true, "full"); err != nil {
+		t.Fatalf("set full policy: %v", err)
+	}
+	if err := m.EnableDefaultBotTools("channel-1", "user-2"); err != nil {
+		t.Fatalf("enable default bot tools: %v", err)
+	}
+	p, err := m.mcpPolicies.GetPolicy(context.Background(), "guild-1", "channel-1", "bot-tools")
+	if err != nil {
+		t.Fatalf("get policy: %v", err)
+	}
+	if !p.Enabled || p.AllowAllTools || p.ReadOnly || p.AllowDestructive || p.Preset != "safe-write" {
+		t.Fatalf("default bot-tools should overwrite full access with safe allowlist: %+v", p)
+	}
+	for _, want := range botmcp.DefaultSafeToolNames() {
+		if !containsString(p.EffectiveTools(), want) {
+			t.Fatalf("default tools missing %q: %+v", want, p.EffectiveTools())
+		}
+	}
+	if len(p.EffectiveTools()) != len(botmcp.DefaultSafeToolNames()) {
+		t.Fatalf("default tools = %+v, want exactly %+v", p.EffectiveTools(), botmcp.DefaultSafeToolNames())
 	}
 }
 
@@ -507,11 +591,67 @@ func TestManagerPreflightOptionsUseIsolatedKiroHomeWithoutMCP(t *testing.T) {
 	if len(opts.MCPServers) != 0 {
 		t.Fatalf("preflight must not inject catalog MCP servers by default: %+v", opts.MCPServers)
 	}
-	if len(opts.Env) != 1 || !strings.HasPrefix(opts.Env[0], "KIRO_HOME="+filepath.Join(dir, "kiro-runtime")) {
+	if !agentEnvContainsPrefix(opts.Env, "KIRO_HOME="+filepath.Join(dir, "kiro-agent-runtime")) {
 		t.Fatalf("preflight isolated KIRO_HOME missing: %+v", opts.Env)
+	}
+	if !agentEnvContainsPrefix(opts.Env, "KIRO_MCP_CONFIG="+filepath.Join(dir, "kiro-agent-runtime", "settings", "mcp.json")) {
+		t.Fatalf("preflight isolated KIRO_MCP_CONFIG missing: %+v", opts.Env)
 	}
 	if !opts.TrustAllTools || opts.TrustTools != "" || opts.LoadSessionID != "" {
 		t.Fatalf("unexpected preflight agent options: %+v", opts)
+	}
+}
+
+func TestManagerSeparatesCatalogSourceFromAgentRuntimeMCPConfig(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "catalog-mcp.json")
+	if err := os.WriteFile(cfgPath, []byte(`{"mcpServers":{"catalog-tools":{"command":"/tmp/catalog-mcp","args":["--stdio"]}}}`), 0644); err != nil {
+		t.Fatalf("write catalog config: %v", err)
+	}
+	t.Setenv("KIRO_MCP_CONFIG", cfgPath)
+	m := NewManager(ManagerConfig{DataDir: dir, GuildID: "guild-1"})
+	defer m.StopAll()
+
+	views, err := m.MCPServerViews("channel-1")
+	if err != nil {
+		t.Fatalf("server views: %v", err)
+	}
+	var sawCatalog bool
+	for _, view := range views {
+		if view.Name == "catalog-tools" {
+			sawCatalog = true
+		}
+	}
+	if !sawCatalog {
+		t.Fatalf("catalog server not discovered from bot catalog source: %+v", views)
+	}
+
+	opts := m.agentOptsForChannel("channel-1")
+	if len(opts.MCPServers) != 0 {
+		t.Fatalf("catalog server must not be injected without policy: %+v", opts.MCPServers)
+	}
+	runtimeMCP := filepath.Join(dir, "kiro-agent-runtime", "settings", "mcp.json")
+	raw, err := os.ReadFile(runtimeMCP)
+	if err != nil {
+		t.Fatalf("read runtime mcp config: %v", err)
+	}
+	if string(raw) != "{\"mcpServers\":{}}\n" {
+		t.Fatalf("runtime mcp config should stay empty, got %q", raw)
+	}
+
+	if err := m.SetMCPPolicy("channel-1", "user-1", "catalog-tools", true, "full"); err != nil {
+		t.Fatalf("enable catalog tools: %v", err)
+	}
+	opts = m.agentOptsForChannel("channel-1")
+	if len(opts.MCPServers) != 1 || opts.MCPServers[0].Name != "catalog-tools" {
+		t.Fatalf("enabled catalog server should be injected through ACP options: %+v", opts.MCPServers)
+	}
+	raw, err = os.ReadFile(runtimeMCP)
+	if err != nil {
+		t.Fatalf("read runtime mcp config after policy: %v", err)
+	}
+	if string(raw) != "{\"mcpServers\":{}}\n" {
+		t.Fatalf("runtime mcp config should remain empty after policy injection, got %q", raw)
 	}
 }
 

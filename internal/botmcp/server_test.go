@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/nczz/kiro-discord-bot/internal/channelmeta"
 )
 
 func TestDataSummaryAndChannelListAreMetadataOnly(t *testing.T) {
@@ -21,18 +23,34 @@ func TestDataSummaryAndChannelListAreMetadataOnly(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(chDir, "memory.json"), []byte(`["rule"]`), 0644); err != nil {
 		t.Fatalf("write memory: %v", err)
 	}
+	if err := channelmeta.Upsert(dir, channelmeta.Entry{ID: "channel-1", Name: "general", Type: "channel"}); err != nil {
+		t.Fatalf("write channel metadata: %v", err)
+	}
 	if err := os.MkdirAll(filepath.Join(dir, "cron"), 0755); err != nil {
 		t.Fatalf("mkdir cron: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "cron", "cron.json"), []byte(`[]`), 0644); err != nil {
 		t.Fatalf("write cron: %v", err)
 	}
+	agentRuntimeSettings := filepath.Join(dir, "kiro-agent-runtime", "settings")
+	if err := os.MkdirAll(agentRuntimeSettings, 0755); err != nil {
+		t.Fatalf("mkdir agent runtime settings: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(agentRuntimeSettings, "mcp.json"), []byte(`{"mcpServers":{}}`), 0644); err != nil {
+		t.Fatalf("write runtime mcp: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(agentRuntimeSettings, "cli.json"), []byte(`{}`), 0644); err != nil {
+		t.Fatalf("write runtime cli: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "kiro-runtime"), 0755); err != nil {
+		t.Fatalf("mkdir legacy runtime: %v", err)
+	}
 
 	s, err := dataSummary(dir)
 	if err != nil {
 		t.Fatalf("summary: %v", err)
 	}
-	if !s.SessionsFile || !s.CronStore || s.ChannelDirs != 1 {
+	if !s.SessionsFile || !s.CronStore || s.ChannelDirs != 1 || !s.KiroAgentRuntimeDir || !s.LegacyKiroRuntimeDir || !s.RuntimeMCPConfig || !s.RuntimeCLISettingsFile {
 		t.Fatalf("unexpected summary: %+v", s)
 	}
 
@@ -40,7 +58,7 @@ func TestDataSummaryAndChannelListAreMetadataOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list channels: %v", err)
 	}
-	if len(rows) != 1 || rows[0].ChannelID != "channel-1" || !rows[0].ChatLog || !rows[0].MemoryFile {
+	if len(rows) != 1 || rows[0].ChannelID != "channel-1" || rows[0].Name != "general" || rows[0].Type != "channel" || !rows[0].ChatLog || !rows[0].MemoryFile {
 		t.Fatalf("unexpected channel rows: %+v", rows)
 	}
 }
@@ -48,6 +66,26 @@ func TestDataSummaryAndChannelListAreMetadataOnly(t *testing.T) {
 func TestNewServerExists(t *testing.T) {
 	if NewServer() == nil {
 		t.Fatal("NewServer returned nil")
+	}
+}
+
+func TestDefaultSafeToolNamesExcludeDestructiveTools(t *testing.T) {
+	tools := DefaultSafeToolNames()
+	if len(tools) == 0 {
+		t.Fatal("default safe tools are empty")
+	}
+	seen := map[string]bool{}
+	for _, tool := range tools {
+		if seen[tool] {
+			t.Fatalf("duplicate default safe tool: %s", tool)
+		}
+		seen[tool] = true
+	}
+	if seen[ToolDeleteCron] {
+		t.Fatalf("destructive tool %s must not be default-enabled", ToolDeleteCron)
+	}
+	if !seen[ToolSendMessage] || !seen[ToolSendFile] {
+		t.Fatalf("safe egress tools missing from default safe tools: %+v", tools)
 	}
 }
 
@@ -111,6 +149,35 @@ func TestValidateBoundChannel(t *testing.T) {
 	}
 	if err := validateBoundChannel("channel-2"); err == nil {
 		t.Fatal("mismatched channel accepted")
+	}
+}
+
+func TestDeliveryChannelPrefersTargetChannel(t *testing.T) {
+	t.Setenv("BOT_TOOLS_CHANNEL_ID", "channel-1")
+	t.Setenv("BOT_TOOLS_TARGET_CHANNEL_ID", "thread-1")
+	if err := validateBoundChannel("thread-1"); err != nil {
+		t.Fatalf("target channel rejected: %v", err)
+	}
+	if got := deliveryChannelID("channel-1"); got != "thread-1" {
+		t.Fatalf("deliveryChannelID = %q, want thread-1", got)
+	}
+}
+
+func TestDeliveryChannelPrefersDynamicTargetState(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "target.json")
+	if err := os.WriteFile(statePath, []byte(`{"target_channel_id":"thread-1"}`), 0644); err != nil {
+		t.Fatalf("write target state: %v", err)
+	}
+	t.Setenv("BOT_TOOLS_CHANNEL_ID", "channel-1")
+	t.Setenv("BOT_TOOLS_TARGET_CHANNEL_ID", "channel-1")
+	t.Setenv("BOT_TOOLS_TARGET_STATE_PATH", statePath)
+
+	if err := validateBoundChannel("thread-1"); err != nil {
+		t.Fatalf("dynamic target channel rejected: %v", err)
+	}
+	if got := deliveryChannelID("channel-1"); got != "thread-1" {
+		t.Fatalf("deliveryChannelID = %q, want dynamic thread target", got)
 	}
 }
 

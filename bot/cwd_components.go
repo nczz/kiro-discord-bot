@@ -241,12 +241,21 @@ func (b *Bot) handleCWDComponent(ds *discordgo.Session, i *discordgo.Interaction
 			return
 		}
 		path := filepath.Join(root, rel)
+		firstInitialization := !b.manager.ChannelInitialized(channelID)
 		real, err := b.manager.InitializeChannelCWD(channelID, path)
 		if err != nil {
 			respondInteractionEphemeral(ds, i, commandError(err))
 			return
 		}
-		b.completeCWDSetupInteraction(ds, i, channelID, L.Getf("cwd.setup.initialized", filepath.Base(real)))
+		msg := L.Getf("cwd.setup.initialized", filepath.Base(real))
+		if firstInitialization {
+			if err := b.manager.EnableDefaultBotTools(channelID, userID); err != nil {
+				msg += "\n" + L.Getf("cwd.setup.default_mcp_failed", err.Error())
+			} else {
+				msg += "\n" + L.Get("cwd.setup.default_mcp_enabled")
+			}
+		}
+		b.completeCWDSetupInteraction(ds, i, channelID, msg)
 	case "back":
 		b.updateCWDComponentPanel(ds, i, channelID, "", parseCWDPage(parts, 3))
 	case "new":
@@ -345,12 +354,21 @@ func (b *Bot) handleCWDModalSubmit(ds *discordgo.Session, i *discordgo.Interacti
 		respondInteractionEphemeral(ds, i, commandError(err))
 		return
 	}
+	firstInitialization := !b.manager.ChannelInitialized(channelID)
 	real, err := b.manager.InitializeChannelCWD(channelID, project.Path)
 	if err != nil {
 		respondInteractionEphemeral(ds, i, commandError(err))
 		return
 	}
-	content := secrets.RedactEnv(cwdSetupCompleteMessage(L.Getf("cwd.setup.created", filepath.Base(real))))
+	msg := L.Getf("cwd.setup.created", filepath.Base(real))
+	if firstInitialization {
+		if err := b.manager.EnableDefaultBotTools(channelID, userID); err != nil {
+			msg += "\n" + L.Getf("cwd.setup.default_mcp_failed", err.Error())
+		} else {
+			msg += "\n" + L.Get("cwd.setup.default_mcp_enabled")
+		}
+	}
+	content := secrets.RedactEnv(cwdSetupCompleteMessage(msg))
 	if err := ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseChannelMessageWithSource,
 		Data: &discordgo.InteractionResponseData{

@@ -86,3 +86,17 @@ func TestPrepareSanitizedFileRejectsBinary(t *testing.T) {
 		t.Fatal("PrepareSanitizedFile accepted binary file")
 	}
 }
+
+func TestRedactSensitivePaths(t *testing.T) {
+	input := `stat /tmp/work/.kiro/settings/mcp.json: no such file; open /tmp/work/public/readme.md: denied; read ~/.env.local: denied`
+	got := RedactSensitivePaths(input)
+	if strings.Contains(got, ".kiro") || strings.Contains(got, "mcp.json") || strings.Contains(got, ".env.local") {
+		t.Fatalf("sensitive path leaked: %q", got)
+	}
+	if !strings.Contains(got, "/tmp/work/public/readme.md") {
+		t.Fatalf("non-sensitive path should remain useful: %q", got)
+	}
+	if strings.Count(got, "[REDACTED:PATH]") != 2 {
+		t.Fatalf("redacted path count mismatch: %q", got)
+	}
+}

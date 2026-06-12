@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bwmarrin/discordgo"
@@ -16,6 +17,7 @@ import (
 type safeEgressTask struct {
 	bot      *Bot
 	redactor *secrets.Redactor
+	mu       sync.Mutex
 }
 
 func newSafeEgressTask(bot *Bot) *safeEgressTask {
@@ -27,20 +29,46 @@ func (t *safeEgressTask) Name() string { return "safe-egress" }
 func (t *safeEgressTask) ShouldRun(_ time.Time) bool { return true }
 
 func (t *safeEgressTask) Run() error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	actions, err := botegress.ReadPending(t.bot.dataDir)
 	if err != nil {
 		return err
 	}
 	for _, action := range actions {
-		if err := t.process(action); err != nil {
-			log.Printf("[safe-egress] action %s failed: %v", action.ID, err)
-			t.sendSafeFailure(action, err)
-		}
-		if err := botegress.RemovePending(t.bot.dataDir, action.ID); err != nil {
-			log.Printf("[safe-egress] remove action %s: %v", action.ID, err)
-		}
+		t.processAndRemove(action)
 	}
 	return nil
+}
+
+func (t *safeEgressTask) DrainChannel(channelID string) {
+	channelID = strings.TrimSpace(channelID)
+	if channelID == "" {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	actions, err := botegress.ReadPending(t.bot.dataDir)
+	if err != nil {
+		log.Printf("[safe-egress] drain channel=%s read pending: %v", channelID, err)
+		return
+	}
+	for _, action := range actions {
+		if strings.TrimSpace(action.ChannelID) != channelID {
+			continue
+		}
+		t.processAndRemove(action)
+	}
+}
+
+func (t *safeEgressTask) processAndRemove(action botegress.Action) {
+	if err := t.process(action); err != nil {
+		log.Printf("[safe-egress] action %s failed: %v", action.ID, err)
+		t.sendSafeFailure(action, err)
+	}
+	if err := botegress.RemovePending(t.bot.dataDir, action.ID); err != nil {
+		log.Printf("[safe-egress] remove action %s: %v", action.ID, err)
+	}
 }
 
 func (t *safeEgressTask) process(action botegress.Action) error {
@@ -103,7 +131,7 @@ func (t *safeEgressTask) sendSafeFailure(action botegress.Action, err error) {
 	if channelID == "" {
 		return
 	}
-	msg := "Safe egress blocked: " + t.redactor.Redact(err.Error())
+	msg := "Safe egress blocked: " + botegress.RedactSensitivePaths(t.redactor.Redact(err.Error()))
 	_, _ = channelSendSanitized(t.bot.discord, channelID, msg)
 }
 

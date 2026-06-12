@@ -210,7 +210,7 @@ func (g *GeminiProvider) pollVideo(ctx context.Context, opName string) (*MediaRe
 		}
 
 		var status struct {
-			Done  bool                    `json:"done"`
+			Done  bool                      `json:"done"`
 			Error *struct{ Message string } `json:"error"`
 		}
 		if err := json.Unmarshal(pBody, &status); err != nil {

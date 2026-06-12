@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/nczz/kiro-discord-bot/internal/secrets"
@@ -30,6 +31,8 @@ var sensitivePathFragments = []string{
 	"/id_ed25519",
 	"/discord",
 }
+
+var pathLikePattern = regexp.MustCompile(`(?:~|/)[^\s"'<>]+`)
 
 // SanitizedFile is a temporary redacted file ready for Discord upload.
 type SanitizedFile struct {
@@ -128,4 +131,21 @@ func isSensitivePath(path string) bool {
 	}
 	ext := strings.ToLower(filepath.Ext(clean))
 	return ext == ".pem" || ext == ".key" || ext == ".p12" || ext == ".pfx"
+}
+
+// RedactSensitivePaths replaces sensitive filesystem paths embedded in text.
+// It is used for user-visible failure messages where os.PathError may include
+// paths that identify secret-bearing files even when file contents are never sent.
+func RedactSensitivePaths(text string) string {
+	if text == "" {
+		return ""
+	}
+	return pathLikePattern.ReplaceAllStringFunc(text, func(candidate string) string {
+		trimmed := strings.TrimRight(candidate, ".,;:)]}")
+		suffix := strings.TrimPrefix(candidate, trimmed)
+		if trimmed == "" || !isSensitivePath(trimmed) {
+			return candidate
+		}
+		return "[REDACTED:PATH]" + suffix
+	})
 }

@@ -24,6 +24,7 @@ type Agent struct {
 	cmd       *exec.Cmd
 	transport *Transport
 	state     string // starting, idle, working, stopped
+	startedAt time.Time
 
 	mu           sync.Mutex
 	currentText  strings.Builder
@@ -44,6 +45,7 @@ type Agent struct {
 	stopOnce      sync.Once
 	exited        chan struct{} // closed when child process exits
 	stderrBuf     *ringBuffer   // captures recent stderr from kiro-cli
+	mcpReady      map[string]struct{}
 }
 
 // AgentOptions configures how an agent is spawned.
@@ -160,8 +162,10 @@ func StartAgent(name, kiroCLI, cwd, model string, opts AgentOptions) (*Agent, er
 		cmd:       cmd,
 		transport: NewTransport(stdout, stdin, opts.MaxBuffer),
 		state:     "starting",
+		startedAt: time.Now(),
 		exited:    make(chan struct{}),
 		stderrBuf: stderrRing,
+		mcpReady:  make(map[string]struct{}),
 	}
 
 	a.transport.OnNotification = a.handleNotification
@@ -349,6 +353,9 @@ func (a *Agent) handleNotification(method string, params json.RawMessage) {
 			ServerName string `json:"serverName"`
 		}
 		if json.Unmarshal(params, &mcpNotif) == nil && mcpNotif.ServerName != "" {
+			a.mu.Lock()
+			a.mcpReady[mcpNotif.ServerName] = struct{}{}
+			a.mu.Unlock()
 			log.Printf("[agent:%s] mcp server ready: %s", a.Name, mcpNotif.ServerName)
 		}
 		return
@@ -539,6 +546,17 @@ func (a *Agent) State() string {
 	return a.state
 }
 
+// Uptime returns how long the current ACP process has been running.
+func (a *Agent) Uptime() time.Duration {
+	a.mu.Lock()
+	startedAt := a.startedAt
+	a.mu.Unlock()
+	if startedAt.IsZero() {
+		return 0
+	}
+	return time.Since(startedAt)
+}
+
 // AgentVersion returns the kiro-cli version from the initialize response.
 func (a *Agent) AgentVersion() string {
 	if a.initResult != nil && a.initResult.AgentInfo != nil {
@@ -585,6 +603,18 @@ func (a *Agent) CurrentModeID() string {
 		return a.sessResult.Modes.CurrentModeID
 	}
 	return ""
+}
+
+// MCPReadyServers returns MCP servers reported as initialized by the agent.
+func (a *Agent) MCPReadyServers() []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	servers := make([]string, 0, len(a.mcpReady))
+	for server := range a.mcpReady {
+		servers = append(servers, server)
+	}
+	sort.Strings(servers)
+	return servers
 }
 
 // LoadedSession returns true when this agent was created via session/load.

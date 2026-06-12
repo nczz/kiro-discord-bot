@@ -555,7 +555,7 @@ func (p MCPChannelPolicy) ApplyPreset(preset string) MCPChannelPolicy {
 	return p
 }
 
-func (p MCPChannelPolicy) ToACPServer(entry MCPCatalogEntry, proxyCommand string, guildID, channelID string) acp.MCPServerConfig {
+func (p MCPChannelPolicy) ToACPServer(entry MCPCatalogEntry, proxyCommand string, guildID, channelID, targetChannelID string) acp.MCPServerConfig {
 	allowedTools := p.EffectiveTools()
 	proxyEnv := map[string]string{}
 
@@ -569,7 +569,13 @@ func (p MCPChannelPolicy) ToACPServer(entry MCPCatalogEntry, proxyCommand string
 		}
 		if entry.Name == "bot-tools" {
 			env["BOT_TOOLS_CHANNEL_ID"] = channelID
+			env["BOT_TOOLS_TARGET_CHANNEL_ID"] = strings.TrimSpace(targetChannelID)
 			env["BOT_TOOLS_GUILD_ID"] = guildID
+			if strings.TrimSpace(targetChannelID) == "" || strings.TrimSpace(targetChannelID) == channelID {
+				if statePath := botToolsTargetStatePath(env["DATA_DIR"], channelID); statePath != "" {
+					env["BOT_TOOLS_TARGET_STATE_PATH"] = statePath
+				}
+			}
 		}
 		envItems = mcpproxy.ConfigEnv(entry.Command, entry.Args, env, allowedTools, p.AllowAllTools)
 	}

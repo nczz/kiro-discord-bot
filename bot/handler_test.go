@@ -20,6 +20,7 @@ import (
 	"github.com/nczz/kiro-discord-bot/acp"
 	"github.com/nczz/kiro-discord-bot/audit"
 	"github.com/nczz/kiro-discord-bot/channel"
+	"github.com/nczz/kiro-discord-bot/internal/botegress"
 	L "github.com/nczz/kiro-discord-bot/locale"
 )
 
@@ -66,6 +67,45 @@ func (c *countingDiscordTransport) Count() int {
 	return c.count
 }
 
+type recordingDiscordTransport struct {
+	mu      sync.Mutex
+	paths   []string
+	bodies  []string
+	counter int
+}
+
+func (r *recordingDiscordTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	body := ""
+	if req.Body != nil {
+		b, _ := io.ReadAll(req.Body)
+		body = string(b)
+	}
+	r.mu.Lock()
+	r.counter++
+	id := fmt.Sprintf("response-%d", r.counter)
+	r.paths = append(r.paths, req.Method+" "+req.URL.Path)
+	r.bodies = append(r.bodies, body)
+	r.mu.Unlock()
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Status:     "200 OK",
+		Header:     make(http.Header),
+		Body: io.NopCloser(strings.NewReader(fmt.Sprintf(`{
+			"id":%q,
+			"channel_id":"channel-1",
+			"content":"ok",
+			"author":{"id":"bot-1","username":"bot","discriminator":"0000","bot":true}
+		}`, id))),
+		Request: req,
+	}, nil
+}
+
+func (r *recordingDiscordTransport) Snapshot() ([]string, []string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.paths...), append([]string(nil), r.bodies...)
+}
+
 func newFailingDiscordSession(t *testing.T) *discordgo.Session {
 	t.Helper()
 	ds, err := discordgo.New("Bot test")
@@ -75,6 +115,101 @@ func newFailingDiscordSession(t *testing.T) *discordgo.Session {
 	ds.Client = &http.Client{Transport: failingDiscordTransport{}}
 	ds.State = testPeerPermissionSession(t, nil).State
 	return ds
+}
+
+func TestSafeEgressDrainChannelFlushesOnlyMatchingPendingActions(t *testing.T) {
+	dir := t.TempDir()
+	rt := &recordingDiscordTransport{}
+	ds, err := discordgo.New("Bot test")
+	if err != nil {
+		t.Fatalf("new discord session: %v", err)
+	}
+	ds.Client = &http.Client{Transport: rt}
+	b := &Bot{discord: ds, dataDir: dir}
+	task := newSafeEgressTask(b)
+
+	if _, err := botegress.WritePending(dir, botegress.Action{
+		ID:        "a-thread",
+		Action:    botegress.ActionSendMessage,
+		ChannelID: "thread-1",
+		Content:   "thread payload",
+		CreatedAt: "2026-01-01T00:00:00Z",
+	}); err != nil {
+		t.Fatalf("write thread pending: %v", err)
+	}
+	if _, err := botegress.WritePending(dir, botegress.Action{
+		ID:        "b-channel",
+		Action:    botegress.ActionSendMessage,
+		ChannelID: "channel-1",
+		Content:   "channel payload",
+		CreatedAt: "2026-01-01T00:00:01Z",
+	}); err != nil {
+		t.Fatalf("write channel pending: %v", err)
+	}
+
+	task.DrainChannel("thread-1")
+
+	paths, bodies := rt.Snapshot()
+	if len(paths) != 1 || !strings.Contains(paths[0], "/channels/thread-1/messages") || !strings.Contains(bodies[0], "thread payload") {
+		t.Fatalf("unexpected drained Discord calls: paths=%v bodies=%v", paths, bodies)
+	}
+	actions, err := botegress.ReadPending(dir)
+	if err != nil {
+		t.Fatalf("read pending: %v", err)
+	}
+	if len(actions) != 1 || actions[0].ID != "b-channel" || actions[0].ChannelID != "channel-1" {
+		t.Fatalf("unexpected remaining pending actions: %+v", actions)
+	}
+}
+
+func TestSafeEgressFailureRedactsSensitiveFilePath(t *testing.T) {
+	dir := t.TempDir()
+	rt := &recordingDiscordTransport{}
+	ds, err := discordgo.New("Bot test")
+	if err != nil {
+		t.Fatalf("new discord session: %v", err)
+	}
+	ds.Client = &http.Client{Transport: rt}
+	b := &Bot{discord: ds, dataDir: dir}
+	task := newSafeEgressTask(b)
+	sensitivePath := filepath.Join(dir, ".kiro", "settings", "mcp.json")
+
+	if _, err := botegress.WritePending(dir, botegress.Action{
+		ID:        "sensitive-file",
+		Action:    botegress.ActionSendFile,
+		ChannelID: "thread-1",
+		FilePath:  sensitivePath,
+		Content:   "please send",
+		CreatedAt: "2026-01-01T00:00:00Z",
+	}); err != nil {
+		t.Fatalf("write sensitive file pending: %v", err)
+	}
+
+	task.DrainChannel("thread-1")
+
+	_, bodies := rt.Snapshot()
+	if len(bodies) != 1 {
+		t.Fatalf("discord calls = %d, want 1; bodies=%v", len(bodies), bodies)
+	}
+	if strings.Contains(bodies[0], ".kiro") || strings.Contains(bodies[0], "mcp.json") || strings.Contains(bodies[0], sensitivePath) {
+		t.Fatalf("safe failure leaked sensitive path: %q", bodies[0])
+	}
+	if !strings.Contains(bodies[0], "[REDACTED:PATH]") {
+		t.Fatalf("safe failure missing redacted path marker: %q", bodies[0])
+	}
+}
+
+func TestStatusWithRuntimeIncludesBotUptime(t *testing.T) {
+	L.Load("en")
+	b := &Bot{startedAt: time.Now().Add(-90 * time.Second)}
+
+	got := b.statusWithRuntime("Agent: `test`")
+	if !strings.Contains(got, "Agent: `test`") {
+		t.Fatalf("statusWithRuntime should preserve base status, got:\n%s", got)
+	}
+	if !strings.Contains(got, "Bot uptime: `1m") {
+		t.Fatalf("statusWithRuntime should include bot uptime, got:\n%s", got)
+	}
 }
 
 func newAuditTestBot(t *testing.T) (*Bot, string, func()) {

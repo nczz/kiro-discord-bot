@@ -80,6 +80,47 @@ func TestCreateDefaultProjectSanitizesAndInitializes(t *testing.T) {
 	}
 }
 
+func TestCreateDefaultProjectAllowsUnicodeNames(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "projects")
+	if err := os.MkdirAll(root, 0755); err != nil {
+		t.Fatalf("mkdir root: %v", err)
+	}
+	m := newCWDSetupTestManager(t, root)
+
+	project, err := m.CreateDefaultProject("專案_2026-測試.v1")
+	if err != nil {
+		t.Fatalf("CreateDefaultProject unicode name: %v", err)
+	}
+	if project.Relative != "專案_2026-測試.v1" {
+		t.Fatalf("relative = %q, want unicode project name", project.Relative)
+	}
+	if _, err := os.Stat(filepath.Join(project.Path, ".kiro", "steering")); err != nil {
+		t.Fatalf("expected steering dir: %v", err)
+	}
+}
+
+func TestCreateDefaultProjectRejectsUnsafeUnicodeNames(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "projects")
+	if err := os.MkdirAll(root, 0755); err != nil {
+		t.Fatalf("mkdir root: %v", err)
+	}
+	m := newCWDSetupTestManager(t, root)
+
+	for _, name := range []string{
+		"../escape",
+		"專案/子目錄",
+		"專案\\子目錄",
+		"專案 名稱",
+		"-leading-dash",
+		".leading-dot",
+		strings.Repeat("專", maxProjectNameRunes+1),
+	} {
+		if _, err := m.CreateDefaultProject(name); err == nil {
+			t.Fatalf("expected project name %q to be rejected", name)
+		}
+	}
+}
+
 func TestListDefaultProjectsListsFirstLevelDirectoriesAndMarksGit(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "projects")
 	app := filepath.Join(root, "app")
