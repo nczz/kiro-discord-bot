@@ -1,10 +1,56 @@
 package main
 
 import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
+	"unicode/utf8"
+
+	"github.com/bwmarrin/discordgo"
 )
+
+type recordingDiscordTransport struct {
+	mu      sync.Mutex
+	bodies  []string
+	counter int
+}
+
+func (r *recordingDiscordTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	body := ""
+	if req.Body != nil {
+		raw, _ := io.ReadAll(req.Body)
+		body = string(raw)
+	}
+	r.mu.Lock()
+	r.counter++
+	id := fmt.Sprintf("message-%d", r.counter)
+	r.bodies = append(r.bodies, body)
+	r.mu.Unlock()
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Status:     "200 OK",
+		Header:     make(http.Header),
+		Body: io.NopCloser(strings.NewReader(fmt.Sprintf(`{
+			"id":%q,
+			"channel_id":"channel-1",
+			"content":"ok",
+			"author":{"id":"bot-1","username":"bot","discriminator":"0000","bot":true}
+		}`, id))),
+		Request: req,
+	}, nil
+}
+
+func (r *recordingDiscordTransport) Bodies() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.bodies...)
+}
 
 func TestParseIDSet(t *testing.T) {
 	got := parseIDSet(" 123,456,,123 ")
@@ -76,6 +122,23 @@ func TestDiscordPolicyAllowedWriteTools(t *testing.T) {
 	}
 	if err := p.writeAllowed("discord_reply_message", false); err == nil {
 		t.Fatal("unlisted write should be denied")
+	}
+}
+
+func TestResolveWriteTargetChannelUsesBotTargetState(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "target.json")
+	if err := os.WriteFile(statePath, []byte(`{"target_channel_id":"thread-1"}`+"\n"), 0644); err != nil {
+		t.Fatalf("write target state: %v", err)
+	}
+	t.Setenv("BOT_TOOLS_TARGET_STATE_PATH", statePath)
+
+	oldPolicy := policy
+	policy = discordPolicy{}
+	defer func() { policy = oldPolicy }()
+
+	if got := resolveWriteTargetChannel("channel-1"); got != "thread-1" {
+		t.Fatalf("resolved target = %q, want thread-1", got)
 	}
 }
 
@@ -152,5 +215,135 @@ func TestSafeAttachmentFilename(t *testing.T) {
 	}
 	if got := safeAttachmentFilename("/"); got != "attachment" {
 		t.Fatalf("empty name got %q", got)
+	}
+}
+
+func TestSendDiscordMessagePartsSplitsLongContent(t *testing.T) {
+	rt := &recordingDiscordTransport{}
+	ds, err := discordgo.New("Bot test")
+	if err != nil {
+		t.Fatalf("new discord session: %v", err)
+	}
+	ds.Client = &http.Client{Transport: rt}
+	oldDG := dg
+	dg = ds
+	defer func() { dg = oldDG }()
+
+	msgs, err := sendDiscordMessageParts("channel-1", "API_TOKEN=super-secret-token-123\n<@123456789012345678>\n"+strings.Repeat("alpha beta gamma\n", 180))
+	if err != nil {
+		t.Fatalf("send parts: %v", err)
+	}
+	if len(msgs) < 2 {
+		t.Fatalf("sent messages = %d, want split delivery", len(msgs))
+	}
+	for i, body := range rt.Bodies() {
+		var payload struct {
+			Content         string         `json:"content"`
+			AllowedMentions map[string]any `json:"allowed_mentions"`
+		}
+		if err := json.Unmarshal([]byte(body), &payload); err != nil {
+			t.Fatalf("payload %d json: %v\n%s", i, err, body)
+		}
+		if utf8.RuneCountInString(payload.Content) > 2000 {
+			t.Fatalf("payload %d content len = %d, want <= 2000", i, utf8.RuneCountInString(payload.Content))
+		}
+		if strings.Contains(payload.Content, "super-secret-token-123") {
+			t.Fatalf("payload %d leaked secret: %q", i, payload.Content)
+		}
+		if payload.AllowedMentions == nil {
+			t.Fatalf("payload %d missing allowed_mentions suppression: %s", i, body)
+		}
+	}
+}
+
+func TestReplyDiscordMessagePartsSplitsLongContent(t *testing.T) {
+	rt := &recordingDiscordTransport{}
+	ds, err := discordgo.New("Bot test")
+	if err != nil {
+		t.Fatalf("new discord session: %v", err)
+	}
+	ds.Client = &http.Client{Transport: rt}
+	oldDG := dg
+	dg = ds
+	defer func() { dg = oldDG }()
+
+	msgs, err := replyDiscordMessageParts("channel-1", "source-message", strings.Repeat("reply payload\n", 220))
+	if err != nil {
+		t.Fatalf("reply parts: %v", err)
+	}
+	if len(msgs) < 2 {
+		t.Fatalf("sent replies = %d, want split delivery", len(msgs))
+	}
+	bodies := rt.Bodies()
+	var first struct {
+		Content          string `json:"content"`
+		MessageReference any    `json:"message_reference"`
+	}
+	if err := json.Unmarshal([]byte(bodies[0]), &first); err != nil {
+		t.Fatalf("first payload json: %v\n%s", err, bodies[0])
+	}
+	if first.MessageReference == nil {
+		t.Fatalf("first split reply should preserve message reference: %s", bodies[0])
+	}
+	for i, body := range bodies {
+		var payload struct {
+			Content         string         `json:"content"`
+			AllowedMentions map[string]any `json:"allowed_mentions"`
+		}
+		if err := json.Unmarshal([]byte(body), &payload); err != nil {
+			t.Fatalf("payload %d json: %v\n%s", i, err, body)
+		}
+		if utf8.RuneCountInString(payload.Content) > 2000 {
+			t.Fatalf("payload %d content len = %d, want <= 2000", i, utf8.RuneCountInString(payload.Content))
+		}
+		if payload.AllowedMentions == nil {
+			t.Fatalf("payload %d missing allowed_mentions suppression: %s", i, body)
+		}
+	}
+}
+
+func TestSendDiscordEmbedPartsSplitsLongDescription(t *testing.T) {
+	rt := &recordingDiscordTransport{}
+	ds, err := discordgo.New("Bot test")
+	if err != nil {
+		t.Fatalf("new discord session: %v", err)
+	}
+	ds.Client = &http.Client{Transport: rt}
+	oldDG := dg
+	dg = ds
+	defer func() { dg = oldDG }()
+
+	msgs, err := sendDiscordEmbedParts("channel-1", &discordgo.MessageEmbed{
+		Title:       "Long report",
+		Description: "API_TOKEN=super-secret-token-456\n" + strings.Repeat("embed payload\n", 500),
+	})
+	if err != nil {
+		t.Fatalf("send embed parts: %v", err)
+	}
+	if len(msgs) < 2 {
+		t.Fatalf("sent embeds = %d, want split delivery", len(msgs))
+	}
+	for i, body := range rt.Bodies() {
+		var payload struct {
+			AllowedMentions map[string]any `json:"allowed_mentions"`
+			Embeds          []struct {
+				Description string `json:"description"`
+			} `json:"embeds"`
+		}
+		if err := json.Unmarshal([]byte(body), &payload); err != nil {
+			t.Fatalf("embed payload %d json: %v\n%s", i, err, body)
+		}
+		if len(payload.Embeds) != 1 {
+			t.Fatalf("embed payload %d embeds = %d, want 1", i, len(payload.Embeds))
+		}
+		if utf8.RuneCountInString(payload.Embeds[0].Description) > 4096 {
+			t.Fatalf("embed payload %d description len = %d, want <= 4096", i, utf8.RuneCountInString(payload.Embeds[0].Description))
+		}
+		if strings.Contains(payload.Embeds[0].Description, "super-secret-token-456") {
+			t.Fatalf("embed payload %d leaked secret: %q", i, payload.Embeds[0].Description)
+		}
+		if payload.AllowedMentions == nil {
+			t.Fatalf("embed payload %d missing allowed_mentions suppression: %s", i, body)
+		}
 	}
 }

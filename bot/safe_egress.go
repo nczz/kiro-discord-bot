@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/nczz/kiro-discord-bot/internal/botegress"
@@ -115,6 +116,12 @@ func (t *safeEgressTask) sendFile(action botegress.Action) error {
 	if closer, ok := file.Reader.(*os.File); ok {
 		defer closer.Close()
 	}
+	if utf8.RuneCountInString(content) > discordReplyLimit {
+		if _, err := channelSendSanitized(t.bot.discord, action.ChannelID, content); err != nil {
+			return err
+		}
+		content = ""
+	}
 	msg := &discordgo.MessageSend{
 		Content:         content,
 		Files:           []*discordgo.File{file},
@@ -142,13 +149,33 @@ func (t *safeEgressTask) sendSafeFailure(action botegress.Action, err error) {
 	_, _ = channelSendSanitized(t.bot.discord, channelID, msg)
 }
 
-func channelSendSanitized(ds *discordgo.Session, channelID, content string) (*discordgo.Message, error) {
+func channelSendSanitized(ds *discordgo.Session, channelID, content string) (int, error) {
 	if ds == nil || channelID == "" || content == "" {
-		return nil, nil
+		return 0, nil
 	}
-	return ds.ChannelMessageSendComplex(channelID, &discordgo.MessageSend{
-		Content:         content,
-		AllowedMentions: &discordgo.MessageAllowedMentions{},
-		Flags:           discordgo.MessageFlagsSuppressEmbeds,
-	})
+	parts := splitDiscordMessage(content, discordReplyLimit)
+	if len(parts) == 0 {
+		return 0, nil
+	}
+	sent := 0
+	var firstErr error
+	for i, part := range parts {
+		if len(parts) > 1 {
+			part = formatReplyPart(i, len(parts), part)
+		}
+		_, err := ds.ChannelMessageSendComplex(channelID, &discordgo.MessageSend{
+			Content:         part,
+			AllowedMentions: &discordgo.MessageAllowedMentions{},
+			Flags:           discordgo.MessageFlagsSuppressEmbeds,
+		})
+		if err != nil {
+			log.Printf("[safe-egress] send channel=%s part=%d/%d failed: %v", channelID, i+1, len(parts), err)
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		sent++
+	}
+	return sent, firstErr
 }

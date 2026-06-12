@@ -53,9 +53,10 @@ func (b *Bot) sendCWDPanel(ds *discordgo.Session, i *discordgo.InteractionCreate
 	content, components := b.buildCWDPanel(ctx.channelID, prefix)
 	content = secrets.RedactEnv(content)
 	sent, err := ds.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{
-		Content:    content,
-		Components: components,
-		Flags:      discordgo.MessageFlagsEphemeral,
+		Content:         content,
+		Components:      components,
+		AllowedMentions: &discordgo.MessageAllowedMentions{},
+		Flags:           discordgo.MessageFlagsEphemeral,
 	})
 	b.recordCommandResponseDelivery(ctx, "cwd", "slash", "sent", content, map[string]any{"has_components": len(components) > 0, "ephemeral": true, "cwd_ui": "panel"}, sent, err)
 }
@@ -294,7 +295,8 @@ func (b *Bot) confirmCWDSelection(ds *discordgo.Session, i *discordgo.Interactio
 	if err := ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseUpdateMessage,
 		Data: &discordgo.InteractionResponseData{
-			Content: content,
+			Content:         content,
+			AllowedMentions: &discordgo.MessageAllowedMentions{},
 			Components: []discordgo.MessageComponent{
 				cwdConfirmButtons(channelID, token, page),
 			},
@@ -325,8 +327,9 @@ func (b *Bot) updateCWDComponentPanel(ds *discordgo.Session, i *discordgo.Intera
 	if err := ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseUpdateMessage,
 		Data: &discordgo.InteractionResponseData{
-			Content:    content,
-			Components: components,
+			Content:         content,
+			Components:      components,
+			AllowedMentions: &discordgo.MessageAllowedMentions{},
 		},
 	}); err != nil {
 		log.Printf("[cwd-ui] update failed action_channel=%s: %v", channelID, err)
@@ -372,9 +375,10 @@ func (b *Bot) handleCWDModalSubmit(ds *discordgo.Session, i *discordgo.Interacti
 	if err := ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseChannelMessageWithSource,
 		Data: &discordgo.InteractionResponseData{
-			Content:    content,
-			Components: cwdSetupCompleteComponents(channelID),
-			Flags:      discordgo.MessageFlagsEphemeral,
+			Content:         content,
+			Components:      cwdSetupCompleteComponents(channelID),
+			AllowedMentions: &discordgo.MessageAllowedMentions{},
+			Flags:           discordgo.MessageFlagsEphemeral,
 		},
 	}); err != nil {
 		log.Printf("[cwd-ui] modal submit response failed: %v", err)
@@ -386,8 +390,9 @@ func (b *Bot) completeCWDSetupInteraction(ds *discordgo.Session, i *discordgo.In
 	if err := ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseUpdateMessage,
 		Data: &discordgo.InteractionResponseData{
-			Content:    msg,
-			Components: cwdSetupCompleteComponents(channelID),
+			Content:         msg,
+			Components:      cwdSetupCompleteComponents(channelID),
+			AllowedMentions: &discordgo.MessageAllowedMentions{},
 		},
 	}); err != nil {
 		log.Printf("[cwd-ui] complete setup update failed: %v", err)
@@ -411,7 +416,9 @@ func (b *Bot) sendChannelSetupPrompt(ds *discordgo.Session, m *discordgo.Message
 	}
 	if b.userCanManageAuditTarget(ds, m.Author.ID, m.ChannelID) {
 		_, _ = ds.ChannelMessageSendComplex(m.ChannelID, &discordgo.MessageSend{
-			Content: secrets.RedactEnv(L.Get("cwd.setup.channel_uninitialized_admin")),
+			Content:         secrets.RedactEnv(L.Get("cwd.setup.channel_uninitialized_admin")),
+			AllowedMentions: &discordgo.MessageAllowedMentions{},
+			Flags:           discordgo.MessageFlagsSuppressEmbeds,
 			Components: []discordgo.MessageComponent{
 				discordgo.ActionsRow{Components: []discordgo.MessageComponent{
 					discordgo.Button{
@@ -425,7 +432,7 @@ func (b *Bot) sendChannelSetupPrompt(ds *discordgo.Session, m *discordgo.Message
 		})
 		return
 	}
-	_, _ = ds.ChannelMessageSendReply(m.ChannelID, secrets.RedactEnv(L.Get("cwd.setup.channel_uninitialized_user")), &discordgo.MessageReference{MessageID: m.ID, ChannelID: m.ChannelID})
+	_, _ = sendDiscordText(ds, m.ChannelID, L.Get("cwd.setup.channel_uninitialized_user"), &discordgo.MessageReference{MessageID: m.ID, ChannelID: m.ChannelID})
 }
 
 func (b *Bot) sendThreadSetupPrompt(ds *discordgo.Session, m *discordgo.MessageCreate, parentChannelID string) {
@@ -437,7 +444,9 @@ func (b *Bot) sendThreadSetupPrompt(ds *discordgo.Session, m *discordgo.MessageC
 	}
 	if b.userCanManageAuditTarget(ds, m.Author.ID, parentChannelID) {
 		_, _ = ds.ChannelMessageSendComplex(m.ChannelID, &discordgo.MessageSend{
-			Content: secrets.RedactEnv(L.Get("cwd.setup.thread_uninitialized_admin")),
+			Content:         secrets.RedactEnv(L.Get("cwd.setup.thread_uninitialized_admin")),
+			AllowedMentions: &discordgo.MessageAllowedMentions{},
+			Flags:           discordgo.MessageFlagsSuppressEmbeds,
 			Components: []discordgo.MessageComponent{
 				discordgo.ActionsRow{Components: []discordgo.MessageComponent{
 					discordgo.Button{
@@ -451,7 +460,7 @@ func (b *Bot) sendThreadSetupPrompt(ds *discordgo.Session, m *discordgo.MessageC
 		})
 		return
 	}
-	_, _ = ds.ChannelMessageSendReply(m.ChannelID, secrets.RedactEnv(L.Get("cwd.setup.thread_uninitialized_user")), &discordgo.MessageReference{MessageID: m.ID, ChannelID: m.ChannelID})
+	_, _ = sendDiscordText(ds, m.ChannelID, L.Get("cwd.setup.thread_uninitialized_user"), &discordgo.MessageReference{MessageID: m.ID, ChannelID: m.ChannelID})
 }
 
 func cwdComponentID(parts ...string) string {

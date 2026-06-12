@@ -279,7 +279,7 @@ func (b *Bot) warnIfAttachmentsLarge(ds *discordgo.Session, channelID string, pa
 	// base64 expansion ≈ ×1.37, use ×1.5 as safety margin
 	if int64(float64(total)*1.5) > int64(limit) {
 		mb := total / (1024 * 1024)
-		ds.ChannelMessageSend(channelID, secrets.RedactEnv(L.Getf("warn.attachments_large", mb, limit/(1024*1024))))
+		_, _ = sendDiscordText(ds, channelID, L.Getf("warn.attachments_large", mb, limit/(1024*1024)), nil)
 	}
 }
 
@@ -428,7 +428,7 @@ func buildPrompt(text string, attachments []string, channelID, guildID, username
 func buildPromptThread(text string, attachments []string, channelID, threadID, guildID, username, peerContext string) string {
 	var sb strings.Builder
 	sb.WriteString("[Discord bot environment] Your responses are automatically forwarded to a Discord thread. Each message is split at 2000 chars. Tool execution details are also shown.\n")
-	sb.WriteString("Do not call bot_send_message for ordinary replies or final answers; write the reply normally and the bot will deliver it. Use bot_send_message only when the user explicitly asks you to send a separate Discord message, notify another target, or perform scheduled/cron egress.\n")
+	sb.WriteString("Do not call bot_send_message for ordinary replies or final answers; write the reply normally and the bot will redact, split, and deliver it. bot_send_message is not default-enabled; if it is available, use it only when the user explicitly asks you to send a separate extra Discord message, notify another target, or hand off to another bot.\n")
 	sb.WriteString("For cron management tools, use channel_id as the owning parent channel ID; use thread_id only for thread-targeted Discord messages.\n")
 	if threadID != "" {
 		sb.WriteString(fmt.Sprintf("[Discord context] channel_id=%s thread_id=%s guild_id=%s user=%s\n\n", channelID, threadID, guildID, username))
@@ -527,13 +527,13 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 	auditCtx := ctxForAudit(m.ChannelID, m.ChannelID, false, m.GuildID, m.Author.ID, m.Author.Username)
 	auditCtx.messageID = m.ID
 	reply := func(msg string) {
-		sent, err := ds.ChannelMessageSendReply(m.ChannelID, msg, &discordgo.MessageReference{MessageID: m.ID, ChannelID: m.ChannelID})
+		sent, err := sendDiscordText(ds, m.ChannelID, msg, &discordgo.MessageReference{MessageID: m.ID, ChannelID: m.ChannelID})
 		if isKnownCommand {
 			b.recordCommandResponseDelivery(auditCtx, bangCommand, "message", "sent", msg, nil, sent, err)
 		}
 	}
 	replyWithMetadata := func(msg string, metadata map[string]any) {
-		sent, err := ds.ChannelMessageSendReply(m.ChannelID, msg, &discordgo.MessageReference{MessageID: m.ID, ChannelID: m.ChannelID})
+		sent, err := sendDiscordText(ds, m.ChannelID, msg, &discordgo.MessageReference{MessageID: m.ID, ChannelID: m.ChannelID})
 		if isKnownCommand {
 			b.recordCommandResponseDelivery(auditCtx, bangCommand, "message", "sent", msg, metadata, sent, err)
 		}
@@ -684,7 +684,7 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 		}
 		if err := b.manager.Enqueue(ds, job); err != nil {
 			ds.MessageReactionRemove(m.ChannelID, m.ID, "⏳", "@me")
-			ds.ChannelMessageSend(m.ChannelID, secrets.RedactEnv(L.Getf("error.generic", err.Error())))
+			_, _ = sendDiscordText(ds, m.ChannelID, L.Getf("error.generic", err.Error()), nil)
 		}
 	}
 }
@@ -697,7 +697,7 @@ func (b *Bot) handleThreadUpdate(ds *discordgo.Session, t *discordgo.ThreadUpdat
 			if deferred {
 				log.Printf("[handler] thread %s archived while agent is active; scheduled stop after current job", t.ID)
 				if t.ParentID != "" {
-					_, _ = ds.ChannelMessageSend(t.ParentID, secrets.RedactEnv(L.Getf("thread_agent.archive_deferred", t.ID)))
+					_, _ = sendDiscordText(ds, t.ParentID, L.Getf("thread_agent.archive_deferred", t.ID), nil)
 				}
 			} else if stopped {
 				log.Printf("[handler] thread %s archived, stopping thread agent", t.ID)
@@ -714,15 +714,13 @@ func (b *Bot) handleThreadMessage(ds *discordgo.Session, m *discordgo.MessageCre
 	auditCtx := ctxForAudit(parentChannelID, threadID, true, m.GuildID, m.Author.ID, m.Author.Username)
 	auditCtx.messageID = m.ID
 	reply := func(msg string) {
-		msg = secrets.RedactEnv(msg)
-		sent, err := ds.ChannelMessageSend(threadID, msg)
+		sent, err := sendDiscordText(ds, threadID, msg, nil)
 		if isKnownCommand {
 			b.recordCommandResponseDelivery(auditCtx, bangCommand, "thread_message", "sent", msg, nil, sent, err)
 		}
 	}
 	replyWithMetadata := func(msg string, metadata map[string]any) {
-		msg = secrets.RedactEnv(msg)
-		sent, err := ds.ChannelMessageSend(threadID, msg)
+		sent, err := sendDiscordText(ds, threadID, msg, nil)
 		if isKnownCommand {
 			b.recordCommandResponseDelivery(auditCtx, bangCommand, "thread_message", "sent", msg, metadata, sent, err)
 		}
@@ -900,7 +898,7 @@ func (b *Bot) handleThreadMessage(ds *discordgo.Session, m *discordgo.MessageCre
 	}
 	if err := b.manager.EnqueueThread(ds, job, parentChannelID); err != nil {
 		ds.MessageReactionRemove(threadID, m.ID, "⏳", "@me")
-		ds.ChannelMessageSend(threadID, secrets.RedactEnv(commandError(err)))
+		_, _ = sendDiscordText(ds, threadID, commandError(err), nil)
 	}
 }
 
@@ -1155,8 +1153,9 @@ func (b *Bot) handleSlashCommand(ds *discordgo.Session, i *discordgo.Interaction
 		err := ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
 			Data: &discordgo.InteractionResponseData{
-				Content: msg,
-				Flags:   discordgo.MessageFlagsEphemeral,
+				Content:         msg,
+				AllowedMentions: &discordgo.MessageAllowedMentions{},
+				Flags:           discordgo.MessageFlagsEphemeral,
 			},
 		})
 		b.recordInteractionResponseDelivery(auditCtx, data.Name, "rejected", msg, discordgo.InteractionResponseChannelMessageWithSource, map[string]any{"ephemeral": true}, err)
@@ -1178,8 +1177,9 @@ func (b *Bot) handleSlashCommand(ds *discordgo.Session, i *discordgo.Interaction
 		err := ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
 			Data: &discordgo.InteractionResponseData{
-				Content: msg,
-				Flags:   discordgo.MessageFlagsEphemeral,
+				Content:         msg,
+				AllowedMentions: &discordgo.MessageAllowedMentions{},
+				Flags:           discordgo.MessageFlagsEphemeral,
 			},
 		})
 		b.recordInteractionResponseDelivery(auditCtx, data.Name, "rejected", msg, discordgo.InteractionResponseChannelMessageWithSource, map[string]any{"ephemeral": true}, err)
@@ -1265,16 +1265,18 @@ func (b *Bot) handleSlashCommand(ds *discordgo.Session, i *discordgo.Interaction
 	reply := func(msg string) {
 		msg = secrets.RedactEnv(msg)
 		sent, err := ds.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{
-			Content: msg,
-			Flags:   commandInteractionFlags(visibility),
+			Content:         msg,
+			AllowedMentions: &discordgo.MessageAllowedMentions{},
+			Flags:           commandInteractionFlags(visibility),
 		})
 		b.recordCommandResponseDelivery(auditCtx, data.Name, "slash", "sent", msg, visibilityMetadata, sent, err)
 	}
 	replyWithMetadata := func(msg string, metadata map[string]any) {
 		msg = secrets.RedactEnv(msg)
 		sent, err := ds.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{
-			Content: msg,
-			Flags:   commandInteractionFlags(visibility),
+			Content:         msg,
+			AllowedMentions: &discordgo.MessageAllowedMentions{},
+			Flags:           commandInteractionFlags(visibility),
 		})
 		b.recordCommandResponseDelivery(auditCtx, data.Name, "slash", "sent", msg, mergeMetadata(metadata, visibilityMetadata), sent, err)
 	}

@@ -383,6 +383,7 @@ func (s *MCPPolicyStore) GetPolicy(ctx context.Context, guildID, channelID, serv
 	if t, err := time.Parse(time.RFC3339, updatedAt); err == nil {
 		p.UpdatedAt = t
 	}
+	p = normalizeLegacyDefaultBotToolsPolicy(p)
 	return p, nil
 }
 
@@ -529,6 +530,52 @@ func (p MCPChannelPolicy) EffectiveTools() []string {
 	return normalizeStrings(p.AllowedTools)
 }
 
+func normalizeLegacyDefaultBotToolsPolicy(p MCPChannelPolicy) MCPChannelPolicy {
+	if p.ServerName != "bot-tools" || !p.Enabled || p.AllowAllTools || p.ReadOnly || p.AllowDestructive {
+		return p
+	}
+	if p.Preset != "safe-write" {
+		return p
+	}
+	tools := normalizeStrings(p.AllowedTools)
+	legacy := []string{
+		"bot_create_cron",
+		"bot_data_summary",
+		"bot_list_channel_data",
+		"bot_list_cron",
+		"bot_send_file",
+		"bot_send_message",
+	}
+	if !sameStringSet(tools, legacy) {
+		return p
+	}
+	p.AllowedTools = []string{
+		"bot_create_cron",
+		"bot_data_summary",
+		"bot_list_channel_data",
+		"bot_list_cron",
+		"bot_send_file",
+	}
+	return p
+}
+
+func sameStringSet(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	am := make(map[string]int, len(a))
+	for _, item := range a {
+		am[item]++
+	}
+	for _, item := range b {
+		if am[item] == 0 {
+			return false
+		}
+		am[item]--
+	}
+	return true
+}
+
 func (p MCPChannelPolicy) ApplyPreset(preset string) MCPChannelPolicy {
 	switch strings.TrimSpace(preset) {
 	case "read":
@@ -571,6 +618,12 @@ func (p MCPChannelPolicy) ToACPServer(entry MCPCatalogEntry, proxyCommand string
 			env["BOT_TOOLS_CHANNEL_ID"] = channelID
 			env["BOT_TOOLS_TARGET_CHANNEL_ID"] = strings.TrimSpace(targetChannelID)
 			env["BOT_TOOLS_GUILD_ID"] = guildID
+			if strings.TrimSpace(targetChannelID) == "" || strings.TrimSpace(targetChannelID) == channelID {
+				if statePath := botToolsTargetStatePath(env["DATA_DIR"], channelID); statePath != "" {
+					env["BOT_TOOLS_TARGET_STATE_PATH"] = statePath
+				}
+			}
+		} else if entry.Name == "mcp-discord" {
 			if strings.TrimSpace(targetChannelID) == "" || strings.TrimSpace(targetChannelID) == channelID {
 				if statePath := botToolsTargetStatePath(env["DATA_DIR"], channelID); statePath != "" {
 					env["BOT_TOOLS_TARGET_STATE_PATH"] = statePath

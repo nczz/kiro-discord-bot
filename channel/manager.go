@@ -509,16 +509,16 @@ func (m *Manager) agentOptsForTempChannel(name, channelID string) acp.AgentOptio
 		return opts
 	}
 	for i := range opts.MCPServers {
-		if opts.MCPServers[i].Name == "bot-tools" {
+		if opts.MCPServers[i].Name == "bot-tools" || opts.MCPServers[i].Name == "mcp-discord" {
 			var targetEnv map[string]string
 			if err := json.Unmarshal([]byte(opts.MCPServers[i].Env["MCP_PROXY_ENV_JSON"]), &targetEnv); err != nil {
-				log.Printf("[mcp-policy] decode temp bot-tools env: %v", err)
+				log.Printf("[mcp-policy] decode temp %s env: %v", opts.MCPServers[i].Name, err)
 				continue
 			}
 			targetEnv["BOT_TOOLS_TARGET_STATE_PATH"] = statePath
 			raw, err := json.Marshal(targetEnv)
 			if err != nil {
-				log.Printf("[mcp-policy] encode temp bot-tools env: %v", err)
+				log.Printf("[mcp-policy] encode temp %s env: %v", opts.MCPServers[i].Name, err)
 				continue
 			}
 			opts.MCPServers[i].Env["MCP_PROXY_ENV_JSON"] = string(raw)
@@ -625,7 +625,7 @@ func (m *Manager) Enqueue(ds *discordgo.Session, job *Job) error {
 	qLen := worker.QueueLen()
 	_ = ds.MessageReactionAdd(job.ChannelID, job.MessageID, "⏳")
 	if qLen > 1 && job.DeliveryMode != DeliveryInline {
-		_, _ = ds.ChannelMessageSendReply(job.ChannelID, L.Getf("status.queued", qLen), &discordgo.MessageReference{
+		_, _ = sendDiscordText(ds, job.ChannelID, L.Getf("status.queued", qLen), &discordgo.MessageReference{
 			MessageID: job.MessageID,
 			ChannelID: job.ChannelID,
 		})

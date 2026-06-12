@@ -3,7 +3,9 @@ package bot
 import (
 	"strings"
 
+	"github.com/bwmarrin/discordgo"
 	"github.com/nczz/kiro-discord-bot/internal/discordfmt"
+	"github.com/nczz/kiro-discord-bot/internal/secrets"
 )
 
 const discordReplyLimit = 1900
@@ -56,4 +58,25 @@ func splitDiscordMessage(content string, limit int) []string {
 		limit = discordReplyLimit
 	}
 	return discordfmt.Split(content, limit)
+}
+
+func sendDiscordText(ds *discordgo.Session, channelID, content string, ref *discordgo.MessageReference) (*discordgo.Message, error) {
+	content = secrets.RedactEnv(content)
+	return ds.ChannelMessageSendComplex(channelID, &discordgo.MessageSend{
+		Content:         content,
+		AllowedMentions: &discordgo.MessageAllowedMentions{},
+		Flags:           discordgo.MessageFlagsSuppressEmbeds,
+		Reference:       ref,
+	})
+}
+
+func editDiscordText(ds *discordgo.Session, channelID, messageID, content string) (*discordgo.Message, error) {
+	content = secrets.RedactEnv(content)
+	return ds.ChannelMessageEditComplex(&discordgo.MessageEdit{
+		ID:              messageID,
+		Channel:         channelID,
+		Content:         &content,
+		AllowedMentions: &discordgo.MessageAllowedMentions{},
+		Flags:           discordgo.MessageFlagsSuppressEmbeds,
+	})
 }

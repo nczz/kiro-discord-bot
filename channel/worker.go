@@ -450,7 +450,7 @@ func (w *Worker) execute(job *Job) {
 
 	// Post initial status in thread
 	if job.Transcript != "" {
-		ds.ChannelMessageSend(threadID, secrets.RedactEnv(L.Get("stt.prefix")+job.Transcript))
+		_, _ = SendLongThread(ds, threadID, L.Get("stt.prefix")+job.Transcript)
 	}
 	SendProcessMessage(ds, threadID, "🔄 "+L.Get("worker.processing"))
 
@@ -622,7 +622,7 @@ func (w *Worker) execute(job *Job) {
 
 			// Warn if context usage is high
 			if usage := w.agent.ContextUsage(); usage >= 90 {
-				ds.ChannelMessageSend(threadID, secrets.RedactEnv("⚠️ "+L.Getf("context.usage_warning", usage)))
+				SendProcessMessage(ds, threadID, "⚠️ "+L.Getf("context.usage_warning", usage))
 			}
 
 			finishJob()
@@ -644,7 +644,7 @@ func (w *Worker) execute(job *Job) {
 			w.channelID, job.Username, job.MessageID, time.Since(startTime).Round(time.Millisecond), err)
 		if !w.isSilent() {
 			msg := L.Getf("error.agent_read", err)
-			ds.ChannelMessageSend(threadID, secrets.RedactEnv(msg))
+			SendProcessMessage(ds, threadID, msg)
 			swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "⚠️")
 			swapReaction(ds, job.ChannelID, job.MessageID, "⚙️", "⚠️")
 		}
@@ -1167,8 +1167,9 @@ func (w *Worker) executeFallback(job *Job) {
 		log.Printf("[worker %s] write fallback bot-tools target state: %v", w.channelID, err)
 	}
 
-	replyMsg, err := ds.ChannelMessageSendReply(job.ChannelID, "🔄 "+L.Get("worker.processing"), &discordgo.MessageReference{
-		MessageID: job.MessageID, ChannelID: job.ChannelID,
+	replyMsg, err := sendDiscordText(ds, job.ChannelID, "🔄 "+L.Get("worker.processing"), &discordgo.MessageReference{
+		MessageID: job.MessageID,
+		ChannelID: job.ChannelID,
 	})
 	if err != nil {
 		swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "❌")
@@ -1233,7 +1234,13 @@ func editMessage(ds *discordgo.Session, channelID, msgID, content string) {
 	if len(content) > 2000 {
 		content = truncateUTF8(content, 1997) + "..."
 	}
-	_, _ = ds.ChannelMessageEdit(channelID, msgID, content)
+	_, _ = ds.ChannelMessageEditComplex(&discordgo.MessageEdit{
+		ID:              msgID,
+		Channel:         channelID,
+		Content:         &content,
+		AllowedMentions: &discordgo.MessageAllowedMentions{},
+		Flags:           discordgo.MessageFlagsSuppressEmbeds,
+	})
 }
 
 func sendLong(ds *discordgo.Session, channelID, placeholderID, content string) {
@@ -1251,7 +1258,7 @@ func sendLong(ds *discordgo.Session, channelID, placeholderID, content string) {
 	editMessage(ds, channelID, placeholderID, prefix+parts[0])
 
 	for i := 1; i < len(parts); i++ {
-		_, _ = ds.ChannelMessageSend(channelID, secrets.RedactEnv(discordfmt.WithPartPrefix(parts[i], i, len(parts))))
+		_, _ = sendDiscordText(ds, channelID, secrets.RedactEnv(discordfmt.WithPartPrefix(parts[i], i, len(parts))), nil)
 	}
 }
 
@@ -1263,7 +1270,7 @@ func SendLongThread(ds *discordgo.Session, threadID, content string) (int, error
 	sentCount := 0
 	var firstErr error
 	for _, p := range parts {
-		if _, err := ds.ChannelMessageSend(threadID, p); err != nil {
+		if _, err := sendDiscordText(ds, threadID, p, nil); err != nil {
 			log.Printf("[send] thread %s failed: %v (len=%d)", threadID, err, len(p))
 			if firstErr == nil {
 				firstErr = err
@@ -1287,10 +1294,20 @@ func SendLongReply(ds *discordgo.Session, channelID, messageID, content string) 
 			p = discordfmt.WithPartPrefix(p, i, len(parts))
 		}
 		ref := &discordgo.MessageReference{MessageID: messageID, ChannelID: channelID}
-		if _, err := ds.ChannelMessageSendReply(channelID, p, ref); err != nil {
+		if _, err := sendDiscordText(ds, channelID, p, ref); err != nil {
 			log.Printf("[send] reply channel %s failed: %v (len=%d)", channelID, err, len(p))
 		}
 	}
+}
+
+func sendDiscordText(ds *discordgo.Session, channelID, content string, ref *discordgo.MessageReference) (*discordgo.Message, error) {
+	content = secrets.RedactEnv(content)
+	return ds.ChannelMessageSendComplex(channelID, &discordgo.MessageSend{
+		Content:         content,
+		AllowedMentions: &discordgo.MessageAllowedMentions{},
+		Flags:           discordgo.MessageFlagsSuppressEmbeds,
+		Reference:       ref,
+	})
 }
 
 func splitMessage(s string, limit int) []string {

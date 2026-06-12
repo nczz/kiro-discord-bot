@@ -69,6 +69,8 @@ docs/release.md  → release and deployment safety checklist
 - **ACP feature gating**：`session/load`、image prompt 必須先檢查 agent 的 `agentCapabilities`；`session/set_model`、`session/set_mode` 必須先用 `session/new` 回傳的 available models/modes 驗證 ID。不能只信任 RPC success，kiro-cli 可能在下一個 prompt 才暴露 invalid model。
 - **Session continuity 優先用 session/load**：agent 重啟時，如果 store 中有 SessionID 且 agent 支援 `loadSession`，優先用 `session/load` 恢復完整對話歷史。失敗時 fallback 到 `session/new` + `historyPrefix`。
 - **Discord MCP 安全邊界**：MCP guild/channel allowlist 與 write guard 在 `cmd/mcp-discord` 內執行。新增 Discord REST tool 時必須先判斷它是 guild-scoped、channel-scoped、global、read-only、write 或 destructive，並套用對應 policy。
+- **Discord 回覆格式化必須復用既有工具**：任何會送到 Discord 的長文字、MCP tool output、safe egress、thread/final response、reply、embed description，都不得自行實作分段、Markdown 降級、code fence 修補或分段 prefix。必須復用 `internal/discordfmt.Split` 與 `internal/discordfmt.WithPartPrefix`，或復用已建立在它們之上的專案封裝（例如 `bot` / `channel` 既有長訊息送出 helper）。若現有 helper 不足，先擴充共用 helper 並補測試，不要在 feature code 中複製一份 split 邏輯。
+- **MCP / egress security 與 audit 不可繞過**：任何 Discord 寫入路徑都必須保留對應的 allowlist、read-only/write/destructive guard、secret redaction、AllowedMentions 防護、delivery error handling 與 audit/語意事件紀錄。新增或修改 MCP tool 時，不得為了修復 UX 而直接改用裸 Discord API 繞過 policy proxy、safe egress pending queue、redactor 或既有 delivery wrapper。若需要分批送出，分批前仍先套用同一套 policy；每批送出也必須沿用同一套 redaction、mention suppression、錯誤處理與測試。
 - **Release preflight 不碰 runtime state**：preflight script 只能 build/test/check artifacts，不得停止/啟動 bot、修改 `DATA_DIR`、刪除 Docker volumes、改寫 `.env` 或觸發 Discord side effects。
 
 ## Collaboration（協作方式）
@@ -84,6 +86,8 @@ docs/release.md  → release and deployment safety checklist
 - 在 `acp/` 以外直接 spawn 或管理 kiro-cli process
 - 在 Manager `ValidateCWD` 以外接受使用者提供的 agent cwd
 - 新增 Discord MCP channel/guild 操作但未檢查 allowlist
+- 自行手寫 Discord 訊息分段、Markdown 包裝或 prefix 格式，而不是復用 `internal/discordfmt` 或既有長訊息 helper
+- 新增 Discord/MCP 寫入路徑但繞過 policy guard、secret redaction、AllowedMentions、防嵌入設定、delivery audit 或既有 safe egress pipeline
 - 忽略 Go error return（`err` 必須處理或顯式 `_ =` 標註理由）
 - 在 handler 層放業務邏輯（應透過 manager 操作）
 
@@ -94,6 +98,7 @@ docs/release.md  → release and deployment safety checklist
 - 新增 Discord command 時同步更新 `buildSlashCommands()` 和 handler dispatch
 - 修改 struct 欄位時檢查所有 caller 是否同步更新
 - 修改 Docker runtime 或 deployment env 時同步檢查 README、`.env.example`、`docker-compose.yml`
+- 修改 Discord 發訊息、檔案、embed、MCP egress 或 agent final response 時，檢查是否復用 `internal/discordfmt` / 既有 helper，並補長訊息、code block、UTF-8、reply/thread target、redaction / policy guard 測試
 - 發布或部署前跑 `scripts/release-preflight.sh`；需要真實 ACP 才加 `RUN_ACP_SMOKE=1 KIRO_CLI=...`
 - CI workflow 只跑不需要 secrets 的檢查；ACP smoke 必須留在本機或部署主機執行
 

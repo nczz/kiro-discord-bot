@@ -48,9 +48,11 @@ printf '%s\n%s\n%s\n' \
   | DATA_DIR="$(mktemp -d)" go run . mcp-bot
 ```
 
-The output should include `serverInfo.name="bot-tools"` and the expected tools:
+The output should include `serverInfo.name="bot-tools"` and the expected catalog tools:
 `bot_data_summary`, `bot_list_channel_data`, `bot_list_cron`, `bot_send_message`,
 `bot_send_file`, `bot_create_cron`, and `bot_delete_cron`.
+`bot_send_message` is a catalog tool only and is not default-enabled for new
+channels; `bot_send_file` remains default-enabled for safe file delivery.
 
 ## 4. GitHub Actions
 

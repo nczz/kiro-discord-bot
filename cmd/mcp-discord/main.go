@@ -17,10 +17,15 @@ import (
 	"github.com/bwmarrin/discordgo"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
+	"github.com/nczz/kiro-discord-bot/internal/discordfmt"
+	"github.com/nczz/kiro-discord-bot/internal/secrets"
 )
 
 var dg *discordgo.Session
 var policy discordPolicy
+
+const discordMessageLimit = 1900
+const discordEmbedDescriptionLimit = 3900
 
 type discordPolicy struct {
 	allowedGuilds     map[string]struct{}
@@ -118,6 +123,47 @@ func ensureChannelAllowed(channelID string) error {
 	}
 	if ch.GuildID == "" {
 		return fmt.Errorf("channel %s has no guild_id and guild allowlist is enabled", channelID)
+	}
+	return ensureGuildAllowed(ch.GuildID)
+}
+
+func resolveWriteTargetChannel(requestedChannelID string) string {
+	target := currentTargetStateChannelID()
+	if target == "" {
+		return requestedChannelID
+	}
+	if err := ensureGuildForDynamicTarget(target); err != nil {
+		log.Printf("[mcp-discord] ignoring dynamic target %s for requested channel %s: %v", target, requestedChannelID, err)
+		return requestedChannelID
+	}
+	return target
+}
+
+func currentTargetStateChannelID() string {
+	path := strings.TrimSpace(os.Getenv("BOT_TOOLS_TARGET_STATE_PATH"))
+	if path == "" {
+		return ""
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	var state struct {
+		TargetChannelID string `json:"target_channel_id"`
+	}
+	if err := json.Unmarshal(raw, &state); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(state.TargetChannelID)
+}
+
+func ensureGuildForDynamicTarget(channelID string) error {
+	if len(policy.allowedGuilds) == 0 {
+		return nil
+	}
+	ch, err := dg.Channel(channelID)
+	if err != nil {
+		return err
 	}
 	return ensureGuildAllowed(ch.GuildID)
 }
@@ -223,6 +269,145 @@ func safeAttachmentFilename(raw string) string {
 	return name
 }
 
+func sendDiscordMessageParts(channelID, content string) ([]*discordgo.Message, error) {
+	parts := discordfmt.Split(secrets.RedactEnv(content), discordMessageLimit)
+	if len(parts) == 0 {
+		return nil, fmt.Errorf("content is empty")
+	}
+	var sent []*discordgo.Message
+	var firstErr error
+	for i, part := range parts {
+		if len(parts) > 1 {
+			part = discordfmt.WithPartPrefix(part, i, len(parts))
+		}
+		msg, err := dg.ChannelMessageSendComplex(channelID, discordTextMessage(part))
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		sent = append(sent, msg)
+	}
+	return sent, firstErr
+}
+
+func replyDiscordMessageParts(channelID, messageID, content string) ([]*discordgo.Message, error) {
+	parts := discordfmt.Split(secrets.RedactEnv(content), discordMessageLimit)
+	if len(parts) == 0 {
+		return nil, fmt.Errorf("content is empty")
+	}
+	var sent []*discordgo.Message
+	var firstErr error
+	for i, part := range parts {
+		if len(parts) > 1 {
+			part = discordfmt.WithPartPrefix(part, i, len(parts))
+		}
+		var (
+			msg *discordgo.Message
+			err error
+		)
+		if i == 0 {
+			send := discordTextMessage(part)
+			send.Reference = &discordgo.MessageReference{MessageID: messageID, ChannelID: channelID}
+			msg, err = dg.ChannelMessageSendComplex(channelID, send)
+		} else {
+			msg, err = dg.ChannelMessageSendComplex(channelID, discordTextMessage(part))
+		}
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		sent = append(sent, msg)
+	}
+	return sent, firstErr
+}
+
+func messageIDs(messages []*discordgo.Message) string {
+	ids := make([]string, 0, len(messages))
+	for _, msg := range messages {
+		if msg != nil && msg.ID != "" {
+			ids = append(ids, msg.ID)
+		}
+	}
+	return strings.Join(ids, ", ")
+}
+
+func discordTextMessage(content string) *discordgo.MessageSend {
+	return &discordgo.MessageSend{
+		Content:         content,
+		AllowedMentions: &discordgo.MessageAllowedMentions{},
+		Flags:           discordgo.MessageFlagsSuppressEmbeds,
+	}
+}
+
+func sendDiscordEmbedParts(channelID string, embed *discordgo.MessageEmbed) ([]*discordgo.Message, error) {
+	if embed == nil {
+		return nil, fmt.Errorf("embed is nil")
+	}
+	embed = redactEmbed(embed)
+	parts := discordfmt.Split(embed.Description, discordEmbedDescriptionLimit)
+	if len(parts) == 0 {
+		parts = []string{""}
+	}
+	var sent []*discordgo.Message
+	var firstErr error
+	for i, part := range parts {
+		next := *embed
+		next.Description = part
+		if len(parts) > 1 {
+			next.Description = discordfmt.WithPartPrefix(part, i, len(parts))
+			if i > 0 {
+				next.Fields = nil
+			}
+		}
+		msg, err := dg.ChannelMessageSendComplex(channelID, &discordgo.MessageSend{
+			Embeds:          []*discordgo.MessageEmbed{&next},
+			AllowedMentions: &discordgo.MessageAllowedMentions{},
+			Flags:           discordgo.MessageFlagsSuppressEmbeds,
+		})
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		sent = append(sent, msg)
+	}
+	return sent, firstErr
+}
+
+func redactEmbed(embed *discordgo.MessageEmbed) *discordgo.MessageEmbed {
+	if embed == nil {
+		return nil
+	}
+	next := *embed
+	next.Title = secrets.RedactEnv(next.Title)
+	next.Description = secrets.RedactEnv(next.Description)
+	next.URL = secrets.RedactEnv(next.URL)
+	if next.Footer != nil {
+		footer := *next.Footer
+		footer.Text = secrets.RedactEnv(footer.Text)
+		next.Footer = &footer
+	}
+	if len(next.Fields) > 0 {
+		fields := make([]*discordgo.MessageEmbedField, 0, len(next.Fields))
+		for _, field := range next.Fields {
+			if field == nil {
+				continue
+			}
+			f := *field
+			f.Name = secrets.RedactEnv(f.Name)
+			f.Value = secrets.RedactEnv(f.Value)
+			fields = append(fields, &f)
+		}
+		next.Fields = fields
+	}
+	return &next
+}
+
 func ensureDiscord() error {
 	if dg != nil {
 		return nil
@@ -322,12 +507,13 @@ func main() {
 			if err := ensureWriteAllowed("discord_send_message", false); err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
+			chID = resolveWriteTargetChannel(chID)
 			content, _ := req.RequireString("content")
-			msg, err := dg.ChannelMessageSend(chID, content)
+			msgs, err := sendDiscordMessageParts(chID, content)
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
-			return mcp.NewToolResultText(fmt.Sprintf("Sent message %s", msg.ID)), nil
+			return mcp.NewToolResultText(fmt.Sprintf("Sent %d message part(s): %s", len(msgs), messageIDs(msgs))), nil
 		},
 	)
 
@@ -352,13 +538,11 @@ func main() {
 			}
 			msgID, _ := req.RequireString("message_id")
 			content, _ := req.RequireString("content")
-			msg, err := dg.ChannelMessageSendReply(chID, content, &discordgo.MessageReference{
-				MessageID: msgID, ChannelID: chID,
-			})
+			msgs, err := replyDiscordMessageParts(chID, msgID, content)
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
-			return mcp.NewToolResultText(fmt.Sprintf("Replied with message %s", msg.ID)), nil
+			return mcp.NewToolResultText(fmt.Sprintf("Replied with %d message part(s): %s", len(msgs), messageIDs(msgs))), nil
 		},
 	)
 
@@ -511,8 +695,9 @@ func main() {
 			if err := ensureWriteAllowed("discord_send_file", false); err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
+			chID = resolveWriteTargetChannel(chID)
 			filePath, _ := req.RequireString("file_path")
-			content := req.GetString("content", "")
+			content := secrets.RedactEnv(req.GetString("content", ""))
 
 			f, err := os.Open(filePath)
 			if err != nil {
@@ -528,8 +713,16 @@ func main() {
 				return mcp.NewToolResultError("file exceeds 25MB Discord limit"), nil
 			}
 
+			if len(discordfmt.Split(content, discordMessageLimit)) > 1 {
+				if _, err := sendDiscordMessageParts(chID, content); err != nil {
+					return mcp.NewToolResultError(err.Error()), nil
+				}
+				content = ""
+			}
 			msg, err := dg.ChannelMessageSendComplex(chID, &discordgo.MessageSend{
-				Content: content,
+				Content:         content,
+				AllowedMentions: &discordgo.MessageAllowedMentions{},
+				Flags:           discordgo.MessageFlagsSuppressEmbeds,
 				Files: []*discordgo.File{{
 					Name:   filepath.Base(filePath),
 					Reader: f,
@@ -659,7 +852,17 @@ func main() {
 			}
 			msgID, _ := req.RequireString("message_id")
 			content, _ := req.RequireString("content")
-			_, err := dg.ChannelMessageEdit(chID, msgID, content)
+			content = secrets.RedactEnv(content)
+			if len(discordfmt.Split(content, discordMessageLimit)) > 1 {
+				return mcp.NewToolResultError("content exceeds Discord edit limit; send a new split message instead"), nil
+			}
+			_, err := dg.ChannelMessageEditComplex(&discordgo.MessageEdit{
+				ID:              msgID,
+				Channel:         chID,
+				Content:         &content,
+				AllowedMentions: &discordgo.MessageAllowedMentions{},
+				Flags:           discordgo.MessageFlagsSuppressEmbeds,
+			})
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
@@ -749,6 +952,7 @@ func main() {
 			if err := ensureWriteAllowed("discord_send_embed", false); err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
+			chID = resolveWriteTargetChannel(chID)
 			title, _ := req.RequireString("title")
 			embed := &discordgo.MessageEmbed{
 				Title:       title,
@@ -771,11 +975,11 @@ func main() {
 				}
 				embed.Fields = fields
 			}
-			msg, err := dg.ChannelMessageSendEmbed(chID, embed)
+			msgs, err := sendDiscordEmbedParts(chID, embed)
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
-			return mcp.NewToolResultText(fmt.Sprintf("Sent embed message %s", msg.ID)), nil
+			return mcp.NewToolResultText(fmt.Sprintf("Sent %d embed message part(s): %s", len(msgs), messageIDs(msgs))), nil
 		},
 	)
 

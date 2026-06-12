@@ -28,9 +28,10 @@ func (b *Bot) sendMCPManagePanel(ds *discordgo.Session, i *discordgo.Interaction
 	content, components := b.buildMCPManagePanel(ctx.channelID, "")
 	content = secrets.RedactEnv(content)
 	sent, err := ds.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{
-		Content:    content,
-		Components: components,
-		Flags:      discordgo.MessageFlagsEphemeral,
+		Content:         content,
+		Components:      components,
+		AllowedMentions: &discordgo.MessageAllowedMentions{},
+		Flags:           discordgo.MessageFlagsEphemeral,
 	})
 	b.recordCommandResponseDelivery(ctx, "mcp", "slash", "sent", content, map[string]any{"has_components": true, "mcp_ui": "manage", "ephemeral": true}, sent, err)
 }
@@ -587,8 +588,9 @@ func respondInteractionEphemeral(ds *discordgo.Session, i *discordgo.Interaction
 	_ = ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseChannelMessageWithSource,
 		Data: &discordgo.InteractionResponseData{
-			Content: msg,
-			Flags:   discordgo.MessageFlagsEphemeral,
+			Content:         msg,
+			AllowedMentions: &discordgo.MessageAllowedMentions{},
+			Flags:           discordgo.MessageFlagsEphemeral,
 		},
 	})
 }

@@ -260,6 +260,9 @@ func TestManagerBuiltinMCPRequiresExplicitPolicy(t *testing.T) {
 		"CRON_TIMEZONE":  "Asia/Taipei",
 		"USAGE_TIMEZONE": "Asia/Taipei",
 	})
+	m.RegisterBuiltinMCP("mcp-discord", []string{"mcp-discord-server"}, map[string]string{
+		"DATA_DIR": dir,
+	})
 
 	opts := m.agentOptsForChannel("channel-1")
 	if len(opts.MCPServers) != 0 {
@@ -284,11 +287,26 @@ func TestManagerBuiltinMCPRequiresExplicitPolicy(t *testing.T) {
 	if err := m.SetMCPPolicy("channel-1", "user-1", "bot-tools", true, "full"); err != nil {
 		t.Fatalf("enable builtin policy: %v", err)
 	}
+	if err := m.SetMCPPolicy("channel-1", "user-1", "mcp-discord", true, "full"); err != nil {
+		t.Fatalf("enable mcp-discord policy: %v", err)
+	}
 	opts = m.agentOptsForChannel("channel-1")
-	if len(opts.MCPServers) != 1 || opts.MCPServers[0].Name != "bot-tools" {
+	if len(opts.MCPServers) != 2 {
 		t.Fatalf("explicitly enabled builtin should be injected: %+v", opts.MCPServers)
 	}
-	targetEnv := proxyTargetEnv(t, opts.MCPServers[0].Env)
+	var botToolsEnv, discordEnv map[string]string
+	for _, server := range opts.MCPServers {
+		switch server.Name {
+		case "bot-tools":
+			botToolsEnv = proxyTargetEnv(t, server.Env)
+		case "mcp-discord":
+			discordEnv = proxyTargetEnv(t, server.Env)
+		}
+	}
+	if botToolsEnv == nil || discordEnv == nil {
+		t.Fatalf("expected bot-tools and mcp-discord envs, got %+v", opts.MCPServers)
+	}
+	targetEnv := botToolsEnv
 	if targetEnv["DATA_DIR"] != dir {
 		t.Fatalf("builtin env missing data dir: %+v", targetEnv)
 	}
@@ -300,6 +318,9 @@ func TestManagerBuiltinMCPRequiresExplicitPolicy(t *testing.T) {
 	}
 	if targetEnv["BOT_TOOLS_TARGET_STATE_PATH"] != filepath.Join(dir, "bot-tools-targets", "channel-1.json") {
 		t.Fatalf("builtin env missing dynamic target state path: %+v", targetEnv)
+	}
+	if discordEnv["BOT_TOOLS_TARGET_STATE_PATH"] != filepath.Join(dir, "bot-tools-targets", "channel-1.json") {
+		t.Fatalf("mcp-discord env missing dynamic target state path: %+v", discordEnv)
 	}
 	if err := m.SetBotToolsTargetState("channel-1", "thread-1"); err != nil {
 		t.Fatalf("set target state: %v", err)
@@ -317,16 +338,38 @@ func TestManagerBuiltinMCPRequiresExplicitPolicy(t *testing.T) {
 	}
 
 	tempOpts := m.agentOptsForTempChannel("cron-job-1", "channel-1")
-	tempEnv := proxyTargetEnv(t, tempOpts.MCPServers[0].Env)
+	var tempEnv, tempDiscordEnv map[string]string
+	for _, server := range tempOpts.MCPServers {
+		switch server.Name {
+		case "bot-tools":
+			tempEnv = proxyTargetEnv(t, server.Env)
+		case "mcp-discord":
+			tempDiscordEnv = proxyTargetEnv(t, server.Env)
+		}
+	}
+	if tempEnv == nil || tempDiscordEnv == nil {
+		t.Fatalf("expected temp bot-tools and mcp-discord envs, got %+v", tempOpts.MCPServers)
+	}
 	if tempEnv["BOT_TOOLS_CHANNEL_ID"] != "channel-1" || tempEnv["BOT_TOOLS_TARGET_CHANNEL_ID"] != "channel-1" {
 		t.Fatalf("temp builtin env missing channel binding: %+v", tempEnv)
 	}
 	if tempEnv["BOT_TOOLS_TARGET_STATE_PATH"] != filepath.Join(dir, "bot-tools-targets", "cron-job-1.json") {
 		t.Fatalf("temp target state path = %q, want cron-specific path", tempEnv["BOT_TOOLS_TARGET_STATE_PATH"])
 	}
+	if tempDiscordEnv["BOT_TOOLS_TARGET_STATE_PATH"] != filepath.Join(dir, "bot-tools-targets", "cron-job-1.json") {
+		t.Fatalf("temp mcp-discord target state path = %q, want cron-specific path", tempDiscordEnv["BOT_TOOLS_TARGET_STATE_PATH"])
+	}
 
 	threadOpts := m.agentOptsForTarget("channel-1", "thread-1")
-	threadEnv := proxyTargetEnv(t, threadOpts.MCPServers[0].Env)
+	var threadEnv map[string]string
+	for _, server := range threadOpts.MCPServers {
+		if server.Name == "bot-tools" {
+			threadEnv = proxyTargetEnv(t, server.Env)
+		}
+	}
+	if threadEnv == nil {
+		t.Fatalf("expected thread bot-tools env, got %+v", threadOpts.MCPServers)
+	}
 	if threadEnv["BOT_TOOLS_CHANNEL_ID"] != "channel-1" || threadEnv["BOT_TOOLS_TARGET_CHANNEL_ID"] != "thread-1" {
 		t.Fatalf("builtin env missing thread target binding: %+v", threadEnv)
 	}
@@ -339,6 +382,9 @@ func TestManagerBuiltinMCPRequiresExplicitPolicy(t *testing.T) {
 
 	if err := m.SetMCPPolicy("channel-1", "user-1", "bot-tools", false, "full"); err != nil {
 		t.Fatalf("disable builtin policy: %v", err)
+	}
+	if err := m.SetMCPPolicy("channel-1", "user-1", "mcp-discord", false, "full"); err != nil {
+		t.Fatalf("disable mcp-discord policy: %v", err)
 	}
 	if got := m.agentOptsForChannel("channel-1").MCPServers; len(got) != 0 {
 		t.Fatalf("explicit disabled builtin must not be injected: %+v", got)
@@ -361,8 +407,62 @@ func TestManagerEnableDefaultBotToolsUsesSafeAllowlist(t *testing.T) {
 	if !p.Enabled || p.AllowAllTools || p.ReadOnly || p.AllowDestructive {
 		t.Fatalf("default bot-tools policy is not safe-write allowlist: %+v", p)
 	}
-	if tools := strings.Join(p.EffectiveTools(), ","); strings.Contains(tools, "bot_delete_cron") || !strings.Contains(tools, "bot_send_message") {
+	if tools := strings.Join(p.EffectiveTools(), ","); strings.Contains(tools, "bot_delete_cron") || strings.Contains(tools, "bot_send_message") || !strings.Contains(tools, "bot_send_file") || !strings.Contains(tools, "bot_create_cron") {
 		t.Fatalf("unexpected default tools: %q", tools)
+	}
+}
+
+func TestLegacyDefaultBotToolsPolicyDropsEgressTools(t *testing.T) {
+	dir := t.TempDir()
+	store, err := OpenMCPPolicyStore(dir)
+	if err != nil {
+		t.Fatalf("open policy store: %v", err)
+	}
+	defer store.Close()
+
+	legacy := defaultMCPPolicy("guild-1", "channel-1", "bot-tools")
+	legacy.Enabled = true
+	legacy.Preset = "safe-write"
+	legacy.ReadOnly = false
+	legacy.AllowAllTools = false
+	legacy.AllowDestructive = false
+	legacy.AllowedTools = []string{
+		"bot_data_summary",
+		"bot_list_channel_data",
+		"bot_list_cron",
+		"bot_send_message",
+		"bot_send_file",
+		"bot_create_cron",
+	}
+	if err := store.SetPolicy(context.Background(), legacy); err != nil {
+		t.Fatalf("set legacy policy: %v", err)
+	}
+
+	got, err := store.GetPolicy(context.Background(), "guild-1", "channel-1", "bot-tools")
+	if err != nil {
+		t.Fatalf("get policy: %v", err)
+	}
+	tools := strings.Join(got.EffectiveTools(), ",")
+	if strings.Contains(tools, "bot_send_message") {
+		t.Fatalf("legacy default message egress tool was not removed: %+v", got.EffectiveTools())
+	}
+	if !strings.Contains(tools, "bot_create_cron") || !strings.Contains(tools, "bot_send_file") {
+		t.Fatalf("legacy normalization removed allowed default tools: %+v", got.EffectiveTools())
+	}
+}
+
+func TestCustomBotToolsPolicyKeepsExplicitEgressTool(t *testing.T) {
+	p := defaultMCPPolicy("guild-1", "channel-1", "bot-tools")
+	p.Enabled = true
+	p.Preset = "safe-write"
+	p.ReadOnly = false
+	p.AllowAllTools = false
+	p.AllowDestructive = false
+	p.AllowedTools = []string{"bot_send_message"}
+
+	got := normalizeLegacyDefaultBotToolsPolicy(p)
+	if !containsString(got.EffectiveTools(), "bot_send_message") {
+		t.Fatalf("custom explicit egress tool should be preserved: %+v", got.EffectiveTools())
 	}
 }
 

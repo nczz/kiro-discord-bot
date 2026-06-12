@@ -86,8 +86,11 @@ func TestDefaultSafeToolNamesExcludeDestructiveTools(t *testing.T) {
 	if seen[ToolDeleteCron] {
 		t.Fatalf("destructive tool %s must not be default-enabled", ToolDeleteCron)
 	}
-	if !seen[ToolSendMessage] || !seen[ToolSendFile] {
-		t.Fatalf("safe egress tools missing from default safe tools: %+v", tools)
+	if seen[ToolSendMessage] {
+		t.Fatalf("message egress tool must not be default-enabled for ordinary replies: %+v", tools)
+	}
+	if !seen[ToolSendFile] {
+		t.Fatalf("file egress tool should be default-enabled for interactive file delivery: %+v", tools)
 	}
 }
 

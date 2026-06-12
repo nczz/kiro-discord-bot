@@ -212,9 +212,10 @@ func (b *Bot) handleCronList(ds *discordgo.Session, i *discordgo.InteractionCrea
 		content, components := buildCronCard(job)
 		content = secrets.RedactEnv(content)
 		sent, err := ds.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{
-			Content:    content,
-			Components: components,
-			Flags:      commandInteractionFlags(visibility),
+			Content:         content,
+			Components:      components,
+			AllowedMentions: &discordgo.MessageAllowedMentions{},
+			Flags:           commandInteractionFlags(visibility),
 		})
 		b.recordCommandResponseDelivery(auditCtx, command, "slash", "sent", content, mergeMetadata(map[string]any{"part_index": index + 1, "part_total": len(jobs), "has_components": true}, visibilityMetadata), sent, err)
 	}
@@ -416,8 +417,9 @@ func (b *Bot) respondInteractionForCommand(ds *discordgo.Session, i *discordgo.I
 	err := ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseChannelMessageWithSource,
 		Data: &discordgo.InteractionResponseData{
-			Content: msg,
-			Flags:   commandInteractionFlags(visibility),
+			Content:         msg,
+			AllowedMentions: &discordgo.MessageAllowedMentions{},
+			Flags:           commandInteractionFlags(visibility),
 		},
 	})
 	b.recordInteractionResponseDelivery(auditCtx, command, "sent", msg, discordgo.InteractionResponseChannelMessageWithSource, metadata, err)
@@ -428,8 +430,9 @@ func (b *Bot) followupInteractionForCommand(ds *discordgo.Session, i *discordgo.
 	visibility := commandResponseVisibility(command, "")
 	metadata = mergeMetadata(metadata, commandVisibilityMetadata(visibility))
 	sent, err := ds.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{
-		Content: msg,
-		Flags:   commandInteractionFlags(visibility),
+		Content:         msg,
+		AllowedMentions: &discordgo.MessageAllowedMentions{},
+		Flags:           commandInteractionFlags(visibility),
 	})
 	b.recordCommandResponseDelivery(auditCtx, command, "slash", "sent", msg, metadata, sent, err)
 }
@@ -439,8 +442,9 @@ func respondInteraction(ds *discordgo.Session, i *discordgo.InteractionCreate, m
 	if err := ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseChannelMessageWithSource,
 		Data: &discordgo.InteractionResponseData{
-			Content: msg,
-			Flags:   discordgo.MessageFlagsEphemeral,
+			Content:         msg,
+			AllowedMentions: &discordgo.MessageAllowedMentions{},
+			Flags:           discordgo.MessageFlagsEphemeral,
 		},
 	}); err != nil {
 		log.Printf("[interaction] respond failed: %v (content_len=%d)", err, len(msg))
@@ -448,7 +452,7 @@ func respondInteraction(ds *discordgo.Session, i *discordgo.InteractionCreate, m
 }
 
 func sendChannelMessage(ds *discordgo.Session, channelID, msg string) (*discordgo.Message, error) {
-	return ds.ChannelMessageSend(channelID, secrets.RedactEnv(msg))
+	return sendDiscordText(ds, channelID, msg, nil)
 }
 
 func truncate(s string, n int) string {
@@ -666,8 +670,9 @@ func (b *Bot) handleCronPrompt(ds *discordgo.Session, i *discordgo.InteractionCr
 	}
 
 	sent, err := ds.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{
-		Content: msg,
-		Flags:   commandInteractionFlags(visibility),
+		Content:         msg,
+		AllowedMentions: &discordgo.MessageAllowedMentions{},
+		Flags:           commandInteractionFlags(visibility),
 		Components: []discordgo.MessageComponent{
 			discordgo.ActionsRow{Components: []discordgo.MessageComponent{
 				discordgo.Button{
@@ -693,7 +698,11 @@ func (b *Bot) handleCronPromptButton(ds *discordgo.Session, i *discordgo.Interac
 	if customID == "cronp_cancel" {
 		if err := ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseUpdateMessage,
-			Data: &discordgo.InteractionResponseData{Content: "❌ " + L.Get("cancel.success"), Components: []discordgo.MessageComponent{}},
+			Data: &discordgo.InteractionResponseData{
+				Content:         "❌ " + L.Get("cancel.success"),
+				Components:      []discordgo.MessageComponent{},
+				AllowedMentions: &discordgo.MessageAllowedMentions{},
+			},
 		}); err != nil {
 			log.Printf("[interaction] cronp_cancel respond failed: %v", err)
 		}
@@ -756,8 +765,9 @@ func (b *Bot) handleCronPromptButton(ds *discordgo.Session, i *discordgo.Interac
 	if err := ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseUpdateMessage,
 		Data: &discordgo.InteractionResponseData{
-			Content:    content,
-			Components: []discordgo.MessageComponent{},
+			Content:         content,
+			Components:      []discordgo.MessageComponent{},
+			AllowedMentions: &discordgo.MessageAllowedMentions{},
 		},
 	}); err != nil {
 		log.Printf("[interaction] cronp_confirm respond failed: %v", err)

@@ -164,6 +164,102 @@ func TestSafeEgressDrainChannelFlushesOnlyMatchingPendingActions(t *testing.T) {
 	}
 }
 
+func TestSafeEgressSendMessageSplitsLongContent(t *testing.T) {
+	dir := t.TempDir()
+	rt := &recordingDiscordTransport{}
+	ds, err := discordgo.New("Bot test")
+	if err != nil {
+		t.Fatalf("new discord session: %v", err)
+	}
+	ds.Client = &http.Client{Transport: rt}
+	b := &Bot{discord: ds, dataDir: dir}
+	task := newSafeEgressTask(b)
+
+	longContent := strings.Repeat("alpha beta gamma\n", 180)
+	if _, err := botegress.WritePending(dir, botegress.Action{
+		ID:        "long-message",
+		Action:    botegress.ActionSendMessage,
+		ChannelID: "channel-1",
+		Content:   longContent,
+		CreatedAt: "2026-01-01T00:00:00Z",
+	}); err != nil {
+		t.Fatalf("write pending: %v", err)
+	}
+
+	if delivered := task.DrainChannel("channel-1"); delivered != 1 {
+		t.Fatalf("DrainChannel delivered = %d, want 1", delivered)
+	}
+
+	paths, bodies := rt.Snapshot()
+	if len(paths) < 2 {
+		t.Fatalf("safe egress should split long Discord messages, got paths=%v bodies=%v", paths, bodies)
+	}
+	for i, body := range bodies {
+		var payload struct {
+			Content string `json:"content"`
+		}
+		if err := json.Unmarshal([]byte(body), &payload); err != nil {
+			t.Fatalf("discord payload %d json: %v\n%s", i, err, body)
+		}
+		if utf8.RuneCountInString(payload.Content) > 2000 {
+			t.Fatalf("discord payload %d content len = %d, want <= 2000", i, utf8.RuneCountInString(payload.Content))
+		}
+		if strings.Contains(payload.Content, "Safe egress blocked") {
+			t.Fatalf("safe egress reported failure instead of splitting: %q", payload.Content)
+		}
+	}
+}
+
+func TestSafeEgressSendFileSplitsLongContentBeforeUpload(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "report.txt")
+	if err := os.WriteFile(filePath, []byte("report body"), 0600); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	rt := &recordingDiscordTransport{}
+	ds, err := discordgo.New("Bot test")
+	if err != nil {
+		t.Fatalf("new discord session: %v", err)
+	}
+	ds.Client = &http.Client{Transport: rt}
+	b := &Bot{discord: ds, dataDir: dir}
+	task := newSafeEgressTask(b)
+
+	if _, err := botegress.WritePending(dir, botegress.Action{
+		ID:        "long-file-message",
+		Action:    botegress.ActionSendFile,
+		ChannelID: "channel-1",
+		FilePath:  filePath,
+		Content:   strings.Repeat("file intro\n", 260),
+		CreatedAt: "2026-01-01T00:00:00Z",
+	}); err != nil {
+		t.Fatalf("write pending: %v", err)
+	}
+
+	if delivered := task.DrainChannel("channel-1"); delivered != 1 {
+		t.Fatalf("DrainChannel delivered = %d, want 1", delivered)
+	}
+
+	_, bodies := rt.Snapshot()
+	if len(bodies) < 3 {
+		t.Fatalf("safe file egress should send split text plus file upload, got %d bodies: %v", len(bodies), bodies)
+	}
+	for i, body := range bodies[:len(bodies)-1] {
+		var payload struct {
+			Content string `json:"content"`
+		}
+		if err := json.Unmarshal([]byte(body), &payload); err != nil {
+			t.Fatalf("text payload %d json: %v\n%s", i, err, body)
+		}
+		if utf8.RuneCountInString(payload.Content) > 2000 {
+			t.Fatalf("text payload %d content len = %d, want <= 2000", i, utf8.RuneCountInString(payload.Content))
+		}
+	}
+	if !strings.Contains(bodies[len(bodies)-1], `name="files[0]"`) {
+		t.Fatalf("last safe egress call should upload the file, got: %s", bodies[len(bodies)-1])
+	}
+}
+
 func TestSafeEgressDrainChannelCountsOnlySuccessfulDeliveries(t *testing.T) {
 	dir := t.TempDir()
 	ds := newFailingDiscordSession(t)

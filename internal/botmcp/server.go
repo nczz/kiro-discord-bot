@@ -40,7 +40,6 @@ func DefaultSafeToolNames() []string {
 		ToolDataSummary,
 		ToolListChannelData,
 		ToolListCron,
-		ToolSendMessage,
 		ToolSendFile,
 		ToolCreateCron,
 	}
@@ -73,7 +72,7 @@ func NewServer() *server.MCPServer {
 		},
 	)
 	s.AddTool(
-		writeTool(ToolSendMessage, "Send a separate Discord message through the bot-controlled safe egress queue. Do not use this for ordinary replies or final answers; normal assistant text is already delivered by the bot. Use this only when explicitly asked to send an extra Discord message, notify another target, hand off to another bot, or perform scheduled/cron egress. The main bot redacts secrets before delivery.", false),
+		writeTool(ToolSendMessage, "Send a separate Discord message through the bot-controlled safe egress queue. This tool is not part of the default channel allowlist. Do not use it for ordinary replies or final answers; normal assistant text is already delivered, split, and displayed by the bot. Use this only when a channel manager explicitly enabled it and the user explicitly asks to send an extra Discord message, notify another target, hand off to another bot, or perform scheduled/cron egress. The main bot redacts secrets before delivery.", false),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			channelID, _ := req.RequireString("channel_id")
 			if err := validateBoundChannel(channelID); err != nil {
