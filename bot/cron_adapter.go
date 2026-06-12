@@ -138,14 +138,14 @@ func (a *cronAdapter) AskAgentInThread(ctx context.Context, agent *acp.Agent, ch
 	if threadID != "" {
 		// Test if thread is still accessible by sending the run separator
 		sep := fmt.Sprintf("── %s ──", time.Now().Format("01/02 15:04"))
-		if _, err := ds.ChannelMessageSend(threadID, sep); err != nil {
+		if _, err := sendDiscordText(ds, threadID, sep, nil); err != nil {
 			// Thread gone or archived — try to unarchive
 			if _, uerr := ds.ChannelEditComplex(threadID, &discordgo.ChannelEdit{
 				Archived: boolPtr(false),
 				Locked:   boolPtr(false),
 			}); uerr != nil {
 				threadID = "" // give up, create new
-			} else if _, err2 := ds.ChannelMessageSend(threadID, sep); err2 != nil {
+			} else if _, err2 := sendDiscordText(ds, threadID, sep, nil); err2 != nil {
 				threadID = "" // still can't send, create new
 			}
 		}
@@ -159,7 +159,7 @@ func (a *cronAdapter) AskAgentInThread(ctx context.Context, agent *acp.Agent, ch
 		}
 		threadID = thread.ID
 		// Post initial separator for new thread
-		ds.ChannelMessageSend(threadID, fmt.Sprintf("── %s ──", time.Now().Format("01/02 15:04")))
+		_, _ = sendDiscordText(ds, threadID, fmt.Sprintf("── %s ──", time.Now().Format("01/02 15:04")), nil)
 	}
 
 	targetStateKey := channelID
@@ -212,7 +212,7 @@ func (a *cronAdapter) AskAgentInThread(ctx context.Context, agent *acp.Agent, ch
 		elapsed := int(time.Since(startTime).Seconds())
 		count := toolCount.Load()
 		msg := L.Getf("cron.progress", L.Get("worker.processing"), elapsed, count)
-		ds.ChannelMessageEdit(threadID, statusMsgID, msg)
+		_, _ = editDiscordText(ds, threadID, statusMsgID, msg)
 	}
 
 	callbacks := acp.AsyncCallbacks{
@@ -283,7 +283,7 @@ func (a *cronAdapter) AskAgentInThread(ctx context.Context, agent *acp.Agent, ch
 					errMsg = L.Get("worker.timeout.short")
 				}
 				if statusMsgID != "" {
-					ds.ChannelMessageEdit(threadID, statusMsgID, L.Getf("cron.progress.failed", elapsed, count))
+					_, _ = editDiscordText(ds, threadID, statusMsgID, L.Getf("cron.progress.failed", elapsed, count))
 				}
 				a.drainSafeEgress(threadID)
 				sentCount, sendErr := channel.SendLongThread(ds, threadID, channel.AppendMetricsFooter("❌ "+errMsg, agent.TurnMetrics()))
@@ -298,11 +298,15 @@ func (a *cronAdapter) AskAgentInThread(ctx context.Context, agent *acp.Agent, ch
 			}
 			// Update status to done
 			if statusMsgID != "" {
-				ds.ChannelMessageEdit(threadID, statusMsgID, L.Getf("cron.progress.done", elapsed, count))
+				_, _ = editDiscordText(ds, threadID, statusMsgID, L.Getf("cron.progress.done", elapsed, count))
 			}
 			// Mention user before response if configured
 			if mentionID != "" {
-				ds.ChannelMessageSend(threadID, fmt.Sprintf("<@%s>", mentionID))
+				_, _ = ds.ChannelMessageSendComplex(threadID, &discordgo.MessageSend{
+					Content:         fmt.Sprintf("<@%s>", mentionID),
+					AllowedMentions: &discordgo.MessageAllowedMentions{Users: []string{mentionID}},
+					Flags:           discordgo.MessageFlagsSuppressEmbeds,
+				})
 			}
 			a.drainSafeEgress(threadID)
 			sentCount, sendErr := channel.SendLongThread(ds, threadID, channel.AppendMetricsFooter(response, agent.TurnMetrics()))
@@ -313,20 +317,33 @@ func (a *cronAdapter) AskAgentInThread(ctx context.Context, agent *acp.Agent, ch
 		},
 	}
 
-	// Watch for context cancellation (timeout)
-	go func() {
-		<-ctx.Done()
+	agent.AskAsync(prompt, callbacks)
+
+	// Block until complete
+	select {
+	case r := <-done:
+		return r.response, threadID, r.responseSent, r.err
+	case <-ctx.Done():
 		if ctx.Err() == context.DeadlineExceeded {
 			log.Printf("[cron-adapter] timeout, sending cancel")
 			agent.CancelPrompt()
 		}
-	}()
-
-	agent.AskAsync(prompt, callbacks)
-
-	// Block until complete
-	r := <-done
-	return r.response, threadID, r.responseSent, r.err
+		errMsg := ctx.Err().Error()
+		if ctx.Err() == context.DeadlineExceeded {
+			errMsg = L.Get("worker.timeout.short")
+		}
+		elapsed := int(time.Since(startTime).Seconds())
+		count := toolCount.Load()
+		if statusMsgID != "" {
+			_, _ = editDiscordText(ds, threadID, statusMsgID, L.Getf("cron.progress.failed", elapsed, count))
+		}
+		a.drainSafeEgress(threadID)
+		sentCount, sendErr := channel.SendLongThread(ds, threadID, channel.AppendMetricsFooter("❌ "+errMsg, agent.TurnMetrics()))
+		if sendErr != nil {
+			log.Printf("[cron] failed to send agent timeout response thread=%s: %v", threadID, sendErr)
+		}
+		return "", threadID, sentCount > 0 && sendErr == nil, ctx.Err()
+	}
 }
 
 func (a *cronAdapter) drainSafeEgress(threadID string) {

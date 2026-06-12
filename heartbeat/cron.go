@@ -110,6 +110,7 @@ func (c *CronTask) RunNow(jobID string) {
 		return
 	}
 	if _, loaded := c.running.LoadOrStore(job.ID, true); loaded {
+		log.Printf("[cron] run-now ignored job %s (%s): already running", job.ID, job.Name)
 		return // already running
 	}
 	go c.execute(job, time.Now().In(c.location))
