@@ -326,6 +326,49 @@ func TestSafeEgressFailureRedactsSensitiveFilePath(t *testing.T) {
 	}
 }
 
+func TestEgressReasonMessageLocalizesKnownSafeFailures(t *testing.T) {
+	L.Load("en")
+	tests := []struct {
+		name string
+		raw  string
+		want string
+	}{
+		{
+			name: "not text",
+			raw:  "file type is not safely redactable as text",
+			want: "file type is not safely redactable as text",
+		},
+		{
+			name: "too large",
+			raw:  "file exceeds sanitizable size limit (5242880 bytes)",
+			want: "file exceeds sanitizable size limit",
+		},
+		{
+			name: "directory",
+			raw:  "directories cannot be sent as files",
+			want: "directories cannot be sent as files",
+		},
+		{
+			name: "path required",
+			raw:  "file_path is required",
+			want: "file_path is required",
+		},
+		{
+			name: "unknown fallback",
+			raw:  "open sanitized file: permission denied",
+			want: "open sanitized file: permission denied",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := egressReasonMessage(tt.raw); got != tt.want {
+				t.Fatalf("egressReasonMessage(%q) = %q, want %q", tt.raw, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestStatusWithRuntimeIncludesBotUptime(t *testing.T) {
 	L.Load("en")
 	b := &Bot{startedAt: time.Now().Add(-90 * time.Second)}

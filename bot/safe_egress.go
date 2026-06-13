@@ -146,8 +146,28 @@ func (t *safeEgressTask) sendSafeFailure(action botegress.Action, err error) {
 	if channelID == "" {
 		return
 	}
-	msg := L.Getf("egress.blocked", botegress.RedactSensitivePaths(t.redactor.Redact(err.Error())))
+	reason := egressReasonMessage(err.Error())
+	msg := L.Getf("egress.blocked", botegress.RedactSensitivePaths(t.redactor.Redact(reason)))
 	_, _ = channelSendSanitized(t.bot.discord, channelID, msg)
+}
+
+func egressReasonMessage(raw string) string {
+	for _, r := range egressReasonKeys {
+		if strings.Contains(raw, r.match) {
+			return L.Get(r.key)
+		}
+	}
+	return raw
+}
+
+var egressReasonKeys = []struct {
+	match string
+	key   string
+}{
+	{"file type is not safely redactable as text", "egress.reason.not_text"},
+	{"exceeds sanitizable size limit", "egress.reason.too_large"},
+	{"directories cannot be sent as files", "egress.reason.is_directory"},
+	{"file_path is required", "egress.reason.path_required"},
 }
 
 func channelSendSanitized(ds *discordgo.Session, channelID, content string) (int, error) {

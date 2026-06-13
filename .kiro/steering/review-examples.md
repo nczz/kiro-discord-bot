@@ -120,6 +120,26 @@ Review finding to write:
 
 > High: deployment verification only checked service liveness. Confirm the running binary version from startup logs or `/doctor`; otherwise the host may still be running the old release.
 
+## Example: i18n Format String With Internal Error
+
+Bad implementation:
+
+- Uses `L.Getf("egress.blocked", err.Error())` directly.
+- zh-TW users see `⚠️ 安全傳送被阻擋：file type is not safely redactable as text` — Chinese prefix with English error body.
+- No attempt to translate known error reasons.
+- Tests only prove the format string works, not that the final user-visible output is linguistically consistent.
+
+High-quality implementation:
+
+- Builds a reason map matching known error substrings to locale keys (`egress.reason.*`).
+- Known reasons render fully translated: `⚠️ 安全傳送被阻擋：檔案類型無法安全地以文字形式脫敏`.
+- Unknown errors fallback to redacted original (acceptable because they are rare runtime failures).
+- Tests cover all known reasons, a dynamic-value case (size limit with bytes), and the unknown fallback path.
+
+Review finding to write:
+
+> Medium: the i18n format string embeds a raw English error in a translated template, causing language mixing for zh-TW users. Map known error reasons to locale keys and fallback only for genuinely unknown failures.
+
 ## Suspicious Review Phrases
 
 Treat these phrases as a cue to gather more evidence:
