@@ -128,6 +128,7 @@ func (a *cronAdapter) RecordAgentResponse(agent *acp.Agent, job *heartbeat.CronJ
 
 func (a *cronAdapter) AskAgentInThread(ctx context.Context, agent *acp.Agent, channelID, threadName, existingThreadID, prompt, mentionID, createdByID string) (string, string, bool, error) {
 	ds := a.bot.discord
+	loc := a.bot.cronLocationOrLocal()
 	archiveDur := a.bot.manager.ThreadArchive()
 	if archiveDur <= 0 {
 		archiveDur = 1440
@@ -137,7 +138,7 @@ func (a *cronAdapter) AskAgentInThread(ctx context.Context, agent *acp.Agent, ch
 	threadID := existingThreadID
 	if threadID != "" {
 		// Test if thread is still accessible by sending the run separator
-		sep := fmt.Sprintf("── %s ──", time.Now().Format("01/02 15:04"))
+		sep := fmt.Sprintf("── %s ──", time.Now().In(loc).Format("01/02 15:04"))
 		if _, err := sendDiscordText(ds, threadID, sep, nil); err != nil {
 			// Thread gone or archived — try to unarchive
 			if _, uerr := ds.ChannelEditComplex(threadID, &discordgo.ChannelEdit{
@@ -159,7 +160,7 @@ func (a *cronAdapter) AskAgentInThread(ctx context.Context, agent *acp.Agent, ch
 		}
 		threadID = thread.ID
 		// Post initial separator for new thread
-		_, _ = sendDiscordText(ds, threadID, fmt.Sprintf("── %s ──", time.Now().Format("01/02 15:04")), nil)
+		_, _ = sendDiscordText(ds, threadID, fmt.Sprintf("── %s ──", time.Now().In(loc).Format("01/02 15:04")), nil)
 	}
 
 	targetStateKey := channelID
@@ -177,7 +178,7 @@ func (a *cronAdapter) AskAgentInThread(ctx context.Context, agent *acp.Agent, ch
 	}
 
 	// Update thread title with execution start timestamp
-	execTS := time.Now().Format("01/02 15:04")
+	execTS := time.Now().In(loc).Format("01/02 15:04")
 	ds.ChannelEditComplex(threadID, &discordgo.ChannelEdit{
 		Name: threadName + " · " + execTS,
 	})

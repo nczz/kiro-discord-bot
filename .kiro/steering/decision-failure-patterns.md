@@ -186,6 +186,38 @@ Regression expectation:
 
 - Deployment handoff must report each target separately and include artifact identity plus runtime version evidence.
 
+### User-Visible Timestamp Shows Wrong Timezone
+
+Symptoms:
+
+- Cron thread title shows UTC or server-local time instead of the configured `CRON_TIMEZONE`.
+- `/cron-list` last_run/next_run times do not match the user's expected timezone.
+- Cron execution separator lines in threads use a different timezone than the schedule.
+
+First checks:
+
+- `bot/cron_adapter.go`: all `time.Now().Format(...)` must use `.In(loc)`.
+- `bot/handler_cron.go`: `buildCronCard` must receive and apply a `*time.Location`.
+- `heartbeat/cron.go`: history display must use `.In(c.location)`.
+- `CRON_TIMEZONE` env var value and whether it was loaded correctly at startup.
+- `/doctor` runtime overview.
+
+Root cause pattern:
+
+- `time.Now().Format("01/02 15:04")` uses the process-local timezone (often UTC on servers), not the user-configured `CRON_TIMEZONE`.
+- `time.Parse(time.RFC3339, ...)` preserves the stored offset but does not convert to the display timezone — correct only by accident when the writer and reader use the same location.
+
+Fix pattern:
+
+- Always call `.In(loc)` before `.Format(...)` for any user-visible timestamp.
+- Obtain location from `CRON_TIMEZONE` via the shared Bot helper (`cronLocationOrLocal`) or `c.location` inside CronTask.
+- Do not rely on RFC3339 offset preservation as a substitute for explicit timezone conversion.
+
+Regression expectation:
+
+- All user-visible time outputs in cron/thread/slash responses must show in `CRON_TIMEZONE`.
+- Test with a non-UTC `CRON_TIMEZONE` to catch implicit local-time bugs.
+
 ## Architecture Decision Checklist
 
 Before implementing a structural change, answer:

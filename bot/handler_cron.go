@@ -209,7 +209,7 @@ func (b *Bot) handleCronList(ds *discordgo.Session, i *discordgo.InteractionCrea
 	}
 
 	for index, job := range jobs {
-		content, components := buildCronCard(job)
+		content, components := buildCronCard(job, b.cronLocationOrLocal())
 		content = secrets.RedactEnv(content)
 		sent, err := ds.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{
 			Content:         content,
@@ -336,8 +336,17 @@ func (b *Bot) handleCronButton(ds *discordgo.Session, i *discordgo.InteractionCr
 	}
 }
 
+func (b *Bot) cronLocationOrLocal() *time.Location {
+	if b.cronTimezone != "" {
+		if loc, err := time.LoadLocation(b.cronTimezone); err == nil {
+			return loc
+		}
+	}
+	return time.Now().Location()
+}
+
 // buildCronCard renders a job's content and buttons for display.
-func buildCronCard(job *heartbeat.CronJob) (string, []discordgo.MessageComponent) {
+func buildCronCard(job *heartbeat.CronJob, loc *time.Location) (string, []discordgo.MessageComponent) {
 	status := "✅"
 	if !job.Enabled {
 		status = "⏸️"
@@ -349,13 +358,13 @@ func buildCronCard(job *heartbeat.CronJob) (string, []discordgo.MessageComponent
 	lastRun := L.Get("cron.list.last_run_none")
 	if job.LastRun != "" {
 		if t, err := time.Parse(time.RFC3339, job.LastRun); err == nil {
-			lastRun = t.Format("01/02 15:04")
+			lastRun = t.In(loc).Format("01/02 15:04")
 		}
 	}
 	nextRun := L.Get("cron.list.next_run_pending")
 	if job.NextRun != "" {
 		if t, err := time.Parse(time.RFC3339, job.NextRun); err == nil {
-			nextRun = t.Format("01/02 15:04")
+			nextRun = t.In(loc).Format("01/02 15:04")
 		}
 	}
 
@@ -383,7 +392,7 @@ func buildCronCard(job *heartbeat.CronJob) (string, []discordgo.MessageComponent
 
 // updateCronCard updates the button message in-place with refreshed job state + status line.
 func (b *Bot) updateCronCard(ds *discordgo.Session, i *discordgo.InteractionCreate, job *heartbeat.CronJob, statusMsg string) {
-	content, components := buildCronCard(job)
+	content, components := buildCronCard(job, b.cronLocationOrLocal())
 	content = secrets.RedactEnv(statusMsg + "\n\n" + content)
 	if err := ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseUpdateMessage,

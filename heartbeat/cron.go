@@ -264,7 +264,7 @@ func (c *CronTask) buildPrompt(job *CronJob, history []CronHistory) string {
 		sb.WriteString(L.Get("cron.prompt.history_header"))
 		for _, h := range history {
 			ts, _ := time.Parse(time.RFC3339, h.Timestamp)
-			sb.WriteString(fmt.Sprintf("[%s] (%s) %s\n", ts.Format("01/02 15:04"), h.Status, h.Response))
+			sb.WriteString(fmt.Sprintf("[%s] (%s) %s\n", ts.In(c.location).Format("01/02 15:04"), h.Status, h.Response))
 		}
 		sb.WriteString("---\n\n")
 	}

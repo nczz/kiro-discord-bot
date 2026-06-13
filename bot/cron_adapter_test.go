@@ -8,12 +8,14 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/nczz/kiro-discord-bot/acp"
 	"github.com/nczz/kiro-discord-bot/audit"
 	"github.com/nczz/kiro-discord-bot/heartbeat"
 	"github.com/nczz/kiro-discord-bot/internal/botegress"
+	L "github.com/nczz/kiro-discord-bot/locale"
 )
 
 func TestCronAdapterRecordAgentResponseDistinguishesUnsentFailure(t *testing.T) {
@@ -131,5 +133,31 @@ func TestCronAdapterDrainSafeEgressFlushesThreadTarget(t *testing.T) {
 	}
 	if len(actions) != 0 {
 		t.Fatalf("pending actions = %+v, want empty", actions)
+	}
+}
+
+func TestBuildCronCardDisplaysRunsInCronTimezone(t *testing.T) {
+	L.Load("en")
+	loc, err := time.LoadLocation("Asia/Taipei")
+	if err != nil {
+		t.Fatalf("load timezone: %v", err)
+	}
+	job := &heartbeat.CronJob{
+		ID:       "job-1",
+		Name:     "Daily",
+		Enabled:  true,
+		Schedule: "0 8 * * *",
+		Prompt:   "Run report",
+		LastRun:  "2026-06-13T00:30:00Z",
+		NextRun:  "2026-06-14T00:30:00Z",
+	}
+
+	content, _ := buildCronCard(job, loc)
+
+	if !strings.Contains(content, "06/13 08:30") || !strings.Contains(content, "06/14 08:30") {
+		t.Fatalf("cron card did not render RFC3339 timestamps in Asia/Taipei:\n%s", content)
+	}
+	if strings.Contains(content, "06/13 00:30") || strings.Contains(content, "06/14 00:30") {
+		t.Fatalf("cron card leaked UTC timestamps:\n%s", content)
 	}
 }

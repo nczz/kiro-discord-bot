@@ -75,6 +75,7 @@ docs/release.md  → release and deployment safety checklist
 - **Discord 回覆格式化必須復用既有工具**：任何會送到 Discord 的長文字、MCP tool output、safe egress、thread/final response、reply、embed description，都不得自行實作分段、Markdown 降級、code fence 修補或分段 prefix。必須復用 `internal/discordfmt.Split` 與 `internal/discordfmt.WithPartPrefix`，或復用已建立在它們之上的專案封裝（例如 `bot` / `channel` 既有長訊息送出 helper）。若現有 helper 不足，先擴充共用 helper 並補測試，不要在 feature code 中複製一份 split 邏輯。
 - **MCP / egress security 與 audit 不可繞過**：任何 Discord 寫入路徑都必須保留對應的 allowlist、read-only/write/destructive guard、secret redaction、AllowedMentions 防護、delivery error handling 與 audit/語意事件紀錄。新增或修改 MCP tool 時，不得為了修復 UX 而直接改用裸 Discord API 繞過 policy proxy、safe egress pending queue、redactor 或既有 delivery wrapper。若需要分批送出，分批前仍先套用同一套 policy；每批送出也必須沿用同一套 redaction、mention suppression、錯誤處理與測試。
 - **Release preflight 不碰 runtime state**：preflight script 只能 build/test/check artifacts，不得停止/啟動 bot、修改 `DATA_DIR`、刪除 Docker volumes、改寫 `.env` 或觸發 Discord side effects。
+- **使用者可見的時間輸出必須顯式指定時區**：任何 `time.Format()` 呼叫若其結果會出現在 Discord 訊息、thread 標題、embed 或 slash command 回覆中，必須先 `.In(loc)` 明確轉換到 `CRON_TIMEZONE`（或對應的使用者時區），不允許依賴 `time.Now()` 的隱式本地時區或 RFC3339 parse 後的隱式 offset 保留。
 - **重大決策不可只留在對話中**：當修復方向被放棄、架構邊界被確認、已知限制被接受、或 runtime 事故暴露可重複模式時，必須同步更新 `.kiro/steering/decision-failure-patterns.md`，留下決策、取捨、非目標、未來觸發條件與 regression expectation。
 - **Steering 文件必須跟著專案演進**：新增 package、共用 helper、架構層、runtime 模式、部署目標、MCP tool 類型、已知限制或事故模式時，必須重新檢查 `.kiro/steering/` 是否仍反映當前真實架構。若 steering 文件彼此描述衝突，先決定 source of truth 並修正 drift，再宣告可提交或發布。
 

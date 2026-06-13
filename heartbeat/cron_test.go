@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -215,6 +216,36 @@ func TestCronExecuteRecordsUnsentAgentResponse(t *testing.T) {
 	}
 	if deps.recordStatus != "ok" {
 		t.Fatalf("record status = %q, want agent execution status to remain ok", deps.recordStatus)
+	}
+}
+
+func TestCronBuildPromptDisplaysHistoryInCronTimezone(t *testing.T) {
+	store, err := NewCronStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	task := NewCronTask(store, &fakeCronDeps{}, t.TempDir(), "Asia/Taipei", "guild-1")
+	job := &CronJob{
+		ID:        "job-1",
+		Name:      "Daily",
+		ChannelID: "channel-1",
+		GuildID:   "guild-1",
+		Schedule:  "0 8 * * *",
+		Prompt:    "Run report",
+		Enabled:   true,
+	}
+
+	prompt := task.buildPrompt(job, []CronHistory{{
+		Timestamp: "2026-06-13T00:30:00Z",
+		Status:    "ok",
+		Response:  "done",
+	}})
+
+	if !strings.Contains(prompt, "[06/13 08:30]") {
+		t.Fatalf("history timestamp was not rendered in Asia/Taipei:\n%s", prompt)
+	}
+	if strings.Contains(prompt, "[06/13 00:30]") {
+		t.Fatalf("history timestamp leaked UTC time:\n%s", prompt)
 	}
 }
 
