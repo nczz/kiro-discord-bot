@@ -52,6 +52,9 @@ cmd/mcp-discord/ → optional Discord MCP server, REST tools + guild/channel all
 scripts/         → repeatable local release/preflight checks
 docs/release.md  → release and deployment safety checklist
 .github/         → CI preflight workflow for push/PR checks
+.kiro/steering/360-review-handoff.md → evidence-first review, fix, verification, and handoff loop
+.kiro/steering/review-examples.md → concrete examples of rigorous review and reuse discipline
+.kiro/steering/decision-failure-patterns.md → architecture decisions, non-goals, recurring failures, regression expectations
 ```
 
 - handler 只做路由和轉發，業務邏輯在 channel/manager
@@ -72,6 +75,8 @@ docs/release.md  → release and deployment safety checklist
 - **Discord 回覆格式化必須復用既有工具**：任何會送到 Discord 的長文字、MCP tool output、safe egress、thread/final response、reply、embed description，都不得自行實作分段、Markdown 降級、code fence 修補或分段 prefix。必須復用 `internal/discordfmt.Split` 與 `internal/discordfmt.WithPartPrefix`，或復用已建立在它們之上的專案封裝（例如 `bot` / `channel` 既有長訊息送出 helper）。若現有 helper 不足，先擴充共用 helper 並補測試，不要在 feature code 中複製一份 split 邏輯。
 - **MCP / egress security 與 audit 不可繞過**：任何 Discord 寫入路徑都必須保留對應的 allowlist、read-only/write/destructive guard、secret redaction、AllowedMentions 防護、delivery error handling 與 audit/語意事件紀錄。新增或修改 MCP tool 時，不得為了修復 UX 而直接改用裸 Discord API 繞過 policy proxy、safe egress pending queue、redactor 或既有 delivery wrapper。若需要分批送出，分批前仍先套用同一套 policy；每批送出也必須沿用同一套 redaction、mention suppression、錯誤處理與測試。
 - **Release preflight 不碰 runtime state**：preflight script 只能 build/test/check artifacts，不得停止/啟動 bot、修改 `DATA_DIR`、刪除 Docker volumes、改寫 `.env` 或觸發 Discord side effects。
+- **重大決策不可只留在對話中**：當修復方向被放棄、架構邊界被確認、已知限制被接受、或 runtime 事故暴露可重複模式時，必須同步更新 `.kiro/steering/decision-failure-patterns.md`，留下決策、取捨、非目標、未來觸發條件與 regression expectation。
+- **Steering 文件必須跟著專案演進**：新增 package、共用 helper、架構層、runtime 模式、部署目標、MCP tool 類型、已知限制或事故模式時，必須重新檢查 `.kiro/steering/` 是否仍反映當前真實架構。若 steering 文件彼此描述衝突，先決定 source of truth 並修正 drift，再宣告可提交或發布。
 
 ## Collaboration（協作方式）
 
@@ -110,9 +115,13 @@ docs/release.md  → release and deployment safety checklist
 - [ ] README.md：英文段 + 中文段都更新（env 表格、Project Structure、Notes）
 - [ ] `.env.example`：新增 env var 時同步
 - [ ] `.kiro/steering/project.md`：架構圖或設計原則有變時同步
+- [ ] `.kiro/steering/360-review-handoff.md`：review / debug / deploy / handoff 流程或品質門檻改變時同步
+- [ ] `.kiro/steering/review-examples.md`：新增常見錯誤、review 模式或交接案例時同步
+- [ ] `.kiro/steering/decision-failure-patterns.md`：重大架構判斷、非目標、已知限制、事故復盤或 regression expectation 改變時同步
 - [ ] `INSTALL_MCP.md` + `.kiro/steering/discord-mcp.md`：Discord MCP 行為或安全邊界改變時同步
 - [ ] `docs/release.md` + `scripts/release-preflight.sh`：發布門檻或部署流程改變時同步
 - [ ] `.github/workflows/preflight.yml`：preflight 腳本或 CI 門檻改變時同步
+- [ ] Steering drift scan：新增 package/helper/runtime path/deployment target/MCP tool category/known limitation 時，確認 `.kiro/steering/` 的 source of truth 沒有互相衝突
 - [ ] 新增 env var 完整路徑：`config.go` → `ManagerConfig` / `BotConfig`（若影響 runtime）→ `main.go` → `channel/doctor_env.go` (envSpecs) → `locale/lang/en.json` + `zh-TW.json` (doctor.env.desc.*) → README.md → `.env.example`
 - [ ] 新增 Discord MCP-only env var：`cmd/mcp-discord` → README → `.env.example` → `INSTALL_MCP.md`
 - [ ] `docs/listen-mode-matrix.md`：修改 pause/back/thread-mode/requiresHumanMention 邏輯時同步
