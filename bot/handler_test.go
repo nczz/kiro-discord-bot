@@ -289,6 +289,7 @@ func TestSafeEgressDrainChannelCountsOnlySuccessfulDeliveries(t *testing.T) {
 }
 
 func TestSafeEgressFailureRedactsSensitiveFilePath(t *testing.T) {
+	L.Load("en")
 	dir := t.TempDir()
 	rt := &recordingDiscordTransport{}
 	ds, err := discordgo.New("Bot test")

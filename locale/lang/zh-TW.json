@@ -118,6 +118,8 @@
   "worker.timeout.short": "逾時",
   "worker.thread_default": "任務",
   "worker.tool_fallback": "工具",
+  "egress.sensitive_path_notice": "偵測到敏感路徑，已上傳淨化後的副本。",
+  "egress.blocked": "Safe egress 被阻擋：%s",
   "health.restart_failed": "⚠️ Agent 異常且重啟失敗：%s",
   "health.restarted": "⚠️ Agent 異常，已自動重啟。",
   "cmd.start.desc": "綁定專案目錄並啟動 agent",

@@ -124,6 +124,8 @@
   "worker.empty_response": "(empty response)",
   "worker.thread_default": "Task",
   "worker.tool_fallback": "tool",
+  "egress.sensitive_path_notice": "Sensitive path detected; uploaded a sanitized copy.",
+  "egress.blocked": "Safe egress blocked: %s",
   "health.restart_failed": "⚠️ Agent error, restart failed: %s",
   "health.restarted": "⚠️ Agent error, auto-restarted.",
   "cmd.start.desc": "Bind project directory and start agent",

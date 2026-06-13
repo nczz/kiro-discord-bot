@@ -12,6 +12,7 @@ import (
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/nczz/kiro-discord-bot/internal/botegress"
+	L "github.com/nczz/kiro-discord-bot/locale"
 	"github.com/nczz/kiro-discord-bot/internal/secrets"
 )
 
@@ -107,7 +108,7 @@ func (t *safeEgressTask) sendFile(action botegress.Action) error {
 		if content != "" {
 			content += "\n"
 		}
-		content += "Sensitive path detected; uploaded a sanitized copy."
+		content += L.Get("egress.sensitive_path_notice")
 	}
 	file, err := openDiscordFile(prepared.Path, prepared.DisplayName)
 	if err != nil {
@@ -145,7 +146,7 @@ func (t *safeEgressTask) sendSafeFailure(action botegress.Action, err error) {
 	if channelID == "" {
 		return
 	}
-	msg := "Safe egress blocked: " + botegress.RedactSensitivePaths(t.redactor.Redact(err.Error()))
+	msg := L.Getf("egress.blocked", botegress.RedactSensitivePaths(t.redactor.Redact(err.Error())))
 	_, _ = channelSendSanitized(t.bot.discord, channelID, msg)
 }
 
