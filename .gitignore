@@ -10,3 +10,4 @@ mcp-media
 mcp-media-server
 logs/
 dist/
+.tmp/

@@ -187,6 +187,7 @@ type fakeWorkerAgent struct {
 	mu             sync.Mutex
 	cancelCalls    int
 	interruptCalls int
+	stopCalls      int
 	callbacks      acp.AsyncCallbacks
 	readError      func(error)
 	metrics        acp.TurnMetrics
@@ -238,6 +239,12 @@ func (f *fakeWorkerAgent) Interrupt() error {
 	return nil
 }
 
+func (f *fakeWorkerAgent) Stop() {
+	f.mu.Lock()
+	f.stopCalls++
+	f.mu.Unlock()
+}
+
 func (f *fakeWorkerAgent) ContextUsage() float64 { return 0 }
 
 func (f *fakeWorkerAgent) TurnMetrics() acp.TurnMetrics { return f.metrics }
@@ -260,6 +267,12 @@ func (f *fakeWorkerAgent) InterruptCalls() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.interruptCalls
+}
+
+func (f *fakeWorkerAgent) StopCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.stopCalls
 }
 
 func (f *fakeWorkerAgent) Callbacks() acp.AsyncCallbacks {
@@ -1190,5 +1203,172 @@ func TestWorkerInlineLoggerStoresResponseWithoutMetricsFooter(t *testing.T) {
 	}
 	if assistantEntries[0].Content != "final response" {
 		t.Fatalf("assistant history content = %q, want response without metrics footer", assistantEntries[0].Content)
+	}
+}
+
+func TestWorkerScheduleInterruptEscalationSendsInterruptAfterGrace(t *testing.T) {
+	agent := &fakeWorkerAgent{}
+	w := newWorker("ch1", agent, 1, 1, 1, 1440, nil, "")
+	w.stopGrace = 200 * time.Millisecond
+
+	_, cancel := context.WithCancel(context.Background())
+	w.cancelMu.Lock()
+	w.cancelFn = cancel
+	w.currentJobID = "m1"
+	w.currentJobSeq = 1
+	w.currentJobActive = true
+	w.cancelMu.Unlock()
+
+	if !w.scheduleInterruptEscalation(1, 5*time.Millisecond, "test timeout") {
+		t.Fatal("scheduleInterruptEscalation returned false for active job")
+	}
+
+	deadline := time.After(200 * time.Millisecond)
+	for {
+		if got := agent.InterruptCalls(); got == 1 {
+			return
+		} else if got > 1 {
+			t.Fatalf("interrupt calls = %d, want 1", got)
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("interrupt calls = %d, want 1", agent.InterruptCalls())
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+}
+
+func TestWorkerScheduleInterruptEscalationStopsAgentIfStillActiveAfterInterrupt(t *testing.T) {
+	agent := &fakeWorkerAgent{}
+	w := newWorker("ch1", agent, 1, 1, 1, 1440, nil, "")
+	w.stopGrace = 5 * time.Millisecond
+
+	_, cancel := context.WithCancel(context.Background())
+	w.cancelMu.Lock()
+	w.cancelFn = cancel
+	w.currentJobID = "m1"
+	w.currentJobSeq = 1
+	w.currentJobActive = true
+	w.cancelMu.Unlock()
+
+	if !w.scheduleInterruptEscalation(1, 5*time.Millisecond, "test timeout") {
+		t.Fatal("scheduleInterruptEscalation returned false for active job")
+	}
+
+	deadline := time.After(200 * time.Millisecond)
+	for {
+		if got := agent.StopCalls(); got == 1 {
+			if ic := agent.InterruptCalls(); ic != 1 {
+				t.Fatalf("interrupt calls = %d, want 1 before stop", ic)
+			}
+			return
+		} else if got > 1 {
+			t.Fatalf("stop calls = %d, want 1", got)
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("stop calls = %d, want 1", agent.StopCalls())
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+}
+
+func TestWorkerScheduleInterruptEscalationSkipsStopAfterJobClears(t *testing.T) {
+	agent := &fakeWorkerAgent{}
+	w := newWorker("ch1", agent, 1, 1, 1, 1440, nil, "")
+	w.stopGrace = 20 * time.Millisecond
+
+	_, cancel := context.WithCancel(context.Background())
+	w.cancelMu.Lock()
+	w.cancelFn = cancel
+	w.currentJobID = "m1"
+	w.currentJobSeq = 1
+	w.currentJobActive = true
+	w.cancelMu.Unlock()
+
+	if !w.scheduleInterruptEscalation(1, 5*time.Millisecond, "test timeout") {
+		t.Fatal("scheduleInterruptEscalation returned false for active job")
+	}
+
+	deadline := time.After(200 * time.Millisecond)
+	for {
+		if got := agent.InterruptCalls(); got == 1 {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("interrupt calls = %d, want 1", agent.InterruptCalls())
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+
+	w.cancelMu.Lock()
+	w.cancelFn = nil
+	w.currentJobActive = false
+	w.cancelMu.Unlock()
+
+	time.Sleep(50 * time.Millisecond)
+	if got := agent.StopCalls(); got != 0 {
+		t.Fatalf("stop calls = %d, want 0 (job already cleared)", got)
+	}
+}
+
+func TestWorkerScheduleInterruptEscalationSkipsInterruptAfterJobClears(t *testing.T) {
+	agent := &fakeWorkerAgent{}
+	w := newWorker("ch1", agent, 1, 1, 1, 1440, nil, "")
+
+	_, cancel := context.WithCancel(context.Background())
+	w.cancelMu.Lock()
+	w.cancelFn = cancel
+	w.currentJobID = "m1"
+	w.currentJobSeq = 1
+	w.currentJobActive = true
+	w.cancelMu.Unlock()
+
+	if !w.scheduleInterruptEscalation(1, 20*time.Millisecond, "test timeout") {
+		t.Fatal("scheduleInterruptEscalation returned false for active job")
+	}
+
+	w.cancelMu.Lock()
+	w.cancelFn = nil
+	w.currentJobActive = false
+	w.cancelMu.Unlock()
+
+	time.Sleep(50 * time.Millisecond)
+	if got := agent.InterruptCalls(); got != 0 {
+		t.Fatalf("interrupt calls = %d, want 0 (job already cleared)", got)
+	}
+}
+
+func TestWorkerTimeoutAndManualInterruptSharePendingEscalation(t *testing.T) {
+	agent := &fakeWorkerAgent{}
+	w := newWorker("ch1", agent, 1, 1, 1, 1440, nil, "")
+	w.stopGrace = 200 * time.Millisecond
+
+	_, cancel := context.WithCancel(context.Background())
+	w.cancelMu.Lock()
+	w.cancelFn = cancel
+	w.currentJobID = "m1"
+	w.currentJobSeq = 1
+	w.currentJobActive = true
+	w.cancelMu.Unlock()
+
+	agent.CancelPrompt()
+	if !w.scheduleInterruptEscalation(1, 20*time.Millisecond, "timeout cancel ineffective") {
+		t.Fatal("timeout escalation was not scheduled")
+	}
+	if !w.InterruptCurrent(20 * time.Millisecond) {
+		t.Fatal("InterruptCurrent returned false for active job")
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	if got := agent.CancelCalls(); got != 2 {
+		t.Fatalf("cancel calls = %d, want 2 (timeout cancel plus manual cancel)", got)
+	}
+	if got := agent.InterruptCalls(); got != 1 {
+		t.Fatalf("interrupt calls = %d, want 1 shared escalation", got)
 	}
 }

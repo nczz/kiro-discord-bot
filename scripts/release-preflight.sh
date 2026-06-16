@@ -10,6 +10,7 @@ DOCKER_IMAGE="${DOCKER_IMAGE:-kiro-discord-bot:preflight}"
 TMP_BASE="${TMPDIR:-/tmp}"
 GOCACHE="${GOCACHE:-$TMP_BASE/kiro-discord-bot-gocache}"
 GOMODCACHE="${GOMODCACHE:-$TMP_BASE/kiro-discord-bot-gomodcache}"
+ACP_RUNTIME_HOME="${ACP_RUNTIME_HOME:-$ROOT_DIR/.tmp/release-preflight-kiro-home}"
 
 step() {
   printf '\n==> %s\n' "$*"
@@ -63,8 +64,12 @@ if is_true "$RUN_ACP_SMOKE"; then
     printf 'RUN_ACP_SMOKE=1 requires KIRO_CLI=/path/to/kiro-cli\n' >&2
     exit 1
   fi
+  ACP_MCP_CONFIG="$ACP_RUNTIME_HOME/settings/mcp.json"
+  mkdir -p "$(dirname "$ACP_MCP_CONFIG")"
+  printf '{"mcpServers":{}}\n' > "$ACP_MCP_CONFIG"
+
   step "ACP smoke with $KIRO_CLI"
-  GOCACHE="$GOCACHE" GOMODCACHE="$GOMODCACHE" KIRO_CLI="$KIRO_CLI" go test -count=1 -run '^TestPreflightCheck$' -v ./acp
+  GOCACHE="$GOCACHE" GOMODCACHE="$GOMODCACHE" KIRO_CLI="$KIRO_CLI" KIRO_HOME="$ACP_RUNTIME_HOME" KIRO_MCP_CONFIG="$ACP_MCP_CONFIG" go test -count=1 -run '^TestPreflightCheck$' -v ./acp
 else
   step "ACP smoke skipped (set RUN_ACP_SMOKE=1 KIRO_CLI=/path/to/kiro-cli)"
 fi

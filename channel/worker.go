@@ -48,6 +48,14 @@ type DeliveryMode string
 const (
 	DeliveryThread DeliveryMode = "thread"
 	DeliveryInline DeliveryMode = "inline"
+
+	// cancelEscalationGrace is how long to wait after sending ACP cancel
+	// before escalating to SIGINT when the agent does not respond.
+	cancelEscalationGrace = 30 * time.Second
+
+	// interruptStopGrace is how long to wait after SIGINT before stopping the
+	// agent process group if the same job is still stuck.
+	interruptStopGrace = 30 * time.Second
 )
 
 func (m DeliveryMode) String() string {
@@ -69,6 +77,8 @@ type Worker struct {
 	askTimeoutSec   int
 	streamUpdateSec int
 	threadArchive   int // auto-archive duration in minutes
+	escalationGrace time.Duration
+	stopGrace       time.Duration
 	stopCh          chan struct{}
 	idleCh          chan struct{} // signaled when agent finishes a task
 	stopped         sync.Once
@@ -108,6 +118,7 @@ type workerAgent interface {
 	AskAsyncMulti([]acp.PromptContent, acp.AsyncCallbacks)
 	CancelPrompt()
 	Interrupt() error
+	Stop()
 	ContextUsage() float64
 	TurnMetrics() acp.TurnMetrics
 	OnReadErrorFunc(func(error))
@@ -127,6 +138,8 @@ func newWorker(channelID string, agent workerAgent, bufSize, askTimeoutSec, stre
 		askTimeoutSec:   askTimeoutSec,
 		streamUpdateSec: streamUpdateSec,
 		threadArchive:   threadArchive,
+		escalationGrace: cancelEscalationGrace,
+		stopGrace:       interruptStopGrace,
 		stopCh:          make(chan struct{}),
 		idleCh:          make(chan struct{}, 1),
 		logger:          logger,
@@ -244,10 +257,6 @@ func (w *Worker) InterruptCurrent(grace time.Duration) bool {
 	fn := w.cancelFn
 	jobID := w.currentJobID
 	jobSeq := w.currentJobSeq
-	alreadyPending := w.pendingInterruptSeq == jobSeq
-	if fn != nil && jobSeq != 0 && !alreadyPending {
-		w.pendingInterruptSeq = jobSeq
-	}
 	w.cancelMu.Unlock()
 	if fn == nil || jobSeq == 0 {
 		return false
@@ -255,9 +264,19 @@ func (w *Worker) InterruptCurrent(grace time.Duration) bool {
 
 	fn()
 	w.agent.CancelPrompt()
-	if alreadyPending {
-		return true
+	w.scheduleInterruptEscalation(jobSeq, grace, fmt.Sprintf("interrupt | job=%s", jobID))
+
+	return true
+}
+
+func (w *Worker) scheduleInterruptEscalation(jobSeq uint64, grace time.Duration, reason string) bool {
+	w.cancelMu.Lock()
+	if w.cancelFn == nil || jobSeq == 0 || w.currentJobSeq != jobSeq || w.pendingInterruptSeq == jobSeq {
+		w.cancelMu.Unlock()
+		return false
 	}
+	w.pendingInterruptSeq = jobSeq
+	w.cancelMu.Unlock()
 
 	go func() {
 		if grace > 0 {
@@ -275,12 +294,33 @@ func (w *Worker) InterruptCurrent(grace time.Duration) bool {
 		if !stillActive {
 			return
 		}
+		log.Printf("[worker %s] %s: sending interrupt after %s", w.channelID, reason, grace)
 		if err := w.agent.Interrupt(); err != nil {
-			log.Printf("[worker %s] interrupt failed | job=%s err=%v", w.channelID, jobID, err)
+			log.Printf("[worker %s] interrupt escalation failed | reason=%s err=%v", w.channelID, reason, err)
 		}
+		w.scheduleStopEscalation(jobSeq, w.stopGrace, reason)
 	}()
 
 	return true
+}
+
+func (w *Worker) scheduleStopEscalation(jobSeq uint64, grace time.Duration, reason string) {
+	go func() {
+		if grace > 0 {
+			timer := time.NewTimer(grace)
+			defer timer.Stop()
+			<-timer.C
+		}
+
+		w.cancelMu.Lock()
+		stillActive := w.cancelFn != nil && w.currentJobSeq == jobSeq
+		w.cancelMu.Unlock()
+		if !stillActive {
+			return
+		}
+		log.Printf("[worker %s] %s: still active after interrupt, stopping agent after %s", w.channelID, reason, grace)
+		w.agent.Stop()
+	}()
 }
 
 // CurrentThreadID returns the thread ID of the currently running task.
@@ -458,6 +498,7 @@ func (w *Worker) execute(job *Job) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(w.askTimeoutSec)*time.Second)
 	w.cancelMu.Lock()
 	w.cancelFn = cancel
+	currentJobSeq := w.currentJobSeq
 	w.cancelMu.Unlock()
 
 	// Async callbacks — all post to thread
@@ -629,13 +670,15 @@ func (w *Worker) execute(job *Job) {
 		},
 	}
 
-	// Watch for timeout — send cancel to agent
+	// Watch for timeout — send cancel to agent, escalate to interrupt if ineffective
 	go func() {
 		<-ctx.Done()
-		if ctx.Err() == context.DeadlineExceeded {
-			log.Printf("[worker %s] timeout %ds, sending cancel", w.channelID, w.askTimeoutSec)
-			go w.agent.CancelPrompt()
+		if ctx.Err() != context.DeadlineExceeded {
+			return
 		}
+		log.Printf("[worker %s] timeout %ds, sending cancel", w.channelID, w.askTimeoutSec)
+		w.agent.CancelPrompt()
+		w.scheduleInterruptEscalation(currentJobSeq, w.escalationGrace, "timeout cancel ineffective")
 	}()
 
 	// Watch for ReadLoop errors (e.g. buffer overflow)
@@ -838,6 +881,7 @@ func (w *Worker) executeInline(job *Job) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(w.askTimeoutSec)*time.Second)
 	w.cancelMu.Lock()
 	w.cancelFn = cancel
+	currentJobSeq := w.currentJobSeq
 	w.cancelMu.Unlock()
 
 	callbacks := acp.AsyncCallbacks{
@@ -946,10 +990,12 @@ func (w *Worker) executeInline(job *Job) {
 
 	go func() {
 		<-ctx.Done()
-		if ctx.Err() == context.DeadlineExceeded {
-			log.Printf("[worker %s] inline timeout %ds, sending cancel", w.channelID, w.askTimeoutSec)
-			go w.agent.CancelPrompt()
+		if ctx.Err() != context.DeadlineExceeded {
+			return
 		}
+		log.Printf("[worker %s] inline timeout %ds, sending cancel", w.channelID, w.askTimeoutSec)
+		w.agent.CancelPrompt()
+		w.scheduleInterruptEscalation(currentJobSeq, w.escalationGrace, "inline timeout cancel ineffective")
 	}()
 
 	w.agent.OnReadErrorFunc(func(err error) {
@@ -1180,7 +1226,19 @@ func (w *Worker) executeFallback(job *Job) {
 	defer cancel()
 	w.cancelMu.Lock()
 	w.cancelFn = cancel
+	currentJobSeq := w.currentJobSeq
 	w.cancelMu.Unlock()
+
+	// Watch for timeout — escalate to interrupt if cancel is ineffective
+	go func() {
+		<-ctx.Done()
+		if ctx.Err() != context.DeadlineExceeded {
+			return
+		}
+		log.Printf("[worker %s] fallback timeout %ds, sending cancel", w.channelID, w.askTimeoutSec)
+		w.agent.CancelPrompt()
+		w.scheduleInterruptEscalation(currentJobSeq, w.escalationGrace, "fallback timeout cancel ineffective")
+	}()
 
 	response, askErr := w.agent.Ask(ctx, job.Prompt, func(chunk string) {
 		if w.onActivity != nil {
