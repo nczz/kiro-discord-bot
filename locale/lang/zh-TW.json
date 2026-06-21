@@ -124,6 +124,8 @@
   "egress.reason.too_large": "檔案超過可脫敏的大小上限",
   "egress.reason.is_directory": "不支援傳送目錄",
   "egress.reason.path_required": "未指定檔案路徑",
+  "egress.reason.extract_failed": "無法從此檔案安全提取可讀文字",
+  "egress.reason.unsupported_format": "檔案格式不支援安全文字提取",
   "health.restart_failed": "⚠️ Agent 異常且重啟失敗：%s",
   "health.restarted": "⚠️ Agent 異常，已自動重啟。",
   "cmd.start.desc": "綁定專案目錄並啟動 agent",

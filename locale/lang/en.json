@@ -130,6 +130,8 @@
   "egress.reason.too_large": "file exceeds sanitizable size limit",
   "egress.reason.is_directory": "directories cannot be sent as files",
   "egress.reason.path_required": "file_path is required",
+  "egress.reason.extract_failed": "failed to extract readable text from this file",
+  "egress.reason.unsupported_format": "file format is not supported for safe text extraction",
   "health.restart_failed": "⚠️ Agent error, restart failed: %s",
   "health.restarted": "⚠️ Agent error, auto-restarted.",
   "cmd.start.desc": "Bind project directory and start agent",

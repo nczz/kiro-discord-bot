@@ -128,6 +128,22 @@ func TestReadOnlyToolAnnotations(t *testing.T) {
 	}
 }
 
+func TestSendFileToolDocumentsExtractedTextOutput(t *testing.T) {
+	tool := writeTool(ToolSendFile, "Send a local file through the bot-controlled safe egress queue. Text files are redacted and uploaded as sanitized copies. Documents with extractable readable text (PDF, DOCX, XLSX) are converted to text, redacted, and uploaded as sanitized .txt copies; original binary documents are never uploaded back.", false)
+
+	if !strings.Contains(tool.Description, "sanitized .txt copies") || !strings.Contains(tool.Description, "never uploaded back") {
+		t.Fatalf("send file description should document extracted .txt output and no original binary upload: %q", tool.Description)
+	}
+	filePath, ok := tool.InputSchema.Properties["file_path"].(map[string]any)
+	if !ok {
+		t.Fatalf("file_path schema missing: %+v", tool.InputSchema.Properties["file_path"])
+	}
+	desc, _ := filePath["description"].(string)
+	if !strings.Contains(desc, "extractable readable text") || !strings.Contains(desc, "redacted .txt") {
+		t.Fatalf("file_path description should document redacted .txt output: %q", desc)
+	}
+}
+
 func TestWriteToolAnnotations(t *testing.T) {
 	sendMessageTool := writeTool("bot_send_message", "send", false)
 	if sendMessageTool.Annotations.ReadOnlyHint == nil || *sendMessageTool.Annotations.ReadOnlyHint {

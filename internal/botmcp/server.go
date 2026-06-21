@@ -91,7 +91,7 @@ func NewServer() *server.MCPServer {
 		},
 	)
 	s.AddTool(
-		writeTool(ToolSendFile, "Send a local text file through the bot-controlled safe egress queue. The main bot uploads only a redacted sanitized copy.", false),
+		writeTool(ToolSendFile, "Send a local file through the bot-controlled safe egress queue. Text files are redacted and uploaded as sanitized copies. Documents with extractable readable text (PDF, DOCX, XLSX) are converted to text, redacted, and uploaded as sanitized .txt copies; original binary documents are never uploaded back.", false),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			channelID, _ := req.RequireString("channel_id")
 			if err := validateBoundChannel(channelID); err != nil {
@@ -212,7 +212,7 @@ func writeTool(name, description string, destructive bool) mcp.Tool {
 	case ToolSendFile:
 		for _, opt := range []mcp.ToolOption{
 			mcp.WithString("channel_id", mcp.Required(), mcp.Description("Discord channel ID from context")),
-			mcp.WithString("file_path", mcp.Required(), mcp.Description("Local text file path to sanitize and upload")),
+			mcp.WithString("file_path", mcp.Required(), mcp.Description("Local file path to sanitize and upload. Text files stay text; PDF, DOCX, and XLSX with extractable readable text are extracted to redacted .txt copies.")),
 			mcp.WithString("content", mcp.Description("Optional message content to send with the sanitized file")),
 		} {
 			opt(&t)

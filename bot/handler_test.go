@@ -354,6 +354,16 @@ func TestEgressReasonMessageLocalizesKnownSafeFailures(t *testing.T) {
 			want: "file_path is required",
 		},
 		{
+			name: "extract failed",
+			raw:  "extract readable text (.docx): extract readable text: no readable text found",
+			want: "failed to extract readable text from this file",
+		},
+		{
+			name: "unsupported extractable format",
+			raw:  "unsupported extractable format",
+			want: "file format is not supported for safe text extraction",
+		},
+		{
 			name: "unknown fallback",
 			raw:  "open sanitized file: permission denied",
 			want: "open sanitized file: permission denied",

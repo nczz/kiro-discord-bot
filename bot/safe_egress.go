@@ -12,8 +12,8 @@ import (
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/nczz/kiro-discord-bot/internal/botegress"
-	L "github.com/nczz/kiro-discord-bot/locale"
 	"github.com/nczz/kiro-discord-bot/internal/secrets"
+	L "github.com/nczz/kiro-discord-bot/locale"
 )
 
 type safeEgressTask struct {
@@ -168,6 +168,8 @@ var egressReasonKeys = []struct {
 	{"exceeds sanitizable size limit", "egress.reason.too_large"},
 	{"directories cannot be sent as files", "egress.reason.is_directory"},
 	{"file_path is required", "egress.reason.path_required"},
+	{"extract readable text", "egress.reason.extract_failed"},
+	{"unsupported extractable format", "egress.reason.unsupported_format"},
 }
 
 func channelSendSanitized(ds *discordgo.Session, channelID, content string) (int, error) {

@@ -58,6 +58,38 @@ These are deliberate boundaries unless a new architecture task changes them:
 - Do not patch multi-bot coordination by weakening `requiresHumanMention`, peer filtering, MCP policy, or safe egress.
 - If reliable multi-bot orchestration becomes a product goal, design it as an explicit server-side architecture with owned routing, state, audit, and bot identity boundaries.
 
+## Current Safe Egress Decisions
+
+### Document Files Are Extracted To Text, Not Rewritten In Original Format
+
+Decision:
+
+- `bot_send_file` may accept document formats with extractable readable text such as PDF, DOCX, and XLSX, but the bot-side safe egress output is an extracted, redacted `.txt` copy. The original binary document is not uploaded back to Discord.
+
+Context:
+
+- Safe egress is a security boundary for agent-accessible local files. Text files can be redacted directly, but binary document containers may hide content in headers, footers, comments, metadata, formulas, hidden sheets, embedded objects, or compressed streams.
+- Rebuilding a PDF/DOCX/XLSX that preserves original format while proving every secret-bearing location was removed requires format-specific sanitization guarantees this project does not currently own.
+
+Rejected alternatives:
+
+- Rewriting PDF/DOCX/XLSX in place or generating a same-extension sanitized copy was rejected because it can leave unredacted content in unsupported document parts, corrupt the file, or imply a stronger guarantee than tests can prove.
+- Uploading unsupported binary files after filename/content redaction was rejected because the original bytes may contain secrets that the bot cannot inspect safely.
+
+Current scope:
+
+- Text files are redacted and uploaded as sanitized text copies.
+- Supported extractable document formats are converted to readable text, redacted, and uploaded as `.redacted.txt` copies.
+- Unsupported binary files, unreadable files, oversized files, and files that expand beyond the safe extraction limit are refused instead of uploaded.
+
+Future trigger:
+
+- Reopen original-format output only if the project adds a format-specific sanitizer with tests for hidden document parts, comments, metadata, formulas, embedded objects, malformed files, and output-openability for each supported format.
+
+Verification:
+
+- Regression tests should cover extracted document redaction, compressed PDF text extraction, safe display names, temp directory creation, unsupported binary refusal, extraction/output size limits, locale reasons, MCP tool wording, and README behavior alignment.
+
 ## Known Failure Patterns
 
 ### CWD Or Kiro Settings Pollution
