@@ -14,9 +14,9 @@ import (
 
 const MaxSanitizableFileBytes int64 = 5 * 1024 * 1024
 
-// ExtractableBinaryExt lists file extensions that should be extracted,
-// redacted, and re-packaged instead of treated as raw text.
-var ExtractableBinaryExt = map[string]bool{
+// extractableBinaryExt lists document extensions that should be converted to
+// redacted text output instead of treated as raw text.
+var extractableBinaryExt = map[string]bool{
 	".pdf":  true,
 	".docx": true,
 	".xlsx": true,
@@ -79,7 +79,7 @@ func PrepareSanitizedFile(path string, redactor *secrets.Redactor, tempRoot stri
 	if !isTextFile(abs, raw) {
 		// Try extraction for supported binary formats
 		ext := strings.ToLower(filepath.Ext(abs))
-		if ExtractableBinaryExt[ext] {
+		if extractableBinaryExt[ext] {
 			return prepareExtractedFile(abs, redactor, tempRoot)
 		}
 		return SanitizedFile{}, fmt.Errorf("file type is not safely redactable as text")
