@@ -693,6 +693,47 @@ func TestWorkerInlineDeliverySendsOnlyFinalReplyAndReplacesQueuedReaction(t *tes
 	}
 }
 
+func TestWorkerInlineDeliveryWithoutMessageIDSendsUnreferencedFinalReply(t *testing.T) {
+	L.Load("en")
+	rt := &recordingRoundTripper{}
+	ds := testDiscordSession(rt)
+	agent := &fakeWorkerAgent{}
+	w := newWorker("ch1", agent, 1, 30, 1, 1440, nil, "")
+
+	w.executeInline(&Job{
+		ChannelID:    "ch1",
+		Prompt:       "slash audit prompt",
+		Session:      ds,
+		DeliveryMode: DeliveryInline,
+	})
+	cb := agent.Callbacks()
+	if cb.OnComplete == nil {
+		t.Fatal("expected inline callbacks to be registered")
+	}
+	cb.OnToolCall(acp.ToolCallEvent{Kind: "read", Title: "Query audit"})
+	cb.OnComplete("audit investigation result", nil)
+
+	reqs, bodies := rt.Snapshot()
+	var messagePosts int
+	for i, req := range reqs {
+		if strings.Contains(req, "/reactions/") {
+			t.Fatalf("empty message id should not emit reaction requests; request=%s", req)
+		}
+		if strings.HasPrefix(req, "POST /api/") && strings.HasSuffix(req, "/channels/ch1/messages") {
+			messagePosts++
+			if !strings.Contains(bodies[i], "audit investigation result") {
+				t.Fatalf("final reply body = %q, want audit investigation result", bodies[i])
+			}
+			if strings.Contains(bodies[i], "message_reference") {
+				t.Fatalf("final reply body should not include message_reference: %q", bodies[i])
+			}
+		}
+	}
+	if messagePosts != 1 {
+		t.Fatalf("message post count = %d, want 1; requests=%v bodies=%v", messagePosts, reqs, bodies)
+	}
+}
+
 func TestWorkerThreadDeliveryAppendsMetricsToFinalResponse(t *testing.T) {
 	L.Load("en")
 	rt := &recordingRoundTripper{}

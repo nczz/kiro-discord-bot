@@ -623,7 +623,9 @@ func (m *Manager) Enqueue(ds *discordgo.Session, job *Job) error {
 	m.channelLastActivity[job.ChannelID] = time.Now()
 
 	qLen := worker.QueueLen()
-	_ = ds.MessageReactionAdd(job.ChannelID, job.MessageID, "⏳")
+	if job.MessageID != "" {
+		_ = ds.MessageReactionAdd(job.ChannelID, job.MessageID, "⏳")
+	}
 	if qLen > 1 && job.DeliveryMode != DeliveryInline {
 		_, _ = sendDiscordText(ds, job.ChannelID, L.Getf("status.queued", qLen), &discordgo.MessageReference{
 			MessageID: job.MessageID,

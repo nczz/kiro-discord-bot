@@ -822,6 +822,9 @@ func (p *inlineReactionPulse) setFinal(next string) {
 }
 
 func (p *inlineReactionPulse) replace(prev, next string) {
+	if p.messageID == "" {
+		return
+	}
 	if prev != "" && prev != next {
 		_ = p.ds.MessageReactionRemove(p.channelID, p.messageID, prev, "@me")
 	}
@@ -1383,7 +1386,10 @@ func SendLongReply(ds *discordgo.Session, channelID, messageID, content string) 
 		if len(parts) > 1 {
 			p = discordfmt.WithPartPrefix(p, i, len(parts))
 		}
-		ref := &discordgo.MessageReference{MessageID: messageID, ChannelID: channelID}
+		var ref *discordgo.MessageReference
+		if messageID != "" {
+			ref = &discordgo.MessageReference{MessageID: messageID, ChannelID: channelID}
+		}
 		if _, err := sendDiscordText(ds, channelID, p, ref); err != nil {
 			log.Printf("[send] reply channel %s failed: %v (len=%d)", channelID, err, len(p))
 		}
