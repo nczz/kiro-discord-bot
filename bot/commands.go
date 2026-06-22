@@ -158,10 +158,20 @@ func (b *Bot) cmdAudit(ctx cmdCtx) {
 		ctx.reply(L.Get("audit.forbidden"))
 		return
 	}
+
+	// Determine if args is a prompt or a numeric limit
+	args := strings.TrimSpace(ctx.args)
+	if args != "" {
+		if _, err := strconv.Atoi(args); err != nil {
+			// Non-numeric args = natural language prompt → agent task
+			b.cmdAuditPrompt(ctx, args)
+			return
+		}
+	}
+
 	limit := 20
-	args := strings.Fields(ctx.args)
-	if len(args) > 0 {
-		if n, err := strconv.Atoi(args[len(args)-1]); err == nil && n > 0 {
+	if args != "" {
+		if n, err := strconv.Atoi(args); err == nil && n > 0 {
 			limit = n
 		}
 	}
@@ -175,6 +185,43 @@ func (b *Bot) cmdAudit(ctx cmdCtx) {
 		return
 	}
 	ctx.reply(formatAuditTimeline(events))
+}
+
+func (b *Bot) cmdAuditPrompt(ctx cmdCtx, prompt string) {
+	if !b.manager.ChannelInitialized(ctx.channelID) {
+		ctx.reply(L.Get("audit.prompt_requires_init"))
+		return
+	}
+	// Build augmented prompt with audit context
+	augmented := fmt.Sprintf("[Audit investigation request]\n"+
+		"The user asks you to investigate the Discord audit database and provide a report.\n"+
+		"Use the bot_query_audit tool to inspect scoped audit timeline rows for this Discord target. Do not generate SQL; use the tool filters such as target_id, limit, contains, and event_type.\n"+
+		"Target channel/thread ID for this query context: %s\n\n"+
+		"User question: %s", ctx.targetID, prompt)
+
+	job := &channel.Job{
+		ChannelID:    ctx.channelID,
+		GuildID:      ctx.guildID,
+		MessageID:    ctx.messageID,
+		Prompt:       augmented,
+		Session:      b.discord,
+		UserID:       ctx.userID,
+		Username:     ctx.username,
+		Source:       "audit_prompt",
+		DeliveryMode: channel.DeliveryThread,
+	}
+	if !b.manager.ThreadModeEnabled(ctx.channelID) {
+		job.DeliveryMode = channel.DeliveryInline
+	}
+	if ctx.inThread {
+		job.ThreadID = ctx.targetID
+		job.DeliveryMode = channel.DeliveryThread
+	}
+	if err := b.manager.Enqueue(b.discord, job); err != nil {
+		ctx.reply(commandError(err))
+		return
+	}
+	ctx.reply(L.Get("audit.prompt_submitted"))
 }
 
 func formatAuditTimeline(events []audit.TimelineEvent) string {

@@ -278,6 +278,80 @@ func TestStoreRecentTimelineMergesDiscordAndBotEvents(t *testing.T) {
 	}
 }
 
+func TestQueryTimelineReadOnlyScopesTargetAndGuild(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "discord.sqlite")
+	store, err := Open(Config{Enabled: true, DBPath: dbPath, RecordContent: true})
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+
+	for _, msg := range []*discordgo.Message{
+		{ID: "m1", GuildID: "g1", ChannelID: "c1", Content: "visible created_at message_create", Timestamp: time.Now(), Author: &discordgo.User{ID: "u1", Username: "alice"}},
+		{ID: "m2", GuildID: "g1", ChannelID: "c2", Content: "other channel", Timestamp: time.Now(), Author: &discordgo.User{ID: "u2", Username: "bob"}},
+		{ID: "m3", GuildID: "g2", ChannelID: "c1", Content: "other guild", Timestamp: time.Now(), Author: &discordgo.User{ID: "u3", Username: "carol"}},
+	} {
+		payload := &discordgo.MessageCreate{Message: msg}
+		if err := store.Record(context.Background(), EventFromPayload("message_create", payload, func(string) string { return "" }), payload); err != nil {
+			t.Fatalf("record message %s: %v", msg.ID, err)
+		}
+	}
+
+	events, err := QueryTimelineReadOnly(dbPath, TimelineQueryOptions{
+		GuildID:        "g1",
+		TargetID:       "c1",
+		Contains:       "message_create",
+		EventType:      "message_create",
+		IncludeContent: true,
+		Limit:          10,
+	})
+	if err != nil {
+		t.Fatalf("query timeline: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("events = %d, want 1: %+v", len(events), events)
+	}
+	if events[0].MessageID != "m1" || events[0].Content != "visible created_at message_create" {
+		t.Fatalf("scoped event = %+v", events[0])
+	}
+}
+
+func TestQueryTimelineReadOnlyOmitsContentByDefault(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "discord.sqlite")
+	store, err := Open(Config{Enabled: true, DBPath: dbPath, RecordContent: true})
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+
+	msg := &discordgo.Message{ID: "m1", GuildID: "g1", ChannelID: "c1", Content: "secret", Timestamp: time.Now(), Author: &discordgo.User{ID: "u1", Username: "alice"}}
+	payload := &discordgo.MessageCreate{Message: msg}
+	if err := store.Record(context.Background(), EventFromPayload("message_create", payload, func(string) string { return "" }), payload); err != nil {
+		t.Fatalf("record message: %v", err)
+	}
+
+	events, err := QueryTimelineReadOnly(dbPath, TimelineQueryOptions{GuildID: "g1", TargetID: "c1", Limit: 10})
+	if err != nil {
+		t.Fatalf("query timeline: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("events = %d, want 1", len(events))
+	}
+	if events[0].Content != "" {
+		t.Fatalf("content = %q, want omitted", events[0].Content)
+	}
+
+	events, err = QueryTimelineReadOnly(dbPath, TimelineQueryOptions{GuildID: "g1", TargetID: "c1", Contains: "secret", Limit: 10})
+	if err != nil {
+		t.Fatalf("query hidden content: %v", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("hidden content search returned events: %+v", events)
+	}
+}
+
 func openTestDB(t *testing.T, path string) *sql.DB {
 	t.Helper()
 	db, err := sql.Open("sqlite", path)

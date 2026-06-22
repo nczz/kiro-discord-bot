@@ -70,17 +70,17 @@ type BotEvent struct {
 }
 
 type TimelineEvent struct {
-	Kind       string
-	Type       string
-	ChannelID  string
-	TargetID   string
-	ThreadID   string
-	MessageID  string
-	UserID     string
-	Command    string
-	Status     string
-	Content    string
-	RecordedAt string
+	Kind       string `json:"kind"`
+	Type       string `json:"type"`
+	ChannelID  string `json:"channel_id"`
+	TargetID   string `json:"target_id"`
+	ThreadID   string `json:"thread_id"`
+	MessageID  string `json:"message_id"`
+	UserID     string `json:"user_id"`
+	Command    string `json:"command"`
+	Status     string `json:"status"`
+	Content    string `json:"content,omitempty"`
+	RecordedAt string `json:"recorded_at"`
 }
 
 func Open(cfg Config) (*Store, error) {
@@ -832,4 +832,111 @@ func redactContent(v any) {
 			redactContent(item)
 		}
 	}
+}
+
+type TimelineQueryOptions struct {
+	GuildID        string
+	TargetID       string
+	Limit          int
+	Contains       string
+	EventType      string
+	IncludeContent bool
+}
+
+// QueryTimelineReadOnly opens a separate read-only connection and returns
+// timeline rows scoped to one Discord channel/thread target.
+func QueryTimelineReadOnly(dbPath string, opts TimelineQueryOptions) ([]TimelineEvent, error) {
+	if strings.TrimSpace(opts.TargetID) == "" {
+		return nil, errors.New("target_id is required")
+	}
+	if opts.Limit <= 0 || opts.Limit > 100 {
+		opts.Limit = 50
+	}
+	db, err := sql.Open("sqlite", dbPath+"?mode=ro")
+	if err != nil {
+		return nil, fmt.Errorf("open audit db: %w", err)
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	contentExpr := "''"
+	if opts.IncludeContent {
+		contentExpr = "COALESCE(content, '')"
+	}
+	discordFilter := ""
+	botFilter := ""
+	var discordArgs []any
+	var botArgs []any
+	if strings.TrimSpace(opts.GuildID) != "" {
+		discordFilter += " AND guild_id = ?"
+		botFilter += " AND guild_id = ?"
+		discordArgs = append(discordArgs, opts.GuildID)
+		botArgs = append(botArgs, opts.GuildID)
+	}
+	if strings.TrimSpace(opts.EventType) != "" {
+		discordFilter += " AND event_type = ?"
+		botFilter += " AND event_type = ?"
+		discordArgs = append(discordArgs, opts.EventType)
+		botArgs = append(botArgs, opts.EventType)
+	}
+	if strings.TrimSpace(opts.Contains) != "" {
+		needle := "%" + opts.Contains + "%"
+		discordFilter += " AND (event_type LIKE ? OR channel_id LIKE ? OR thread_id LIKE ? OR message_id LIKE ? OR user_id LIKE ? OR author_id LIKE ? OR author_username LIKE ?)"
+		botFilter += " AND (event_type LIKE ? OR channel_id LIKE ? OR target_id LIKE ? OR thread_id LIKE ? OR message_id LIKE ? OR user_id LIKE ? OR username LIKE ? OR command LIKE ? OR status LIKE ? OR error LIKE ?)"
+		for range 7 {
+			discordArgs = append(discordArgs, needle)
+		}
+		for range 10 {
+			botArgs = append(botArgs, needle)
+		}
+	}
+	args := []any{opts.TargetID, opts.TargetID, opts.TargetID}
+	args = append(args, discordArgs...)
+	args = append(args, opts.TargetID, opts.TargetID, opts.TargetID, opts.TargetID)
+	args = append(args, botArgs...)
+	args = append(args, opts.Limit)
+
+	rows, err := db.QueryContext(ctx, fmt.Sprintf(`SELECT kind, event_type, channel_id, target_id, thread_id, message_id, user_id, command, status, content, recorded_at
+FROM (
+	SELECT 'discord' AS kind, event_type, COALESCE(channel_id, '') AS channel_id, COALESCE(channel_id, '') AS target_id, COALESCE(thread_id, '') AS thread_id, COALESCE(message_id, '') AS message_id, COALESCE(user_id, '') AS user_id, '' AS command, '' AS status, %s AS content, recorded_at
+	FROM discord_events
+	WHERE (channel_id = ? OR thread_id = ? OR parent_channel_id = ?)%s
+	UNION ALL
+	SELECT 'bot' AS kind, event_type, COALESCE(channel_id, '') AS channel_id, COALESCE(target_id, '') AS target_id, COALESCE(thread_id, '') AS thread_id, COALESCE(message_id, '') AS message_id, COALESCE(user_id, '') AS user_id, COALESCE(command, '') AS command, COALESCE(status, '') AS status, %s AS content, recorded_at
+	FROM bot_audit_events
+	WHERE (target_id = ? OR channel_id = ? OR thread_id = ? OR parent_channel_id = ?)%s
+)
+ORDER BY recorded_at DESC
+LIMIT ?`, contentExpr, discordFilter, contentExpr, botFilter), args...)
+	if err != nil {
+		return nil, fmt.Errorf("query: %w", err)
+	}
+	defer rows.Close()
+
+	var out []TimelineEvent
+	for rows.Next() {
+		var e TimelineEvent
+		if err := rows.Scan(&e.Kind, &e.Type, &e.ChannelID, &e.TargetID, &e.ThreadID, &e.MessageID, &e.UserID, &e.Command, &e.Status, &e.Content, &e.RecordedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// AuditDBPath returns the expected audit database file path for a given data directory.
+func AuditDBPath(dataDir string) string {
+	return filepath.Join(dataDir, "audit", "discord.sqlite")
+}
+
+// SchemaDescription returns a human-readable description of the scoped audit timeline
+// for use in MCP tool descriptions.
+func SchemaDescription() string {
+	return `Returns scoped audit timeline rows only. Available fields: kind, type, channel_id, target_id, thread_id, message_id, user_id, command, status, recorded_at. Message content is omitted from MCP tool output. Supported filters: target_id, limit, contains, event_type. The tool cannot query raw tables or raw_json.`
 }

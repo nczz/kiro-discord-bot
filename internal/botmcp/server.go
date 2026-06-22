@@ -12,6 +12,7 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
+	"github.com/nczz/kiro-discord-bot/audit"
 	"github.com/nczz/kiro-discord-bot/internal/botegress"
 	"github.com/nczz/kiro-discord-bot/internal/channelmeta"
 	"github.com/nczz/kiro-discord-bot/internal/cronpolicy"
@@ -31,6 +32,7 @@ const (
 	ToolCreateCron      = "bot_create_cron"
 	ToolListCron        = "bot_list_cron"
 	ToolDeleteCron      = "bot_delete_cron"
+	ToolQueryAudit      = "bot_query_audit"
 )
 
 // DefaultSafeToolNames returns the bot-tools allowlist enabled during first channel setup.
@@ -40,6 +42,7 @@ func DefaultSafeToolNames() []string {
 		ToolDataSummary,
 		ToolListChannelData,
 		ToolListCron,
+		ToolQueryAudit,
 		ToolSendFile,
 		ToolCreateCron,
 	}
@@ -190,6 +193,41 @@ func NewServer() *server.MCPServer {
 			return mcp.NewToolResultText(fmt.Sprintf("Cron job %q scheduled for deletion. It will be removed within 60 seconds.", strings.TrimSpace(jobID))), nil
 		},
 	)
+	s.AddTool(
+		mcp.NewTool(ToolQueryAudit,
+			mcp.WithDescription("Query scoped Discord audit timeline rows for the current bot-tools channel/thread context. "+audit.SchemaDescription()),
+			mcp.WithString("target_id", mcp.Description("Optional target channel/thread ID. Defaults to the current bot-tools target and must match the bound channel or thread target.")),
+			mcp.WithNumber("limit", mcp.Description("Maximum rows to return, 1-100. Defaults to 50.")),
+			mcp.WithString("contains", mcp.Description("Optional substring filter across event metadata such as type, target, message ID, user, command, status, and error. Message content is not searched.")),
+			mcp.WithString("event_type", mcp.Description("Optional exact event type filter, such as message_create or agent_tool_call.")),
+			mcp.WithReadOnlyHintAnnotation(true),
+			mcp.WithDestructiveHintAnnotation(false),
+			mcp.WithIdempotentHintAnnotation(true),
+			mcp.WithOpenWorldHintAnnotation(false),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			targetID, err := auditToolTargetID(req.GetString("target_id", ""))
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			dbPath := audit.AuditDBPath(dataDir())
+			rows, err := audit.QueryTimelineReadOnly(dbPath, audit.TimelineQueryOptions{
+				GuildID:   strings.TrimSpace(os.Getenv("BOT_TOOLS_GUILD_ID")),
+				TargetID:  targetID,
+				Limit:     req.GetInt("limit", 50),
+				Contains:  req.GetString("contains", ""),
+				EventType: req.GetString("event_type", ""),
+			})
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			if len(rows) == 0 {
+				return mcp.NewToolResultText("No results."), nil
+			}
+			raw, _ := json.MarshalIndent(rows, "", "  ")
+			return mcp.NewToolResultText(string(raw)), nil
+		},
+	)
 	return s
 }
 
@@ -309,6 +347,26 @@ func cronOwnerChannelID(requested string) (string, error) {
 		return bound, nil
 	}
 	return strings.TrimSpace(requested), nil
+}
+
+func auditToolTargetID(requested string) (string, error) {
+	requested = strings.TrimSpace(requested)
+	if requested == "" {
+		if target := currentTargetStateChannelID(); target != "" {
+			return target, nil
+		}
+		if target := strings.TrimSpace(os.Getenv("BOT_TOOLS_TARGET_CHANNEL_ID")); target != "" {
+			return target, nil
+		}
+		requested = strings.TrimSpace(os.Getenv("BOT_TOOLS_CHANNEL_ID"))
+	}
+	if requested == "" {
+		return "", fmt.Errorf("target_id is required")
+	}
+	if err := validateBoundChannel(requested); err != nil {
+		return "", err
+	}
+	return requested, nil
 }
 
 func currentTargetStateChannelID() string {

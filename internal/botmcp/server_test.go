@@ -92,6 +92,25 @@ func TestDefaultSafeToolNamesExcludeDestructiveTools(t *testing.T) {
 	if !seen[ToolSendFile] {
 		t.Fatalf("file egress tool should be default-enabled for interactive file delivery: %+v", tools)
 	}
+	if !seen[ToolQueryAudit] {
+		t.Fatalf("scoped audit query tool should be default-enabled for /audit prompt support: %+v", tools)
+	}
+}
+
+func TestAuditToolTargetIDIsBoundToCurrentBotToolsTarget(t *testing.T) {
+	t.Setenv("BOT_TOOLS_CHANNEL_ID", "channel-1")
+	t.Setenv("BOT_TOOLS_TARGET_CHANNEL_ID", "thread-1")
+
+	got, err := auditToolTargetID("")
+	if err != nil {
+		t.Fatalf("default target: %v", err)
+	}
+	if got != "thread-1" {
+		t.Fatalf("default target = %q, want thread-1", got)
+	}
+	if _, err := auditToolTargetID("channel-2"); err == nil {
+		t.Fatal("expected cross-channel target to be rejected")
+	}
 }
 
 func TestCreateCronToolDocumentsBotTimezone(t *testing.T) {

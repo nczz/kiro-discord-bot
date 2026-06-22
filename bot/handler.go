@@ -918,6 +918,7 @@ func buildSlashCommands() []*discordgo.ApplicationCommand {
 		{Name: "doctor", Description: L.Get("cmd.doctor.desc")},
 		{Name: "audit", Description: L.Get("cmd.audit.desc"), Options: []*discordgo.ApplicationCommandOption{
 			{Type: discordgo.ApplicationCommandOptionInteger, Name: "limit", Description: L.Get("cmd.audit.opt.limit"), Required: false},
+			{Type: discordgo.ApplicationCommandOptionString, Name: "prompt", Description: L.Get("cmd.audit.opt.prompt"), Required: false},
 		}},
 		{Name: "mcp", Description: L.Get("cmd.mcp.desc"), Options: mcpSlashOptions()},
 		{Name: "steering", Description: L.Get("cmd.steering.desc"), Options: steeringSlashOptions()},
@@ -1307,8 +1308,13 @@ func (b *Bot) handleSlashCommand(ds *discordgo.Session, i *discordgo.Interaction
 		case "doctor":
 			b.cmdDoctor(ctx)
 		case "audit":
-			if len(data.Options) > 0 {
-				ctx.args = fmt.Sprintf("%d", data.Options[0].IntValue())
+			for _, opt := range data.Options {
+				switch opt.Name {
+				case "limit":
+					ctx.args = fmt.Sprintf("%d", opt.IntValue())
+				case "prompt":
+					ctx.args = opt.StringValue()
+				}
 			}
 			b.cmdAudit(ctx)
 		case "mcp":
