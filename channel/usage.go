@@ -197,6 +197,7 @@ func (s *UsageStore) Report(guildID, channelID, userID string, limit int, now ti
 	if err != nil {
 		return UsageReport{}, err
 	}
+	scoped := make([]usageRecordWithTime, 0, len(records))
 	for _, rec := range records {
 		if guildID != "" {
 			if rec.GuildID != guildID {
@@ -205,11 +206,17 @@ func (s *UsageStore) Report(guildID, channelID, userID string, limit int, now ti
 		} else if channelID != "" && rec.ChannelID != channelID {
 			continue
 		}
-		if userID != "" && rec.UserID != userID {
-			continue
-		}
 		t, err := parseUsageTime(rec.Timestamp, loc)
 		if err != nil || t.After(now) {
+			continue
+		}
+		scoped = append(scoped, usageRecordWithTime{record: rec, timestamp: t})
+	}
+	usernameAliases := uniqueUsernameAliases(scoped)
+	for _, item := range scoped {
+		rec := item.record
+		resolvedUserID := resolveUsageUserID(rec, usernameAliases)
+		if userID != "" && resolvedUserID != userID {
 			continue
 		}
 		credits := rec.Credits
@@ -217,29 +224,29 @@ func (s *UsageStore) Report(guildID, channelID, userID string, limit int, now ti
 		if len(rec.MeteringUsage) > 0 {
 			credits, meteringSupported = creditsFromMetering(rec.MeteringUsage)
 		}
-		row := rows[rec.UserID]
+		row := rows[resolvedUserID]
 		if row == nil {
-			row = &UsageReportRow{UserID: rec.UserID}
-			rows[rec.UserID] = row
+			row = &UsageReportRow{UserID: resolvedUserID}
+			rows[resolvedUserID] = row
 		}
 		if rec.Username != "" {
 			row.Username = rec.Username
 		}
-		if !t.Before(monthStart) {
+		if !item.timestamp.Before(monthStart) {
 			row.MonthCredits += credits
 			row.MonthTurns++
 			if meteringSupported {
 				row.MeteredMonthTurns++
 			}
 		}
-		if !t.Before(weekStart) {
+		if !item.timestamp.Before(weekStart) {
 			row.WeekCredits += credits
 			row.WeekTurns++
 			if meteringSupported {
 				row.MeteredWeekTurns++
 			}
 		}
-		if !t.Before(dayStart) {
+		if !item.timestamp.Before(dayStart) {
 			row.DayCredits += credits
 			row.DayTurns++
 			if meteringSupported {
@@ -275,6 +282,45 @@ func (s *UsageStore) Report(guildID, channelID, userID string, limit int, now ti
 		MonthStart:  monthStart,
 		Rows:        out,
 	}, nil
+}
+
+type usageRecordWithTime struct {
+	record    UsageRecord
+	timestamp time.Time
+}
+
+func uniqueUsernameAliases(records []usageRecordWithTime) map[string]string {
+	aliases := make(map[string]string)
+	ambiguous := make(map[string]bool)
+	for _, item := range records {
+		rec := item.record
+		username := strings.TrimSpace(rec.Username)
+		userID := strings.TrimSpace(rec.UserID)
+		if username == "" || userID == "" {
+			continue
+		}
+		if existing, ok := aliases[username]; ok && existing != userID {
+			ambiguous[username] = true
+			continue
+		}
+		aliases[username] = userID
+	}
+	for username := range ambiguous {
+		delete(aliases, username)
+	}
+	return aliases
+}
+
+func resolveUsageUserID(rec UsageRecord, usernameAliases map[string]string) string {
+	userID := strings.TrimSpace(rec.UserID)
+	if userID != "" {
+		return userID
+	}
+	username := strings.TrimSpace(rec.Username)
+	if username == "" {
+		return ""
+	}
+	return usernameAliases[username]
 }
 
 func (s *UsageStore) readRange(start, end time.Time) ([]UsageRecord, error) {
