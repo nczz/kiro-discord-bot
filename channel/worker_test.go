@@ -734,6 +734,63 @@ func TestWorkerInlineDeliveryWithoutMessageIDSendsUnreferencedFinalReply(t *test
 	}
 }
 
+func TestWorkerInlineDeliveryWithFinalReplyAvoidsPublicChannelPost(t *testing.T) {
+	L.Load("en")
+	rt := &recordingRoundTripper{}
+	ds := testDiscordSession(rt)
+	agent := &fakeWorkerAgent{}
+	w := newWorker("ch1", agent, 1, 30, 1, 1440, nil, "")
+	statePath := filepath.Join(t.TempDir(), "target.json")
+	w.SetBotToolsTargetStatePath(statePath)
+
+	drainCalls := 0
+	w.OnBeforeFinalResponseFunc(func(targetChannelID string) int {
+		drainCalls++
+		return 0
+	})
+
+	var finalReplies []string
+	w.executeInline(&Job{
+		ChannelID:        "ch1",
+		BotToolsTargetID: "thread-1",
+		DisableBotEgress: true,
+		Prompt:           "slash audit prompt",
+		Session:          ds,
+		DeliveryMode:     DeliveryInline,
+		FinalReply: func(content string) {
+			raw, err := os.ReadFile(statePath)
+			if err != nil {
+				t.Fatalf("target state missing before private final response: %v", err)
+			}
+			if !strings.Contains(string(raw), `"target_channel_id":"thread-1"`) {
+				t.Fatalf("target state = %s, want thread-1", raw)
+			}
+			if !strings.Contains(string(raw), `"disable_egress":true`) {
+				t.Fatalf("target state = %s, want egress disabled", raw)
+			}
+			finalReplies = append(finalReplies, content)
+		},
+	})
+	cb := agent.Callbacks()
+	if cb.OnComplete == nil {
+		t.Fatal("expected inline callbacks to be registered")
+	}
+	cb.OnComplete("private audit result", nil)
+
+	if drainCalls != 0 {
+		t.Fatalf("safe egress drain calls = %d, want 0 for private audit job", drainCalls)
+	}
+	if len(finalReplies) != 1 || !strings.Contains(finalReplies[0], "private audit result") {
+		t.Fatalf("private final replies = %#v, want private audit result", finalReplies)
+	}
+	reqs, bodies := rt.Snapshot()
+	for i, req := range reqs {
+		if strings.HasPrefix(req, "POST /api/") && strings.HasSuffix(req, "/channels/ch1/messages") {
+			t.Fatalf("private final reply should not post publicly; request=%s body=%s", req, bodies[i])
+		}
+	}
+}
+
 func TestWorkerThreadDeliveryAppendsMetricsToFinalResponse(t *testing.T) {
 	L.Load("en")
 	rt := &recordingRoundTripper{}

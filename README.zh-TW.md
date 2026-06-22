@@ -116,7 +116,7 @@ Compose 會針對容器環境固定部分預設值：`DEFAULT_CWD=/projects`、`
 | `/status` | 查詢 agent 狀態、queue 長度、context 使用率、session ID、bot/agent uptime |
 | `/usage [user]` | 查詢今天、本周、本月至今 credits 用量 |
 | `/doctor` | 執行部署診斷與 ACP preflight |
-| `/audit [limit]` | 查看目前頻道或討論串最近的 raw/semantic 稽核事件 |
+| `/audit [limit]` | 私密查看目前頻道或討論串最近的 raw/semantic 稽核事件 |
 | `/mcp manage` | 開啟互動式 MCP 權限面板，包含工具掃描與工具層級允許/移除控制 |
 | `/mcp <action> [value]` | 查詢或更新此頻道的 MCP policy。Action：`status`、`enable`、`disable` |
 | `/steering <status|create|edit>` | 管理目前頻道專案的 agent context 檔：`.kiro/steering/<project>.md` |
@@ -174,7 +174,7 @@ Compose 會針對容器環境固定部分預設值：`DEFAULT_CWD=/projects`、`
 | `!model` | 查詢討論串 agent 目前的 model |
 | `!model <model-id>` | 切換討論串 agent 的 model 並重啟 |
 | `!models` | 列出所有可用的 model |
-| `!audit [limit]` | 查看此討論串最近的稽核事件 |
+| `!audit [limit]` | 不支援輸出稽核資料；請改用私密 slash `/audit` |
 
 所有討論串指令也支援 `/` slash command 形式。
 
@@ -222,8 +222,8 @@ Kiro model provider
 - **Agent metrics**：當 ACP 回傳 turn metrics 時，agent 執行完成的可見回覆會帶 `⚡` metrics footer。usage ledger 會分開保存 Discord 訊息 ID 與 slash command interaction ID（`message_id`、`interaction_id`），並額外保存通用的 `invocation_id` 方便和 audit 交叉關聯。
 - **Raw Discord 稽核資料庫**：bot 可見的 Discord events 會獨立寫入 SQLite（預設 `DATA_DIR/audit/discord.sqlite`），包含 append-only `discord_events` 與 messages、attachments、reactions、threads 查詢投影；也會在 `bot_audit_events` 紀錄 command 呼叫、command 回覆送出成功/失敗、agent job lifecycle、agent final response 等語意事件。Slash command initial response、deferred followup、cron/reminder command response 都會走同一套 delivery success/failure audit。高頻 typing-start event 預設不紀錄。這不會觸發 agent，也不會自動注入 agent 對話 context；現有 `chat.jsonl` 仍只紀錄實際 user/agent 互動。
 - **Audit 關聯 ID**：`bot_audit_events` 的 `message_id` 與 `interaction_id` 代表觸發 bot command 的使用者呼叫來源；Discord 回傳 bot response message object 時，實際 bot 回覆訊息 ID 會存到 metadata 的 `response_message_id`；initial interaction response 與 modal 不會暴露 Discord message ID，所以改存 `interaction_response_type`。Cron agent 的 `response_sent` 代表 final response message 實際送達，不只是 thread 是否存在。
-- **Slash command 可視性**：管理型 slash command 會設定 Discord default member permissions，讓一般使用者預設不會在 command picker 看到。`/mcp manage`、`/steering`、`/cron-list`、`/cwd`、`/status`、`/usage`、`/doctor`、`/audit`、`/models`、`/memory`、`/flashmemory` 等操作或查詢回應會優先使用 ephemeral private response，減少設定面板與敏感路徑留在頻道中。Agent 任務成果與明確的頻道行為變更仍會送到目標 channel/thread。
-- **稽核權限**：`/audit` 與 `!audit` 直接使用 Discord effective channel permissions，不另建 ACL。呼叫者必須能管理目前目標頻道或討論串；討論串會接受父層頻道管理權限。Discord 權限異動會在下一次查詢即時生效。
+- **Slash command 可視性**：管理型 slash command 會設定 Discord default member permissions，讓一般使用者預設不會在 command picker 看到。`/mcp manage`、`/steering`、`/cron-list`、`/cwd`、`/status`、`/usage`、`/doctor`、`/audit`、`/models`、`/memory`、`/flashmemory` 等操作或查詢回應會優先使用 ephemeral private response，減少設定面板與敏感路徑留在頻道中。Audit prompt 調查的 agent 最終報告也會以私密回覆送出；`!audit` 文字指令因 Discord 無法提供 ephemeral 回覆，不會輸出稽核資料。非稽核的 agent 任務成果與明確的頻道行為變更仍會送到目標 channel/thread。
+- **稽核權限**：`/audit` 直接使用 Discord effective channel permissions，不另建 ACL。呼叫者必須能管理目前目標頻道或討論串；討論串會接受父層頻道管理權限。Discord 權限異動會在下一次查詢即時生效。稽核資料只會透過私密 slash command response 回傳；`!audit` 文字指令不會回傳稽核 rows 或調查報告。
 - 長回覆會依 Discord 訊息限制自動分段，並在跨段時補齊 code block fence；舊版 `/resume` 與 `!resume` 指令目前保留但不會重送最後回覆。
 - **討論串模式**：預設新的父頻道任務會由 bot 主動開 Discord thread，過程與最終回覆都在 thread 中。`/thread off` 或父頻道 `/pause` 會停止新任務開 thread；新任務必須 @mention bot，使用頻道主 agent，在原頻道以 `🔄`、`💭`、`✨`、`🛠️`、`⚙️` 等 reaction heartbeat 顯示仍在運作，最後才送出實際回覆。`/thread on` 或父頻道 `/back` 會恢復新任務開 thread。
 - **討論串互動**：在 bot 建立的 thread 中發訊息，會自動啟動獨立的 thread agent 接續討論。thread 會保存建立當下的監聽模式；父頻道後續切換 `/thread off` 不會讓舊 thread 被動改成 mention-only。若父頻道已是 `/thread off`，手動建立或未知來源的 thread 預設 mention-only，直到在該 thread 內 `/back`。非 active agent 閒置超過 `THREAD_AGENT_IDLE_SEC` 或非 active thread 歸檔時自動關閉，再次發訊息可重新啟動。容量上限不會自動關閉任何 thread agent；如果名額已滿，bot 會列出 active/inactive 狀態與 inactive 候選，讓使用者執行 `/close-thread thread_id:<id>` 關閉指定 inactive agent。active work 不會因 idle cleanup、歸檔事件或 thread agent 容量上限被強制終止；active thread 若被歸檔，會在目前 job 回到 idle 後關閉；`THREAD_AGENT_IDLE_SEC=0` 可停用討論串閒置清理。

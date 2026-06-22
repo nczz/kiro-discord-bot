@@ -327,7 +327,7 @@ The bot needs explicit permission in each channel it should respond to:
 | `/status` | Show agent state, queue length, context usage, session ID, and bot/agent uptime |
 | `/usage [user]` | Show credit usage for today, this week, and month-to-date |
 | `/doctor` | Run deployment diagnostics and ACP preflight |
-| `/audit [limit]` | Show recent raw/semantic audit events for the current channel or thread |
+| `/audit [limit]` | Privately show recent raw/semantic audit events for the current channel or thread |
 | `/mcp manage` | Open the interactive MCP policy panel, including tool scan and tool-level allow/remove controls |
 | `/mcp <action> [value]` | Show or update channel MCP policy. Actions: `status`, `enable`, `disable` |
 | `/steering <status|create|edit>` | Manage the current channel project's agent context file at `.kiro/steering/<project>.md` |
@@ -385,7 +385,7 @@ New parent channels must be initialized before agent work starts. The first norm
 | `!model` | Show thread agent's current model |
 | `!model <model-id>` | Switch thread agent's model |
 | `!models` | List all available models |
-| `!audit [limit]` | Show recent audit events for this thread |
+| `!audit [limit]` | Not supported for audit data; use private slash `/audit` |
 
 All thread commands also work as `/` slash commands inside a thread.
 
@@ -409,7 +409,7 @@ Run `/doctor` in the target channel or thread to verify Discord permissions, con
 
 Slash commands are registered at guild scope, but the bot rejects command invocations in channels or threads where its Discord user cannot view and respond. Administrative commands also set default Discord member permissions so they are hidden from most users in the command picker by default. For channel-specific command picker visibility, configure application command permissions for the app in Discord or through an OAuth2 token with `applications.commands.permissions.update`.
 
-Operational panels such as `/mcp manage`, `/steering`, and `/cron-list`, plus sensitive utility replies such as `/cwd`, `/status`, `/usage`, `/doctor`, `/audit`, `/models`, `/memory`, and `/flashmemory`, are sent as private interaction responses where Discord supports ephemeral messages. Agent task results and explicit channel behavior changes remain visible in the target channel or thread.
+Operational panels such as `/mcp manage`, `/steering`, and `/cron-list`, plus sensitive utility replies such as `/cwd`, `/status`, `/usage`, `/doctor`, `/audit`, `/models`, `/memory`, and `/flashmemory`, are sent as private interaction responses where Discord supports ephemeral messages. Audit prompt investigations also deliver the agent's final report privately and reject `!audit` text-command queries because Discord cannot make those replies ephemeral. Non-audit agent task results and explicit channel behavior changes remain visible in the target channel or thread.
 
 ### Status Indicators
 
@@ -696,7 +696,7 @@ The agent will read the guide, build the binary, update `mcp.json`, and prompt y
 - **Agent metrics:** Completed agent executions display a `⚡` metrics footer when ACP turn metrics are available. The usage ledger stores Discord message IDs and slash-command interaction IDs separately (`message_id`, `interaction_id`) plus a generic `invocation_id` for cross-audit correlation.
 - **Raw Discord audit DB:** Bot-visible Discord events are recorded independently in SQLite at `DATA_DIR/audit/discord.sqlite` by default. The audit recorder stores append-only `discord_events` rows plus query projections for messages, attachments, reactions, and threads. It also records semantic bot events such as command invocations, command response delivery success/failure, agent job lifecycle, and agent final responses in `bot_audit_events`. Slash-command initial responses, deferred followups, and cron/reminder command responses all use the same delivery success/failure audit path. High-volume typing-start events are disabled by default. Audit data does not trigger the agent and is never injected into conversation context unless an explicit command or future tool reads it.
 - **Audit correlation IDs:** In `bot_audit_events`, `message_id` and `interaction_id` identify the user invocation that triggered a bot command. When Discord returns a bot response message object, the actual bot response message ID is stored in metadata as `response_message_id`; initial interaction responses and modals do not expose a Discord message ID, so they store `interaction_response_type` instead. Cron agent `response_sent` reflects final response message delivery, not just whether a thread exists.
-- **Audit permissions:** `/audit` and `!audit` use Discord effective channel permissions instead of a separate ACL. The caller must be able to manage the current target channel/thread, either directly or through the parent channel for threads. Discord permission changes take effect on the next audit query.
+- **Audit permissions:** `/audit` uses Discord effective channel permissions instead of a separate ACL. The caller must be able to manage the current target channel/thread, either directly or through the parent channel for threads. Discord permission changes take effect on the next audit query. Audit data is returned only through private slash-command responses; `!audit` text commands do not return audit rows or investigation reports.
 - **Attachments:** Stored in `DATA_DIR/ch-<channelID>/attachments/` with timestamp prefixes. Filenames are sanitized, downloads must return HTTP 200, and each file is capped by `ATTACHMENT_MAX_MB`. Auto-cleaned after `ATTACHMENT_RETAIN_DAYS`.
 - **Tool permissions:** Server-initiated ACP permission requests are approved only when `TRUST_ALL_TOOLS=true` or `TRUST_TOOLS` is set; otherwise they are denied by local policy.
 - **Preflight:** `PREFLIGHT_MODE=warn` keeps the bot online when `kiro-cli` is temporarily unavailable. Use `strict` for fail-fast production startup or `skip` for development.

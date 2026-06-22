@@ -41,6 +41,9 @@ type Job struct {
 	Source            string // message, thread, cron, etc.
 	DeliveryMode      DeliveryMode
 	ThreadMentionOnly bool // listen snapshot for newly created agent threads
+	BotToolsTargetID  string
+	DisableBotEgress  bool
+	FinalReply        func(string)
 }
 
 type DeliveryMode string
@@ -831,6 +834,27 @@ func (p *inlineReactionPulse) replace(prev, next string) {
 	_ = p.ds.MessageReactionAdd(p.channelID, p.messageID, next)
 }
 
+func (job *Job) inlineBotToolsTargetID() string {
+	if job == nil {
+		return ""
+	}
+	if targetID := strings.TrimSpace(job.BotToolsTargetID); targetID != "" {
+		return targetID
+	}
+	return job.ChannelID
+}
+
+func (job *Job) sendInlineFinalReply(ds *discordgo.Session, content string) {
+	if job == nil {
+		return
+	}
+	if job.FinalReply != nil {
+		job.FinalReply(content)
+		return
+	}
+	SendLongReply(ds, job.ChannelID, job.MessageID, content)
+}
+
 func (w *Worker) executeInline(job *Job) {
 	ds := job.Session
 	startTime := time.Now()
@@ -887,7 +911,8 @@ func (w *Worker) executeInline(job *Job) {
 			Attachments: job.Attachments,
 		})
 	}
-	if err := writeBotToolsTargetState(w.botToolsTargetStatePath, job.ChannelID); err != nil {
+	targetID := job.inlineBotToolsTargetID()
+	if err := writeBotToolsTargetStateOptions(w.botToolsTargetStatePath, targetID, job.DisableBotEgress); err != nil {
 		log.Printf("[worker %s] write inline bot-tools target state: %v", w.channelID, err)
 	}
 
@@ -960,7 +985,10 @@ func (w *Worker) executeInline(job *Job) {
 				log.Printf("[worker %s] inline job error | user=%s msg=%s elapsed=%s ctxErr=%v err=%v",
 					w.channelID, job.Username, job.MessageID, time.Since(startTime).Round(time.Millisecond), ctxErr, askErr)
 				errorContent := "❌ " + errMsg
-				delivered := w.drainBeforeFinal(job.ChannelID)
+				delivered := 0
+				if !job.DisableBotEgress {
+					delivered = w.drainBeforeFinal(targetID)
+				}
 				if suppressGenericKiroErrorAfterEgress(askErr, ctxErr, delivered) {
 					log.Printf("[worker %s] suppressing inline generic Kiro error after safe egress delivery | user=%s msg=%s delivered=%d",
 						w.channelID, job.Username, job.MessageID, delivered)
@@ -975,7 +1003,7 @@ func (w *Worker) executeInline(job *Job) {
 					finishJob("✅")
 					return
 				}
-				SendLongReply(ds, job.ChannelID, job.MessageID, AppendMetricsFooter(errorContent, w.agent.TurnMetrics()))
+				job.sendInlineFinalReply(ds, AppendMetricsFooter(errorContent, w.agent.TurnMetrics()))
 				if w.logger != nil {
 					w.logger.Log(w.channelID, ChatEntry{Role: "assistant", Content: errorContent, Model: w.model})
 				}
@@ -995,8 +1023,10 @@ func (w *Worker) executeInline(job *Job) {
 				response = L.Get("worker.empty_response")
 			}
 			responseWithMetrics := AppendMetricsFooter(response, w.agent.TurnMetrics())
-			w.drainBeforeFinal(job.ChannelID)
-			SendLongReply(ds, job.ChannelID, job.MessageID, responseWithMetrics)
+			if !job.DisableBotEgress {
+				w.drainBeforeFinal(targetID)
+			}
+			job.sendInlineFinalReply(ds, responseWithMetrics)
 			w.auditResponseEvent(job, "", "success", response)
 			if w.logger != nil {
 				w.logger.Log(w.channelID, ChatEntry{Role: "assistant", Content: response, Model: w.model})
@@ -1028,8 +1058,10 @@ func (w *Worker) executeInline(job *Job) {
 			return
 		}
 		errMsg := L.Getf("error.agent_read", err)
-		w.drainBeforeFinal(job.ChannelID)
-		SendLongReply(ds, job.ChannelID, job.MessageID, errMsg)
+		if !job.DisableBotEgress {
+			w.drainBeforeFinal(targetID)
+		}
+		job.sendInlineFinalReply(ds, errMsg)
 		if w.logger != nil {
 			w.logger.Log(w.channelID, ChatEntry{Role: "assistant", Content: errMsg, Model: w.model})
 		}

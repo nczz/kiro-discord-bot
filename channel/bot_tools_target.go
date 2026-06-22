@@ -9,6 +9,7 @@ import (
 
 type botToolsTargetState struct {
 	TargetChannelID string `json:"target_channel_id"`
+	DisableEgress   bool   `json:"disable_egress,omitempty"`
 }
 
 func botToolsTargetStatePath(dataDir, channelID string) string {
@@ -22,6 +23,10 @@ func botToolsTargetStatePath(dataDir, channelID string) string {
 }
 
 func writeBotToolsTargetState(path, targetChannelID string) error {
+	return writeBotToolsTargetStateOptions(path, targetChannelID, false)
+}
+
+func writeBotToolsTargetStateOptions(path, targetChannelID string, disableEgress bool) error {
 	path = strings.TrimSpace(path)
 	targetChannelID = strings.TrimSpace(targetChannelID)
 	if path == "" || targetChannelID == "" {
@@ -30,7 +35,7 @@ func writeBotToolsTargetState(path, targetChannelID string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
 	}
-	raw, err := json.Marshal(botToolsTargetState{TargetChannelID: targetChannelID})
+	raw, err := json.Marshal(botToolsTargetState{TargetChannelID: targetChannelID, DisableEgress: disableEgress})
 	if err != nil {
 		return err
 	}

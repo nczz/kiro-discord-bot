@@ -239,6 +239,22 @@ func TestDeliveryChannelPrefersDynamicTargetState(t *testing.T) {
 	}
 }
 
+func TestBotToolsEgressDisabledReadsDynamicTargetState(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "target.json")
+	if err := os.WriteFile(statePath, []byte(`{"target_channel_id":"thread-1","disable_egress":true}`), 0644); err != nil {
+		t.Fatalf("write target state: %v", err)
+	}
+	t.Setenv("BOT_TOOLS_TARGET_STATE_PATH", statePath)
+
+	if !botToolsEgressDisabled() {
+		t.Fatal("expected bot-tools egress to be disabled by dynamic target state")
+	}
+	if got := currentTargetStateChannelID(); got != "thread-1" {
+		t.Fatalf("current target = %q, want thread-1", got)
+	}
+}
+
 func TestCronOwnerChannelNormalizesDynamicThreadTargetToBoundChannel(t *testing.T) {
 	dir := t.TempDir()
 	statePath := filepath.Join(dir, "target.json")

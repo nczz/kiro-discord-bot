@@ -77,6 +77,9 @@ func NewServer() *server.MCPServer {
 	s.AddTool(
 		writeTool(ToolSendMessage, "Send a separate Discord message through the bot-controlled safe egress queue. This tool is not part of the default channel allowlist. Do not use it for ordinary replies or final answers; normal assistant text is already delivered, split, and displayed by the bot. Use this only when a channel manager explicitly enabled it and the user explicitly asks to send an extra Discord message, notify another target, hand off to another bot, or perform scheduled/cron egress. The main bot redacts secrets before delivery.", false),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			if botToolsEgressDisabled() {
+				return mcp.NewToolResultError("Discord egress is disabled for this private audit job."), nil
+			}
 			channelID, _ := req.RequireString("channel_id")
 			if err := validateBoundChannel(channelID); err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
@@ -96,6 +99,9 @@ func NewServer() *server.MCPServer {
 	s.AddTool(
 		writeTool(ToolSendFile, "Send a local file through the bot-controlled safe egress queue. Text files are redacted and uploaded as sanitized copies. Documents with extractable readable text (PDF, DOCX, XLSX) are converted to text, redacted, and uploaded as sanitized .txt copies; original binary documents are never uploaded back.", false),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			if botToolsEgressDisabled() {
+				return mcp.NewToolResultError("File egress is disabled for this private audit job."), nil
+			}
 			channelID, _ := req.RequireString("channel_id")
 			if err := validateBoundChannel(channelID); err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
@@ -311,6 +317,11 @@ type channelData struct {
 	MemoryFile      bool   `json:"memory_file"`
 }
 
+type targetState struct {
+	TargetChannelID string `json:"target_channel_id"`
+	DisableEgress   bool   `json:"disable_egress"`
+}
+
 func dataDir() string {
 	if dir := strings.TrimSpace(os.Getenv("DATA_DIR")); dir != "" {
 		return dir
@@ -370,21 +381,32 @@ func auditToolTargetID(requested string) (string, error) {
 }
 
 func currentTargetStateChannelID() string {
-	path := strings.TrimSpace(os.Getenv("BOT_TOOLS_TARGET_STATE_PATH"))
-	if path == "" {
-		return ""
-	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-	var state struct {
-		TargetChannelID string `json:"target_channel_id"`
-	}
-	if err := json.Unmarshal(raw, &state); err != nil {
+	state, ok := currentTargetState()
+	if !ok {
 		return ""
 	}
 	return strings.TrimSpace(state.TargetChannelID)
+}
+
+func botToolsEgressDisabled() bool {
+	state, ok := currentTargetState()
+	return ok && state.DisableEgress
+}
+
+func currentTargetState() (targetState, bool) {
+	path := strings.TrimSpace(os.Getenv("BOT_TOOLS_TARGET_STATE_PATH"))
+	if path == "" {
+		return targetState{}, false
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return targetState{}, false
+	}
+	var state targetState
+	if err := json.Unmarshal(raw, &state); err != nil {
+		return state, false
+	}
+	return state, true
 }
 
 func dataSummary(root string) (summary, error) {

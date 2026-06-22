@@ -158,6 +158,10 @@ func (b *Bot) cmdAudit(ctx cmdCtx) {
 		ctx.reply(L.Get("audit.forbidden"))
 		return
 	}
+	if ctx.interactionID == "" {
+		ctx.reply(L.Get("audit.slash_only"))
+		return
+	}
 
 	// Determine if args is a prompt or a numeric limit
 	args := strings.TrimSpace(ctx.args)
@@ -196,26 +200,28 @@ func (b *Bot) cmdAuditPrompt(ctx cmdCtx, prompt string) {
 	augmented := fmt.Sprintf("[Audit investigation request]\n"+
 		"The user asks you to investigate the Discord audit database and provide a report.\n"+
 		"Use the bot_query_audit tool to inspect scoped audit timeline rows for this Discord target. Do not generate SQL; use the tool filters such as target_id, limit, contains, and event_type.\n"+
+		"Do not use Discord or file egress tools such as bot_send_message or bot_send_file for this audit report. Return the final report normally; the bot will deliver it privately to the requesting manager.\n"+
 		"Target channel/thread ID for this query context: %s\n\n"+
 		"User question: %s", ctx.targetID, prompt)
 
 	job := &channel.Job{
-		ChannelID:    ctx.channelID,
-		GuildID:      ctx.guildID,
-		MessageID:    ctx.messageID,
-		Prompt:       augmented,
-		Session:      b.discord,
-		UserID:       ctx.userID,
-		Username:     ctx.username,
-		Source:       "audit_prompt",
-		DeliveryMode: channel.DeliveryThread,
-	}
-	if !b.manager.ThreadModeEnabled(ctx.channelID) {
-		job.DeliveryMode = channel.DeliveryInline
+		ChannelID:        ctx.channelID,
+		GuildID:          ctx.guildID,
+		MessageID:        ctx.messageID,
+		Prompt:           augmented,
+		Session:          b.discord,
+		UserID:           ctx.userID,
+		Username:         ctx.username,
+		Source:           "audit_prompt",
+		DeliveryMode:     channel.DeliveryInline,
+		BotToolsTargetID: ctx.targetID,
+		DisableBotEgress: true,
+		FinalReply: func(content string) {
+			replyLongWithMetadata(ctx, content, map[string]any{"audit_prompt_result": true})
+		},
 	}
 	if ctx.inThread {
 		job.ThreadID = ctx.targetID
-		job.DeliveryMode = channel.DeliveryThread
 	}
 	if err := b.manager.Enqueue(b.discord, job); err != nil {
 		ctx.reply(commandError(err))
