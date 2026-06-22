@@ -1168,6 +1168,78 @@ func TestWorkerInlineAuditStoresPureResponseWithoutMetricsFooter(t *testing.T) {
 	t.Fatal("expected agent_response_sent audit event")
 }
 
+func TestWorkerAuditJobEventUsesThreadAsTargetWhenPresent(t *testing.T) {
+	sink := &recordingAuditSink{}
+	w := newWorker("ch1", &fakeWorkerAgent{}, 1, 30, 1, 1440, nil, "model-1")
+	w.SetAuditSink(sink)
+
+	w.auditJobEvent("agent_tool_call", &Job{
+		GuildID:   "guild-1",
+		ChannelID: "ch1",
+		MessageID: "msg-1",
+		UserID:    "user-1",
+		Username:  "alice",
+		Source:    "message",
+	}, "thread-1", "", map[string]any{"tool_call_id": "tool-1"})
+
+	events := sink.Snapshot()
+	if len(events) != 1 {
+		t.Fatalf("audit events = %d, want 1", len(events))
+	}
+	evt := events[0]
+	if evt.TargetID != "thread-1" || evt.ThreadID != "thread-1" || evt.ChannelID != "ch1" {
+		t.Fatalf("audit target fields = target:%q thread:%q channel:%q, want thread/thread/channel", evt.TargetID, evt.ThreadID, evt.ChannelID)
+	}
+	if evt.ParentChannelID != "ch1" {
+		t.Fatalf("parent channel = %q, want ch1", evt.ParentChannelID)
+	}
+}
+
+func TestWorkerInlineAuditRecordsToolEvents(t *testing.T) {
+	L.Load("en")
+	rt := &recordingRoundTripper{}
+	ds := testDiscordSession(rt)
+	agent := &fakeWorkerAgent{}
+	sink := &recordingAuditSink{}
+	w := newWorker("ch1", agent, 1, 30, 1, 1440, nil, "model-1")
+	w.SetAuditSink(sink)
+
+	w.executeInline(&Job{
+		GuildID:      "guild-1",
+		ChannelID:    "ch1",
+		MessageID:    "m1",
+		Prompt:       "hello",
+		Session:      ds,
+		UserID:       "user-1",
+		Username:     "alice",
+		Source:       "message",
+		DeliveryMode: DeliveryInline,
+	})
+	cb := agent.Callbacks()
+	cb.OnToolCall(acp.ToolCallEvent{Kind: "execute", Title: "Run tests", ToolCallID: "tool-1"})
+	cb.OnToolResult(acp.ToolCallEvent{Kind: "execute", Title: "Run tests", ToolCallID: "tool-1", Status: "completed"})
+	cb.OnComplete("done", nil)
+
+	var sawCall, sawResult bool
+	for _, evt := range sink.Snapshot() {
+		switch evt.Type {
+		case "agent_tool_call":
+			sawCall = true
+			if evt.TargetID != "ch1" || evt.Metadata["tool_call_id"] != "tool-1" || evt.Metadata["title"] != "Run tests" {
+				t.Fatalf("tool call audit event = %+v", evt)
+			}
+		case "agent_tool_result":
+			sawResult = true
+			if evt.TargetID != "ch1" || evt.Status != "completed" || evt.Metadata["tool_call_id"] != "tool-1" {
+				t.Fatalf("tool result audit event = %+v", evt)
+			}
+		}
+	}
+	if !sawCall || !sawResult {
+		t.Fatalf("saw call/result = %v/%v; events=%+v", sawCall, sawResult, sink.Snapshot())
+	}
+}
+
 func TestWorkerInlineLoggerStoresResponseWithoutMetricsFooter(t *testing.T) {
 	L.Load("en")
 	rt := &recordingRoundTripper{}

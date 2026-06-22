@@ -126,8 +126,12 @@ func (a *cronAdapter) RecordAgentResponse(agent *acp.Agent, job *heartbeat.CronJ
 	})
 }
 
-func (a *cronAdapter) AskAgentInThread(ctx context.Context, agent *acp.Agent, channelID, threadName, existingThreadID, prompt, mentionID, createdByID string) (string, string, bool, error) {
+func (a *cronAdapter) AskAgentInThread(ctx context.Context, agent *acp.Agent, job *heartbeat.CronJob, threadName, prompt string) (string, string, bool, error) {
 	ds := a.bot.discord
+	channelID := job.ChannelID
+	existingThreadID := job.ThreadID
+	mentionID := job.MentionID
+	createdByID := job.CreatedByID
 	loc := a.bot.cronLocationOrLocal()
 	archiveDur := a.bot.manager.ThreadArchive()
 	if archiveDur <= 0 {
@@ -239,8 +243,10 @@ func (a *cronAdapter) AskAgentInThread(ctx context.Context, agent *acp.Agent, ch
 				}
 				channel.SendProcessMessage(ds, threadID, msg)
 			}
+			a.recordCronToolAuditEvent(agent, job, threadID, "agent_tool_call", evt)
 		},
 		OnToolResult: func(evt acp.ToolCallEvent) {
+			a.recordCronToolAuditEvent(agent, job, threadID, "agent_tool_result", evt)
 			if isSilent() {
 				if evt.Status == "failed" {
 					channel.SendProcessMessage(ds, threadID, "❌ "+channel.EscapeDiscordMarkdown(evt.Title))
@@ -345,6 +351,48 @@ func (a *cronAdapter) AskAgentInThread(ctx context.Context, agent *acp.Agent, ch
 		}
 		return "", threadID, sentCount > 0 && sendErr == nil, ctx.Err()
 	}
+}
+
+func (a *cronAdapter) recordCronToolAuditEvent(agent *acp.Agent, job *heartbeat.CronJob, threadID, eventType string, evt acp.ToolCallEvent) {
+	if a == nil || a.bot == nil || job == nil {
+		return
+	}
+	source := "cron"
+	if job.OneShot {
+		source = "reminder"
+	}
+	userID := job.CreatedByID
+	if userID == "" {
+		userID = job.MentionID
+	}
+	targetID := threadID
+	if targetID == "" {
+		targetID = job.ChannelID
+	}
+	model := job.Model
+	if model == "" && agent != nil {
+		model = agent.CurrentModelID()
+	}
+	a.bot.recordBotAuditEvent(audit.BotEvent{
+		Type:            eventType,
+		GuildID:         job.GuildID,
+		ChannelID:       job.ChannelID,
+		TargetID:        targetID,
+		ThreadID:        threadID,
+		ParentChannelID: job.ChannelID,
+		JobID:           job.ID,
+		UserID:          userID,
+		Username:        job.CreatedBy,
+		Source:          source,
+		Status:          evt.Status,
+		Command:         evt.Title,
+		Model:           model,
+		Metadata: map[string]any{
+			"kind":          evt.Kind,
+			"tool_call_id":  evt.ToolCallID,
+			"cron_job_name": job.Name,
+		},
+	})
 }
 
 func (a *cronAdapter) drainSafeEgress(threadID string) {

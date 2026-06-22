@@ -99,6 +99,56 @@ func TestCronAdapterRecordAgentResponseStoresSentResponse(t *testing.T) {
 	}
 }
 
+func TestCronAdapterRecordToolAuditUsesJobContext(t *testing.T) {
+	dir := t.TempDir()
+	store, err := audit.Open(audit.Config{DataDir: dir})
+	if err != nil {
+		t.Fatalf("open audit store: %v", err)
+	}
+	recorder := audit.NewRecorder(store, 10, nil, false)
+	adapter := &cronAdapter{botNotifier{bot: &Bot{guildID: "guild-1", auditRecorder: recorder}}}
+
+	adapter.recordCronToolAuditEvent(&acp.Agent{}, &heartbeat.CronJob{
+		ID:          "job-1",
+		Name:        "Daily report",
+		GuildID:     "guild-1",
+		ChannelID:   "channel-1",
+		CreatedBy:   "alice",
+		CreatedByID: "user-1",
+		Model:       "model-1",
+		OneShot:     true,
+	}, "thread-1", "agent_tool_result", acp.ToolCallEvent{
+		Kind:       "execute",
+		Title:      "Run report",
+		ToolCallID: "tool-1",
+		Status:     "completed",
+	})
+	recorder.Close()
+
+	db, err := sql.Open("sqlite", filepath.Join(dir, "audit", "discord.sqlite"))
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer db.Close()
+	var raw string
+	if err := db.QueryRowContext(context.Background(), `SELECT raw_json FROM bot_audit_events WHERE event_type='agent_tool_result'`).Scan(&raw); err != nil {
+		t.Fatalf("query bot audit event: %v", err)
+	}
+	var evt audit.BotEvent
+	if err := json.Unmarshal([]byte(raw), &evt); err != nil {
+		t.Fatalf("unmarshal raw event: %v", err)
+	}
+	if evt.Source != "reminder" || evt.JobID != "job-1" || evt.TargetID != "thread-1" || evt.ThreadID != "thread-1" {
+		t.Fatalf("event routing fields = source:%q job:%q target:%q thread:%q", evt.Source, evt.JobID, evt.TargetID, evt.ThreadID)
+	}
+	if evt.Model != "model-1" || evt.Command != "Run report" || evt.Status != "completed" {
+		t.Fatalf("event model/command/status = %q/%q/%q", evt.Model, evt.Command, evt.Status)
+	}
+	if evt.Metadata["cron_job_name"] != "Daily report" || evt.Metadata["tool_call_id"] != "tool-1" || evt.Metadata["kind"] != "execute" {
+		t.Fatalf("event metadata = %+v", evt.Metadata)
+	}
+}
+
 func TestCronAdapterDrainSafeEgressFlushesThreadTarget(t *testing.T) {
 	dir := t.TempDir()
 	rt := &recordingDiscordTransport{}

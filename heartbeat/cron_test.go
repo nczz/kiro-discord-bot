@@ -24,6 +24,7 @@ type fakeCronDeps struct {
 	recordStatus  string
 	responseCalls int
 	responseSent  bool
+	askJobID      string
 	askSent       bool
 	askSentSet    bool
 	noThread      bool
@@ -48,7 +49,8 @@ func (f *fakeCronDeps) ChannelCWD(string) string {
 	return f.channelCWD
 }
 
-func (f *fakeCronDeps) AskAgentInThread(context.Context, *acp.Agent, string, string, string, string, string, string) (string, string, bool, error) {
+func (f *fakeCronDeps) AskAgentInThread(_ context.Context, _ *acp.Agent, job *CronJob, _, _ string) (string, string, bool, error) {
+	f.askJobID = job.ID
 	threadID := "thread-1"
 	if f.noThread {
 		threadID = ""
@@ -103,6 +105,9 @@ func TestCronExecuteRecordsAgentUsage(t *testing.T) {
 	}
 	if deps.recordJobID != "job-1" || deps.recordThread != "thread-1" || deps.recordStatus != "ok" {
 		t.Fatalf("recorded job/thread/status = %q/%q/%q", deps.recordJobID, deps.recordThread, deps.recordStatus)
+	}
+	if deps.askJobID != "job-1" {
+		t.Fatalf("ask job ID = %q, want job-1", deps.askJobID)
 	}
 	if deps.responseCalls != 1 {
 		t.Fatalf("response calls = %d, want 1", deps.responseCalls)

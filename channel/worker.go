@@ -534,12 +534,22 @@ func (w *Worker) execute(job *Job) {
 				SendProcessMessage(ds, threadID, msg)
 			}
 			swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "⚙️")
+			w.auditJobEvent("agent_tool_call", job, threadID, "", map[string]any{
+				"kind":         evt.Kind,
+				"title":        evt.Title,
+				"tool_call_id": evt.ToolCallID,
+			})
 		},
 		OnToolResult: func(evt acp.ToolCallEvent) {
 			if w.onActivity != nil {
 				w.onActivity()
 			}
 			swapReaction(ds, job.ChannelID, job.MessageID, "⚙️", "🔄")
+			w.auditJobEvent("agent_tool_result", job, threadID, evt.Status, map[string]any{
+				"kind":         evt.Kind,
+				"title":        evt.Title,
+				"tool_call_id": evt.ToolCallID,
+			})
 			silent := w.isSilent != nil && w.isSilent()
 			if silent {
 				// Compact: only show one-line failure
@@ -895,11 +905,21 @@ func (w *Worker) executeInline(job *Job) {
 				w.onActivity()
 			}
 			pulse.Tool()
+			w.auditJobEvent("agent_tool_call", job, "", "", map[string]any{
+				"kind":         evt.Kind,
+				"title":        evt.Title,
+				"tool_call_id": evt.ToolCallID,
+			})
 		},
 		OnToolResult: func(evt acp.ToolCallEvent) {
 			if w.onActivity != nil {
 				w.onActivity()
 			}
+			w.auditJobEvent("agent_tool_result", job, "", evt.Status, map[string]any{
+				"kind":         evt.Kind,
+				"title":        evt.Title,
+				"tool_call_id": evt.ToolCallID,
+			})
 			if evt.Status == "failed" {
 				pulse.set("⚠️")
 				return
@@ -1039,13 +1059,21 @@ func (w *Worker) auditJobEvent(eventType string, job *Job, threadID, status stri
 	if w == nil || w.audit == nil || job == nil {
 		return
 	}
+	targetID := job.ChannelID
+	parentChannelID := job.ParentChannelID
+	if threadID != "" {
+		targetID = threadID
+		if parentChannelID == "" {
+			parentChannelID = job.ChannelID
+		}
+	}
 	w.audit.RecordBotEvent(audit.BotEvent{
 		Type:            eventType,
 		GuildID:         job.GuildID,
 		ChannelID:       job.ChannelID,
-		TargetID:        job.ChannelID,
+		TargetID:        targetID,
 		ThreadID:        threadID,
-		ParentChannelID: job.ParentChannelID,
+		ParentChannelID: parentChannelID,
 		MessageID:       job.MessageID,
 		JobID:           job.MessageID,
 		UserID:          job.UserID,
@@ -1065,6 +1093,10 @@ func (w *Worker) auditResponseEvent(job *Job, threadID, status, content string) 
 	if targetID == "" {
 		targetID = job.ChannelID
 	}
+	parentChannelID := job.ParentChannelID
+	if threadID != "" && parentChannelID == "" {
+		parentChannelID = job.ChannelID
+	}
 	metadata := map[string]any{
 		"content_len":   len(content),
 		"delivery_mode": job.DeliveryMode.String(),
@@ -1078,7 +1110,7 @@ func (w *Worker) auditResponseEvent(job *Job, threadID, status, content string) 
 		ChannelID:       job.ChannelID,
 		TargetID:        targetID,
 		ThreadID:        threadID,
-		ParentChannelID: job.ParentChannelID,
+		ParentChannelID: parentChannelID,
 		MessageID:       job.MessageID,
 		JobID:           job.MessageID,
 		UserID:          job.UserID,
