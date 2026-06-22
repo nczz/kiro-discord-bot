@@ -672,16 +672,16 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 		}
 
 		job := &channel.Job{
-			ChannelID:         m.ChannelID,
-			GuildID:           m.GuildID,
-			MessageID:         m.ID,
-			Prompt:            prompt,
-			UserID:            m.Author.ID,
-			Username:          m.Author.Username,
-			Attachments:       localPaths,
-			Transcript:        transcript,
-			Source:            "message",
-			DeliveryMode:      deliveryMode,
+			ChannelID:    m.ChannelID,
+			GuildID:      m.GuildID,
+			MessageID:    m.ID,
+			Prompt:       prompt,
+			UserID:       m.Author.ID,
+			Username:     m.Author.Username,
+			Attachments:  localPaths,
+			Transcript:   transcript,
+			Source:       "message",
+			DeliveryMode: deliveryMode,
 		}
 		job.ThreadMentionOnly, _ = b.requiresHumanMention(ds, m.ChannelID, "", selfID)
 		if err := b.manager.Enqueue(ds, job); err != nil {
@@ -1265,22 +1265,15 @@ func (b *Bot) handleSlashCommand(ds *discordgo.Session, i *discordgo.Interaction
 	})
 	visibilityMetadata := commandVisibilityMetadata(visibility)
 	b.recordInteractionResponseDelivery(auditCtx, data.Name, "deferred", "", discordgo.InteractionResponseDeferredChannelMessageWithSource, visibilityMetadata, err)
+	responder := newDeferredSlashResponder(ds, i.Interaction, commandInteractionFlags(visibility))
 	reply := func(msg string) {
 		msg = secrets.RedactEnv(msg)
-		sent, err := ds.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{
-			Content:         msg,
-			AllowedMentions: &discordgo.MessageAllowedMentions{},
-			Flags:           commandInteractionFlags(visibility),
-		})
+		sent, err := responder.Send(msg)
 		b.recordCommandResponseDelivery(auditCtx, data.Name, "slash", "sent", msg, visibilityMetadata, sent, err)
 	}
 	replyWithMetadata := func(msg string, metadata map[string]any) {
 		msg = secrets.RedactEnv(msg)
-		sent, err := ds.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{
-			Content:         msg,
-			AllowedMentions: &discordgo.MessageAllowedMentions{},
-			Flags:           commandInteractionFlags(visibility),
-		})
+		sent, err := responder.Send(msg)
 		b.recordCommandResponseDelivery(auditCtx, data.Name, "slash", "sent", msg, mergeMetadata(metadata, visibilityMetadata), sent, err)
 	}
 	ctx := cmdCtx{channelID: channelID, targetID: rawChannelID, inThread: inThread, reply: reply, replyWithMetadata: replyWithMetadata, guildID: i.GuildID, userID: userID, username: username, interactionID: i.ID}

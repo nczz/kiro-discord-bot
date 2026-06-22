@@ -2217,6 +2217,50 @@ func TestPrivateSlashCommandRecordsEphemeralDeferredResponse(t *testing.T) {
 	}
 }
 
+func TestDeferredSlashResponderEditsOriginalThenEphemeralFollowup(t *testing.T) {
+	rt := &recordingDiscordTransport{}
+	ds, err := discordgo.New("Bot test")
+	if err != nil {
+		t.Fatalf("new discord session: %v", err)
+	}
+	ds.Client = &http.Client{Transport: rt}
+	interaction := &discordgo.Interaction{
+		AppID: "app-1",
+		Token: "token-1",
+	}
+	responder := newDeferredSlashResponder(ds, interaction, discordgo.MessageFlagsEphemeral)
+
+	if _, err := responder.Send("first private part"); err != nil {
+		t.Fatalf("send first part: %v", err)
+	}
+	if _, err := responder.Send("second private part"); err != nil {
+		t.Fatalf("send second part: %v", err)
+	}
+
+	paths, bodies := rt.Snapshot()
+	if len(paths) != 2 {
+		t.Fatalf("requests = %v, want 2", paths)
+	}
+	if !strings.Contains(paths[0], "/webhooks/app-1/token-1/messages/@original") || !strings.HasPrefix(paths[0], "PATCH ") {
+		t.Fatalf("first request = %q, want edit original response", paths[0])
+	}
+	if strings.Contains(bodies[0], `"flags"`) {
+		t.Fatalf("original response edit body should not set flags: %s", bodies[0])
+	}
+	if !strings.Contains(bodies[0], "first private part") {
+		t.Fatalf("first body = %s", bodies[0])
+	}
+	if !strings.Contains(paths[1], "/webhooks/app-1/token-1") || !strings.HasPrefix(paths[1], "POST ") {
+		t.Fatalf("second request = %q, want followup create", paths[1])
+	}
+	if !strings.Contains(bodies[1], `"flags":64`) {
+		t.Fatalf("second followup body should be ephemeral: %s", bodies[1])
+	}
+	if !strings.Contains(bodies[1], "second private part") {
+		t.Fatalf("second body = %s", bodies[1])
+	}
+}
+
 func TestHandleSlashCommandRecordsInitialRejectionDeliveryFailure(t *testing.T) {
 	L.Load("en")
 	b, dbPath, cleanup := newAuditTestBot(t)
