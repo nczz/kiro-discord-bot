@@ -50,9 +50,12 @@ printf '%s\n%s\n%s\n' \
 
 The output should include `serverInfo.name="bot-tools"` and the expected catalog tools:
 `bot_data_summary`, `bot_list_channel_data`, `bot_list_cron`, `bot_send_message`,
-`bot_send_file`, `bot_create_cron`, and `bot_delete_cron`.
-`bot_send_message` is a catalog tool only and is not default-enabled for new
-channels; `bot_send_file` remains default-enabled for safe file delivery.
+`bot_send_file`, `bot_create_cron`, `bot_delete_cron`, and `bot_query_audit`.
+`bot_send_message`, `bot_delete_cron`, and `bot_query_audit` are catalog tools
+only and are not default-enabled for new channels; manager-authorized
+`/audit <prompt>` runs use a private short-lived agent with only
+`bot_query_audit`. `bot_send_file` remains default-enabled for safe file
+delivery.
 
 ## 4. GitHub Actions
 

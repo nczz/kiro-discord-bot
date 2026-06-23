@@ -528,6 +528,12 @@ func (m *Manager) agentOptsForTempChannel(name, channelID string) acp.AgentOptio
 }
 
 func (m *Manager) agentOptsForTarget(channelID, targetChannelID string) acp.AgentOptions {
+	opts := m.agentOptsWithRuntime()
+	opts.MCPServers = m.mcpServersForTarget(channelID, targetChannelID)
+	return opts
+}
+
+func (m *Manager) agentOptsWithRuntime() acp.AgentOptions {
 	opts := m.agentOpts()
 	if m.agentRuntimeHome != "" {
 		opts.Env = append(opts.Env, "KIRO_HOME="+m.agentRuntimeHome)
@@ -537,8 +543,15 @@ func (m *Manager) agentOptsForTarget(channelID, targetChannelID string) acp.Agen
 			opts.Env = append(opts.Env, "KIRO_MCP_CONFIG="+cfgPath)
 		}
 	}
-	opts.MCPServers = m.mcpServersForTarget(channelID, targetChannelID)
 	return opts
+}
+
+// AskTimeout returns the configured timeout used for agent Ask calls.
+func (m *Manager) AskTimeout() time.Duration {
+	if m == nil || m.askTimeoutSec <= 0 {
+		return time.Hour
+	}
+	return time.Duration(m.askTimeoutSec) * time.Second
 }
 
 func (m *Manager) mcpServersForChannel(channelID string) []acp.MCPServerConfig {
@@ -571,6 +584,35 @@ func (m *Manager) mcpServersForTarget(channelID, targetChannelID string) []acp.M
 		servers = append(servers, policy.ToACPServer(entry, m.mcpProxyCommand, m.guildID, channelID, targetChannelID))
 	}
 	return servers
+}
+
+func (m *Manager) auditPromptMCPServers(channelID, targetChannelID string) ([]acp.MCPServerConfig, error) {
+	if m.mcpPolicies == nil {
+		return nil, fmt.Errorf("mcp policy store is unavailable")
+	}
+	if strings.TrimSpace(channelID) == "" {
+		return nil, fmt.Errorf("channel_id is required")
+	}
+	if err := m.mcpPolicies.RefreshCatalog(context.Background()); err != nil {
+		return nil, fmt.Errorf("refresh mcp catalog: %w", err)
+	}
+	if m.mcpProxyCommand == "" {
+		return nil, fmt.Errorf("mcp proxy command unavailable")
+	}
+	entry, ok := m.mcpPolicies.CatalogEntry("bot-tools")
+	if !ok {
+		return nil, fmt.Errorf("mcp server %q was not found in catalog", "bot-tools")
+	}
+	policy := defaultMCPPolicy(m.guildID, channelID, "bot-tools")
+	policy.Enabled = true
+	policy.Preset = "audit-prompt"
+	policy.ReadOnly = false
+	policy.AllowAllTools = false
+	policy.AllowDestructive = false
+	policy.AllowedTools = botmcp.AuditPromptToolNames()
+	return []acp.MCPServerConfig{
+		policy.ToACPServer(entry, m.mcpProxyCommand, m.guildID, channelID, targetChannelID),
+	}, nil
 }
 
 // stopChannel stops the worker and agent for a channel. Must be called with m.mu held.
@@ -1793,6 +1835,39 @@ func (m *Manager) StartTempAgent(name, cwd, model, channelID string) (*acp.Agent
 		return nil, err
 	}
 	return acp.StartAgent(name, m.kiroCLI, cwd, model, m.agentOptsForTempChannel(name, channelID))
+}
+
+// StartAuditPromptAgent starts a private, short-lived agent for an already
+// authorized /audit prompt. It injects only the scoped audit query tool and
+// does not depend on the channel's persistent MCP policy.
+func (m *Manager) StartAuditPromptAgent(name, channelID, targetChannelID string) (*acp.Agent, string, error) {
+	cwd := m.defaultCWD
+	model := m.defaultModel
+	if sess, ok := m.getChannelSession(channelID); ok {
+		if sess.CWD != "" {
+			cwd = sess.CWD
+		}
+		if sess.Model != "" {
+			model = sess.Model
+		}
+	}
+	var err error
+	cwd, err = m.ValidateCWD(cwd)
+	if err != nil {
+		return nil, "", err
+	}
+	servers, err := m.auditPromptMCPServers(channelID, targetChannelID)
+	if err != nil {
+		return nil, "", err
+	}
+	opts := m.agentOptsWithRuntime()
+	opts.LoadSessionID = ""
+	opts.MCPServers = servers
+	agent, err := acp.StartAgent(name, m.kiroCLI, cwd, model, opts)
+	if err != nil {
+		return nil, "", err
+	}
+	return agent, model, nil
 }
 
 // SendCommand sends a slash command (e.g. /compact, /clear) to the channel's agent.

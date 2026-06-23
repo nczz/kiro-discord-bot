@@ -407,8 +407,41 @@ func TestManagerEnableDefaultBotToolsUsesSafeAllowlist(t *testing.T) {
 	if !p.Enabled || p.AllowAllTools || p.ReadOnly || p.AllowDestructive {
 		t.Fatalf("default bot-tools policy is not safe-write allowlist: %+v", p)
 	}
-	if tools := strings.Join(p.EffectiveTools(), ","); strings.Contains(tools, "bot_delete_cron") || strings.Contains(tools, "bot_send_message") || !strings.Contains(tools, "bot_send_file") || !strings.Contains(tools, "bot_create_cron") {
+	if tools := strings.Join(p.EffectiveTools(), ","); strings.Contains(tools, "bot_delete_cron") || strings.Contains(tools, "bot_send_message") || strings.Contains(tools, "bot_query_audit") || !strings.Contains(tools, "bot_send_file") || !strings.Contains(tools, "bot_create_cron") {
 		t.Fatalf("unexpected default tools: %q", tools)
+	}
+}
+
+func TestManagerAuditPromptMCPServersBypassChannelPolicyWithScopedAuditToolOnly(t *testing.T) {
+	dir := t.TempDir()
+	m := NewManager(ManagerConfig{DataDir: dir, GuildID: "guild-1"})
+	defer m.StopAll()
+
+	m.RegisterBuiltinMCP("bot-tools", []string{"mcp-bot"}, map[string]string{"DATA_DIR": dir})
+	if got := m.agentOptsForChannel("channel-1").MCPServers; len(got) != 0 {
+		t.Fatalf("ordinary channel agent should not get bot-tools by default: %+v", got)
+	}
+
+	servers, err := m.auditPromptMCPServers("channel-1", "thread-1")
+	if err != nil {
+		t.Fatalf("audit prompt mcp servers: %v", err)
+	}
+	if len(servers) != 1 || servers[0].Name != "bot-tools" {
+		t.Fatalf("audit prompt servers = %+v, want only bot-tools", servers)
+	}
+	var allowed []string
+	if err := json.Unmarshal([]byte(servers[0].Env["MCP_PROXY_ALLOWED_TOOLS_JSON"]), &allowed); err != nil {
+		t.Fatalf("allowed tools json: %v", err)
+	}
+	if len(allowed) != 1 || allowed[0] != botmcp.ToolQueryAudit {
+		t.Fatalf("allowed tools = %+v, want only %s", allowed, botmcp.ToolQueryAudit)
+	}
+	targetEnv := proxyTargetEnv(t, servers[0].Env)
+	if targetEnv["BOT_TOOLS_CHANNEL_ID"] != "channel-1" || targetEnv["BOT_TOOLS_TARGET_CHANNEL_ID"] != "thread-1" || targetEnv["BOT_TOOLS_GUILD_ID"] != "guild-1" {
+		t.Fatalf("audit prompt target binding = %+v", targetEnv)
+	}
+	if targetEnv["BOT_TOOLS_TARGET_STATE_PATH"] != "" {
+		t.Fatalf("audit prompt should use fixed target without dynamic state path: %+v", targetEnv)
 	}
 }
 
@@ -430,6 +463,7 @@ func TestLegacyDefaultBotToolsPolicyDropsEgressTools(t *testing.T) {
 		"bot_data_summary",
 		"bot_list_channel_data",
 		"bot_list_cron",
+		"bot_query_audit",
 		"bot_send_message",
 		"bot_send_file",
 		"bot_create_cron",
@@ -446,23 +480,29 @@ func TestLegacyDefaultBotToolsPolicyDropsEgressTools(t *testing.T) {
 	if strings.Contains(tools, "bot_send_message") {
 		t.Fatalf("legacy default message egress tool was not removed: %+v", got.EffectiveTools())
 	}
+	if strings.Contains(tools, "bot_query_audit") {
+		t.Fatalf("legacy default audit query tool was not removed: %+v", got.EffectiveTools())
+	}
 	if !strings.Contains(tools, "bot_create_cron") || !strings.Contains(tools, "bot_send_file") {
 		t.Fatalf("legacy normalization removed allowed default tools: %+v", got.EffectiveTools())
 	}
 }
 
-func TestCustomBotToolsPolicyKeepsExplicitEgressTool(t *testing.T) {
+func TestCustomBotToolsPolicyKeepsExplicitSensitiveTools(t *testing.T) {
 	p := defaultMCPPolicy("guild-1", "channel-1", "bot-tools")
 	p.Enabled = true
 	p.Preset = "safe-write"
 	p.ReadOnly = false
 	p.AllowAllTools = false
 	p.AllowDestructive = false
-	p.AllowedTools = []string{"bot_send_message"}
+	p.AllowedTools = []string{"bot_send_message", "bot_query_audit"}
 
 	got := normalizeLegacyDefaultBotToolsPolicy(p)
 	if !containsString(got.EffectiveTools(), "bot_send_message") {
 		t.Fatalf("custom explicit egress tool should be preserved: %+v", got.EffectiveTools())
+	}
+	if !containsString(got.EffectiveTools(), "bot_query_audit") {
+		t.Fatalf("custom explicit audit query tool should be preserved: %+v", got.EffectiveTools())
 	}
 }
 

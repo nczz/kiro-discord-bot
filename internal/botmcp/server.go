@@ -42,10 +42,15 @@ func DefaultSafeToolNames() []string {
 		ToolDataSummary,
 		ToolListChannelData,
 		ToolListCron,
-		ToolQueryAudit,
 		ToolSendFile,
 		ToolCreateCron,
 	}
+}
+
+// AuditPromptToolNames returns the private, temporary bot-tools allowlist used
+// only for manager-authorized /audit prompt investigations.
+func AuditPromptToolNames() []string {
+	return []string{ToolQueryAudit}
 }
 
 // NewServer builds the built-in bot tools MCP server.

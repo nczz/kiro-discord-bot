@@ -17,6 +17,7 @@ import (
 	mcpclient "github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/nczz/kiro-discord-bot/acp"
+	"github.com/nczz/kiro-discord-bot/internal/botmcp"
 	"github.com/nczz/kiro-discord-bot/mcpproxy"
 	_ "modernc.org/sqlite"
 )
@@ -538,23 +539,38 @@ func normalizeLegacyDefaultBotToolsPolicy(p MCPChannelPolicy) MCPChannelPolicy {
 		return p
 	}
 	tools := normalizeStrings(p.AllowedTools)
-	legacy := []string{
-		"bot_create_cron",
-		"bot_data_summary",
-		"bot_list_channel_data",
-		"bot_list_cron",
-		"bot_send_file",
-		"bot_send_message",
+	legacyDefaults := [][]string{
+		{
+			"bot_create_cron",
+			"bot_data_summary",
+			"bot_list_channel_data",
+			"bot_list_cron",
+			"bot_send_file",
+			"bot_send_message",
+		},
+		{
+			"bot_create_cron",
+			"bot_data_summary",
+			"bot_list_channel_data",
+			"bot_list_cron",
+			"bot_query_audit",
+			"bot_send_file",
+		},
+		{
+			"bot_create_cron",
+			"bot_data_summary",
+			"bot_list_channel_data",
+			"bot_list_cron",
+			"bot_query_audit",
+			"bot_send_file",
+			"bot_send_message",
+		},
 	}
-	if !sameStringSet(tools, legacy) {
-		return p
-	}
-	p.AllowedTools = []string{
-		"bot_create_cron",
-		"bot_data_summary",
-		"bot_list_channel_data",
-		"bot_list_cron",
-		"bot_send_file",
+	for _, legacy := range legacyDefaults {
+		if sameStringSet(tools, legacy) {
+			p.AllowedTools = botmcp.DefaultSafeToolNames()
+			return p
+		}
 	}
 	return p
 }

@@ -204,30 +204,108 @@ func (b *Bot) cmdAuditPrompt(ctx cmdCtx, prompt string) {
 		"Target channel/thread ID for this query context: %s\n\n"+
 		"User question: %s", ctx.targetID, prompt)
 
-	job := &channel.Job{
-		ChannelID:        ctx.channelID,
-		GuildID:          ctx.guildID,
-		MessageID:        ctx.messageID,
-		Prompt:           augmented,
-		Session:          b.discord,
-		UserID:           ctx.userID,
-		Username:         ctx.username,
-		Source:           "audit_prompt",
-		DeliveryMode:     channel.DeliveryInline,
-		BotToolsTargetID: ctx.targetID,
-		DisableBotEgress: true,
-		FinalReply: func(content string) {
-			replyLongWithMetadata(ctx, content, map[string]any{"audit_prompt_result": true})
-		},
-	}
-	if ctx.inThread {
-		job.ThreadID = ctx.targetID
-	}
-	if err := b.manager.Enqueue(b.discord, job); err != nil {
-		ctx.reply(commandError(err))
+	ctx.reply(L.Get("audit.prompt_submitted"))
+	go b.runAuditPrompt(ctx, augmented)
+}
+
+func (b *Bot) runAuditPrompt(ctx cmdCtx, prompt string) {
+	agentName := "audit-" + auditPromptInvocationID(ctx)
+	startedAt := time.Now()
+	b.recordAuditPromptAgentEvent(ctx, "agent_job_started", "", "", map[string]any{"delivery_mode": channel.DeliveryInline.String()})
+	agent, model, err := b.manager.StartAuditPromptAgent(agentName, ctx.channelID, ctx.targetID)
+	if err != nil {
+		b.recordAuditPromptAgentEvent(ctx, "agent_job_failed", "error", err.Error(), map[string]any{"elapsed_ms": time.Since(startedAt).Milliseconds(), "stage": "start_agent"})
+		replyLongWithMetadata(ctx, commandError(err), map[string]any{"audit_prompt_result": true, "status": "error"})
 		return
 	}
-	ctx.reply(L.Get("audit.prompt_submitted"))
+	defer agent.Stop()
+
+	runCtx, cancel := context.WithTimeout(context.Background(), b.manager.AskTimeout())
+	defer cancel()
+	response, askErr := agent.Ask(runCtx, prompt, nil)
+	status := "success"
+	if askErr != nil {
+		status = "error"
+		response = commandError(askErr)
+	} else if strings.TrimSpace(response) == "" {
+		response = L.Get("worker.empty_response")
+	}
+	metrics := agent.TurnMetrics()
+	if err := b.manager.RecordUsage(channel.UsageRecord{
+		GuildID:       ctx.guildID,
+		ChannelID:     ctx.channelID,
+		ThreadID:      auditPromptThreadID(ctx),
+		UserID:        ctx.userID,
+		Username:      ctx.username,
+		MessageID:     ctx.messageID,
+		InteractionID: ctx.interactionID,
+		InvocationID:  auditPromptInvocationID(ctx),
+		Model:         model,
+		Source:        "audit_prompt",
+		Status:        status,
+		MeteringUsage: metrics.MeteringUsage,
+		DurationMs:    metrics.TurnDurationMs,
+		ContextUsage:  metrics.ContextUsage,
+	}); err != nil {
+		log.Printf("[usage] append audit prompt failed | user=%s interaction=%s err=%v", ctx.userID, ctx.interactionID, err)
+	}
+	metadata := channel.MetricsMetadata(metrics)
+	metadata["elapsed_ms"] = time.Since(startedAt).Milliseconds()
+	metadata["response_len"] = len(response)
+	if askErr != nil {
+		metadata["error"] = askErr.Error()
+		b.recordAuditPromptAgentEvent(ctx, "agent_job_failed", status, response, metadata)
+	} else {
+		b.recordAuditPromptAgentEvent(ctx, "agent_job_completed", status, "", metadata)
+	}
+	content := channel.AppendMetricsFooter(response, metrics)
+	b.recordAuditPromptAgentEvent(ctx, "agent_response_sent", status, response, map[string]any{"content_len": len(content), "delivery_mode": channel.DeliveryInline.String()})
+	replyLongWithMetadata(ctx, content, map[string]any{"audit_prompt_result": true, "status": status})
+}
+
+func (b *Bot) recordAuditPromptAgentEvent(ctx cmdCtx, eventType, status, content string, metadata map[string]any) {
+	if b == nil || b.auditRecorder == nil {
+		return
+	}
+	threadID := auditPromptThreadID(ctx)
+	parentChannelID := ""
+	if threadID != "" {
+		parentChannelID = ctx.channelID
+	}
+	b.auditRecorder.RecordBotEvent(audit.BotEvent{
+		Type:            eventType,
+		GuildID:         ctx.guildID,
+		ChannelID:       ctx.channelID,
+		TargetID:        ctx.targetID,
+		ThreadID:        threadID,
+		ParentChannelID: parentChannelID,
+		MessageID:       ctx.messageID,
+		InteractionID:   ctx.interactionID,
+		JobID:           auditPromptInvocationID(ctx),
+		UserID:          ctx.userID,
+		Username:        ctx.username,
+		Source:          "audit_prompt",
+		Status:          status,
+		Content:         content,
+		Metadata:        metadata,
+	})
+}
+
+func auditPromptInvocationID(ctx cmdCtx) string {
+	if strings.TrimSpace(ctx.interactionID) != "" {
+		return ctx.interactionID
+	}
+	if strings.TrimSpace(ctx.messageID) != "" {
+		return ctx.messageID
+	}
+	return ctx.targetID
+}
+
+func auditPromptThreadID(ctx cmdCtx) string {
+	if ctx.inThread {
+		return ctx.targetID
+	}
+	return ""
 }
 
 func formatAuditTimeline(events []audit.TimelineEvent) string {

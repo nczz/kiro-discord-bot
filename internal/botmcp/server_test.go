@@ -92,8 +92,12 @@ func TestDefaultSafeToolNamesExcludeDestructiveTools(t *testing.T) {
 	if !seen[ToolSendFile] {
 		t.Fatalf("file egress tool should be default-enabled for interactive file delivery: %+v", tools)
 	}
-	if !seen[ToolQueryAudit] {
-		t.Fatalf("scoped audit query tool should be default-enabled for /audit prompt support: %+v", tools)
+	if seen[ToolQueryAudit] {
+		t.Fatalf("audit query tool must not be default-enabled outside manager-authorized /audit prompt jobs: %+v", tools)
+	}
+	auditTools := AuditPromptToolNames()
+	if len(auditTools) != 1 || auditTools[0] != ToolQueryAudit {
+		t.Fatalf("audit prompt tools = %+v, want only %s", auditTools, ToolQueryAudit)
 	}
 }
 
