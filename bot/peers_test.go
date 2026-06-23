@@ -40,8 +40,11 @@ func TestMultiBotMode(t *testing.T) {
 func TestPeerPromptContextSeparatesSelf(t *testing.T) {
 	b := &Bot{peers: parseBotPeers("BuildBot:111111111111111111,ReviewBot:333333333333333333")}
 	got := b.peerPromptContext("111111111111111111")
-	if !containsAll(got, "self=BuildBot", "handoff_peer=ReviewBot", "Never mention yourself") {
+	if !containsAll(got, "self=BuildBot", "handoff_peer=ReviewBot", "mention_ref=[[discord:user:333333333333333333]]", "Never mention yourself") {
 		t.Fatalf("peerPromptContext() missing expected content:\n%s", got)
+	}
+	if strings.Contains(got, "<@") {
+		t.Fatalf("peerPromptContext() should not expose raw mention tokens:\n%s", got)
 	}
 }
 

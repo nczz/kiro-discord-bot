@@ -21,6 +21,7 @@ import (
 	"github.com/nczz/kiro-discord-bot/audit"
 	"github.com/nczz/kiro-discord-bot/channel"
 	"github.com/nczz/kiro-discord-bot/internal/botegress"
+	"github.com/nczz/kiro-discord-bot/internal/discordmention"
 	L "github.com/nczz/kiro-discord-bot/locale"
 )
 
@@ -1847,6 +1848,45 @@ func TestBuildPromptDocumentsCronOwnerChannelScope(t *testing.T) {
 	}
 	if !strings.Contains(got, "channel_id=channel-1 thread_id=thread-1") {
 		t.Fatalf("prompt missing channel/thread context:\n%s", got)
+	}
+}
+
+func TestBuildPromptDocumentsStructuredMentionReferences(t *testing.T) {
+	got := buildPromptThreadWithMentions("please notify Chun", nil, "channel-1", "thread-1", "guild-1", "alice", "", []discordmention.Ref{
+		discordmention.UserRef("123", "Chun"),
+	})
+	if !strings.Contains(got, "[[discord:user:123]]") {
+		t.Fatalf("prompt missing structured mention placeholder:\n%s", got)
+	}
+	if strings.Contains(got, "<@123>") {
+		t.Fatalf("prompt should not expose raw mention token:\n%s", got)
+	}
+	if !strings.Contains(got, "Do not write raw Discord angle-bracket mention strings") {
+		t.Fatalf("prompt missing raw mention guidance:\n%s", got)
+	}
+}
+
+func TestMentionRefsForMessageUsesStructuredDiscordMentions(t *testing.T) {
+	refs := mentionRefsForMessage(&discordgo.MessageCreate{Message: &discordgo.Message{
+		Author:   &discordgo.User{ID: "111", Username: "alice"},
+		Mentions: []*discordgo.User{{ID: "222", Username: "bob"}, {ID: "999", Username: "bot"}},
+	}}, "999")
+	if len(refs) != 2 {
+		t.Fatalf("refs = %+v, want author plus mentioned non-bot user", refs)
+	}
+	placeholders := []string{refs[0].Placeholder, refs[1].Placeholder}
+	hasAuthor := false
+	hasMentioned := false
+	for _, placeholder := range placeholders {
+		if placeholder == "[[discord:user:111]]" {
+			hasAuthor = true
+		}
+		if placeholder == "[[discord:user:222]]" {
+			hasMentioned = true
+		}
+	}
+	if !hasAuthor || !hasMentioned {
+		t.Fatalf("refs = %+v", refs)
 	}
 }
 

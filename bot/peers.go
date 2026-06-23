@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/bwmarrin/discordgo"
+	"github.com/nczz/kiro-discord-bot/internal/discordmention"
 )
 
 const peerPermissionCacheTTL = 30 * time.Second
@@ -509,11 +510,15 @@ func (b *Bot) peerPromptContext(selfID string) string {
 	var hasHandoffPeer bool
 	for _, p := range peers {
 		roleText := ""
-		if roleMention := p.RoleMention(); roleMention != "" {
-			roleText = fmt.Sprintf(" role_mention=%s", roleMention)
+		if p.RoleID != "" {
+			roleText = fmt.Sprintf(" role_mention_ref=%s", discordmention.RoleRef(p.RoleID, p.Name).Placeholder)
 		}
 		if p.ID == selfID {
-			sb.WriteString(fmt.Sprintf("- self=%s id=%s mention=%s%s\n", p.Name, p.ID, p.Mention(), roleText))
+			selfRef := ""
+			if p.ID != "" {
+				selfRef = fmt.Sprintf(" mention_ref=%s", discordmention.UserRef(p.ID, p.Name).Placeholder)
+			}
+			sb.WriteString(fmt.Sprintf("- self=%s id=%s%s%s\n", p.Name, p.ID, selfRef, roleText))
 			continue
 		}
 		hasHandoffPeer = true
@@ -521,16 +526,29 @@ func (b *Bot) peerPromptContext(selfID string) string {
 			sb.WriteString(fmt.Sprintf("- handoff_peer=%s%s\n", p.Name, roleText))
 			continue
 		}
-		sb.WriteString(fmt.Sprintf("- handoff_peer=%s id=%s mention=%s%s\n", p.Name, p.ID, p.Mention(), roleText))
+		sb.WriteString(fmt.Sprintf("- handoff_peer=%s id=%s mention_ref=%s%s\n", p.Name, p.ID, discordmention.UserRef(p.ID, p.Name).Placeholder, roleText))
 	}
 	sb.WriteString("[Discord bot handoff rules]\n")
 	if hasHandoffPeer {
-		sb.WriteString("- Use handoff_peer mention tokens exactly when explicitly asked to hand off, review, compare, or collaborate with another bot.\n")
-		sb.WriteString("- Put handoff_peer mentions only in final result messages, after your own work is complete.\n")
+		sb.WriteString("- Use handoff_peer mention_ref placeholders exactly when explicitly asked to hand off, review, compare, or collaborate with another bot.\n")
+		sb.WriteString("- Put handoff_peer mention_ref placeholders only in final result messages, after your own work is complete.\n")
 	}
 	sb.WriteString("- Never mention yourself for handoff.\n")
 	sb.WriteString("- Do not mention another bot in progress updates, errors, tool output summaries, or casual replies.\n")
 	return sb.String()
+}
+
+func (b *Bot) peerMentionRefs(selfID string) []discordmention.Ref {
+	var refs []discordmention.Ref
+	for _, p := range b.peerSnapshot() {
+		if p.ID != "" && p.ID != selfID {
+			refs = append(refs, discordmention.UserRef(p.ID, p.Name))
+		}
+		if p.RoleID != "" {
+			refs = append(refs, discordmention.RoleRef(p.RoleID, p.Name))
+		}
+	}
+	return refs
 }
 
 func (b *Bot) discoverBotPeers(ds *discordgo.Session, ready *discordgo.Ready) {

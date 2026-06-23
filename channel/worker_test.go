@@ -3,6 +3,7 @@ package channel
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"io"
 	"math"
@@ -17,6 +18,7 @@ import (
 	"github.com/bwmarrin/discordgo"
 	"github.com/nczz/kiro-discord-bot/acp"
 	"github.com/nczz/kiro-discord-bot/audit"
+	"github.com/nczz/kiro-discord-bot/internal/discordmention"
 	L "github.com/nczz/kiro-discord-bot/locale"
 )
 
@@ -83,10 +85,10 @@ func TestPromptVisibleBodySkipsDiscordMetadataBlocks(t *testing.T) {
 [Discord context] channel_id=1 guild_id=2 user=mxp
 
 [Discord bot peers]
-- BuildBot id=111111111111111111 mention=<@111111111111111111>
-- ReviewBot id=333333333333333333 mention=<@333333333333333333>
+- BuildBot id=111111111111111111 mention_ref=[[discord:user:111111111111111111]]
+- ReviewBot id=333333333333333333 mention_ref=[[discord:user:333333333333333333]]
 [Discord bot handoff rules]
-- Use the peer mention token exactly.
+- Use handoff_peer mention_ref placeholders exactly.
 
 請幫我 review 這段內容`
 
@@ -367,6 +369,105 @@ func TestSendLongThreadReportsDeliveryResult(t *testing.T) {
 	}
 	if sentCount != 0 {
 		t.Fatalf("sent count = %d, want 0 on failure", sentCount)
+	}
+}
+
+func TestSendLongThreadWithMentionsAllowsOnlyVerifiedPlaceholders(t *testing.T) {
+	rt := &recordingRoundTripper{}
+	_, err := SendLongThreadWithMentions(testDiscordSession(rt), "thread-1", "hello [[discord:user:123]] raw <@456>", []discordmention.Ref{
+		discordmention.UserRef("123", "Chun"),
+	})
+	if err != nil {
+		t.Fatalf("SendLongThreadWithMentions err = %v", err)
+	}
+	_, bodies := rt.Snapshot()
+	if len(bodies) != 1 {
+		t.Fatalf("bodies = %d, want 1: %v", len(bodies), bodies)
+	}
+	var payload struct {
+		Content         string `json:"content"`
+		AllowedMentions struct {
+			Users []string `json:"users"`
+		} `json:"allowed_mentions"`
+	}
+	if err := json.Unmarshal([]byte(bodies[0]), &payload); err != nil {
+		t.Fatalf("payload json: %v\n%s", err, bodies[0])
+	}
+	if !strings.Contains(payload.Content, "<@123>") {
+		t.Fatalf("content missing rendered placeholder: %q", payload.Content)
+	}
+	if strings.Contains(payload.Content, "<@456>") {
+		t.Fatalf("raw mention was not escaped: %q", payload.Content)
+	}
+	if len(payload.AllowedMentions.Users) != 1 || payload.AllowedMentions.Users[0] != "123" {
+		t.Fatalf("allowed mentions = %+v, want only 123", payload.AllowedMentions.Users)
+	}
+}
+
+func TestSendLongThreadWithMentionsDoesNotAllowRawMentionForSameUser(t *testing.T) {
+	rt := &recordingRoundTripper{}
+	_, err := SendLongThreadWithMentions(testDiscordSession(rt), "thread-1", "raw <@123>", []discordmention.Ref{
+		discordmention.UserRef("123", "Chun"),
+	})
+	if err != nil {
+		t.Fatalf("SendLongThreadWithMentions err = %v", err)
+	}
+	_, bodies := rt.Snapshot()
+	var payload struct {
+		Content         string `json:"content"`
+		AllowedMentions struct {
+			Users []string `json:"users"`
+		} `json:"allowed_mentions"`
+	}
+	if err := json.Unmarshal([]byte(bodies[0]), &payload); err != nil {
+		t.Fatalf("payload json: %v\n%s", err, bodies[0])
+	}
+	if strings.Contains(payload.Content, "<@123>") {
+		t.Fatalf("raw mention should not remain active: %q", payload.Content)
+	}
+	if len(payload.AllowedMentions.Users) != 0 {
+		t.Fatalf("allowed mentions = %+v, want none", payload.AllowedMentions.Users)
+	}
+}
+
+func TestSendLongThreadWithMentionsRendersBeforeSplitting(t *testing.T) {
+	rt := &recordingRoundTripper{}
+	content := strings.Repeat("a", 1975) + " [[discord:user:123]] tail"
+	_, err := SendLongThreadWithMentions(testDiscordSession(rt), "thread-1", content, []discordmention.Ref{
+		discordmention.UserRef("123", "Chun"),
+	})
+	if err != nil {
+		t.Fatalf("SendLongThreadWithMentions err = %v", err)
+	}
+	_, bodies := rt.Snapshot()
+	if len(bodies) < 2 {
+		t.Fatalf("expected split messages, got %d: %v", len(bodies), bodies)
+	}
+	mentionsSeen := 0
+	for i, body := range bodies {
+		var payload struct {
+			Content         string `json:"content"`
+			AllowedMentions struct {
+				Users []string `json:"users"`
+			} `json:"allowed_mentions"`
+		}
+		if err := json.Unmarshal([]byte(body), &payload); err != nil {
+			t.Fatalf("payload %d json: %v\n%s", i, err, body)
+		}
+		if strings.Contains(payload.Content, "[[discord:user:123]]") {
+			t.Fatalf("placeholder leaked in payload %d: %q", i, payload.Content)
+		}
+		if strings.Contains(payload.Content, "<@123>") {
+			mentionsSeen++
+			if len(payload.AllowedMentions.Users) != 1 || payload.AllowedMentions.Users[0] != "123" {
+				t.Fatalf("payload %d allowed mentions = %+v, want 123", i, payload.AllowedMentions.Users)
+			}
+		} else if len(payload.AllowedMentions.Users) != 0 {
+			t.Fatalf("payload %d allowed mentions = %+v, want none", i, payload.AllowedMentions.Users)
+		}
+	}
+	if mentionsSeen != 1 {
+		t.Fatalf("rendered mention occurrences = %d, want 1", mentionsSeen)
 	}
 }
 
