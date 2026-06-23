@@ -109,7 +109,7 @@ func (b *Bot) handleMCPComponent(ds *discordgo.Session, i *discordgo.Interaction
 			fail(L.Get("error.expired"))
 			return
 		}
-		msg := b.discoverMCPToolsMessage(selected)
+		msg := b.discoverMCPToolsMessage(channelID, selected)
 		content, components := b.buildMCPToolsPanel(channelID, selected, msg, 0)
 		edit(content, components)
 		return
@@ -203,13 +203,16 @@ func (b *Bot) applyMCPToolSelection(channelID, userID, server, tool string, allo
 	return L.Getf("mcp.tool_updated", server, tool)
 }
 
-func (b *Bot) discoverMCPToolsMessage(server string) string {
+func (b *Bot) discoverMCPToolsMessage(channelID, server string) string {
+	log.Printf("[mcp-ui] scan requested channel=%s server=%s", channelID, server)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	tools, err := b.manager.DiscoverMCPTools(ctx, server)
 	if err != nil {
+		log.Printf("[mcp-ui] scan failed channel=%s server=%s: %v", channelID, server, err)
 		return commandError(err)
 	}
+	log.Printf("[mcp-ui] scan succeeded channel=%s server=%s count=%d", channelID, server, len(tools))
 	return L.Getf("mcp.tools.scan_done", server, len(tools))
 }
 

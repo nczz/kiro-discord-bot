@@ -200,6 +200,7 @@ func NewManager(cfg ManagerConfig) *Manager {
 		log.Printf("[mcp-policy] disabled: %v", err)
 	} else {
 		m.mcpPolicies = store
+		m.mcpPolicies.SetDiscoveryProxyCommand(m.mcpProxyCommand)
 		if m.botID != "" {
 			if err := m.applyLegacyMCPMigration(); err != nil {
 				log.Printf("[mcp-policy] legacy migration: %v", err)

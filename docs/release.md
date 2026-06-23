@@ -147,6 +147,7 @@ journalctl -u kiro-discord-bot -n 20 --no-pager
 3. Send a test message — confirm agent responds.
 4. If STT is enabled, send a voice message — confirm transcription works.
 5. If MCP servers are configured, verify they respond to tool calls.
+6. If URL-based MCP servers live on a private LAN, run `/mcp manage` and scan the server. On macOS LaunchAgent deployments, see [macOS MCP Networking](macos-mcp-networking.md) if the same URL works from an interactive shell but scanning fails with `no route to host`.
 
 ## 8. Rollback
 
@@ -189,6 +190,7 @@ After upgrade, run `/doctor` to confirm ACP preflight still passes.
 - Bot reads `.env` at `<INSTALL_DIR>/.env` (via systemd `EnvironmentFile`).
 - Use `/doctor` to see env set/unset state plus selected effective runtime values. Sensitive env vars only show `set (redacted)` and never include raw values or partial secrets.
 - When adding a new env var, follow the path in `.kiro/steering/project.md` Completeness Checklist.
+- For macOS LaunchAgent deployments with private-LAN MCP servers, prefer fixing macOS Local Network/service identity or launchd environment. Use a loopback relay only as an explicit operational fallback; see [macOS MCP Networking](macos-mcp-networking.md).
 
 ## 11. Safety Rules
 

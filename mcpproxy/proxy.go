@@ -8,8 +8,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
+	"path"
 	"strings"
 	"sync"
 	"syscall"
@@ -93,27 +95,48 @@ func LoadConfigFromEnv() (Config, error) {
 
 func Run(ctx context.Context, cfg Config, stdin io.Reader, stdout, stderr io.Writer) error {
 	if cfg.URL != "" {
+		if isSSEURL(cfg.URL) {
+			return runSSE(ctx, cfg, stdin, stdout, stderr)
+		}
 		return runHTTP(ctx, cfg, stdin, stdout, stderr)
 	}
 	return runStdio(ctx, cfg, stdin, stdout, stderr)
 }
 
+func writeLineLocked(mu *sync.Mutex, w io.Writer, line []byte) error {
+	mu.Lock()
+	defer mu.Unlock()
+	if _, err := w.Write(line); err != nil {
+		return err
+	}
+	if len(line) == 0 || line[len(line)-1] != '\n' {
+		_, err := w.Write([]byte("\n"))
+		return err
+	}
+	return nil
+}
+
+func newMCPHTTPPostRequest(ctx context.Context, rawURL string, body []byte, sessionID string) (*http.Request, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, rawURL, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	if sessionID != "" {
+		req.Header.Set("Mcp-Session-Id", sessionID)
+	}
+	return req, nil
+}
+
 func runHTTP(ctx context.Context, cfg Config, stdin io.Reader, stdout, stderr io.Writer) error {
 	var writeMu sync.Mutex
 	writeLine := func(w io.Writer, line []byte) error {
-		writeMu.Lock()
-		defer writeMu.Unlock()
-		if _, err := w.Write(line); err != nil {
-			return err
-		}
-		if len(line) == 0 || line[len(line)-1] != '\n' {
-			_, err := w.Write([]byte("\n"))
-			return err
-		}
-		return nil
+		return writeLineLocked(&writeMu, w, line)
 	}
 
 	client := &http.Client{}
+	var sessionID string
 	scanner := bufio.NewScanner(stdin)
 	scanner.Buffer(make([]byte, 0, 64*1024), 64*1024*1024)
 	for scanner.Scan() {
@@ -130,11 +153,10 @@ func runHTTP(ctx context.Context, cfg Config, stdin io.Reader, stdout, stderr io
 			}
 			continue
 		}
-		req, err := http.NewRequestWithContext(ctx, "POST", cfg.URL, bytes.NewReader(line))
+		req, err := newMCPHTTPPostRequest(ctx, cfg.URL, line, sessionID)
 		if err != nil {
 			return err
 		}
-		req.Header.Set("Content-Type", "application/json")
 		resp, err := client.Do(req)
 		if err != nil {
 			// Network error: return JSON-RPC error to keep session alive.
@@ -166,8 +188,21 @@ func runHTTP(ctx context.Context, cfg Config, stdin io.Reader, stdout, stderr io
 			}
 			continue
 		}
+		if gotSessionID := strings.TrimSpace(resp.Header.Get("Mcp-Session-Id")); gotSessionID != "" {
+			sessionID = gotSessionID
+		}
 		body = bytes.TrimSpace(body)
 		if len(body) == 0 {
+			continue
+		}
+		if isEventStreamHeader(resp.Header) {
+			messages := parseSSEMessages(body)
+			for _, msg := range messages {
+				msg = filterToolsList(cfg, msg)
+				if err := writeLine(stdout, msg); err != nil {
+					return err
+				}
+			}
 			continue
 		}
 		body = filterToolsList(cfg, body)
@@ -179,6 +214,259 @@ func runHTTP(ctx context.Context, cfg Config, stdin io.Reader, stdout, stderr io
 		return err
 	}
 	return nil
+}
+
+func isEventStreamResponse(resp *http.Response) bool {
+	if resp == nil {
+		return false
+	}
+	return isEventStreamHeader(resp.Header)
+}
+
+func isEventStreamHeader(header http.Header) bool {
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(header.Get("Content-Type"))), "text/event-stream")
+}
+
+func runSSE(ctx context.Context, cfg Config, stdin io.Reader, stdout, stderr io.Writer) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	var writeMu sync.Mutex
+	writeLine := func(w io.Writer, line []byte) error {
+		return writeLineLocked(&writeMu, w, line)
+	}
+
+	client := &http.Client{}
+	endpointCh := make(chan string, 1)
+	errCh := make(chan error, 1)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, cfg.URL, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Accept", "text/event-stream")
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return fmt.Errorf("sse endpoint returned status %d: %s", resp.StatusCode, body)
+	}
+	defer resp.Body.Close()
+
+	go func() {
+		errCh <- readSSEEvents(ctx, cfg, resp.Body, stdout, stderr, writeLine, endpointCh)
+	}()
+
+	var postURL string
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case err := <-errCh:
+		if err != nil {
+			return err
+		}
+		return nil
+	case endpoint := <-endpointCh:
+		postURL, err = resolveSSEEndpoint(cfg.URL, endpoint)
+		if err != nil {
+			return err
+		}
+	}
+
+	scanner := bufio.NewScanner(stdin)
+	scanner.Buffer(make([]byte, 0, 64*1024), 64*1024*1024)
+	for scanner.Scan() {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		line := append([]byte(nil), scanner.Bytes()...)
+		action, blockedTool, id := inspectClientLine(cfg, line)
+		if action == "block" {
+			if err := writeLine(stdout, blockedToolResponse(id, blockedTool)); err != nil {
+				return err
+			}
+			continue
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, postURL, bytes.NewReader(line))
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := client.Do(req)
+		if err != nil {
+			reqID := extractJSONRPCID(line)
+			if err2 := writeLine(stdout, httpErrorResponse(reqID, fmt.Sprintf("sse post: %v", err))); err2 != nil {
+				return err2
+			}
+			if stderr != nil {
+				_, _ = fmt.Fprintf(stderr, "[mcp-proxy-sse] request to %s failed: %v\n", postURL, err)
+			}
+			continue
+		}
+		body, readErr := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if readErr != nil {
+			reqID := extractJSONRPCID(line)
+			if err2 := writeLine(stdout, httpErrorResponse(reqID, "read SSE POST response body failed")); err2 != nil {
+				return err2
+			}
+			continue
+		}
+		if resp.StatusCode >= 400 {
+			if stderr != nil {
+				_, _ = fmt.Fprintf(stderr, "[mcp-proxy-sse] %s returned %d: %s\n", postURL, resp.StatusCode, body)
+			}
+			reqID := extractJSONRPCID(line)
+			if err := writeLine(stdout, httpErrorResponse(reqID, fmt.Sprintf("upstream returned status %d", resp.StatusCode))); err != nil {
+				return err
+			}
+			continue
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func isSSEURL(raw string) bool {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return false
+	}
+	return path.Base(strings.TrimRight(u.Path, "/")) == "sse"
+}
+
+func resolveSSEEndpoint(baseURL, endpoint string) (string, error) {
+	base, err := url.Parse(baseURL)
+	if err != nil {
+		return "", err
+	}
+	ref, err := url.Parse(strings.TrimSpace(endpoint))
+	if err != nil {
+		return "", err
+	}
+	return base.ResolveReference(ref).String(), nil
+}
+
+func readSSEEvents(ctx context.Context, cfg Config, r io.Reader, stdout, stderr io.Writer, writeLine func(io.Writer, []byte) error, endpointCh chan<- string) error {
+	reader := bufio.NewReader(r)
+	var eventName string
+	var dataLines []string
+	endpointSent := false
+	flush := func() error {
+		if len(dataLines) == 0 {
+			eventName = ""
+			return nil
+		}
+		data := strings.Join(dataLines, "\n")
+		dataLines = nil
+		event := eventName
+		eventName = ""
+		switch event {
+		case "endpoint":
+			if !endpointSent {
+				endpointSent = true
+				select {
+				case endpointCh <- data:
+				default:
+				}
+			}
+		case "", "message":
+			body := bytes.TrimSpace([]byte(data))
+			if len(body) == 0 {
+				return nil
+			}
+			body = filterToolsList(cfg, body)
+			if err := writeLine(stdout, body); err != nil {
+				return err
+			}
+		default:
+			if stderr != nil {
+				_, _ = fmt.Fprintf(stderr, "[mcp-proxy-sse] ignored event %q\n", event)
+			}
+		}
+		return nil
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		line, err := reader.ReadString('\n')
+		if err != nil && len(line) == 0 {
+			if err == io.EOF {
+				return flush()
+			}
+			return err
+		}
+		line = strings.TrimRight(line, "\r\n")
+		switch {
+		case line == "":
+			if err := flush(); err != nil {
+				return err
+			}
+		case strings.HasPrefix(line, ":"):
+			// SSE comment/heartbeat.
+		case strings.HasPrefix(line, "event:"):
+			eventName = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
+		case strings.HasPrefix(line, "data:"):
+			dataLines = append(dataLines, strings.TrimSpace(strings.TrimPrefix(line, "data:")))
+		}
+		if err != nil {
+			if err == io.EOF {
+				return flush()
+			}
+			return err
+		}
+	}
+}
+
+func parseSSEMessages(raw []byte) [][]byte {
+	var messages [][]byte
+	reader := bufio.NewReader(bytes.NewReader(raw))
+	var eventName string
+	var dataLines []string
+	flush := func() {
+		if len(dataLines) == 0 {
+			eventName = ""
+			return
+		}
+		data := strings.TrimSpace(strings.Join(dataLines, "\n"))
+		event := eventName
+		eventName = ""
+		dataLines = nil
+		if data == "" || (event != "" && event != "message") {
+			return
+		}
+		messages = append(messages, []byte(data))
+	}
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil && len(line) == 0 {
+			flush()
+			return messages
+		}
+		line = strings.TrimRight(line, "\r\n")
+		switch {
+		case line == "":
+			flush()
+		case strings.HasPrefix(line, ":"):
+		case strings.HasPrefix(line, "event:"):
+			eventName = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
+		case strings.HasPrefix(line, "data:"):
+			dataLines = append(dataLines, strings.TrimSpace(strings.TrimPrefix(line, "data:")))
+		}
+		if err != nil {
+			flush()
+			return messages
+		}
+	}
 }
 
 func extractJSONRPCID(line []byte) any {
@@ -222,16 +510,7 @@ func runStdio(ctx context.Context, cfg Config, stdin io.Reader, stdout, stderr i
 	}
 	var writeMu sync.Mutex
 	writeLine := func(w io.Writer, line []byte) error {
-		writeMu.Lock()
-		defer writeMu.Unlock()
-		if _, err := w.Write(line); err != nil {
-			return err
-		}
-		if len(line) == 0 || line[len(line)-1] != '\n' {
-			_, err := w.Write([]byte("\n"))
-			return err
-		}
-		return nil
+		return writeLineLocked(&writeMu, w, line)
 	}
 
 	errCh := make(chan error, 2)

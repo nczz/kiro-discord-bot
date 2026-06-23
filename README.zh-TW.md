@@ -287,7 +287,7 @@ bot 也會註冊內建的 `bot-tools` MCP catalog entry，由同一支 bot binar
 /mcp disable server:<server>
 ```
 
-請用 `/mcp status` 查看合併後的 catalog 與目前頻道 policy 檢查清單。`/mcp enable` 會開放整個 server。工具層級控制與 MCP 重新載入請使用 `/mcp manage`：面板會以 private interaction response 顯示，可以掃描 server 目前的 `tools/list`、把工具快取到 SQLite、用 Discord select menu 執行允許/移除，並停止活躍 agent，讓下一次執行載入目前 MCP policy。原本手打 tool name 的 `allow-tool`、`deny-tool` 指令不再公開，避免使用者需要猜精確工具名稱。
+請用 `/mcp status` 查看合併後的 catalog 與目前頻道 policy 檢查清單。`/mcp enable` 會開放整個 server。工具層級控制與 MCP 重新載入請使用 `/mcp manage`：面板會以 private interaction response 顯示，並透過與 agent runtime 相同的 MCP policy proxy 掃描 server 目前的 `tools/list`、把工具快取到 SQLite、用 Discord select menu 執行允許/移除，並停止活躍 agent，讓下一次執行載入目前 MCP policy。原本手打 tool name 的 `allow-tool`、`deny-tool` 指令不再公開，避免使用者需要猜精確工具名稱。若 macOS LaunchAgent 部署中 private LAN URL 在互動 shell 可連，但 `/mcp manage` 掃描出現 `no route to host`，請參考 [macOS MCP Networking](docs/macos-mcp-networking.md)。
 
 升級相容會依 data directory 執行一次。全新安裝時，catalog 內的 MCP server 都維持停用，直到頻道管理員手動啟用。若是從舊版升級，且舊版會全域繼承 Kiro MCP config，bot 只會對 `sessions.json` 中已存在的 channel 保留舊行為：第一次升級啟動當下 catalog 內的 server 會對這些既有 channel 以完整 server access 啟用。這個 migration 可重複執行但只會生效一次，不會覆蓋既有明確 policy，也不會自動啟用 migration 之後才新增的 MCP server。
 

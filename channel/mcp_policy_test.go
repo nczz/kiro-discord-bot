@@ -938,6 +938,73 @@ func TestManagerDiscoversAndCachesMCPTools(t *testing.T) {
 	}
 }
 
+func TestMCPPolicyStoreDiscoversURLServerThroughProxyCommand(t *testing.T) {
+	dir := t.TempDir()
+	proxyBin := filepath.Join(dir, "fake-mcp-proxy")
+	proxySrc := filepath.Join(dir, "fake-mcp-proxy.go")
+	if err := os.WriteFile(proxySrc, []byte(`package main
+
+import (
+	"bufio"
+	"encoding/json"
+	"fmt"
+	"os"
+)
+
+func main() {
+	if len(os.Args) != 2 || os.Args[1] != "mcp-proxy" {
+		fmt.Fprintf(os.Stderr, "unexpected args: %v\n", os.Args[1:])
+		os.Exit(2)
+	}
+	if os.Getenv("MCP_PROXY_URL") != "http://127.0.0.1:9999/mcp" {
+		fmt.Fprintf(os.Stderr, "unexpected url: %s\n", os.Getenv("MCP_PROXY_URL"))
+		os.Exit(3)
+	}
+	scanner := bufio.NewScanner(os.Stdin)
+	for scanner.Scan() {
+		var req map[string]any
+		_ = json.Unmarshal(scanner.Bytes(), &req)
+		switch req["method"] {
+		case "initialize":
+			fmt.Printf("{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":{\"protocolVersion\":\"2024-11-05\",\"capabilities\":{\"tools\":{}},\"serverInfo\":{\"name\":\"fake\",\"version\":\"1\"}}}\n", mustJSON(req["id"]))
+		case "tools/list":
+			fmt.Printf("{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":{\"tools\":[{\"name\":\"from-proxy\",\"description\":\"via proxy\",\"inputSchema\":{\"type\":\"object\"}}]}}\n", mustJSON(req["id"]))
+		}
+	}
+}
+
+func mustJSON(v any) string {
+	raw, _ := json.Marshal(v)
+	return string(raw)
+}
+`), 0644); err != nil {
+		t.Fatalf("write fake proxy: %v", err)
+	}
+	build := exec.Command("go", "build", "-o", proxyBin, proxySrc)
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build fake proxy: %v\n%s", err, out)
+	}
+	cfgPath := filepath.Join(dir, "mcp.json")
+	if err := os.WriteFile(cfgPath, []byte(`{"mcpServers":{"url-tools":{"url":"http://127.0.0.1:9999/mcp"}}}`), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	t.Setenv("KIRO_MCP_CONFIG", cfgPath)
+	store, err := OpenMCPPolicyStore(dir)
+	if err != nil {
+		t.Fatalf("open policy store: %v", err)
+	}
+	defer store.Close()
+	store.SetDiscoveryProxyCommand(proxyBin)
+
+	tools, err := store.DiscoverTools(context.Background(), "url-tools")
+	if err != nil {
+		t.Fatalf("discover URL tools through proxy: %v", err)
+	}
+	if len(tools) != 1 || tools[0].Name != "from-proxy" {
+		t.Fatalf("tools = %+v", tools)
+	}
+}
+
 func TestManagerRefreshesMCPCatalogForStatusAndInjection(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "mcp.json")

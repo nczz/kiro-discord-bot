@@ -1,11 +1,13 @@
 package channel
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -55,10 +57,11 @@ type MCPToolInfo struct {
 }
 
 type MCPPolicyStore struct {
-	mu       sync.RWMutex
-	db       *sql.DB
-	catalog  map[string]MCPCatalogEntry
-	builtins []MCPCatalogEntry
+	mu                    sync.RWMutex
+	db                    *sql.DB
+	catalog               map[string]MCPCatalogEntry
+	builtins              []MCPCatalogEntry
+	discoveryProxyCommand string
 }
 
 func OpenMCPPolicyStore(dataDir string) (*MCPPolicyStore, error) {
@@ -89,6 +92,15 @@ func (s *MCPPolicyStore) Close() error {
 		return nil
 	}
 	return s.db.Close()
+}
+
+func (s *MCPPolicyStore) SetDiscoveryProxyCommand(command string) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.discoveryProxyCommand = strings.TrimSpace(command)
 }
 
 func (s *MCPPolicyStore) init() error {
@@ -207,7 +219,12 @@ func (s *MCPPolicyStore) DiscoverTools(ctx context.Context, serverName string) (
 	var c *mcpclient.Client
 	var err error
 	if entry.URL != "" {
-		c, err = mcpclient.NewStreamableHttpClient(entry.URL)
+		proxyCommand := s.discoveryProxyCommandPath()
+		if proxyCommand == "" {
+			return nil, errors.New("mcp proxy command is not available for URL server discovery")
+		}
+		env := mcpproxy.ConfigEnvURL(entry.URL, nil, true)
+		c, err = mcpclient.NewStdioMCPClient(proxyCommand, env, "mcp-proxy")
 	} else {
 		env := make([]string, 0, len(entry.Env))
 		for k, v := range entry.Env {
@@ -220,15 +237,18 @@ func (s *MCPPolicyStore) DiscoverTools(ctx context.Context, serverName string) (
 		return nil, err
 	}
 	defer c.Close()
+	stderrSnapshot := captureMCPClientStderr(c)
 	initReq := mcp.InitializeRequest{}
 	initReq.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
 	initReq.Params.ClientInfo = mcp.Implementation{Name: "kiro-discord-bot-mcp-discovery", Version: "1"}
 	initReq.Params.Capabilities = mcp.ClientCapabilities{}
 	if _, err := c.Initialize(ctx, initReq); err != nil {
+		logMCPDiscoveryError(serverName, "initialize", err, stderrSnapshot())
 		return nil, err
 	}
 	result, err := c.ListTools(ctx, mcp.ListToolsRequest{})
 	if err != nil {
+		logMCPDiscoveryError(serverName, "tools/list", err, stderrSnapshot())
 		return nil, err
 	}
 	now := time.Now().UTC()
@@ -251,6 +271,75 @@ func (s *MCPPolicyStore) DiscoverTools(ctx context.Context, serverName string) (
 	}
 	log.Printf("[mcp-policy] discovered tools server=%s count=%d", serverName, len(tools))
 	return tools, nil
+}
+
+func logMCPDiscoveryError(serverName, stage string, err error, stderr string) {
+	if stderr == "" {
+		log.Printf("[mcp-policy] discover failed server=%s stage=%s: %v", serverName, stage, err)
+		return
+	}
+	log.Printf("[mcp-policy] discover failed server=%s stage=%s: %v; stderr=%s", serverName, stage, err, truncateLogValue(stderr, 4000))
+}
+
+func captureMCPClientStderr(c *mcpclient.Client) func() string {
+	r, ok := mcpclient.GetStderr(c)
+	if !ok || r == nil {
+		return func() string { return "" }
+	}
+	var mu sync.Mutex
+	var buf bytes.Buffer
+	go func() {
+		tmp := make([]byte, 1024)
+		for {
+			n, err := r.Read(tmp)
+			if n > 0 {
+				mu.Lock()
+				remaining := 8192 - buf.Len()
+				if remaining > 0 {
+					if n > remaining {
+						n = remaining
+					}
+					_, _ = buf.Write(tmp[:n])
+				}
+				mu.Unlock()
+			}
+			if err != nil {
+				if err != io.EOF {
+					mu.Lock()
+					if buf.Len() < 8192 {
+						_, _ = fmt.Fprintf(&buf, "\nstderr read error: %v", err)
+					}
+					mu.Unlock()
+				}
+				return
+			}
+		}
+	}()
+	return func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		return strings.TrimSpace(buf.String())
+	}
+}
+
+func truncateLogValue(s string, max int) string {
+	r := []rune(strings.TrimSpace(s))
+	if max <= 0 || len(r) <= max {
+		return string(r)
+	}
+	if max <= 3 {
+		return string(r[:max])
+	}
+	return string(r[:max-3]) + "..."
+}
+
+func (s *MCPPolicyStore) discoveryProxyCommandPath() string {
+	if s == nil {
+		return ""
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.discoveryProxyCommand
 }
 
 func (s *MCPPolicyStore) replaceTools(ctx context.Context, serverName string, tools []MCPToolInfo, now time.Time) error {
