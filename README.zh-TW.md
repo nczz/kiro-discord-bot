@@ -150,6 +150,30 @@ Compose 會針對容器環境固定部分預設值：`DEFAULT_CWD=/projects`、`
 
 在 Discord 討論串中使用指令時，會依最符合直覺的作用範圍執行：`/status`、`/reset`、`/cancel`、`/interrupt`、`/compact`、`/clear`、`/model` 會操作目前的討論串 agent。`/pause`、`/back`、`/silent` 會套用在目前目標，因此討論串可以覆蓋建立當下保存的監聽行為。`/thread` 永遠套用在父頻道未來新任務是否開討論串。`/memory` 與 `/flashmemory` 仍套用在父層頻道，因為討論串 agent 會繼承父層記憶。
 
+**Memory、flash memory 與 steering：** `/memory` 是輕量的 Discord 原生規則層。只要規則出現在 `/memory list` 裡，就是目前啟用狀態；bot 會在每次 agent turn 前把它們注入 prompt 的 `[Memory Rules - always follow these]` 區塊。移除規則會停止未來注入，但目前 agent session 可能已經在先前 context 看過舊規則。若要完整排除過時或衝突的永久記憶，請先移除規則，再執行 `/clear` 與 `/reset`，讓 agent 對話、bot 端頻道歷史與已載入的 ACP session 都重新整理。`/flashmemory` 適合不需要永久保存的當前 session 重點。正式的專案背景、架構決策、coding convention 或需要 review/versioning 的規範，建議使用 `/steering` 與 `.kiro/steering/*.md` 管理。
+
+```text
+/memory action:list
+/memory action:add value:<規則>
+/memory action:remove value:<編號>
+/memory action:clear
+
+!memory list
+!memory add <規則>
+!memory remove <編號>
+!memory clear
+
+/flashmemory action:list
+/flashmemory action:add value:<規則>
+/flashmemory action:remove value:<編號>
+/flashmemory action:clear
+
+!flashmemory list
+!flashmemory add <規則>
+!flashmemory remove <編號>
+!flashmemory clear
+```
+
 頻道設定與排程指令必須在父層頻道使用：`/start`、`/cwd`、`/steering`、`/agent`、`/cron`、`/cron-list`、`/cron-run`、`/cron-prompt`、`/remind`。
 
 新的父層頻道必須先完成初始化才會啟動 agent。未初始化頻道中的第一則一般訊息會被暫停，並提示頻道管理員開啟 private `/cwd` 初始化面板。初次設定只能選擇或建立 `DEFAULT_CWD` 底下的專案；初始化面板會列出 `DEFAULT_CWD` 第一層目錄，並在碰到 Discord select-menu 上限時自動分頁。選擇專案後會先進入確認步驟，按下確認後才會變更頻道 CWD。建立新專案時也會自動建立 `.kiro/steering/`。初始化完成後，頻道會自動以安全預設工具清單啟用內建 `bot-tools` MCP，成功訊息會收斂 CWD 設定流程，只保留 private shortcuts 讓管理員檢視此頻道的 MCP 工具開放設定與建立 agent context 檔。會啟動 agent 或改變 agent 執行上下文的指令會在初始化前被拒絕，例如 `/start`、`/reset`、`/compact`、`/clear`、model/agent 切換、MCP policy 變更、agent context 變更、agent memory 變更、`/cron`、`/cron-run`、`/cron-prompt` 與 agent-backed reminder。完成初始化後，管理員仍可用 `/cwd` 作為進階操作，依一般 cwd allowlist policy 切換到其他允許路徑。

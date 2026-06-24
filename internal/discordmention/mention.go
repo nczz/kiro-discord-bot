@@ -12,15 +12,17 @@ import (
 const sentinelPrefix = "\x00discordmention:"
 
 var rawMentionPattern = regexp.MustCompile(`<(@!?|@&|#)([0-9]+)>`)
+var structuredPlaceholderPattern = regexp.MustCompile(`\[\[discord:(user|role):([0-9]+)\]\]`)
+var anyStructuredPlaceholderPattern = regexp.MustCompile(`\[\[discord:(user|role):[^\]\r\n]*\]\]`)
 
 // Ref is a Discord mention token the bot has verified and made available to an
 // agent. Agents must echo Placeholder exactly; raw Discord mention syntax is not
 // trusted.
 type Ref struct {
-	Kind        string
-	ID          string
-	DisplayName string
-	Placeholder string
+	Kind        string `json:"kind"`
+	ID          string `json:"id"`
+	DisplayName string `json:"display_name,omitempty"`
+	Placeholder string `json:"placeholder"`
 }
 
 // UserRef creates a verified user mention reference.
@@ -90,6 +92,14 @@ func Render(content string, refs []Ref) (string, *discordgo.MessageAllowedMentio
 			userSet[item.ref.ID] = true
 		}
 	}
+	content = structuredPlaceholderPattern.ReplaceAllStringFunc(content, func(match string) string {
+		parts := structuredPlaceholderPattern.FindStringSubmatch(match)
+		if len(parts) != 3 {
+			return "Discord mention"
+		}
+		return fmt.Sprintf("Discord %s", parts[1])
+	})
+	content = anyStructuredPlaceholderPattern.ReplaceAllString(content, "Discord mention")
 
 	users := make([]string, 0, len(userSet))
 	for id := range userSet {

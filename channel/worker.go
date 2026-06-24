@@ -107,6 +107,7 @@ type Worker struct {
 	onIdle          func() bool // called when a job finishes; true means the worker was stopped
 	onThreadCreated func(threadID string, mentionOnly bool)
 	onBeforeFinal   func(targetChannelID string) int
+	onMentionRefs   func([]discordmention.Ref)
 
 	memoryPrefix func() string // returns memory+flash prefix to inject into prompts
 
@@ -115,6 +116,9 @@ type Worker struct {
 	historyPrefix string // prepended to first job's prompt, then cleared
 
 	botToolsTargetStatePath string
+
+	mentionMu   sync.Mutex
+	mentionRefs []discordmention.Ref
 }
 
 type workerAgent interface {
@@ -164,6 +168,9 @@ func (w *Worker) OnThreadCreatedFunc(fn func(threadID string, mentionOnly bool))
 
 // OnBeforeFinalResponseFunc sets a callback invoked before the worker sends its final response.
 func (w *Worker) OnBeforeFinalResponseFunc(fn func(targetChannelID string) int) { w.onBeforeFinal = fn }
+
+// OnMentionRefsUpdatedFunc sets a callback invoked when verified mention refs change.
+func (w *Worker) OnMentionRefsUpdatedFunc(fn func([]discordmention.Ref)) { w.onMentionRefs = fn }
 
 // SetBotToolsTargetStatePath sets the dynamic target state used by bot-tools safe egress.
 func (w *Worker) SetBotToolsTargetStatePath(path string) { w.botToolsTargetStatePath = path }
@@ -380,6 +387,59 @@ func (w *Worker) run() {
 	}
 }
 
+func (w *Worker) rememberMentionRefs(refs []discordmention.Ref) []discordmention.Ref {
+	if w == nil {
+		return refs
+	}
+	w.mentionMu.Lock()
+
+	seen := make(map[string]bool, len(w.mentionRefs)+len(refs))
+	merged := make([]discordmention.Ref, 0, len(w.mentionRefs)+len(refs))
+	add := func(ref discordmention.Ref) {
+		key := ref.Kind + ":" + ref.ID
+		if ref.Kind == "" || ref.ID == "" || seen[key] {
+			return
+		}
+		seen[key] = true
+		merged = append(merged, ref)
+	}
+	for _, ref := range w.mentionRefs {
+		add(ref)
+	}
+	for _, ref := range refs {
+		add(ref)
+	}
+	changed := !sameMentionRefs(w.mentionRefs, merged)
+	w.mentionRefs = append([]discordmention.Ref(nil), merged...)
+	out := append([]discordmention.Ref(nil), merged...)
+	w.mentionMu.Unlock()
+	if changed && w.onMentionRefs != nil {
+		w.onMentionRefs(out)
+	}
+	return out
+}
+
+func (w *Worker) SetMentionRefs(refs []discordmention.Ref) {
+	if w == nil {
+		return
+	}
+	w.mentionMu.Lock()
+	w.mentionRefs = append([]discordmention.Ref(nil), refs...)
+	w.mentionMu.Unlock()
+}
+
+func sameMentionRefs(a, b []discordmention.Ref) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Kind != b[i].Kind || a[i].ID != b[i].ID || a[i].Placeholder != b[i].Placeholder || a[i].DisplayName != b[i].DisplayName {
+			return false
+		}
+	}
+	return true
+}
+
 func promptSummary(prompt string, maxLen int) string {
 	prompt = promptVisibleBody(prompt)
 	if len(prompt) > maxLen {
@@ -406,6 +466,9 @@ func promptVisibleBody(prompt string) string {
 }
 
 func (w *Worker) execute(job *Job) {
+	if job != nil {
+		job.MentionRefs = w.rememberMentionRefs(job.MentionRefs)
+	}
 	if job.DeliveryMode == DeliveryInline {
 		w.executeInline(job)
 		return

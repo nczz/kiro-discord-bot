@@ -18,6 +18,7 @@ import (
 	"github.com/nczz/kiro-discord-bot/acp"
 	"github.com/nczz/kiro-discord-bot/audit"
 	"github.com/nczz/kiro-discord-bot/internal/botmcp"
+	"github.com/nczz/kiro-discord-bot/internal/discordmention"
 	"github.com/nczz/kiro-discord-bot/internal/kirosettings"
 	"github.com/nczz/kiro-discord-bot/internal/textutil"
 	L "github.com/nczz/kiro-discord-bot/locale"
@@ -428,6 +429,43 @@ func (m *Manager) setThreadSession(threadID, parentChannelID string, sess *Sessi
 	sess.TargetID = threadID
 	sess.ParentChannelID = parentChannelID
 	return m.store.Set(key, sess)
+}
+
+func (m *Manager) updateChannelMentionRefs(channelID string, refs []discordmention.Ref) {
+	if m == nil || m.store == nil {
+		return
+	}
+	sess, ok := m.getChannelSession(channelID)
+	if !ok {
+		return
+	}
+	next := *sess
+	next.MentionRefs = cloneMentionRefs(refs)
+	if err := m.setChannelSession(channelID, &next); err != nil {
+		log.Printf("[mention] save channel refs channel=%s err=%v", channelID, err)
+	}
+}
+
+func (m *Manager) updateThreadMentionRefs(threadID, parentChannelID string, refs []discordmention.Ref) {
+	if m == nil || m.store == nil {
+		return
+	}
+	sess, ok := m.getThreadSession(threadID)
+	if !ok {
+		return
+	}
+	next := *sess
+	next.MentionRefs = cloneMentionRefs(refs)
+	if err := m.setThreadSession(threadID, parentChannelID, &next); err != nil {
+		log.Printf("[mention] save thread refs thread=%s err=%v", threadID, err)
+	}
+}
+
+func cloneMentionRefs(refs []discordmention.Ref) []discordmention.Ref {
+	if len(refs) == 0 {
+		return nil
+	}
+	return append([]discordmention.Ref(nil), refs...)
 }
 
 // AllowedCwdRoots returns a copy of configured cwd allowlist roots.
@@ -1603,6 +1641,7 @@ func (m *Manager) startAgentAndWorker(channelID string) (*Worker, error) {
 	cwd := m.defaultCWD
 	model := m.defaultModel
 	agentName := "ch-" + channelID
+	var mentionRefs []discordmention.Ref
 
 	if sess, ok := m.getChannelSession(channelID); ok {
 		if sess.CWD != "" {
@@ -1611,6 +1650,7 @@ func (m *Manager) startAgentAndWorker(channelID string) (*Worker, error) {
 		if sess.Model != "" {
 			model = sess.Model
 		}
+		mentionRefs = cloneMentionRefs(sess.MentionRefs)
 	}
 	var err error
 	cwd, err = m.ValidateCWD(cwd)
@@ -1658,15 +1698,20 @@ func (m *Manager) startAgentAndWorker(channelID string) (*Worker, error) {
 	}
 
 	if err := m.setChannelSession(channelID, &Session{
-		AgentName: agentName,
-		SessionID: agent.SessionID,
-		CWD:       cwd,
-		Model:     model,
+		AgentName:   agentName,
+		SessionID:   agent.SessionID,
+		CWD:         cwd,
+		Model:       model,
+		MentionRefs: mentionRefs,
 	}); err != nil {
 		log.Printf("[manager] save session: %v", err)
 	}
 
 	w := NewWorker(channelID, agent, m.queueBufSize, m.askTimeoutSec, m.streamUpdateSec, m.threadArchive, m.logger, model)
+	w.SetMentionRefs(mentionRefs)
+	w.OnMentionRefsUpdatedFunc(func(refs []discordmention.Ref) {
+		m.updateChannelMentionRefs(channelID, refs)
+	})
 	w.SetBotToolsTargetStatePath(botToolsTargetStatePath(m.dataDir, channelID))
 	w.OnBeforeFinalResponseFunc(m.safeEgressDrain)
 	w.SetUsageStore(m.usage)
@@ -2283,6 +2328,7 @@ func (m *Manager) threadAgentLimitErrorLocked() error {
 func (m *Manager) spawnThreadAgent(threadID, parentChannelID string, modelOverride ...string) (*threadAgentEntry, error) {
 	cwd := m.defaultCWD
 	model := m.defaultModel
+	var mentionRefs []discordmention.Ref
 	if sess, ok := m.getChannelSession(parentChannelID); ok {
 		if sess.CWD != "" {
 			cwd = sess.CWD
@@ -2299,6 +2345,7 @@ func (m *Manager) spawnThreadAgent(threadID, parentChannelID string, modelOverri
 		if threadSess.Model != "" {
 			model = threadSess.Model
 		}
+		mentionRefs = cloneMentionRefs(threadSess.MentionRefs)
 	}
 	if len(modelOverride) > 0 && modelOverride[0] != "" {
 		model = modelOverride[0]
@@ -2345,15 +2392,20 @@ func (m *Manager) spawnThreadAgent(threadID, parentChannelID string, modelOverri
 	}
 
 	if err := m.setThreadSession(threadID, parentChannelID, &Session{
-		AgentName: agentName,
-		SessionID: agent.SessionID,
-		CWD:       cwd,
-		Model:     model,
+		AgentName:   agentName,
+		SessionID:   agent.SessionID,
+		CWD:         cwd,
+		Model:       model,
+		MentionRefs: mentionRefs,
 	}); err != nil {
 		log.Printf("[manager] save thread session: %v", err)
 	}
 
 	w := NewWorker("thread-"+threadID, agent, m.queueBufSize, m.askTimeoutSec, m.streamUpdateSec, 0, m.logger, model)
+	w.SetMentionRefs(mentionRefs)
+	w.OnMentionRefsUpdatedFunc(func(refs []discordmention.Ref) {
+		m.updateThreadMentionRefs(threadID, parentChannelID, refs)
+	})
 	w.OnBeforeFinalResponseFunc(m.safeEgressDrain)
 	w.SetUsageStore(m.usage)
 	w.SetAuditSink(m.audit)

@@ -5,19 +5,22 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+
+	"github.com/nczz/kiro-discord-bot/internal/discordmention"
 )
 
 // Session holds the mapping between a Discord target and a kiro-cli agent.
 type Session struct {
-	AgentName       string `json:"agentName"`
-	SessionID       string `json:"sessionId"`
-	CWD             string `json:"cwd"`
-	Model           string `json:"model,omitempty"`
-	GuildID         string `json:"guildId,omitempty"`
-	BotID           string `json:"botId,omitempty"`
-	TargetType      string `json:"targetType,omitempty"`
-	TargetID        string `json:"targetId,omitempty"`
-	ParentChannelID string `json:"parentChannelId,omitempty"`
+	AgentName       string               `json:"agentName"`
+	SessionID       string               `json:"sessionId"`
+	CWD             string               `json:"cwd"`
+	Model           string               `json:"model,omitempty"`
+	GuildID         string               `json:"guildId,omitempty"`
+	BotID           string               `json:"botId,omitempty"`
+	TargetType      string               `json:"targetType,omitempty"`
+	TargetID        string               `json:"targetId,omitempty"`
+	ParentChannelID string               `json:"parentChannelId,omitempty"`
+	MentionRefs     []discordmention.Ref `json:"mentionRefs,omitempty"`
 }
 
 // SessionStore persists Discord target to ACP session mappings to a JSON file.

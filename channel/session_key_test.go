@@ -1,6 +1,10 @@
 package channel
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/nczz/kiro-discord-bot/internal/discordmention"
+)
 
 func newSessionKeyTestManager(t *testing.T) *Manager {
 	t.Helper()
@@ -102,5 +106,31 @@ func TestThreadSessionKeyIsScopedAndStoresParentChannel(t *testing.T) {
 	}
 	if sess.TargetType != sessionTargetThread || sess.TargetID != "thread-1" {
 		t.Fatalf("expected thread target metadata, got type=%q id=%q", sess.TargetType, sess.TargetID)
+	}
+}
+
+func TestMentionRefsPersistInScopedSessions(t *testing.T) {
+	m := newSessionKeyTestManager(t)
+	m.SetBotID("bot-a")
+
+	if err := m.setChannelSession("channel-1", &Session{SessionID: "session-a"}); err != nil {
+		t.Fatalf("set channel session: %v", err)
+	}
+	m.updateChannelMentionRefs("channel-1", []discordmention.Ref{discordmention.UserRef("123", "Chun")})
+	sess, ok := m.getChannelSession("channel-1")
+	if !ok || len(sess.MentionRefs) != 1 || sess.MentionRefs[0].ID != "123" {
+		t.Fatalf("channel mention refs = %+v", sess)
+	}
+
+	if err := m.setThreadSession("thread-1", "channel-1", &Session{SessionID: "thread-a"}); err != nil {
+		t.Fatalf("set thread session: %v", err)
+	}
+	m.updateThreadMentionRefs("thread-1", "channel-1", []discordmention.Ref{discordmention.RoleRef("456", "Ops")})
+	threadSess, ok := m.getThreadSession("thread-1")
+	if !ok || len(threadSess.MentionRefs) != 1 || threadSess.MentionRefs[0].ID != "456" {
+		t.Fatalf("thread mention refs = %+v", threadSess)
+	}
+	if threadSess.ParentChannelID != "channel-1" {
+		t.Fatalf("thread parent channel = %q, want channel-1", threadSess.ParentChannelID)
 	}
 }

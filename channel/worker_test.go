@@ -471,6 +471,22 @@ func TestSendLongThreadWithMentionsRendersBeforeSplitting(t *testing.T) {
 	}
 }
 
+func TestWorkerRemembersMentionRefsAcrossJobs(t *testing.T) {
+	w := newWorker("channel-1", &fakeWorkerAgent{}, 1, 1, 1, 60, nil, "")
+	first := w.rememberMentionRefs([]discordmention.Ref{discordmention.UserRef("123", "Chun")})
+	if len(first) != 1 || first[0].ID != "123" {
+		t.Fatalf("first refs = %+v, want user 123", first)
+	}
+	second := w.rememberMentionRefs(nil)
+	rendered, allowed := renderDiscordMentions("notify [[discord:user:123]]", second)
+	if !strings.Contains(rendered, "<@123>") {
+		t.Fatalf("remembered ref did not render: %q", rendered)
+	}
+	if allowed == nil || len(allowed.Users) != 1 || allowed.Users[0] != "123" {
+		t.Fatalf("allowed mentions = %+v, want user 123", allowed)
+	}
+}
+
 func TestWorkerCancelCurrentCancelsWithoutSignalingIdle(t *testing.T) {
 	agent := &fakeWorkerAgent{}
 	w := newWorker("ch1", agent, 1, 30, 1, 1440, nil, "")

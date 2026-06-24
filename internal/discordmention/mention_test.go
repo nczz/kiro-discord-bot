@@ -56,11 +56,33 @@ func TestRenderIgnoresInvalidDiscordIDs(t *testing.T) {
 	if strings.Contains(content, "<@not-a-snowflake>") {
 		t.Fatalf("invalid ID rendered as mention: %q", content)
 	}
+	if strings.Contains(content, "[[discord:user:not-a-snowflake]]") {
+		t.Fatalf("invalid placeholder leaked: %q", content)
+	}
 	if allowed == nil || len(allowed.Users) != 0 || len(allowed.Roles) != 0 {
 		t.Fatalf("allowed mentions = %+v, want none", allowed)
 	}
 	if block := PromptBlock([]Ref{UserRef("not-a-snowflake", "bad")}); block != "" {
 		t.Fatalf("PromptBlock() = %q, want empty for invalid ID", block)
+	}
+}
+
+func TestRenderSanitizesUnverifiedStructuredPlaceholders(t *testing.T) {
+	content, allowed := Render("notify [[discord:user:123]] and [[discord:role:456]]", nil)
+	if strings.Contains(content, "[[discord:user:123]]") || strings.Contains(content, "[[discord:role:456]]") {
+		t.Fatalf("unverified placeholders leaked: %q", content)
+	}
+	if strings.Contains(content, "<@123>") || strings.Contains(content, "<@&456>") {
+		t.Fatalf("unverified placeholders rendered as mentions: %q", content)
+	}
+	if strings.Contains(content, "123") || strings.Contains(content, "456") {
+		t.Fatalf("unverified placeholder IDs leaked: %q", content)
+	}
+	if !strings.Contains(content, "Discord user") || !strings.Contains(content, "Discord role") {
+		t.Fatalf("content = %q, want plain Discord user/role fallback", content)
+	}
+	if allowed == nil || len(allowed.Users) != 0 || len(allowed.Roles) != 0 {
+		t.Fatalf("allowed mentions = %+v, want none", allowed)
 	}
 }
 

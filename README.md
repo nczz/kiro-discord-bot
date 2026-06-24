@@ -361,6 +361,30 @@ All commands also work with `!` prefix (e.g. `!status`, `!reset`).
 
 When a command is used inside a Discord thread, it targets the thread agent when that is the least surprising behavior: `/status`, `/reset`, `/cancel`, `/interrupt`, `/compact`, `/clear`, and `/model` operate on the current thread agent. `/pause`, `/back`, and `/silent` apply to the current target, so a thread can override the listen behavior captured when it was created. `/thread` always applies to the parent channel's future new-task behavior. `/memory` and `/flashmemory` remain scoped to the parent channel because thread agents inherit that memory block.
 
+**Memory, flash memory, and steering:** `/memory` is a lightweight Discord-native rule layer. Rules shown by `/memory list` are active: before every agent turn, the bot injects them into the prompt as `[Memory Rules - always follow these]`. Removing a rule stops future injection, but the current agent session may have already seen the old rule in earlier context. To fully retire a stale or conflicting persistent rule, remove it, then run `/clear` and `/reset` so the agent conversation, bot-side channel history, and loaded ACP session are all refreshed. Use `/flashmemory` for session-scoped emphasis that should not persist. Use `/steering` and `.kiro/steering/*.md` for formal project guidance, architecture decisions, coding conventions, and anything that should be reviewed or versioned.
+
+```text
+/memory action:list
+/memory action:add value:<rule>
+/memory action:remove value:<number>
+/memory action:clear
+
+!memory list
+!memory add <rule>
+!memory remove <number>
+!memory clear
+
+/flashmemory action:list
+/flashmemory action:add value:<rule>
+/flashmemory action:remove value:<number>
+/flashmemory action:clear
+
+!flashmemory list
+!flashmemory add <rule>
+!flashmemory remove <number>
+!flashmemory clear
+```
+
 Channel setup and scheduling commands must be run in the parent channel: `/start`, `/cwd`, `/steering`, `/agent`, `/cron`, `/cron-list`, `/cron-run`, `/cron-prompt`, and `/remind`.
 
 New parent channels must be initialized before agent work starts. The first normal message in an uninitialized channel is held back and prompts a channel manager to open the private `/cwd` setup panel. Initial setup can only select or create a project under `DEFAULT_CWD`; the setup panel lists first-level directories under `DEFAULT_CWD` and paginates them when Discord's select-menu limit is reached. Selecting a project opens a confirmation step before the channel CWD is changed. Creating a project also creates `.kiro/steering/`. After setup completes, the channel automatically enables the built-in `bot-tools` MCP with the safe default tool allowlist, keeps the CWD setup closed, and offers private shortcuts to review MCP tool access and create the agent context file. Agent-starting or agent-context-changing commands such as `/start`, `/reset`, `/compact`, `/clear`, model/agent switches, MCP policy changes, agent context changes, agent memory changes, `/cron`, `/cron-run`, `/cron-prompt`, and agent-backed reminders are rejected until initialization is complete. After a channel is initialized, managers can still use `/cwd` as an advanced control to change to another allowed path through the regular cwd allowlist policy.
