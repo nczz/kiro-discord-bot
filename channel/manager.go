@@ -2640,17 +2640,23 @@ func (m *Manager) resetThreadAgentWithModel(threadID, model string) error {
 	}
 	m.mu.Lock()
 	entry, ok := m.threadAgents[threadID]
-	if !ok {
+	threadSess, hasThreadSession := m.getThreadSession(threadID)
+	if !ok && (!hasThreadSession || strings.TrimSpace(threadSess.ParentChannelID) == "") {
 		m.mu.Unlock()
 		return fmt.Errorf("no thread agent")
 	}
-	parentChannelID := entry.parentChannelID
-	entry.worker.Stop()
-	entry.agent.Stop()
-	delete(m.threadAgents, threadID)
+	parentChannelID := ""
+	if ok {
+		parentChannelID = entry.parentChannelID
+		entry.worker.Stop()
+		entry.agent.Stop()
+		delete(m.threadAgents, threadID)
+	} else {
+		parentChannelID = strings.TrimSpace(threadSess.ParentChannelID)
+	}
 
-	if sess, ok := m.getThreadSession(threadID); ok {
-		cp := *sess
+	if hasThreadSession {
+		cp := *threadSess
 		cp.AgentName = ""
 		cp.SessionID = ""
 		if model != "" {

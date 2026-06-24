@@ -2,6 +2,7 @@ package channel
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -177,5 +178,37 @@ func TestThreadAgentDetails(t *testing.T) {
 	_, _, ok = m.ThreadAgentDetails("missing")
 	if ok {
 		t.Fatal("missing thread should not report details")
+	}
+}
+
+func TestResetThreadAgentUsesPersistedThreadSessionWhenAgentNotLoaded(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewSessionStore(dir)
+	if err != nil {
+		t.Fatalf("new session store: %v", err)
+	}
+	m := NewManager(ManagerConfig{
+		Store:       store,
+		KiroCLIPath: "missing-kiro-cli",
+		DefaultCWD:  dir,
+		GuildID:     "guild-1",
+		BotID:       "bot-1",
+	})
+	if err := m.setThreadSession("thread-1", "channel-1", &Session{
+		SessionID: "old-session",
+		CWD:       dir,
+	}); err != nil {
+		t.Fatalf("set thread session: %v", err)
+	}
+
+	err = m.ResetThreadAgent("thread-1")
+	if err == nil {
+		t.Fatal("expected respawn to fail with missing kiro-cli")
+	}
+	if strings.Contains(err.Error(), "no thread agent") {
+		t.Fatalf("reset should use persisted thread session, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "respawn thread agent") {
+		t.Fatalf("reset error = %v, want respawn attempt", err)
 	}
 }
