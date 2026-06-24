@@ -11,3 +11,4 @@ mcp-media-server
 logs/
 dist/
 .tmp/
+*/kiro-agent-runtime/
