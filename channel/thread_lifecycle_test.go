@@ -2,6 +2,7 @@ package channel
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -210,5 +211,20 @@ func TestResetThreadAgentUsesPersistedThreadSessionWhenAgentNotLoaded(t *testing
 	}
 	if !strings.Contains(err.Error(), "respawn thread agent") {
 		t.Fatalf("reset error = %v, want respawn attempt", err)
+	}
+}
+
+func TestResetThreadAgentReportsNoThreadAgentWithoutPersistedSession(t *testing.T) {
+	store, err := NewSessionStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("new session store: %v", err)
+	}
+	m := NewManager(ManagerConfig{
+		Store:   store,
+		GuildID: "guild-1",
+		BotID:   "bot-1",
+	})
+	if err := m.ResetThreadAgent("thread-1"); !errors.Is(err, ErrNoThreadAgent) {
+		t.Fatalf("ResetThreadAgent error = %v, want ErrNoThreadAgent", err)
 	}
 }

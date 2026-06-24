@@ -98,6 +98,8 @@ type ThreadAgentLimitError struct {
 	Candidates []ThreadAgentLimitCandidate
 }
 
+var ErrNoThreadAgent = errors.New("no active or saved thread agent")
+
 // AgentCommandResult is the result of a direct command sent to an agent.
 type AgentCommandResult struct {
 	Response string
@@ -2488,7 +2490,7 @@ func (m *Manager) CancelThreadAgent(threadID string) error {
 	entry, ok := m.threadAgents[threadID]
 	m.mu.Unlock()
 	if !ok {
-		return fmt.Errorf("no thread agent")
+		return ErrNoThreadAgent
 	}
 	if !entry.worker.CancelCurrent() {
 		if entry.worker.IsActive() {
@@ -2505,7 +2507,7 @@ func (m *Manager) InterruptThreadAgent(threadID string) error {
 	entry, ok := m.threadAgents[threadID]
 	m.mu.Unlock()
 	if !ok {
-		return fmt.Errorf("no thread agent")
+		return ErrNoThreadAgent
 	}
 	if !entry.worker.InterruptCurrent(interruptGrace) {
 		return fmt.Errorf("no active job")
@@ -2607,7 +2609,7 @@ func (m *Manager) SendCommandThreadResult(threadID, command string) (AgentComman
 	entry, ok := m.threadAgents[threadID]
 	m.mu.Unlock()
 	if !ok {
-		return AgentCommandResult{}, fmt.Errorf("no thread agent")
+		return AgentCommandResult{}, ErrNoThreadAgent
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -2643,7 +2645,7 @@ func (m *Manager) resetThreadAgentWithModel(threadID, model string) error {
 	threadSess, hasThreadSession := m.getThreadSession(threadID)
 	if !ok && (!hasThreadSession || strings.TrimSpace(threadSess.ParentChannelID) == "") {
 		m.mu.Unlock()
-		return fmt.Errorf("no thread agent")
+		return ErrNoThreadAgent
 	}
 	parentChannelID := ""
 	if ok {

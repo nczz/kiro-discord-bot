@@ -19,6 +19,9 @@ func commandError(err error) string {
 	if errors.As(err, &limitErr) {
 		return threadAgentLimitMessage(limitErr)
 	}
+	if errors.Is(err, channel.ErrNoThreadAgent) {
+		return L.Get("error.no_thread_agent")
+	}
 
 	switch {
 	case strings.Contains(msg, "outside ALLOWED_CWD_ROOTS"):

@@ -24,6 +24,7 @@
   "error.kiro_cli_missing": "❌ kiro-cli cannot be resolved.\n%s\nCheck `KIRO_CLI_PATH`, then run `/doctor` again.",
   "error.kiro_auth": "❌ kiro-cli is not authenticated.\n%s\nRun `kiro-cli login` on the host or set `KIRO_API_KEY`, then restart the bot.",
   "error.queue_full_action": "❌ The channel queue is full.\n%s\nWait for the current task to finish or use `/cancel` before sending more work.",
+  "error.no_thread_agent": "❌ No active or saved thread agent is available for this thread.\nIf this is only a delivery thread from the parent channel, run the command in the parent channel. To create a thread agent here, send a normal message in this thread first.",
   "error.no_active_job": "❌ No task is currently running.",
   "error.active_job_not_cancellable": "❌ A task is starting but is not cancellable yet. Try `/cancel` again in a moment.",
   "error.thread_agent_limit_all_active": "❌ Cannot start another thread agent right now. Capacity is full (%d max, %d active).\nAll thread agent slots are currently working. Wait for one to finish, then retry.",

@@ -87,6 +87,16 @@ func TestCommandErrorThreadAgentLimitAllActive(t *testing.T) {
 	}
 }
 
+func TestCommandErrorNoThreadAgentIsActionable(t *testing.T) {
+	L.Load("en")
+	msg := commandError(channel.ErrNoThreadAgent)
+	for _, want := range []string{"No active or saved thread agent", "parent channel", "send a normal message"} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("missing %q in message:\n%s", want, msg)
+		}
+	}
+}
+
 func TestCommandErrorActiveJobNotCancellable(t *testing.T) {
 	L.Load("en")
 	msg := commandError(errors.New("active job is not cancellable yet"))

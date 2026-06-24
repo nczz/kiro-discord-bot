@@ -23,6 +23,7 @@
   "error.kiro_cli_missing": "❌ 無法解析 kiro-cli。\n%s\n請檢查 `KIRO_CLI_PATH`，修正後再跑 `/doctor`。",
   "error.kiro_auth": "❌ kiro-cli 尚未完成驗證。\n%s\n請在主機上執行 `kiro-cli login`，或設定 `KIRO_API_KEY` 後重啟 bot。",
   "error.queue_full_action": "❌ 此頻道 queue 已滿。\n%s\n請等目前任務完成，或先用 `/cancel` 取消目前任務。",
+  "error.no_thread_agent": "❌ 這個討論串目前沒有可用的 active 或 saved thread agent。\n如果這只是父層頻道 agent 建立的回覆討論串，請在父層頻道執行此指令。若要在此討論串建立 thread agent，請先在討論串中發送一般訊息。",
   "error.no_active_job": "❌ 目前沒有正在執行的任務。",
   "error.active_job_not_cancellable": "❌ 任務正在啟動中，但目前尚未進入可取消階段。請稍後再試 `/cancel`。",
   "error.thread_agent_limit_all_active": "❌ 目前無法啟動新的討論串 agent。容量已滿（上限 %d，active %d）。\n所有討論串 agent 都正在工作，請等其中一個完成後再重試。",
