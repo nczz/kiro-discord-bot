@@ -1,6 +1,6 @@
 # kiro-discord-bot
 
-[English README](README.md)
+[English README](README.md) | [文件網站](https://nczz.github.io/kiro-discord-bot/zh-TW/)
 
 **一個住在 Discord 裡的可訓練 AI agent — 綁定你的 codebase、記住你的規矩、越用越強。**
 

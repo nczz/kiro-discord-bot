@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="kiro-discord-bot logo">
+  <rect width="64" height="64" rx="12" fill="#1f2937"/>
+  <path d="M16 20h32v24H16z" fill="#f9fafb"/>
+  <path d="M22 27h20M22 34h14" stroke="#2563eb" stroke-width="4" stroke-linecap="round"/>
+  <circle cx="48" cy="44" r="8" fill="#10b981"/>
+  <path d="M44 44l3 3 6-7" fill="none" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

@@ -1,6 +1,6 @@
 # kiro-discord-bot
 
-[繁體中文文件](README.zh-TW.md)
+[繁體中文文件](README.zh-TW.md) | [Documentation site](https://nczz.github.io/kiro-discord-bot/)
 
 **A trainable AI agent that lives in Discord — binds to your codebase, remembers your rules, and gets smarter the more you use it.**
 
