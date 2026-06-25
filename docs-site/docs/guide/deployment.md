@@ -15,7 +15,7 @@ Confirm the bot logs in, registers slash commands, and responds to `/doctor`.
 
 ## macOS launchd
 
-For macOS, run the bot as a LaunchAgent with an explicit shell command that sources `.env` and executes the release binary. If private LAN MCP servers fail from launchd but work from an interactive shell, check proxy variables, Local Network permission, and the service identity. See `docs/macos-mcp-networking.md` in the repository for the full runbook.
+For macOS, run the bot as a LaunchAgent with an explicit shell command that sources `.env` and executes the release binary. If private LAN MCP servers fail from launchd but work from an interactive shell, check proxy variables, Local Network permission, and the service identity. See [macOS MCP Networking](macos-mcp-networking.html) for the full runbook.
 
 ## Linux systemd
 
@@ -33,4 +33,4 @@ Before tagging or deploying a release, run:
 scripts/release-preflight.sh
 ```
 
-When touching ACP, MCP policy, bot tools, cron, or deployment behavior, run the relevant smoke checks described in `docs/release.md`.
+When touching ACP, MCP policy, bot tools, cron, or deployment behavior, run the relevant smoke checks described in the [Release Runbook](release.html).

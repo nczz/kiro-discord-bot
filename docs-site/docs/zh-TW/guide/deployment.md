@@ -15,7 +15,7 @@ set +a
 
 ## macOS launchd
 
-macOS 建議用 LaunchAgent，明確透過 shell source `.env` 後執行 release binary。若 private LAN MCP server 在互動 shell 可連，但 launchd 下 `/mcp manage` scan 失敗，請檢查 proxy 變數、Local Network 權限與 service identity。完整 runbook 請看 repo 內 `docs/macos-mcp-networking.md`。
+macOS 建議用 LaunchAgent，明確透過 shell source `.env` 後執行 release binary。若 private LAN MCP server 在互動 shell 可連，但 launchd 下 `/mcp manage` scan 失敗，請檢查 proxy 變數、Local Network 權限與 service identity。完整 runbook 請看 [macOS MCP 網路](macos-mcp-networking.html)。
 
 ## Linux systemd
 
@@ -33,4 +33,4 @@ tag 或部署 release 前，先執行：
 scripts/release-preflight.sh
 ```
 
-若有修改 ACP、MCP policy、bot tools、cron 或部署行為，請執行 `docs/release.md` 中對應的 smoke checks。
+若有修改 ACP、MCP policy、bot tools、cron 或部署行為，請執行 [Release Runbook](release.html) 中對應的 smoke checks。

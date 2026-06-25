@@ -10,23 +10,37 @@ const base = '/kiro-discord-bot/'
 const pages = [
   ['Home', 'index.html'],
   ['Getting Started', 'guide/getting-started.html'],
+  ['Installation', 'guide/installation.html'],
   ['Core Concepts', 'guide/core-concepts.html'],
+  ['Command Reference', 'guide/commands.html'],
+  ['Listen Modes', 'guide/listen-modes.html'],
   ['Steering Files', 'guide/steering.html'],
   ['MCP Policy', 'guide/mcp.html'],
+  ['Discord MCP', 'guide/mcp-discord.html'],
   ['Admin & Security', 'guide/admin-security.html'],
   ['Deployment', 'guide/deployment.html'],
+  ['Release Runbook', 'guide/release.html'],
+  ['macOS MCP Networking', 'guide/macos-mcp-networking.html'],
   ['Troubleshooting', 'guide/troubleshooting.html'],
+  ['Architecture', 'guide/architecture.html'],
 ]
 
 const zhPages = [
   ['首頁', 'zh-TW/index.html'],
   ['快速開始', 'zh-TW/guide/getting-started.html'],
+  ['安裝', 'zh-TW/guide/installation.html'],
   ['核心概念', 'zh-TW/guide/core-concepts.html'],
+  ['指令參考', 'zh-TW/guide/commands.html'],
+  ['監聽模式', 'zh-TW/guide/listen-modes.html'],
   ['Steering 檔案', 'zh-TW/guide/steering.html'],
   ['MCP 權限', 'zh-TW/guide/mcp.html'],
+  ['Discord MCP', 'zh-TW/guide/mcp-discord.html'],
   ['管理與安全', 'zh-TW/guide/admin-security.html'],
   ['部署', 'zh-TW/guide/deployment.html'],
+  ['Release Runbook', 'zh-TW/guide/release.html'],
+  ['macOS MCP 網路', 'zh-TW/guide/macos-mcp-networking.html'],
   ['疑難排解', 'zh-TW/guide/troubleshooting.html'],
+  ['架構', 'zh-TW/guide/architecture.html'],
 ]
 
 await rm(outDir, { recursive: true, force: true })
@@ -69,7 +83,7 @@ function renderPage(rel, markdown) {
   const title = firstHeading(markdown) ?? 'kiro-discord-bot'
   const nav = renderNav(isZh, pagePath)
   const sidebar = renderSidebar(isZh, pagePath)
-  const content = markdownToHtml(markdown)
+  const content = markdownToHtml(markdown, pagePath)
   const lang = isZh ? 'zh-TW' : 'en'
   const description = isZh
     ? 'kiro-discord-bot 文件：安裝、steering、MCP、部署與疑難排解。'
@@ -158,17 +172,18 @@ function firstHeading(markdown) {
   return match?.[1]?.trim()
 }
 
-function markdownToHtml(markdown) {
+function markdownToHtml(markdown, pagePath) {
   const lines = markdown.replace(/\r\n/g, '\n').split('\n')
   const out = []
   let paragraph = []
   let code = null
   let list = null
   let table = []
+  const currentDir = path.posix.dirname(pagePath)
 
   const flushParagraph = () => {
     if (paragraph.length) {
-      out.push(`<p>${inline(paragraph.join(' '))}</p>`)
+      out.push(`<p>${inline(paragraph.join(' '), currentDir)}</p>`)
       paragraph = []
     }
   }
@@ -181,9 +196,9 @@ function markdownToHtml(markdown) {
   const flushTable = () => {
     if (!table.length) return
     const [header, , ...rows] = table
-    out.push('<table><thead><tr>' + splitTable(header).map(c => `<th>${inline(c)}</th>`).join('') + '</tr></thead><tbody>')
+    out.push('<table><thead><tr>' + splitTable(header).map(c => `<th>${inline(c, currentDir)}</th>`).join('') + '</tr></thead><tbody>')
     for (const row of rows) {
-      out.push('<tr>' + splitTable(row).map(c => `<td>${inline(c)}</td>`).join('') + '</tr>')
+      out.push('<tr>' + splitTable(row).map(c => `<td>${inline(c, currentDir)}</td>`).join('') + '</tr>')
     }
     out.push('</tbody></table>')
     table = []
@@ -220,7 +235,7 @@ function markdownToHtml(markdown) {
       const level = heading[1].length
       const text = heading[2].trim()
       const id = slug(text)
-      out.push(`<h${level} id="${id}">${inline(text)} <a class="anchor" href="#${id}" aria-label="Permalink">#</a></h${level}>`)
+      out.push(`<h${level} id="${id}">${inline(text, currentDir)} <a class="anchor" href="#${id}" aria-label="Permalink">#</a></h${level}>`)
       continue
     }
     const unordered = line.match(/^\s*-\s+(.+)$/)
@@ -231,7 +246,7 @@ function markdownToHtml(markdown) {
         out.push('<ul>')
         list = 'ul'
       }
-      out.push(`<li>${inline(unordered[1])}</li>`)
+      out.push(`<li>${inline(unordered[1], currentDir)}</li>`)
       continue
     }
     const ordered = line.match(/^\s*\d+\.\s+(.+)$/)
@@ -242,7 +257,7 @@ function markdownToHtml(markdown) {
         out.push('<ol>')
         list = 'ol'
       }
-      out.push(`<li>${inline(ordered[1])}</li>`)
+      out.push(`<li>${inline(ordered[1], currentDir)}</li>`)
       continue
     }
     paragraph.push(line.trim())
@@ -255,22 +270,23 @@ function splitTable(row) {
   return row.replace(/^\||\|$/g, '').split('|').map(c => c.trim()).filter(c => !/^:?-{3,}:?$/.test(c))
 }
 
-function inline(text) {
+function inline(text, currentDir = '') {
   let s = escapeHtml(text)
   s = s.replace(/`([^`]+)`/g, '<code>$1</code>')
   s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
   s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, label, href) => {
-    const safeHref = normalizeHref(href)
+    const safeHref = normalizeHref(href, currentDir)
     return `<a href="${escapeAttr(safeHref)}">${label}</a>`
   })
   return s
 }
 
-function normalizeHref(href) {
+function normalizeHref(href, currentDir = '') {
   if (href.startsWith('http') || href.startsWith('#')) return href
   if (href === '/') return base
   if (href.startsWith('/')) return base + href.slice(1)
-  return base + href.replace(/^\.\//, '')
+  const resolved = path.posix.normalize(path.posix.join(currentDir === '.' ? '' : currentDir, href))
+  return base + resolved.replace(/^\.\//, '')
 }
 
 function slug(text) {
