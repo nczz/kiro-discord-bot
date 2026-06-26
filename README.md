@@ -1,14 +1,12 @@
 # kiro-discord-bot
 
-[繁體中文 README](README.zh-TW.md) | [Full documentation](https://nczz.github.io/kiro-discord-bot/)
+[繁體中文 README](README.zh-TW.md) | [Full documentation][docs]
 
 **A trainable AI agent that lives in Discord.**
 
 `kiro-discord-bot` connects Discord channels to [Kiro CLI](https://kiro.dev) agents through ACP over stdio. Each initialized channel can bind to a real project directory, keep its own agent session, remember project guidance, and expose MCP tools through explicit channel policy.
 
-This repository README is intentionally short. The detailed user guide, admin guide, MCP setup, release runbook, and troubleshooting docs live on the static documentation site:
-
-**https://nczz.github.io/kiro-discord-bot/**
+This repository README is intentionally short. The detailed user guide, admin guide, MCP setup, release runbook, and troubleshooting docs live on the [documentation site][docs].
 
 ## Why It Is Different
 
@@ -28,17 +26,18 @@ This repository README is intentionally short. The detailed user guide, admin gu
 6. In Discord, run `/cwd` in a channel to bind it to a project.
 7. Run `/doctor` to verify permissions and Kiro readiness.
 
-Full installation guide: https://nczz.github.io/kiro-discord-bot/guide/installation.html
+Continue with the [full installation guide][install-doc].
 
 ## Common Docs
 
-- Getting started: https://nczz.github.io/kiro-discord-bot/guide/getting-started.html
-- Command reference: https://nczz.github.io/kiro-discord-bot/guide/commands.html
-- Steering files: https://nczz.github.io/kiro-discord-bot/guide/steering.html
-- MCP policy: https://nczz.github.io/kiro-discord-bot/guide/mcp.html
-- Discord MCP server: https://nczz.github.io/kiro-discord-bot/guide/mcp-discord.html
-- Deployment: https://nczz.github.io/kiro-discord-bot/guide/deployment.html
-- Troubleshooting: https://nczz.github.io/kiro-discord-bot/guide/troubleshooting.html
+| Topic | Start here |
+| --- | --- |
+| First-time setup | [Getting Started][getting-started] · [Installation][install-doc] |
+| Daily use | [Command Reference][commands] · [Listen Modes][listen-modes] |
+| Agent context | [Steering Files][steering] · [Core Concepts][core-concepts] |
+| Tool access | [MCP Policy][mcp] · [Discord MCP Server][mcp-discord] |
+| Operations | [Deployment][deployment] · [Release Runbook][release] |
+| Support | [Troubleshooting][troubleshooting] · [macOS MCP Networking][macos-networking] |
 
 ## Build From Source
 
@@ -57,8 +56,22 @@ Run the release preflight before tagging or deploying:
 scripts/release-preflight.sh
 ```
 
-Release runbook: https://nczz.github.io/kiro-discord-bot/guide/release.html
+Follow the [release runbook][release] for tagging, publishing, deployment, and rollback.
 
 ## License
 
 MIT
+
+[docs]: https://nczz.github.io/kiro-discord-bot/
+[getting-started]: https://nczz.github.io/kiro-discord-bot/guide/getting-started.html
+[install-doc]: https://nczz.github.io/kiro-discord-bot/guide/installation.html
+[commands]: https://nczz.github.io/kiro-discord-bot/guide/commands.html
+[listen-modes]: https://nczz.github.io/kiro-discord-bot/guide/listen-modes.html
+[core-concepts]: https://nczz.github.io/kiro-discord-bot/guide/core-concepts.html
+[steering]: https://nczz.github.io/kiro-discord-bot/guide/steering.html
+[mcp]: https://nczz.github.io/kiro-discord-bot/guide/mcp.html
+[mcp-discord]: https://nczz.github.io/kiro-discord-bot/guide/mcp-discord.html
+[deployment]: https://nczz.github.io/kiro-discord-bot/guide/deployment.html
+[release]: https://nczz.github.io/kiro-discord-bot/guide/release.html
+[troubleshooting]: https://nczz.github.io/kiro-discord-bot/guide/troubleshooting.html
+[macos-networking]: https://nczz.github.io/kiro-discord-bot/guide/macos-mcp-networking.html

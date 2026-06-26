@@ -1,14 +1,12 @@
 # kiro-discord-bot
 
-[English README](README.md) | [完整文件網站](https://nczz.github.io/kiro-discord-bot/zh-TW/)
+[English README](README.md) | [完整文件網站][docs-zh]
 
 **一個住在 Discord 裡、可以被訓練的 AI agent。**
 
 `kiro-discord-bot` 透過 ACP over stdio 把 Discord 頻道連到 [Kiro CLI](https://kiro.dev) agent。每個完成初始化的頻道都可以綁定真實專案目錄、維持自己的 agent session、累積專案指引，並透過明確的頻道 policy 安全開放 MCP tools。
 
-這份 README 刻意保持精簡。完整使用指南、管理指南、MCP 設定、release runbook 與疑難排解都放在靜態文件網站：
-
-**https://nczz.github.io/kiro-discord-bot/zh-TW/**
+這份 README 刻意保持精簡。完整使用指南、管理指南、MCP 設定、release runbook 與疑難排解都放在 [完整文件網站][docs-zh]。
 
 ## 為什麼不只是聊天機器人
 
@@ -28,17 +26,18 @@
 6. 在 Discord 頻道執行 `/cwd` 綁定專案。
 7. 執行 `/doctor` 確認權限與 Kiro 狀態。
 
-完整安裝指南：https://nczz.github.io/kiro-discord-bot/zh-TW/guide/installation.html
+下一步請看 [完整安裝指南][install-doc-zh]。
 
 ## 常用文件
 
-- 快速開始：https://nczz.github.io/kiro-discord-bot/zh-TW/guide/getting-started.html
-- 指令參考：https://nczz.github.io/kiro-discord-bot/zh-TW/guide/commands.html
-- Steering 檔案：https://nczz.github.io/kiro-discord-bot/zh-TW/guide/steering.html
-- MCP 權限：https://nczz.github.io/kiro-discord-bot/zh-TW/guide/mcp.html
-- Discord MCP server：https://nczz.github.io/kiro-discord-bot/zh-TW/guide/mcp-discord.html
-- 部署：https://nczz.github.io/kiro-discord-bot/zh-TW/guide/deployment.html
-- 疑難排解：https://nczz.github.io/kiro-discord-bot/zh-TW/guide/troubleshooting.html
+| 主題 | 從這裡開始 |
+| --- | --- |
+| 初次設定 | [快速開始][getting-started-zh] · [安裝][install-doc-zh] |
+| 日常使用 | [指令參考][commands-zh] · [監聽模式][listen-modes-zh] |
+| Agent 脈絡 | [Steering 檔案][steering-zh] · [核心概念][core-concepts-zh] |
+| 工具權限 | [MCP 權限][mcp-zh] · [Discord MCP Server][mcp-discord-zh] |
+| 維運 | [部署][deployment-zh] · [Release Runbook][release-zh] |
+| 支援 | [疑難排解][troubleshooting-zh] · [macOS MCP 網路][macos-networking-zh] |
 
 ## 從原始碼建置
 
@@ -57,8 +56,22 @@ Tag 或部署前先跑：
 scripts/release-preflight.sh
 ```
 
-Release runbook：https://nczz.github.io/kiro-discord-bot/zh-TW/guide/release.html
+Tag、發布、部署與 rollback 請照 [Release Runbook][release-zh]。
 
 ## License
 
 MIT
+
+[docs-zh]: https://nczz.github.io/kiro-discord-bot/zh-TW/
+[getting-started-zh]: https://nczz.github.io/kiro-discord-bot/zh-TW/guide/getting-started.html
+[install-doc-zh]: https://nczz.github.io/kiro-discord-bot/zh-TW/guide/installation.html
+[commands-zh]: https://nczz.github.io/kiro-discord-bot/zh-TW/guide/commands.html
+[listen-modes-zh]: https://nczz.github.io/kiro-discord-bot/zh-TW/guide/listen-modes.html
+[core-concepts-zh]: https://nczz.github.io/kiro-discord-bot/zh-TW/guide/core-concepts.html
+[steering-zh]: https://nczz.github.io/kiro-discord-bot/zh-TW/guide/steering.html
+[mcp-zh]: https://nczz.github.io/kiro-discord-bot/zh-TW/guide/mcp.html
+[mcp-discord-zh]: https://nczz.github.io/kiro-discord-bot/zh-TW/guide/mcp-discord.html
+[deployment-zh]: https://nczz.github.io/kiro-discord-bot/zh-TW/guide/deployment.html
+[release-zh]: https://nczz.github.io/kiro-discord-bot/zh-TW/guide/release.html
+[troubleshooting-zh]: https://nczz.github.io/kiro-discord-bot/zh-TW/guide/troubleshooting.html
+[macos-networking-zh]: https://nczz.github.io/kiro-discord-bot/zh-TW/guide/macos-mcp-networking.html
