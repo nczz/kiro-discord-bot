@@ -15,6 +15,19 @@ Bind Discord channels to real projects, teach persistent rules, and safely exten
 
 ## What this site covers
 
-This documentation is the practical operating manual for `kiro-discord-bot`: installation, channel setup, everyday use, steering files, MCP policy, admin safety, deployment, release work, and troubleshooting.
+This documentation is the practical operating manual for `kiro-discord-bot`: installation, channel setup, everyday use, steering files, MCP policy, audit and usage, admin safety, deployment, release work, security review, and troubleshooting.
 
 The README remains the compact project entry point. Detailed explanations and operational runbooks live here.
+
+## Role-based Paths
+
+| Role | Recommended pages |
+| --- | --- |
+| First-time evaluator | [Getting Started](guide/getting-started.html), [Core Concepts](guide/core-concepts.html), [Daily Workflows](guide/daily-workflows.html) |
+| Installer | [Installation](guide/installation.html), [Environment Reference](guide/environment.html), [Deployment](guide/deployment.html) |
+| Discord user | [Command Reference](guide/commands.html), [Listen Modes](guide/listen-modes.html), [Cron and Reminders](guide/cron-reminders.html) |
+| Channel admin | [Admin and Security](guide/admin-security.html), [MCP Policy](guide/mcp.html), [Audit, Usage, and Privacy](guide/audit-usage-privacy.html) |
+| MCP admin | [MCP Policy](guide/mcp.html), [Bot Tools MCP](guide/bot-tools.html), [Discord MCP](guide/mcp-discord.html), [Media MCP](guide/media-mcp.html) |
+| Operator | [Deployment](guide/deployment.html), [macOS MCP Networking](guide/macos-mcp-networking.html), [Troubleshooting](guide/troubleshooting.html) |
+| Maintainer | [Release Runbook](guide/release.html), [Contributor Guide](guide/contributing.html), [Docs Maintenance](guide/docs-maintenance.html) |
+| Security reviewer | [Security Model](guide/security-model.html), [Audit, Usage, and Privacy](guide/audit-usage-privacy.html), [Environment Reference](guide/environment.html) |

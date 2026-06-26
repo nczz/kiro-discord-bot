@@ -57,3 +57,5 @@ Kiro `disabledTools` 不被視為安全邊界。
 ## Audit
 
 Audit storage 記錄 command calls、command responses、agent job lifecycle、final response delivery 等 semantic bot events。Audit prompt investigations 使用短生命週期 private agents，且只注入 audit query tool。
+
+這個架構上層的詳細行為與 trust boundaries 見 [Bot Tools MCP](bot-tools.md)、[Audit、用量與隱私](audit-usage-privacy.md)、[安全模型](security-model.md)。

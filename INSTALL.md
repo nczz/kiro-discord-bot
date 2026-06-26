@@ -1,8 +1,6 @@
 # Install kiro-discord-bot
 
-This file is a short agent-friendly checklist. The canonical installation guide is:
-
-https://nczz.github.io/kiro-discord-bot/guide/installation.html
+This file is a short agent-friendly checklist. The canonical installation guide is [Installation][installation].
 
 ## Checklist
 
@@ -27,9 +25,7 @@ https://nczz.github.io/kiro-discord-bot/guide/installation.html
    - Permissions: View Channels, Send Messages, Send Messages in Threads, Create Public Threads, Read Message History, Add Reactions, Use Slash Commands
    - Keep Interactions Endpoint URL empty
 
-4. Download the latest release archive:
-
-   https://github.com/nczz/kiro-discord-bot/releases/latest
+4. Download the [latest release archive][latest-release].
 
 5. Create `.env` or an equivalent service environment:
 
@@ -54,8 +50,16 @@ https://nczz.github.io/kiro-discord-bot/guide/installation.html
 
 ## Persistent Services
 
-Use the static site for full launchd, systemd, Docker, and release deployment guidance:
+Use the static site for full environment, launchd, systemd, Docker, and release deployment guidance:
 
-- Deployment: https://nczz.github.io/kiro-discord-bot/guide/deployment.html
-- Release runbook: https://nczz.github.io/kiro-discord-bot/guide/release.html
-- macOS MCP networking: https://nczz.github.io/kiro-discord-bot/guide/macos-mcp-networking.html
+- [Environment Reference][environment]
+- [Deployment][deployment]
+- [Release Runbook][release]
+- [macOS MCP Networking][macos-networking]
+
+[installation]: https://nczz.github.io/kiro-discord-bot/guide/installation.html
+[latest-release]: https://github.com/nczz/kiro-discord-bot/releases/latest
+[environment]: https://nczz.github.io/kiro-discord-bot/guide/environment.html
+[deployment]: https://nczz.github.io/kiro-discord-bot/guide/deployment.html
+[release]: https://nczz.github.io/kiro-discord-bot/guide/release.html
+[macos-networking]: https://nczz.github.io/kiro-discord-bot/guide/macos-mcp-networking.html

@@ -19,6 +19,8 @@ This means adding a server to `~/.kiro/settings/mcp.json` does not automatically
 
 New channel initialization enables a safe default allowlist. Higher-risk tools such as `bot_send_message`, `bot_delete_cron`, and `bot_query_audit` require deliberate authorization.
 
+See [Bot Tools MCP](bot-tools.md) for the exact tool list, defaults, scope rules, and audit prompt behavior.
+
 ## Discord MCP
 
 `mcp-discord` is an optional catalog server that can read messages, list channels, send messages, create threads, and perform other Discord REST operations. Before enabling it broadly, restrict its environment:
@@ -32,6 +34,8 @@ MCP_DISCORD_ALLOW_DESTRUCTIVE=false
 ```
 
 For local multi-bot setups, make sure the catalog command loads the `.env` for the same bot identity you are testing. A 403 from Discord may mean the MCP server is using a different bot token than the visible Discord bot.
+
+See [Discord MCP](mcp-discord.md) for the complete tool categories and policy guards. See [Media MCP](media-mcp.md) for optional media-generation tools.
 
 ## Operational Checks
 

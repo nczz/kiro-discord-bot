@@ -80,12 +80,12 @@ KIRO_API_KEY=your-headless-key
 ALLOWED_CWD_ROOTS=/projects
 CRON_TIMEZONE=Asia/Taipei
 USAGE_TIMEZONE=Asia/Taipei
-PREFLIGHT_MODE=strict
+PREFLIGHT_MODE=warn
 THREAD_AGENT_MAX=5
 THREAD_AGENT_IDLE_SEC=900
 ```
 
-啟動後用 `/doctor` 查看有效 runtime 設定；敏感值會被遮蔽。
+啟動後用 `/doctor` 查看有效 runtime 設定；敏感值會被遮蔽。完整變數與預設值見 [環境變數參考](environment.md)。
 
 ## 5. Foreground 啟動一次
 

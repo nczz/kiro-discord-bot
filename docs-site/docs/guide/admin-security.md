@@ -14,6 +14,8 @@ The base bot needs:
 
 MCP servers may need additional Discord REST access. The bot's channel policy does not replace Discord permissions; both must allow the operation.
 
+For the full trust-boundary model, see [Security Model](security-model.md).
+
 ## Private Responses
 
 Admin panels and sensitive command responses use private interaction responses where Discord supports ephemeral messages. This includes `/cwd`, `/status`, `/usage`, `/doctor`, `/audit`, `/models`, `/memory`, `/flashmemory`, `/mcp manage`, `/steering`, and `/cron-list`.
@@ -37,3 +39,5 @@ Use least privilege:
 ## Audit
 
 Audit events record command calls, command replies, agent lifecycle, final responses, and relevant delivery success/failure metadata. Use retention settings when keeping audit data forever is not appropriate.
+
+See [Audit, Usage, and Privacy](audit-usage-privacy.md) for storage paths, content recording, `/audit` behavior, and usage attribution.

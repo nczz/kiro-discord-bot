@@ -80,12 +80,12 @@ KIRO_API_KEY=your-headless-key
 ALLOWED_CWD_ROOTS=/projects
 CRON_TIMEZONE=Asia/Taipei
 USAGE_TIMEZONE=Asia/Taipei
-PREFLIGHT_MODE=strict
+PREFLIGHT_MODE=warn
 THREAD_AGENT_MAX=5
 THREAD_AGENT_IDLE_SEC=900
 ```
 
-Use `/doctor` after startup to inspect effective runtime values. Sensitive values are redacted.
+Use `/doctor` after startup to inspect effective runtime values. Sensitive values are redacted. See [Environment Reference](environment.md) for every supported variable and default.
 
 ## 5. Run Once in Foreground
 

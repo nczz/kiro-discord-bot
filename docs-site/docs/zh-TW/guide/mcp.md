@@ -19,6 +19,8 @@ bot 會把 discovery 與 permission 分開：
 
 新頻道初始化會啟用安全預設 allowlist。風險較高的 `bot_send_message`、`bot_delete_cron`、`bot_query_audit` 需要明確授權。
 
+完整 tool list、預設值、scope rules 與 audit prompt 行為見 [Bot Tools MCP](bot-tools.md)。
+
 ## Discord MCP
 
 `mcp-discord` 是可選 catalog server，可以讀訊息、列頻道、送訊息、開 thread 與執行其他 Discord REST 操作。廣泛啟用前，請先限制它的環境：
@@ -32,6 +34,8 @@ MCP_DISCORD_ALLOW_DESTRUCTIVE=false
 ```
 
 本機多 bot 測試時，請確認 catalog command 載入的是你預期 bot 身分的 `.env`。Discord 回 403 可能代表 MCP server 使用了和畫面上 bot 不同的 token。
+
+完整 Discord MCP tools 與 policy guards 見 [Discord MCP](mcp-discord.md)。可選媒體生成工具見 [Media MCP](media-mcp.md)。
 
 ## 操作檢查
 

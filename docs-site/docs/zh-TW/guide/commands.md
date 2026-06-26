@@ -45,6 +45,8 @@
 
 只要 memory rule 還在 `/memory list` 看得到，就會影響未來 turns。若要完全淘汰過期指引，移除後再執行 `/clear` 與 `/reset`。
 
+Memory、flash memory、steering 與 session cleanup 的操作差異見 [日常工作流](daily-workflows.md)。
+
 ## MCP 與 Admin
 
 | Command | 用途 |
@@ -57,6 +59,8 @@
 
 Audit data 請使用 slash `/audit`。文字 `!audit` 不回傳 audit rows，因為 Discord 無法讓這類文字回覆變成 private。
 
+Audit rows、audit prompt investigations 與 usage attribution 的行為見 [Audit、用量與隱私](audit-usage-privacy.md)。
+
 ## 排程
 
 | Command | 用途 |
@@ -68,6 +72,8 @@ Audit data 請使用 slash `/audit`。文字 `!audit` 不回傳 audit rows，因
 | `/remind <time> <content>` | 建立一次性 reminder，到期時 tag requester。 |
 
 排程指令必須在 parent channel 使用。Cron agent 執行時使用該頻道當下 CWD。
+
+Scheduling scope、MCP-created jobs 與 owner expectations 見 [Cron 與提醒](cron-reminders.md)。
 
 ## Thread Helpers
 

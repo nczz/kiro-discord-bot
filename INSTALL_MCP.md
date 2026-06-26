@@ -2,9 +2,12 @@
 
 This file is a short pointer for agents and operators. The canonical MCP documentation is on the static site:
 
-- MCP policy: https://nczz.github.io/kiro-discord-bot/guide/mcp.html
-- Discord MCP server: https://nczz.github.io/kiro-discord-bot/guide/mcp-discord.html
-- Admin and security: https://nczz.github.io/kiro-discord-bot/guide/admin-security.html
+- [MCP Policy][mcp]
+- [Bot Tools MCP][bot-tools]
+- [Discord MCP Server][mcp-discord]
+- [Media MCP][media-mcp]
+- [Admin and Security][admin-security]
+- [Security Model][security]
 
 ## Short Version
 
@@ -43,3 +46,10 @@ MCP_DISCORD_ALLOW_DESTRUCTIVE=false
 ```
 
 Then use `/mcp status` and `/mcp manage` in the target Discord channel.
+
+[mcp]: https://nczz.github.io/kiro-discord-bot/guide/mcp.html
+[bot-tools]: https://nczz.github.io/kiro-discord-bot/guide/bot-tools.html
+[mcp-discord]: https://nczz.github.io/kiro-discord-bot/guide/mcp-discord.html
+[media-mcp]: https://nczz.github.io/kiro-discord-bot/guide/media-mcp.html
+[admin-security]: https://nczz.github.io/kiro-discord-bot/guide/admin-security.html
+[security]: https://nczz.github.io/kiro-discord-bot/guide/security-model.html

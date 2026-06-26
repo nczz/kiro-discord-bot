@@ -35,8 +35,9 @@
 | 初次設定 | [快速開始][getting-started-zh] · [安裝][install-doc-zh] |
 | 日常使用 | [指令參考][commands-zh] · [監聽模式][listen-modes-zh] |
 | Agent 脈絡 | [Steering 檔案][steering-zh] · [核心概念][core-concepts-zh] |
-| 工具權限 | [MCP 權限][mcp-zh] · [Discord MCP Server][mcp-discord-zh] |
-| 維運 | [部署][deployment-zh] · [Release Runbook][release-zh] |
+| 工具權限 | [MCP 權限][mcp-zh] · [Bot Tools][bot-tools-zh] · [Discord MCP Server][mcp-discord-zh] |
+| 維運 | [環境變數][environment-zh] · [部署][deployment-zh] · [Release Runbook][release-zh] |
+| 安全與審查 | [安全模型][security-zh] · [Audit、用量與隱私][audit-usage-zh] |
 | 支援 | [疑難排解][troubleshooting-zh] · [macOS MCP 網路][macos-networking-zh] |
 
 ## 從原始碼建置
@@ -70,8 +71,12 @@ MIT
 [core-concepts-zh]: https://nczz.github.io/kiro-discord-bot/zh-TW/guide/core-concepts.html
 [steering-zh]: https://nczz.github.io/kiro-discord-bot/zh-TW/guide/steering.html
 [mcp-zh]: https://nczz.github.io/kiro-discord-bot/zh-TW/guide/mcp.html
+[bot-tools-zh]: https://nczz.github.io/kiro-discord-bot/zh-TW/guide/bot-tools.html
 [mcp-discord-zh]: https://nczz.github.io/kiro-discord-bot/zh-TW/guide/mcp-discord.html
+[environment-zh]: https://nczz.github.io/kiro-discord-bot/zh-TW/guide/environment.html
 [deployment-zh]: https://nczz.github.io/kiro-discord-bot/zh-TW/guide/deployment.html
 [release-zh]: https://nczz.github.io/kiro-discord-bot/zh-TW/guide/release.html
+[security-zh]: https://nczz.github.io/kiro-discord-bot/zh-TW/guide/security-model.html
+[audit-usage-zh]: https://nczz.github.io/kiro-discord-bot/zh-TW/guide/audit-usage-privacy.html
 [troubleshooting-zh]: https://nczz.github.io/kiro-discord-bot/zh-TW/guide/troubleshooting.html
 [macos-networking-zh]: https://nczz.github.io/kiro-discord-bot/zh-TW/guide/macos-mcp-networking.html

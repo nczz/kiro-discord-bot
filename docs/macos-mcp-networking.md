@@ -1,8 +1,6 @@
 # macOS MCP Networking
 
-The canonical macOS MCP networking runbook now lives on the static documentation site:
-
-https://nczz.github.io/kiro-discord-bot/guide/macos-mcp-networking.html
+The canonical macOS MCP networking runbook now lives on the static documentation site: [macOS MCP Networking][macos-networking].
 
 ## Short Checklist
 
@@ -16,3 +14,5 @@ Use this when a private LAN MCP endpoint works from an interactive shell but fai
 6. Use a relay only as an explicit deployment fallback.
 
 The bot should use standard MCP transports; host networking issues should be solved at the deployment layer first.
+
+[macos-networking]: https://nczz.github.io/kiro-discord-bot/guide/macos-mcp-networking.html

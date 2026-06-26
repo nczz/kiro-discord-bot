@@ -45,6 +45,8 @@ Commands are available as slash commands. Most also have `!` text-command equiva
 
 If a memory rule is visible in `/memory list`, it affects future turns. To retire stale persistent guidance completely, remove it, then run `/clear` and `/reset`.
 
+See [Daily Workflows](daily-workflows.md) for the operational difference between memory, flash memory, steering, and session cleanup.
+
 ## MCP and Admin
 
 | Command | Purpose |
@@ -57,6 +59,8 @@ If a memory rule is visible in `/memory list`, it affects future turns. To retir
 
 Use slash `/audit` for audit data. Text `!audit` is intentionally not supported for audit rows because Discord cannot make those replies private.
 
+See [Audit, Usage, and Privacy](audit-usage-privacy.md) for how audit rows, audit prompt investigations, and usage attribution work.
+
 ## Scheduling
 
 | Command | Purpose |
@@ -68,6 +72,8 @@ Use slash `/audit` for audit data. Text `!audit` is intentionally not supported 
 | `/remind <time> <content>` | Create a one-time reminder that tags the requester when due. |
 
 Scheduling commands must be run in the parent channel. Cron agents use the channel's current CWD at execution time.
+
+See [Cron and Reminders](cron-reminders.md) for scheduling scope, MCP-created jobs, and owner expectations.
 
 ## Thread-only Helpers
 

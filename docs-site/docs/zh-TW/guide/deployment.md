@@ -11,7 +11,7 @@ set +a
 ./kiro-discord-bot
 ```
 
-確認 bot 登入、slash commands 註冊成功，並能回應 `/doctor`。
+確認 bot 登入、slash commands 註冊成功，並能回應 `/doctor`。把 foreground command 轉成服務前，先檢查 [環境變數參考](environment.md)。
 
 ## macOS launchd
 

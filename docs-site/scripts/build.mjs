@@ -11,36 +11,54 @@ const pages = [
   ['Home', 'index.html'],
   ['Getting Started', 'guide/getting-started.html'],
   ['Installation', 'guide/installation.html'],
+  ['Environment Reference', 'guide/environment.html'],
   ['Core Concepts', 'guide/core-concepts.html'],
   ['Command Reference', 'guide/commands.html'],
+  ['Daily Workflows', 'guide/daily-workflows.html'],
   ['Listen Modes', 'guide/listen-modes.html'],
   ['Steering Files', 'guide/steering.html'],
   ['MCP Policy', 'guide/mcp.html'],
+  ['Bot Tools MCP', 'guide/bot-tools.html'],
   ['Discord MCP', 'guide/mcp-discord.html'],
+  ['Media MCP', 'guide/media-mcp.html'],
+  ['Audit, Usage, and Privacy', 'guide/audit-usage-privacy.html'],
+  ['Cron and Reminders', 'guide/cron-reminders.html'],
+  ['Security Model', 'guide/security-model.html'],
   ['Admin & Security', 'guide/admin-security.html'],
   ['Deployment', 'guide/deployment.html'],
   ['Release Runbook', 'guide/release.html'],
   ['macOS MCP Networking', 'guide/macos-mcp-networking.html'],
   ['Troubleshooting', 'guide/troubleshooting.html'],
   ['Architecture', 'guide/architecture.html'],
+  ['Contributor Guide', 'guide/contributing.html'],
+  ['Docs Maintenance', 'guide/docs-maintenance.html'],
 ]
 
 const zhPages = [
   ['首頁', 'zh-TW/index.html'],
   ['快速開始', 'zh-TW/guide/getting-started.html'],
   ['安裝', 'zh-TW/guide/installation.html'],
+  ['環境變數參考', 'zh-TW/guide/environment.html'],
   ['核心概念', 'zh-TW/guide/core-concepts.html'],
   ['指令參考', 'zh-TW/guide/commands.html'],
+  ['日常工作流', 'zh-TW/guide/daily-workflows.html'],
   ['監聽模式', 'zh-TW/guide/listen-modes.html'],
   ['Steering 檔案', 'zh-TW/guide/steering.html'],
   ['MCP 權限', 'zh-TW/guide/mcp.html'],
+  ['Bot Tools MCP', 'zh-TW/guide/bot-tools.html'],
   ['Discord MCP', 'zh-TW/guide/mcp-discord.html'],
+  ['Media MCP', 'zh-TW/guide/media-mcp.html'],
+  ['Audit、用量與隱私', 'zh-TW/guide/audit-usage-privacy.html'],
+  ['Cron 與提醒', 'zh-TW/guide/cron-reminders.html'],
+  ['安全模型', 'zh-TW/guide/security-model.html'],
   ['管理與安全', 'zh-TW/guide/admin-security.html'],
   ['部署', 'zh-TW/guide/deployment.html'],
   ['Release Runbook', 'zh-TW/guide/release.html'],
   ['macOS MCP 網路', 'zh-TW/guide/macos-mcp-networking.html'],
   ['疑難排解', 'zh-TW/guide/troubleshooting.html'],
   ['架構', 'zh-TW/guide/architecture.html'],
+  ['貢獻者指南', 'zh-TW/guide/contributing.html'],
+  ['文件維護', 'zh-TW/guide/docs-maintenance.html'],
 ]
 
 await rm(outDir, { recursive: true, force: true })
@@ -285,8 +303,11 @@ function normalizeHref(href, currentDir = '') {
   if (href.startsWith('http') || href.startsWith('#')) return href
   if (href === '/') return base
   if (href.startsWith('/')) return base + href.slice(1)
-  const resolved = path.posix.normalize(path.posix.join(currentDir === '.' ? '' : currentDir, href))
-  return base + resolved.replace(/^\.\//, '')
+  const [rawPath, fragment = ''] = href.split('#', 2)
+  const outputPath = rawPath.replace(/\.md$/, '.html')
+  const resolved = path.posix.normalize(path.posix.join(currentDir === '.' ? '' : currentDir, outputPath))
+  const suffix = fragment ? `#${fragment}` : ''
+  return base + resolved.replace(/^\.\//, '') + suffix
 }
 
 function slug(text) {

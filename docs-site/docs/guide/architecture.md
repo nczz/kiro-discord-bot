@@ -57,3 +57,5 @@ Normal agent final answers are delivered by the bot. The bot handles secret reda
 ## Audit
 
 Audit storage records semantic bot events such as command calls, command responses, agent job lifecycle, and final response delivery. Audit prompt investigations use short-lived private agents with only the audit query tool injected.
+
+See [Bot Tools MCP](bot-tools.md), [Audit, Usage, and Privacy](audit-usage-privacy.md), and [Security Model](security-model.md) for the detailed behavior and trust boundaries that sit on top of this architecture.

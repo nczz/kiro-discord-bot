@@ -11,7 +11,7 @@ set +a
 ./kiro-discord-bot
 ```
 
-Confirm the bot logs in, registers slash commands, and responds to `/doctor`.
+Confirm the bot logs in, registers slash commands, and responds to `/doctor`. Review [Environment Reference](environment.md) before turning the foreground command into a service.
 
 ## macOS launchd
 

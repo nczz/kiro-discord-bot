@@ -2,9 +2,9 @@
 
 The canonical release and deployment runbooks now live on the static documentation site:
 
-- Release runbook: https://nczz.github.io/kiro-discord-bot/guide/release.html
-- Deployment: https://nczz.github.io/kiro-discord-bot/guide/deployment.html
-- macOS MCP networking: https://nczz.github.io/kiro-discord-bot/guide/macos-mcp-networking.html
+- [Release Runbook][release]
+- [Deployment][deployment]
+- [macOS MCP Networking][macos-networking]
 
 ## Short Checklist
 
@@ -27,3 +27,7 @@ The canonical release and deployment runbooks now live on the static documentati
 7. Verify with `/doctor`, a simple agent reply, and any feature-specific smoke checks.
 
 Do not delete `DATA_DIR`, Docker volumes, `.kiro/`, or `.env` during release or rollback.
+
+[release]: https://nczz.github.io/kiro-discord-bot/guide/release.html
+[deployment]: https://nczz.github.io/kiro-discord-bot/guide/deployment.html
+[macos-networking]: https://nczz.github.io/kiro-discord-bot/guide/macos-mcp-networking.html
