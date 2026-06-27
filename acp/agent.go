@@ -41,6 +41,9 @@ type Agent struct {
 	turnMetrics    TurnMetrics // per-turn metrics from latest metadata
 	lastStopReason string      // stopReason from the most recent prompt result
 
+	cumulativeCost   float64 // omp: latest cumulative session cost (USD) from usage_update
+	turnBaselineCost float64 // omp: cumulative cost snapshot at the start of the current turn
+
 	initResult    *InitializeResult
 	sessResult    *SessionNewResult
 	sessionLoaded bool
@@ -463,6 +466,42 @@ func (a *Agent) handleNotification(method string, params json.RawMessage) {
 	}
 
 	switch notif.Update.SessionUpdate {
+	case NotifUsageUpdate:
+		// omp per-session usage: {size, used, cost:{amount,currency}}. Cost is
+		// cumulative; per-turn cost = delta since the turn's baseline snapshot.
+		var u struct {
+			Update struct {
+				Size float64 `json:"size"`
+				Used float64 `json:"used"`
+				Cost struct {
+					Amount   float64 `json:"amount"`
+					Currency string  `json:"currency"`
+				} `json:"cost"`
+			} `json:"update"`
+		}
+		if json.Unmarshal(params, &u) != nil {
+			return
+		}
+		a.mu.Lock()
+		a.cumulativeCost = u.Update.Cost.Amount
+		delta := a.cumulativeCost - a.turnBaselineCost
+		if delta < 0 {
+			delta = 0 // cumulative reset (e.g. after compaction) → treat as 0 this turn
+		}
+		if u.Update.Size > 0 {
+			a.contextUsage = u.Update.Used / u.Update.Size * 100
+			a.turnMetrics.ContextUsage = a.contextUsage
+		}
+		currency := strings.TrimSpace(u.Update.Cost.Currency)
+		if currency == "" {
+			currency = "USD"
+		}
+		if delta > 0 {
+			a.turnMetrics.MeteringUsage = []MeteringItem{{Value: delta, Unit: currency}}
+		}
+		a.mu.Unlock()
+		return
+
 	case UpdateAgentChunk:
 		if notif.Update.Content == nil || notif.Update.Content.Text == "" {
 			return
@@ -759,6 +798,7 @@ func (a *Agent) Ask(ctx context.Context, prompt string, onChunk func(string)) (s
 	a.currentText.Reset()
 	a.turnMetrics = TurnMetrics{}
 	a.lastStopReason = ""
+	a.turnBaselineCost = a.cumulativeCost
 	a.onChunk = onChunk
 	a.mu.Unlock()
 
@@ -829,6 +869,7 @@ func (a *Agent) AskAsyncMulti(content []PromptContent, cb AsyncCallbacks) {
 	a.currentText.Reset()
 	a.turnMetrics = TurnMetrics{}
 	a.lastStopReason = ""
+	a.turnBaselineCost = a.cumulativeCost
 	a.onChunk = cb.OnChunk
 	a.onToolCall = cb.OnToolCall
 	a.onToolResult = cb.OnToolResult

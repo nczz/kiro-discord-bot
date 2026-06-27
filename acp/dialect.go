@@ -43,8 +43,8 @@ type dialectProfile struct {
 // resolve to the kiro profile (and no caller sets DialectOmp).
 func profileFor(d Dialect) dialectProfile {
 	switch d {
-	// case DialectOmp:
-	//	return ompProfile() // added in S2.1
+	case DialectOmp:
+		return ompProfile()
 	default:
 		return kiroProfile()
 	}
@@ -84,4 +84,79 @@ func kiroProfile() dialectProfile {
 			return &s
 		},
 	}
+}
+
+// ompConfigOption mirrors one entry of omp's session/new `configOptions` array.
+// Verified shape (omp 16.1.23): {id, name, category, type:"select", currentValue, options:[{value,name,description}]}.
+type ompConfigOption struct {
+	ID           string `json:"id"`
+	Category     string `json:"category"`
+	CurrentValue string `json:"currentValue"`
+	Options      []struct {
+		Value       string `json:"value"`
+		Name        string `json:"name"`
+		Description string `json:"description"`
+	} `json:"options"`
+}
+
+// ompProfile drives the `omp acp` ACP dialect (omp 16.x). Differences from kiro:
+// launch has no flags; model switch uses session/set_config_option; cancel must
+// be a JSON-RPC notification; session/new returns configOptions (not modes/models).
+func ompProfile() dialectProfile {
+	return dialectProfile{
+		launchArgs: func(model string, opts AgentOptions) []string {
+			// `omp acp` takes no flags; tool permission is always via
+			// session/request_permission (handled by the shared OnRequest path).
+			// Model is selected post-handshake via setModel, not at launch.
+			return []string{"acp"}
+		},
+		setModel: func(a *Agent, modelID string) error {
+			_, err := a.transport.Send(MethodSetConfigOption, map[string]interface{}{
+				"sessionId": a.SessionID,
+				"configId":  "model",
+				"value":     modelID,
+			})
+			return err
+		},
+		cancel: func(a *Agent) {
+			// omp requires session/cancel as a notification (no id), per ACP spec.
+			go func() { _ = a.transport.SendNotification(MethodCancel, map[string]string{"sessionId": a.SessionID}) }()
+		},
+		parseSession: parseOmpSession,
+	}
+}
+
+// parseOmpSession maps omp's session/new configOptions[] into SessionNewResult's
+// modes/models, so the rest of the agent (AvailableModels/Modes, current ids)
+// works identically across dialects.
+func parseOmpSession(raw json.RawMessage) *SessionNewResult {
+	var r struct {
+		SessionID     string            `json:"sessionId"`
+		ConfigOptions []ompConfigOption `json:"configOptions"`
+	}
+	if err := json.Unmarshal(raw, &r); err != nil {
+		return &SessionNewResult{}
+	}
+	out := &SessionNewResult{SessionID: r.SessionID}
+	for _, opt := range r.ConfigOptions {
+		switch opt.Category {
+		case "model":
+			ms := &ModelState{CurrentModelID: opt.CurrentValue}
+			for _, o := range opt.Options {
+				ms.AvailableModels = append(ms.AvailableModels, ModelEntry{
+					ModelID: o.Value, Name: o.Name, Description: o.Description,
+				})
+			}
+			out.Models = ms
+		case "mode":
+			md := &ModeState{CurrentModeID: opt.CurrentValue}
+			for _, o := range opt.Options {
+				md.AvailableModes = append(md.AvailableModes, ModeEntry{
+					ID: o.Value, Name: o.Name, Description: o.Description,
+				})
+			}
+			out.Modes = md
+		}
+	}
+	return out
 }

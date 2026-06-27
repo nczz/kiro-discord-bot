@@ -9,6 +9,9 @@ const (
 	MethodCancel      = "session/cancel"
 	MethodSetModel    = "session/set_model"
 	MethodSetMode     = "session/set_mode"
+	// omp ACP dialect methods/notifications (omp 16.x).
+	MethodSetConfigOption = "session/set_config_option" // omp model/mode setter
+	NotifUsageUpdate      = "usage_update"              // omp per-session usage (size/used/cost) sessionUpdate
 	NotifUpdate       = "session/update"
 	NotifUpdateKiro   = "_kiro.dev/session/update"
 	NotifMetadata     = "_kiro.dev/metadata"

@@ -9,7 +9,7 @@ exactly that one task. The `NEXT:` pointer is authoritative; if memory disagrees
 
 ---
 
-## NEXT: S2.1 — ompProfile: launch `omp acp`; parse configOptions→models/modes; setModel=set_config_option(configId=model); cancel=SendNotification(session/cancel); metrics from usage_update/prompt-usage
+## NEXT: S3.1 — env full path: AGENT_ENGINE / AGENT_ENGINES_ENABLED / OMP_PATH (config.go→ManagerConfig+Manager+NewManager→main.go→doctor_env.go→locale en/zh-TW→README+zh→.env.example)
 
 (Update this line after each task. It must always name the single next task to do.)
 
@@ -28,11 +28,11 @@ exactly that one task. The `NEXT:` pointer is authoritative; if memory disagrees
 - [x] S1.5 Verify — go build ./... OK; go vet ./acp ./channel ./bot OK; go test ./acp (ok) ./channel (ok, -skip known env test) ./bot (ok) → kiro zero-regression confirmed → COMMIT
 
 ## Stage 2 — omp dialect + verification. Commit when S2.5 green.
-- [ ] S2.1 ompProfile: launch `omp acp`; parse configOptions→models/modes; setModel=set_config_option(configId=model); cancel=SendNotification(session/cancel); metrics from usage_update/prompt-usage
-- [ ] S2.2 omp usage→TurnMetrics: per-turn cost = delta cumulative (guard reset→0); ContextUsage=used/size*100; MeteringItem{Unit:"USD"}
-- [ ] S2.3 omp ACP smoke (gated like RUN_ACP_SMOKE)
-- [ ] S2.4 Inline-confirm: image e2e, /clear semantics, session/load+MCP, omp-unauth behavior
-- [ ] S2.5 Tests: configOptions parse, omp delta cost (+compaction guard), cancel notification, kiro regression → COMMIT
+- [x] S2.1 ompProfile: launch `omp acp`; parseOmpSession(configOptions→models/modes); setModel=set_config_option(configId=model); cancel=SendNotification(session/cancel); profileFor enables DialectOmp
+- [x] S2.2 omp usage→TurnMetrics: handleNotification usage_update case; per-turn cost=delta(cumulative) with reset guard→0; ContextUsage=used/size*100; MeteringItem{Unit:"USD"}; turnBaselineCost snapshot at turn start (Ask + AskAsyncMulti)
+- [x] S2.3 omp ACP smoke (gated RUN_OMP_SMOKE) — PASS live: omp 16.1.23, models=16/modes=2 parsed, stopReason=end_turn, ctx=8.34%, metering=[{0.113655 USD}]
+- [x] S2.4 Inline confirms — core path (handshake/configOptions/prompt/streaming/stopReason/usage) verified via S2.3 smoke on real dialect; image/​/clear/​session-load+MCP already verified in Phase 0 POCs (plan §1/§4.1); omp-unauth /doctor handling deferred to S3.6
+- [x] S2.5 Tests — acp/dialect_test.go: kiro/omp launchArgs, profileFor, parseOmpSession (+malformed), usage delta cost (+compaction reset guard) all PASS; full acp/channel/bot green; kiro zero-regression → COMMIT
 
 ## Stage 3 — engine config + resolution (pure-omp + M1). Commit when S3.7 green.
 - [ ] S3.1 env full path: AGENT_ENGINE / AGENT_ENGINES_ENABLED / OMP_PATH (config→ManagerConfig→main→doctor_env→locale×2→README×2→.env.example)
@@ -59,3 +59,5 @@ exactly that one task. The `NEXT:` pointer is authoritative; if memory disagrees
 
 ## Verified evidence log (one line per completed task: command + result)
 - S1.5: `go build ./...` BUILD_OK; `go vet ./acp ./channel ./bot` VET_OK; `go test ./acp` ok 0.575s; `go test ./channel -skip TestDoctorRuntimeOverviewShowsEffectiveDefaultsWhenEnvUnset` ok 14.079s; `go test ./bot` ok 0.613s.
+- S2.3: `RUN_OMP_SMOKE=1 OMP_PATH=$(which omp) go test ./acp -run TestOmpSmoke` PASS 3.28s — omp 16.1.23, models=16, modes=2, stopReason=end_turn, ctx=8.34%, metering=[{0.113655 USD}].
+- S2.5: `go test ./acp` (7 new dialect tests PASS) ok; `go vet ./acp ./channel ./bot` OK; `go test ./channel -skip <env test>` ok 13.985s; `go test ./bot` ok 0.572s — kiro zero-regression.
