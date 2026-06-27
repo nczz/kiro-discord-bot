@@ -44,6 +44,8 @@ type Agent struct {
 	initResult    *InitializeResult
 	sessResult    *SessionNewResult
 	sessionLoaded bool
+	dialect       Dialect        // which ACP backend this agent drives
+	profile       dialectProfile // dialect-specific behavior; set in StartAgent
 	stopOnce      sync.Once
 	exited        chan struct{} // closed when child process exits
 	stderrBuf     *ringBuffer   // captures recent stderr from kiro-cli
@@ -53,6 +55,7 @@ type Agent struct {
 // AgentOptions configures how an agent is spawned.
 type AgentOptions struct {
 	MaxBuffer     int    // scanner buffer upper limit (bytes); 0 = 64 MiB
+	Dialect       Dialect // ACP backend dialect; zero value = DialectKiro
 	Agent         string // --agent flag; empty = kiro default
 	TrustAllTools bool   // --trust-all-tools; default true
 	TrustTools    string // --trust-tools <names>; comma-separated, overrides TrustAllTools
@@ -126,18 +129,8 @@ func StartAgent(name, kiroCLI, cwd, model string, opts AgentOptions) (*Agent, er
 		return nil, fmt.Errorf("working directory not found: %s", cwd)
 	}
 
-	args := []string{"acp"}
-	if opts.TrustTools != "" {
-		args = append(args, "--trust-tools", opts.TrustTools)
-	} else if opts.TrustAllTools {
-		args = append(args, "--trust-all-tools")
-	}
-	if model != "" {
-		args = append(args, "--model", model)
-	}
-	if opts.Agent != "" {
-		args = append(args, "--agent", opts.Agent)
-	}
+	prof := profileFor(opts.Dialect)
+	args := prof.launchArgs(model, opts)
 
 	cmd := exec.Command(resolvedCLI, args...)
 	cmd.Dir = cwd
@@ -168,6 +161,8 @@ func StartAgent(name, kiroCLI, cwd, model string, opts AgentOptions) (*Agent, er
 		exited:    make(chan struct{}),
 		stderrBuf: stderrRing,
 		mcpReady:  make(map[string]struct{}),
+		dialect:   opts.Dialect,
+		profile:   prof,
 	}
 
 	a.transport.OnNotification = a.handleNotification
@@ -253,7 +248,9 @@ func StartAgent(name, kiroCLI, cwd, model string, opts AgentOptions) (*Agent, er
 	if opts.LoadSessionID != "" && a.SupportsLoadSession() {
 		loadRaw, loadErr := a.transport.Send(MethodLoadSession, sessionParams(cwd, opts.LoadSessionID, opts.MCPServers))
 		if loadErr == nil {
-			json.Unmarshal(loadRaw, &sessResp)
+			if r := prof.parseSession(loadRaw); r != nil {
+				sessResp = *r
+			}
 			if sessResp.SessionID == "" {
 				sessResp.SessionID = opts.LoadSessionID
 			}
@@ -274,7 +271,9 @@ func StartAgent(name, kiroCLI, cwd, model string, opts AgentOptions) (*Agent, er
 			a.Kill()
 			return nil, a.wrapHandshakeError("session/new", sessErr)
 		}
-		json.Unmarshal(sessRaw, &sessResp)
+		if r := prof.parseSession(sessRaw); r != nil {
+			sessResp = *r
+		}
 	}
 	a.SessionID = sessResp.SessionID
 	a.sessResult = &sessResp
@@ -786,7 +785,7 @@ func (a *Agent) Ask(ctx context.Context, prompt string, onChunk func(string)) (s
 
 	select {
 	case <-ctx.Done():
-		go a.transport.Send(MethodCancel, map[string]string{"sessionId": a.SessionID})
+		a.activeProfile().cancel(a)
 		select {
 		case <-ch:
 		case <-time.After(5 * time.Second):
@@ -876,9 +875,19 @@ func (a *Agent) IsBusy() bool {
 	return a.state == "working"
 }
 
-// CancelPrompt sends a session/cancel request to the agent without blocking.
+// activeProfile returns this agent's dialect profile, falling back to the kiro
+// profile for zero-value agents constructed directly in tests.
+func (a *Agent) activeProfile() dialectProfile {
+	if a.profile.cancel == nil {
+		return kiroProfile()
+	}
+	return a.profile
+}
+
+// CancelPrompt requests cancellation of the in-flight prompt (dialect-specific:
+// kiro sends a request, omp sends a notification). Non-blocking.
 func (a *Agent) CancelPrompt() {
-	go a.transport.Send(MethodCancel, map[string]string{"sessionId": a.SessionID})
+	a.activeProfile().cancel(a)
 }
 
 // Interrupt sends SIGINT to the agent process group. It is intentionally less
@@ -897,10 +906,7 @@ func (a *Agent) Interrupt() error {
 // SetModel switches the model for the current session via session/set_model.
 // Returns nil on success, or an error (including "Method not found" if unsupported).
 func (a *Agent) SetModel(modelID string) error {
-	_, err := a.transport.Send(MethodSetModel, map[string]interface{}{
-		"sessionId": a.SessionID,
-		"modelId":   modelID,
-	})
+	err := a.activeProfile().setModel(a, modelID)
 	if err == nil {
 		a.setCurrentModelID(modelID)
 	}

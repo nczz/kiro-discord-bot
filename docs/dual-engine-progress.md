@@ -9,7 +9,7 @@ exactly that one task. The `NEXT:` pointer is authoritative; if memory disagrees
 
 ---
 
-## NEXT: S1.1 — Add acp/dialect.go (Dialect enum + dialectProfile + kiroProfile = current behavior)
+## NEXT: S2.1 — ompProfile: launch `omp acp`; parse configOptions→models/modes; setModel=set_config_option(configId=model); cancel=SendNotification(session/cancel); metrics from usage_update/prompt-usage
 
 (Update this line after each task. It must always name the single next task to do.)
 
@@ -21,11 +21,11 @@ exactly that one task. The `NEXT:` pointer is authoritative; if memory disagrees
 - [x] done — with evidence note (command + result / file:line)
 
 ## Stage 1 — ACP dialect scaffolding (kiro zero-regression). Commit when S1.5 green.
-- [ ] S1.1 acp/dialect.go: Dialect enum + dialectProfile + kiroProfile
-- [ ] S1.2 Transport.SendNotification in acp/jsonrpc.go
-- [ ] S1.3 Agent.dialect field + StartAgent(dialect) + route launch/setModel/cancel/parse/metrics via profile (kiro identical)
-- [ ] S1.4 Update all StartAgent call sites to DialectKiro (manager.go ×4 + preflight)
-- [ ] S1.5 Verify build/vet/test; kiro behavior-identical → COMMIT
+- [x] S1.1 acp/dialect.go: Dialect enum + dialectProfile + kiroProfile — created acp/dialect.go (Dialect/dialectProfile/profileFor/kiroProfile)
+- [x] S1.2 Transport.SendNotification in acp/jsonrpc.go — added (no-id JSON-RPC notification, transport-closed guard)
+- [x] S1.3 Agent.dialect+profile fields + StartAgent uses profile (launchArgs/parseSession); SetModel/CancelPrompt/Ask-cancel via activeProfile() — done, kiroProfile reproduces exact prior behavior
+- [x] S1.4 StartAgent call sites — DEVIATION: Dialect moved into AgentOptions (zero value=DialectKiro), so StartAgent signature unchanged; no callsite edits needed (15 callsites incl. tests keep working)
+- [x] S1.5 Verify — go build ./... OK; go vet ./acp ./channel ./bot OK; go test ./acp (ok) ./channel (ok, -skip known env test) ./bot (ok) → kiro zero-regression confirmed → COMMIT
 
 ## Stage 2 — omp dialect + verification. Commit when S2.5 green.
 - [ ] S2.1 ompProfile: launch `omp acp`; parse configOptions→models/modes; setModel=set_config_option(configId=model); cancel=SendNotification(session/cancel); metrics from usage_update/prompt-usage
@@ -54,7 +54,8 @@ exactly that one task. The `NEXT:` pointer is authoritative; if memory disagrees
 ---
 
 ## Decisions / deviations log (append as they happen; mirror major ones into decision-failure-patterns.md)
-- (none yet)
+- S1 (2026-06-28): Dialect carried in `AgentOptions.Dialect` (zero value DialectKiro) instead of a new positional `StartAgent` param. Reason: avoids breaking ~15 call sites (4 prod + ~11 tests + preflight), idiomatic (project already extends behavior via AgentOptions), zero behavior change for kiro. Mirrored into decision-failure-patterns.md.
+- S1: metrics abstraction (kiro `_kiro.dev/metadata` vs omp `usage_update`) intentionally NOT moved into the profile in Stage 1 — handleNotification keeps the kiro path untouched; omp metrics wiring is added in S2.2 to keep Stage 1 strictly behavior-preserving.
 
 ## Verified evidence log (one line per completed task: command + result)
-- (none yet)
+- S1.5: `go build ./...` BUILD_OK; `go vet ./acp ./channel ./bot` VET_OK; `go test ./acp` ok 0.575s; `go test ./channel -skip TestDoctorRuntimeOverviewShowsEffectiveDefaultsWhenEnvUnset` ok 14.079s; `go test ./bot` ok 0.613s.

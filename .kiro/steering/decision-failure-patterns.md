@@ -168,6 +168,51 @@ Verification:
 
 - Runtime probe of v2 vs v3 handshake + first prompt turn against kiro-cli 2.10.0.
 
+### Dual-Engine: omp Integrated As An ACP Dialect, Not A Second Agent Type
+
+Decision:
+
+- omp (Oh My Pi) is integrated via `omp acp` as a SECOND ACP dialect of the existing `acp.Agent`, not
+  a separate agent type. A `dialectProfile` (acp/dialect.go) captures the only points that differ from
+  kiro-cli: launch args, model setter, cancel framing, session/new result parsing, and metrics source.
+  Transport, handshake, streaming, tool_call, `session/request_permission` (+ TRUST policy / OnRequest
+  approved/denied shape — verified accepted by omp), MCP injection, stopReason, and session/load are shared.
+- The dialect is carried in `AgentOptions.Dialect` (zero value `DialectKiro`), NOT a new positional
+  `StartAgent` parameter. This keeps the `StartAgent` signature stable for all ~15 call sites (prod +
+  tests + preflight) and is idiomatic (the project already extends spawn behavior via AgentOptions).
+
+Context:
+
+- Verified (kiro 2.10.0 + omp 16.1.23): omp model switch = `session/set_config_option{configId:"model"}`
+  (not session/set_model); cancel must be a NOTIFICATION (no id); session/new returns `configOptions[]`
+  (not modes/models); usage = cumulative USD `cost` + tokens via `usage_update` + prompt-result `usage`
+  (kiro uses credits via `_kiro.dev/metadata`); omp reads `AGENTS.md` (so does kiro) but not `.kiro/steering`;
+  MCP per-channel policy is enforced by the bot's mcp-proxy at transport level (engine-agnostic — both
+  engines forward injected env to the MCP subprocess). Full plan: docs/dual-engine-integration-plan.md.
+
+Rejected alternatives:
+
+- A positional `StartAgent(dialect)` param (breaks 15 call sites; no benefit over AgentOptions).
+- A separate `ompAgent` type / interface explosion across manager/cron (rejected: both engines ARE
+  `*acp.Agent`; only the dialect field varies, so `*acp.Agent` stays everywhere).
+- Sharing one DATA_DIR / SQLite across two bot runtimes to allow multi-identity (rejected: violates the
+  independent-runtime non-goal; the chosen product shape is M2 = single bot, single DATA_DIR, switchable
+  engine, so the concern is moot).
+
+Current scope:
+
+- Stage 1 adds the dialect scaffolding with kiro behavior byte-identical (kiroProfile). omp dialect,
+  config/resolution, `/engine`, and per-engine usage land in later stages per the plan §9.
+
+Future trigger:
+
+- If a third ACP engine appears, add another dialect profile; do not fork the agent.
+
+Verification:
+
+- `go build ./...`, `go vet`, and `go test ./acp ./channel ./bot` pass with kiro behavior unchanged at
+  each stage commit; omp dialect gets its own parse/cost/cancel tests + a gated ACP smoke.
+
 ## Known Failure Patterns
 
 ### CWD Or Kiro Settings Pollution

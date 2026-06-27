@@ -129,6 +129,35 @@ func (t *Transport) Send(method string, params interface{}) (json.RawMessage, er
 	}
 }
 
+// SendNotification sends a JSON-RPC 2.0 notification (no id, no response awaited).
+// Used for spec-compliant fire-and-forget methods such as omp's session/cancel.
+func (t *Transport) SendNotification(method string, params interface{}) error {
+	select {
+	case <-t.done:
+		if t.doneErr != nil {
+			return fmt.Errorf("transport closed: %w", t.doneErr)
+		}
+		return fmt.Errorf("transport closed")
+	default:
+	}
+	data, err := json.Marshal(struct {
+		JSONRPC string      `json:"jsonrpc"`
+		Method  string      `json:"method"`
+		Params  interface{} `json:"params,omitempty"`
+	}{JSONRPC: "2.0", Method: method, Params: params})
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	t.mu.Lock()
+	_, err = t.writer.Write(data)
+	t.mu.Unlock()
+	if err != nil {
+		return fmt.Errorf("write: %w", err)
+	}
+	return nil
+}
+
 // ReadLoop reads ndjson lines and dispatches responses and notifications. Blocks until EOF.
 func (t *Transport) ReadLoop() error {
 	for t.scanner.Scan() {
