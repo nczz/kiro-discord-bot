@@ -54,6 +54,10 @@ Kiro `disabledTools` 不被視為安全邊界。
 
 一般 agent final answer 由 bot 負責送出。bot 處理 secret redaction、message splitting、file egress policy 與 Discord delivery errors。`bot_send_message` 不是 final answer 的預設路徑；它是明確通知或 handoff 用的受控額外 egress tool。
 
+ACP prompt result 可能包含 `stopReason`。正常 `end_turn` completion 不會額外提示；`max_tokens`、`refusal`、`cancelled` 這類 abnormal reasons 會以本地化 notice 附加在 final answer，並寫入 job audit metadata。除非 ACP 本身回傳 error，bot 不會把這類 turn 重新分類成 delivery failure。
+
+Kiro subagent progress notification 會保守呈現。Bot 只信任已驗證的 top-level subagent 與 pending-stage counts；只有 notification 內含可辨識 name/status 時，才顯示 best-effort labels。
+
 ## Audit
 
 Audit storage 記錄 command calls、command responses、agent job lifecycle、final response delivery 等 semantic bot events。Audit prompt investigations 使用短生命週期 private agents，且只注入 audit query tool。

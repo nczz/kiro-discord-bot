@@ -90,6 +90,84 @@ Verification:
 
 - Regression tests should cover extracted document redaction, compressed PDF text extraction, safe display names, temp directory creation, unsupported binary refusal, extraction/output size limits, locale reasons, MCP tool wording, and README behavior alignment.
 
+## Current ACP Protocol Decisions
+
+### Prompt stopReason Is Surfaced, Not Used For Success/Error Reclassification
+
+Decision:
+
+- `acp.Agent` parses the `session/prompt` result `stopReason` and exposes it via `StopReason()`, mirroring the turn-scoped `TurnMetrics()`/`ContextUsage()` accessor pattern. The worker reads it inside `OnComplete` and appends a localized notice only for abnormal reasons (`max_tokens`, `refusal`, `cancelled`). `end_turn`/empty is the silent common case.
+
+Context:
+
+- Verified against kiro-cli 2.10.0: the prompt result is `{"stopReason":"end_turn"}`. Previously `AskAsyncMulti` discarded it with `_ = raw`, so a token-limited or refused turn looked identical to a clean completion.
+- This ties to the failure pattern "Agent Produced Output But Worker Did Not Finish".
+
+Rejected alternatives:
+
+- Changing the `OnComplete(response, err)` signature to add stopReason was rejected: it would touch both worker delivery paths plus every test fake, for data that fits the existing accessor pattern.
+- Reclassifying `max_tokens`/`refusal` as errors was rejected: it would entangle the delicate `suppressGenericKiroErrorAfterEgress` logic. Current scope only appends a user-visible notice and records `stop_reason` in `agent_job_completed` audit metadata.
+
+Current scope:
+
+- Surface + notice + audit across the three delivery paths (thread async, inline async, sync fallback). No change to success/error classification or suppression logic.
+
+Future trigger:
+
+- If product needs to retry-on-`max_tokens` or block-on-`refusal`, design explicit turn-outcome handling rather than overloading the notice.
+
+Verification:
+
+- `acp` unit tests for reset/parse; `channel` runtime-path tests asserting the inline final reply contains the notice on `max_tokens` and omits it on `end_turn`.
+
+### Subagent List Update Is Rendered Count-First, Best-Effort On Element Fields
+
+Decision:
+
+- `_kiro.dev/subagent/list_update` is parsed into `SubagentState` using only the verified top-level arrays (`subagents`, `pendingStages`). Element fields (`name`/`status`/`description`) are extracted best-effort from common key names and may be empty. The thread path renders a one-line progress message when there is activity; inline/silent skip it.
+
+Context:
+
+- kiro-cli 2.10.0 (default `--agent-engine v2`) emits the notification proactively, but the observed payload was always `{"subagents":[],"pendingStages":[]}`. Multiple probes (including a prompt explicitly asking for parallel subagents) never populated the arrays, so element shapes are unverified.
+
+Rejected alternatives:
+
+- Building a fully-typed parser for element fields was rejected per the project rule against speculative parsers for unobservable structures. Counts come from verified keys; field extraction is guarded and degrades to empty.
+
+Current scope:
+
+- Defensive parse + count-based progress line + best-effort entry labels. No assumption about element field semantics.
+
+Future trigger:
+
+- Once a populated payload is captured at runtime, enrich `SubagentEntry` with the real field names and add a parser test for that shape.
+
+### Agent Engine v3 Is Out Of Scope Until Client Terminal Is Implemented
+
+Decision:
+
+- The bot continues to run the default `--agent-engine v2`. `v3` is not adopted.
+
+Context:
+
+- Probing `kiro-cli acp --agent-engine v3` (2.10.0) showed the agent issues a `_kiro/terminal/shell_type` server-to-client request and then stalls. The bot's generic `OnRequest` handler answers every server request with a permission outcome (`approved`/`denied`), which is the wrong response shape for a terminal-type query, so the v3 session does not progress.
+
+Rejected alternatives:
+
+- Special-casing `_kiro/terminal/shell_type` in the generic permission handler was rejected as a partial patch. v3 requires real client-side terminal capability handling, not a single hard-coded reply.
+
+Current scope:
+
+- Stay on v2. Do not pass `--agent-engine`.
+
+Future trigger:
+
+- If v3 features (e.g. richer subagent staging) become desirable, implement the ACP client `terminal/*` and `fs/*` request handlers properly (the bot already advertises `terminal` and `fs` capabilities it does not currently serve), then re-test the full v3 turn lifecycle.
+
+Verification:
+
+- Runtime probe of v2 vs v3 handshake + first prompt turn against kiro-cli 2.10.0.
+
 ## Known Failure Patterns
 
 ### CWD Or Kiro Settings Pollution

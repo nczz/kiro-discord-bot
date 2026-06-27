@@ -105,3 +105,85 @@ func TestSessionParamsSerializesEmptyMCPServersArray(t *testing.T) {
 		t.Fatalf("expected empty mcpServers array, got %#v from %s", got.MCPServers, raw)
 	}
 }
+
+func TestParsePromptStopReason(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  json.RawMessage
+		want string
+	}{
+		{name: "empty", raw: nil, want: ""},
+		{name: "normal", raw: json.RawMessage(`{"stopReason":"end_turn"}`), want: StopEndTurn},
+		{name: "abnormal", raw: json.RawMessage(`{"stopReason":"max_tokens"}`), want: StopMaxTokens},
+		{name: "trim", raw: json.RawMessage(`{"stopReason":" refusal "}`), want: StopRefusal},
+		{name: "missing", raw: json.RawMessage(`{"sessionId":"s1"}`), want: ""},
+		{name: "malformed", raw: json.RawMessage(`not json`), want: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := parsePromptStopReason(tt.raw); got != tt.want {
+				t.Fatalf("parsePromptStopReason() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRecordStopReasonAccessor(t *testing.T) {
+	a := &Agent{}
+	if a.StopReason() != "" {
+		t.Fatalf("initial stop reason should be empty, got %q", a.StopReason())
+	}
+	a.recordStopReason(json.RawMessage(`{"stopReason":"max_tokens"}`))
+	if a.StopReason() != StopMaxTokens {
+		t.Fatalf("stop reason = %q, want %q", a.StopReason(), StopMaxTokens)
+	}
+	a.lastStopReason = ""
+	if a.StopReason() != "" {
+		t.Fatalf("reset stop reason should be empty, got %q", a.StopReason())
+	}
+}
+
+func TestParseSubagentStateEmpty(t *testing.T) {
+	// Verified shape from kiro-cli 2.10.0: empty arrays.
+	state := parseSubagentState(json.RawMessage(`{"subagents":[],"pendingStages":[]}`))
+	if state.HasActivity() {
+		t.Fatalf("empty payload should report no activity: %+v", state)
+	}
+	if len(state.Subagents) != 0 || len(state.PendingStages) != 0 {
+		t.Fatalf("expected empty entries, got %+v", state)
+	}
+}
+
+func TestParseSubagentStatePopulatedBestEffort(t *testing.T) {
+	// Element fields are unverified; the parser extracts best-effort from common
+	// key names and tolerates missing fields.
+	payload := json.RawMessage(`{
+		"subagents":[
+			{"name":"research-a","status":"running","description":"summarize goroutines"},
+			{"title":"research-b"}
+		],
+		"pendingStages":[{"name":"combine"}]
+	}`)
+	state := parseSubagentState(payload)
+	if !state.HasActivity() {
+		t.Fatal("populated payload should report activity")
+	}
+	if len(state.Subagents) != 2 || len(state.PendingStages) != 1 {
+		t.Fatalf("unexpected counts: %+v", state)
+	}
+	if state.Subagents[0].Name != "research-a" || state.Subagents[0].Status != "running" {
+		t.Fatalf("entry 0 not parsed: %+v", state.Subagents[0])
+	}
+	// "title" should fall back into Name.
+	if state.Subagents[1].Name != "research-b" {
+		t.Fatalf("title fallback failed: %+v", state.Subagents[1])
+	}
+}
+
+func TestParseSubagentStateMalformed(t *testing.T) {
+	// Must not panic or report activity on garbage.
+	state := parseSubagentState(json.RawMessage(`not json`))
+	if state.HasActivity() {
+		t.Fatal("malformed payload should report no activity")
+	}
+}

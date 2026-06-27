@@ -13,6 +13,7 @@ const (
 	NotifUpdateKiro   = "_kiro.dev/session/update"
 	NotifMetadata     = "_kiro.dev/metadata"
 	NotifMcpReady     = "_kiro.dev/mcp/server_initialized"
+	NotifSubagent     = "_kiro.dev/subagent/list_update"
 
 	// ClientProtocolVersion is the ACP protocol major version.
 	// Per spec, this is a single integer incremented only on breaking changes.
@@ -21,7 +22,6 @@ const (
 
 // session/update notification types (kiro-cli 1.28.2+)
 const (
-	UpdateToolCallChunk  = "tool_call_chunk"
 	UpdateToolCall       = "tool_call"
 	UpdateToolCallUpdate = "tool_call_update"
 	UpdateAgentChunk     = "agent_message_chunk"
@@ -133,4 +133,36 @@ type TurnMetrics struct {
 	ContextUsage   float64
 	MeteringUsage  []MeteringItem
 	TurnDurationMs int64
+}
+
+// session/prompt stopReason values returned in the prompt result.
+// "end_turn" is the normal completion. Other values indicate the turn ended
+// for a reason the user should know about.
+const (
+	StopEndTurn   = "end_turn"
+	StopMaxTokens = "max_tokens"
+	StopRefusal   = "refusal"
+	StopCancelled = "cancelled"
+)
+
+// SubagentEntry is a best-effort view of a single subagent or pending stage
+// from _kiro.dev/subagent/list_update. Only the top-level array shape is
+// verified against kiro-cli 2.10.0; element fields are extracted defensively
+// and may be empty when the agent does not provide them.
+type SubagentEntry struct {
+	Name        string // best-effort: "name" / "title"
+	Status      string // best-effort: "status" / "state"
+	Description string // best-effort: "description" / "task"
+}
+
+// SubagentState carries parsed _kiro.dev/subagent/list_update data. Counts are
+// derived from the verified top-level "subagents" and "pendingStages" arrays.
+type SubagentState struct {
+	Subagents     []SubagentEntry
+	PendingStages []SubagentEntry
+}
+
+// HasActivity reports whether there is any subagent or pending stage to show.
+func (s SubagentState) HasActivity() bool {
+	return len(s.Subagents) > 0 || len(s.PendingStages) > 0
 }

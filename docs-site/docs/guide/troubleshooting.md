@@ -23,6 +23,10 @@ Check:
 - Multi-bot mode did not switch the channel to automatic mention-only behavior.
 - `/doctor` reports healthy Discord permissions and ACP preflight.
 
+## Response Was Cut Off
+
+If the bot says the response reached the model output limit, the ACP turn completed with `stopReason=max_tokens`. Ask the bot to continue in the same channel or thread. The turn is still recorded as completed because ACP returned a final prompt result rather than a transport error.
+
 ## Thread Reset Says No Thread Agent
 
 A thread may have conversation history without an active in-memory thread agent. Idle cleanup, archive events, or restart can remove the active agent process. Use a new message in the thread to recreate context when supported, or start from the parent channel if the thread is stale.

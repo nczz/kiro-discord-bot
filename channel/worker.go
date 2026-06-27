@@ -130,6 +130,7 @@ type workerAgent interface {
 	Stop()
 	ContextUsage() float64
 	TurnMetrics() acp.TurnMetrics
+	StopReason() string
 	OnReadErrorFunc(func(error))
 	RecentStderr() string
 	SupportsImagePrompt() bool
@@ -659,6 +660,17 @@ func (w *Worker) execute(job *Job) {
 			}
 			SendProcessMessage(ds, threadID, "💭 "+EscapeDiscordMarkdown(text))
 		},
+		OnSubagentUpdate: func(state acp.SubagentState) {
+			if w.onActivity != nil {
+				w.onActivity()
+			}
+			if w.isSilent != nil && w.isSilent() {
+				return // Compact: skip subagent progress
+			}
+			if msg := FormatSubagentProgress(state); msg != "" {
+				SendProcessMessage(ds, threadID, msg)
+			}
+		},
 		OnComplete: func(response string, askErr error) {
 			if w.onActivity != nil {
 				w.onActivity()
@@ -723,6 +735,8 @@ func (w *Worker) execute(job *Job) {
 			swapReaction(ds, job.ChannelID, job.MessageID, "⚙️", "✅")
 			// Mark the origin done before final text so tagged peer bots see a completed source.
 			w.drainBeforeFinal(threadID)
+			stopReason := w.agent.StopReason()
+			response = AppendStopReasonNotice(response, stopReason)
 			SendLongThreadWithMentions(ds, threadID, AppendMetricsFooter(response, w.agent.TurnMetrics()), job.MentionRefs)
 			w.auditResponseEvent(job, threadID, "success", response)
 
@@ -734,10 +748,14 @@ func (w *Worker) execute(job *Job) {
 			}
 
 			w.recordUsage(job, threadID, "success")
-			w.auditJobEvent("agent_job_completed", job, threadID, "success", map[string]any{
+			completedMeta := map[string]any{
 				"elapsed_ms":   time.Since(startTime).Milliseconds(),
 				"response_len": len(response),
-			})
+			}
+			if stopReason != "" {
+				completedMeta["stop_reason"] = stopReason
+			}
+			w.auditJobEvent("agent_job_completed", job, threadID, "success", completedMeta)
 
 			// Warn if context usage is high
 			if usage := w.agent.ContextUsage(); usage >= 90 {
@@ -1087,6 +1105,8 @@ func (w *Worker) executeInline(job *Job) {
 			if response == "" {
 				response = L.Get("worker.empty_response")
 			}
+			stopReason := w.agent.StopReason()
+			response = AppendStopReasonNotice(response, stopReason)
 			responseWithMetrics := AppendMetricsFooter(response, w.agent.TurnMetrics())
 			if !job.DisableBotEgress {
 				w.drainBeforeFinal(targetID)
@@ -1097,11 +1117,15 @@ func (w *Worker) executeInline(job *Job) {
 				w.logger.Log(w.channelID, ChatEntry{Role: "assistant", Content: response, Model: w.model})
 			}
 			w.recordUsage(job, "", "success")
-			w.auditJobEvent("agent_job_completed", job, "", "success", map[string]any{
+			inlineCompletedMeta := map[string]any{
 				"delivery_mode": DeliveryInline.String(),
 				"elapsed_ms":    time.Since(startTime).Milliseconds(),
 				"response_len":  len(response),
-			})
+			}
+			if stopReason != "" {
+				inlineCompletedMeta["stop_reason"] = stopReason
+			}
+			w.auditJobEvent("agent_job_completed", job, "", "success", inlineCompletedMeta)
 			finishJob("✅")
 		},
 	}
@@ -1405,6 +1429,7 @@ func (w *Worker) executeFallback(job *Job) {
 		if response == "" {
 			response = L.Get("worker.empty_response")
 		}
+		response = AppendStopReasonNotice(response, w.agent.StopReason())
 		logContent = response
 		swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "✅")
 		responseWithMetrics := AppendMetricsFooter(response, w.agent.TurnMetrics())
@@ -1665,6 +1690,59 @@ func SendProcessMessage(ds *discordgo.Session, channelID, content string) (*disc
 		log.Printf("[send] process message %s failed: %v (len=%d)", channelID, err, len(content))
 	}
 	return msg, err
+}
+
+// StopReasonNotice returns a localized notice for an abnormal prompt stopReason.
+// It returns empty for normal completion (end_turn / empty), so callers can
+// unconditionally append the result without affecting the common case.
+func StopReasonNotice(reason string) string {
+	switch reason {
+	case acp.StopMaxTokens:
+		return L.Get("worker.stop_max_tokens")
+	case acp.StopRefusal:
+		return L.Get("worker.stop_refusal")
+	case acp.StopCancelled:
+		return L.Get("worker.stop_cancelled")
+	default:
+		return ""
+	}
+}
+
+// AppendStopReasonNotice appends a stopReason notice to content when the reason
+// is abnormal. Normal completion leaves content unchanged.
+func AppendStopReasonNotice(content, reason string) string {
+	notice := StopReasonNotice(reason)
+	if notice == "" {
+		return content
+	}
+	if content == "" {
+		return notice
+	}
+	return content + "\n\n" + notice
+}
+
+// FormatSubagentProgress builds a one-line progress message from subagent state.
+// Counts come from the verified top-level arrays; entry names are appended
+// best-effort only when present. Returns empty when there is no activity.
+func FormatSubagentProgress(state acp.SubagentState) string {
+	if !state.HasActivity() {
+		return ""
+	}
+	msg := L.Getf("worker.subagent_progress", len(state.Subagents), len(state.PendingStages))
+	names := make([]string, 0, len(state.Subagents))
+	for _, s := range state.Subagents {
+		if s.Name != "" {
+			label := s.Name
+			if s.Status != "" {
+				label += " (" + s.Status + ")"
+			}
+			names = append(names, EscapeDiscordMarkdown(label))
+		}
+	}
+	if len(names) > 0 {
+		msg += "\n" + strings.Join(names, ", ")
+	}
+	return msg
 }
 
 // AppendMetricsFooter appends the turn metrics footer to a final user-visible response.

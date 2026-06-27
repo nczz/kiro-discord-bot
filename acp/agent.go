@@ -33,11 +33,13 @@ type Agent struct {
 	onToolCall   func(ToolCallEvent) // called on tool_call notification
 	onToolResult func(ToolCallEvent) // called on tool_call_update notification
 	onThought    func(string)        // called on agent_thought_chunk
+	onSubagent   func(SubagentState) // called on _kiro.dev/subagent/list_update
 	onExit       func()              // called when child process exits unexpectedly
 	onReadError  func(error)         // called when ReadLoop encounters an error
 
-	contextUsage float64     // latest context usage percentage from metadata
-	turnMetrics  TurnMetrics // per-turn metrics from latest metadata
+	contextUsage   float64     // latest context usage percentage from metadata
+	turnMetrics    TurnMetrics // per-turn metrics from latest metadata
+	lastStopReason string      // stopReason from the most recent prompt result
 
 	initResult    *InitializeResult
 	sessResult    *SessionNewResult
@@ -322,6 +324,70 @@ func ResolveKiroCLI(kiroCLI string) (string, error) {
 	return resolved, nil
 }
 
+// parseSubagentState defensively parses a _kiro.dev/subagent/list_update payload.
+// The verified shape from kiro-cli 2.10.0 is {"subagents":[...],"pendingStages":[...]}.
+// Element fields are unverified (never observed populated), so they are extracted
+// best-effort from common key names and may be empty.
+func parseSubagentState(params json.RawMessage) SubagentState {
+	var raw struct {
+		Subagents     []map[string]interface{} `json:"subagents"`
+		PendingStages []map[string]interface{} `json:"pendingStages"`
+	}
+	if json.Unmarshal(params, &raw) != nil {
+		return SubagentState{}
+	}
+	return SubagentState{
+		Subagents:     subagentEntries(raw.Subagents),
+		PendingStages: subagentEntries(raw.PendingStages),
+	}
+}
+
+func subagentEntries(items []map[string]interface{}) []SubagentEntry {
+	if len(items) == 0 {
+		return nil
+	}
+	out := make([]SubagentEntry, 0, len(items))
+	for _, m := range items {
+		out = append(out, SubagentEntry{
+			Name:        firstString(m, "name", "title", "id"),
+			Status:      firstString(m, "status", "state"),
+			Description: firstString(m, "description", "task", "summary"),
+		})
+	}
+	return out
+}
+
+// firstString returns the first key in keys whose value is a non-empty string.
+func firstString(m map[string]interface{}, keys ...string) string {
+	for _, k := range keys {
+		if v, ok := m[k].(string); ok && strings.TrimSpace(v) != "" {
+			return v
+		}
+	}
+	return ""
+}
+
+func parsePromptStopReason(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var res struct {
+		StopReason string `json:"stopReason"`
+	}
+	if json.Unmarshal(raw, &res) != nil {
+		return ""
+	}
+	return strings.TrimSpace(res.StopReason)
+}
+
+func (a *Agent) recordStopReason(raw json.RawMessage) {
+	if reason := parsePromptStopReason(raw); reason != "" {
+		a.mu.Lock()
+		a.lastStopReason = reason
+		a.mu.Unlock()
+	}
+}
+
 func (a *Agent) handleNotification(method string, params json.RawMessage) {
 	// Handle metadata notifications (context usage, metering, duration)
 	if method == NotifMetadata {
@@ -357,6 +423,19 @@ func (a *Agent) handleNotification(method string, params json.RawMessage) {
 			a.mcpReady[mcpNotif.ServerName] = struct{}{}
 			a.mu.Unlock()
 			log.Printf("[agent:%s] mcp server ready: %s", a.Name, mcpNotif.ServerName)
+		}
+		return
+	}
+
+	// Subagent / staging progress (kiro-cli 2.x). Only the top-level array shape
+	// is verified; element fields are extracted defensively.
+	if method == NotifSubagent {
+		state := parseSubagentState(params)
+		a.mu.Lock()
+		cb := a.onSubagent
+		a.mu.Unlock()
+		if cb != nil && state.HasActivity() {
+			cb(state)
 		}
 		return
 	}
@@ -532,6 +611,14 @@ func (a *Agent) OnThoughtFunc(fn func(string)) {
 	a.mu.Unlock()
 }
 
+// OnSubagentFunc sets a callback invoked on _kiro.dev/subagent/list_update
+// notifications when there is subagent or pending-stage activity.
+func (a *Agent) OnSubagentFunc(fn func(SubagentState)) {
+	a.mu.Lock()
+	a.onSubagent = fn
+	a.mu.Unlock()
+}
+
 // OnReadErrorFunc sets a callback invoked when the ReadLoop encounters an error (e.g. buffer overflow).
 func (a *Agent) OnReadErrorFunc(fn func(error)) {
 	a.mu.Lock()
@@ -672,6 +759,7 @@ func (a *Agent) Ask(ctx context.Context, prompt string, onChunk func(string)) (s
 	a.state = "working"
 	a.currentText.Reset()
 	a.turnMetrics = TurnMetrics{}
+	a.lastStopReason = ""
 	a.onChunk = onChunk
 	a.mu.Unlock()
 
@@ -708,6 +796,7 @@ func (a *Agent) Ask(ctx context.Context, prompt string, onChunk func(string)) (s
 		if r.err != nil {
 			return "", r.err
 		}
+		a.recordStopReason(r.raw)
 		a.mu.Lock()
 		text := a.currentText.String()
 		a.mu.Unlock()
@@ -717,11 +806,12 @@ func (a *Agent) Ask(ctx context.Context, prompt string, onChunk func(string)) (s
 
 // AsyncCallbacks holds callbacks for AskAsync.
 type AsyncCallbacks struct {
-	OnChunk      func(string)
-	OnToolCall   func(ToolCallEvent)
-	OnToolResult func(ToolCallEvent)
-	OnThought    func(string)
-	OnComplete   func(response string, err error)
+	OnChunk          func(string)
+	OnToolCall       func(ToolCallEvent)
+	OnToolResult     func(ToolCallEvent)
+	OnThought        func(string)
+	OnSubagentUpdate func(SubagentState)
+	OnComplete       func(response string, err error)
 }
 
 // AskAsync sends a prompt and returns immediately. Callbacks fire as notifications arrive.
@@ -739,10 +829,12 @@ func (a *Agent) AskAsyncMulti(content []PromptContent, cb AsyncCallbacks) {
 	a.state = "working"
 	a.currentText.Reset()
 	a.turnMetrics = TurnMetrics{}
+	a.lastStopReason = ""
 	a.onChunk = cb.OnChunk
 	a.onToolCall = cb.OnToolCall
 	a.onToolResult = cb.OnToolResult
 	a.onThought = cb.OnThought
+	a.onSubagent = cb.OnSubagentUpdate
 	a.mu.Unlock()
 
 	go func() {
@@ -758,6 +850,7 @@ func (a *Agent) AskAsyncMulti(content []PromptContent, cb AsyncCallbacks) {
 		a.onToolCall = nil
 		a.onToolResult = nil
 		a.onThought = nil
+		a.onSubagent = nil
 		a.mu.Unlock()
 
 		if err != nil {
@@ -766,7 +859,10 @@ func (a *Agent) AskAsyncMulti(content []PromptContent, cb AsyncCallbacks) {
 			}
 			return
 		}
-		_ = raw
+		// Capture stopReason from the prompt result (e.g. end_turn, max_tokens,
+		// refusal, cancelled). Stored turn-scoped so worker can read it in
+		// OnComplete, mirroring the TurnMetrics()/ContextUsage() pattern.
+		a.recordStopReason(raw)
 		if cb.OnComplete != nil {
 			cb.OnComplete(text, nil)
 		}
@@ -836,6 +932,15 @@ func (a *Agent) TurnMetrics() TurnMetrics {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.turnMetrics
+}
+
+// StopReason returns the stopReason from the most recent completed prompt turn
+// (e.g. "end_turn", "max_tokens", "refusal", "cancelled"). Empty if the agent
+// did not report one. Reset at the start of each turn.
+func (a *Agent) StopReason() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.lastStopReason
 }
 
 // Stop gracefully stops the agent: SIGTERM → wait 2s → SIGKILL entire process group.

@@ -23,6 +23,10 @@
 - multi-bot mode 是否自動把 channel 切成 mention-only。
 - `/doctor` 是否顯示 Discord 權限與 ACP preflight 健康。
 
+## 回應被截斷
+
+如果 bot 提示回應達到模型輸出上限，代表 ACP turn 以 `stopReason=max_tokens` 完成。請在同一個 channel 或 thread 要求 bot 繼續。這個 turn 仍會記錄為 completed，因為 ACP 回傳的是 final prompt result，不是 transport error。
+
 ## Thread Reset 顯示 No Thread Agent
 
 Thread 可能有對話紀錄，但沒有 active in-memory thread agent。Idle cleanup、archive event 或 bot restart 都可能移除 agent process。必要時在 thread 內用新訊息重新建立脈絡，或回 parent channel 開新任務。

@@ -54,6 +54,10 @@ Kiro `disabledTools` is not treated as the security boundary.
 
 Normal agent final answers are delivered by the bot. The bot handles secret redaction, message splitting, file egress policy, and Discord delivery errors. `bot_send_message` is intentionally not the default path for final answers; it is a controlled extra egress tool for explicit notifications or handoffs.
 
+ACP prompt results may include a `stopReason`. Normal `end_turn` completion is silent; abnormal reasons such as `max_tokens`, `refusal`, or `cancelled` are surfaced as localized notices appended to the final answer and recorded in job audit metadata. The bot does not reclassify those turns as delivery failures unless ACP itself returns an error.
+
+Kiro subagent progress notifications are rendered conservatively. The bot trusts the verified top-level subagent and pending-stage counts, and displays best-effort labels only when the notification includes recognizable names or statuses.
+
 ## Audit
 
 Audit storage records semantic bot events such as command calls, command responses, agent job lifecycle, and final response delivery. Audit prompt investigations use short-lived private agents with only the audit query tool injected.

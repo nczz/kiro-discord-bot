@@ -195,6 +195,7 @@ type fakeWorkerAgent struct {
 	metrics        acp.TurnMetrics
 	askResponse    string
 	askErr         error
+	stopReason     string
 }
 
 type recordingAuditSink struct {
@@ -250,6 +251,12 @@ func (f *fakeWorkerAgent) Stop() {
 func (f *fakeWorkerAgent) ContextUsage() float64 { return 0 }
 
 func (f *fakeWorkerAgent) TurnMetrics() acp.TurnMetrics { return f.metrics }
+
+func (f *fakeWorkerAgent) StopReason() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.stopReason
+}
 
 func (f *fakeWorkerAgent) OnReadErrorFunc(fn func(error)) {
 	f.mu.Lock()
@@ -1657,5 +1664,84 @@ func TestWorkerTimeoutAndManualInterruptSharePendingEscalation(t *testing.T) {
 	}
 	if got := agent.InterruptCalls(); got != 1 {
 		t.Fatalf("interrupt calls = %d, want 1 shared escalation", got)
+	}
+}
+
+func TestWorkerInlineAppendsStopReasonNoticeOnMaxTokens(t *testing.T) {
+	L.Load("en")
+	rt := &recordingRoundTripper{}
+	ds := testDiscordSession(rt)
+	agent := &fakeWorkerAgent{stopReason: acp.StopMaxTokens}
+	w := newWorker("ch1", agent, 1, 30, 1, 1440, nil, "")
+
+	w.executeInline(&Job{
+		ChannelID:    "ch1",
+		MessageID:    "m1",
+		Prompt:       "hello",
+		Session:      ds,
+		DeliveryMode: DeliveryInline,
+	})
+	cb := agent.Callbacks()
+	if cb.OnComplete == nil {
+		t.Fatal("expected inline callbacks to be registered")
+	}
+	cb.OnComplete("partial answer", nil)
+
+	reqs, bodies := rt.Snapshot()
+	want := L.Get("worker.stop_max_tokens")
+	found := false
+	for i, req := range reqs {
+		if strings.HasPrefix(req, "POST /api/") && strings.HasSuffix(req, "/channels/ch1/messages") {
+			if strings.Contains(bodies[i], want) && strings.Contains(bodies[i], "partial answer") {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected final reply to contain stopReason notice %q and response; requests=%v bodies=%v", want, reqs, bodies)
+	}
+}
+
+func TestWorkerInlineNoStopReasonNoticeOnEndTurn(t *testing.T) {
+	L.Load("en")
+	rt := &recordingRoundTripper{}
+	ds := testDiscordSession(rt)
+	agent := &fakeWorkerAgent{stopReason: acp.StopEndTurn}
+	w := newWorker("ch1", agent, 1, 30, 1, 1440, nil, "")
+
+	w.executeInline(&Job{
+		ChannelID:    "ch1",
+		MessageID:    "m1",
+		Prompt:       "hello",
+		Session:      ds,
+		DeliveryMode: DeliveryInline,
+	})
+	cb := agent.Callbacks()
+	cb.OnComplete("clean answer", nil)
+
+	_, bodies := rt.Snapshot()
+	for _, b := range bodies {
+		if strings.Contains(b, L.Get("worker.stop_max_tokens")) ||
+			strings.Contains(b, L.Get("worker.stop_refusal")) {
+			t.Fatalf("end_turn should not append any stop reason notice; body=%q", b)
+		}
+	}
+}
+
+func TestFormatSubagentProgress(t *testing.T) {
+	L.Load("en")
+	if got := FormatSubagentProgress(acp.SubagentState{}); got != "" {
+		t.Fatalf("no activity should yield empty string, got %q", got)
+	}
+	state := acp.SubagentState{
+		Subagents:     []acp.SubagentEntry{{Name: "research-a", Status: "running"}, {}},
+		PendingStages: []acp.SubagentEntry{{Name: "combine"}},
+	}
+	got := FormatSubagentProgress(state)
+	if got == "" {
+		t.Fatal("expected non-empty progress for active state")
+	}
+	if !strings.Contains(got, "research-a") || !strings.Contains(got, "running") {
+		t.Fatalf("progress should include best-effort entry name/status: %q", got)
 	}
 }
