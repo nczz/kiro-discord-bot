@@ -470,6 +470,9 @@ func formatUsageReport(report channel.UsageReport, userID string) string {
 		sb.WriteString(L.Getf("usage.report.row",
 			row.DayCredits, row.DayTurns, row.WeekCredits, row.WeekTurns, row.MonthCredits, row.MonthTurns))
 		sb.WriteString("\n")
+		if row.DayCostUSD > 0 || row.WeekCostUSD > 0 || row.MonthCostUSD > 0 {
+			sb.WriteString(L.Getf("usage.report.cost_usd", row.DayCostUSD, row.WeekCostUSD, row.MonthCostUSD) + "\n")
+		}
 		if row.MonthTurns > row.MeteredMonthTurns {
 			sb.WriteString(L.Getf("usage.report.unmetered", row.MonthTurns-row.MeteredMonthTurns) + "\n")
 		}
@@ -870,6 +873,40 @@ func (b *Bot) cmdModel(ctx cmdCtx) {
 	} else {
 		ctx.reply(L.Getf("model.switched", model))
 	}
+}
+
+// cmdEngine shows or switches the agent engine (kiro/omp) for the scope.
+func (b *Bot) cmdEngine(ctx cmdCtx) {
+	enabled := strings.Join(b.manager.EnabledEngines(), ", ")
+	if ctx.args == "" {
+		current := b.manager.ChannelEngine(ctx.channelID)
+		if ctx.inThread {
+			current = b.manager.ThreadEngine(ctx.targetID, ctx.channelID)
+		}
+		ctx.reply(L.Getf("engine.current", current, enabled))
+		return
+	}
+	engine := strings.ToLower(strings.TrimSpace(ctx.args))
+	if !channel.ValidEngineName(engine) {
+		ctx.reply(L.Getf("engine.unknown", ctx.args))
+		return
+	}
+	if !b.manager.EngineEnabled(engine) {
+		ctx.reply(L.Getf("engine.not_enabled", engine, enabled))
+		return
+	}
+	ctx.reply(L.Getf("engine.switching", engine))
+	var err error
+	if ctx.inThread {
+		err = b.manager.SwitchThreadEngine(ctx.targetID, ctx.channelID, engine)
+	} else {
+		err = b.manager.SwitchEngine(ctx.channelID, engine)
+	}
+	if err != nil {
+		ctx.reply(L.Getf("error.reset_failed", commandErrorString(err)))
+		return
+	}
+	ctx.reply(L.Getf("engine.switched", engine))
 }
 
 // --- Thread-only commands ---

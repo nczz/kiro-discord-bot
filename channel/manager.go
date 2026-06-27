@@ -766,7 +766,7 @@ func (m *Manager) Reset(channelID string) error {
 	delete(m.flashMemory, channelID)
 
 	if sess != nil {
-		if err := m.setChannelSession(channelID, &Session{CWD: sess.CWD, Model: sess.Model}); err != nil {
+		if err := m.setChannelSession(channelID, &Session{CWD: sess.CWD, Model: sess.Model, Engine: sess.Engine}); err != nil {
 			log.Printf("[manager] save session on reset: %v", err)
 		}
 	}
@@ -782,7 +782,7 @@ func (m *Manager) Restart(channelID string) error {
 	m.stopChannel(channelID)
 
 	if sess != nil {
-		if err := m.setChannelSession(channelID, &Session{CWD: sess.CWD, Model: sess.Model}); err != nil {
+		if err := m.setChannelSession(channelID, &Session{CWD: sess.CWD, Model: sess.Model, Engine: sess.Engine}); err != nil {
 			log.Printf("[manager] save session on restart: %v", err)
 		}
 	}
@@ -1298,6 +1298,7 @@ func (m *Manager) StartAt(channelID, cwd string) error {
 	newSess := &Session{CWD: cwd}
 	if existing != nil {
 		newSess.Model = existing.Model
+		newSess.Engine = existing.Engine
 	}
 	_ = m.setChannelSession(channelID, newSess)
 
@@ -1677,8 +1678,12 @@ func (m *Manager) startAgentAndWorker(channelID string) (*Worker, error) {
 
 	// Try to load previous session if available
 	opts := m.agentOptsForChannel(channelID)
-	if sess, ok := m.getChannelSession(channelID); ok && sess.SessionID != "" {
-		opts.LoadSessionID = sess.SessionID
+	channelEngine := ""
+	if sess, ok := m.getChannelSession(channelID); ok {
+		if sess.SessionID != "" {
+			opts.LoadSessionID = sess.SessionID
+		}
+		channelEngine = sess.Engine
 	}
 	dialect, binary := m.engineForChannel(channelID)
 	opts = m.applyEngine(opts, dialect)
@@ -1715,6 +1720,7 @@ func (m *Manager) startAgentAndWorker(channelID string) (*Worker, error) {
 		SessionID:   agent.SessionID,
 		CWD:         cwd,
 		Model:       model,
+		Engine:      channelEngine,
 		MentionRefs: mentionRefs,
 	}); err != nil {
 		log.Printf("[manager] save session: %v", err)
@@ -2410,11 +2416,16 @@ func (m *Manager) spawnThreadAgent(threadID, parentChannelID string, modelOverri
 		}
 	}
 
+	threadEngine := ""
+	if hasThreadSession {
+		threadEngine = threadSess.Engine
+	}
 	if err := m.setThreadSession(threadID, parentChannelID, &Session{
 		AgentName:   agentName,
 		SessionID:   agent.SessionID,
 		CWD:         cwd,
 		Model:       model,
+		Engine:      threadEngine,
 		MentionRefs: mentionRefs,
 	}); err != nil {
 		log.Printf("[manager] save thread session: %v", err)

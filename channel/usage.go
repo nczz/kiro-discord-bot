@@ -30,9 +30,11 @@ type UsageRecord struct {
 	InteractionID     string             `json:"interaction_id,omitempty"`
 	InvocationID      string             `json:"invocation_id,omitempty"`
 	Model             string             `json:"model,omitempty"`
+	Engine            string             `json:"engine,omitempty"`
 	Source            string             `json:"source"`
 	Status            string             `json:"status"`
 	Credits           float64            `json:"credits"`
+	CostUSD           float64            `json:"cost_usd,omitempty"`
 	MeteringSupported bool               `json:"metering_supported"`
 	MeteringUsage     []acp.MeteringItem `json:"metering_usage,omitempty"`
 	DurationMs        int64              `json:"duration_ms,omitempty"`
@@ -62,6 +64,9 @@ type UsageReportRow struct {
 	DayCredits        float64
 	WeekCredits       float64
 	MonthCredits      float64
+	DayCostUSD        float64
+	WeekCostUSD       float64
+	MonthCostUSD      float64
 	DayTurns          int
 	WeekTurns         int
 	MonthTurns        int
@@ -113,6 +118,7 @@ func (s *UsageStore) Append(record UsageRecord) error {
 		record.Timestamp = now.Format(usageTimeFormat)
 	}
 	record.Credits, record.MeteringSupported = creditsFromMetering(record.MeteringUsage)
+	record.CostUSD, _ = costFromMetering(record.MeteringUsage)
 	if record.Source == "" {
 		record.Source = "message"
 	}
@@ -178,6 +184,19 @@ func creditsFromMetering(items []acp.MeteringItem) (float64, bool) {
 	return credits, supported
 }
 
+// costFromMetering sums USD-denominated metering entries (omp engine).
+func costFromMetering(items []acp.MeteringItem) (float64, bool) {
+	var cost float64
+	supported := false
+	for _, item := range items {
+		if strings.EqualFold(strings.TrimSpace(item.Unit), "USD") {
+			cost += item.Value
+			supported = true
+		}
+	}
+	return cost, supported
+}
+
 func (s *UsageStore) Report(guildID, channelID, userID string, limit int, now time.Time) (UsageReport, error) {
 	if s == nil {
 		return UsageReport{}, errors.New("usage store not configured")
@@ -224,6 +243,14 @@ func (s *UsageStore) Report(guildID, channelID, userID string, limit int, now ti
 		if len(rec.MeteringUsage) > 0 {
 			credits, meteringSupported = creditsFromMetering(rec.MeteringUsage)
 		}
+		cost := rec.CostUSD
+		costSupported := false
+		if len(rec.MeteringUsage) > 0 {
+			cost, costSupported = costFromMetering(rec.MeteringUsage)
+		}
+		if costSupported {
+			meteringSupported = true
+		}
 		row := rows[resolvedUserID]
 		if row == nil {
 			row = &UsageReportRow{UserID: resolvedUserID}
@@ -234,6 +261,7 @@ func (s *UsageStore) Report(guildID, channelID, userID string, limit int, now ti
 		}
 		if !item.timestamp.Before(monthStart) {
 			row.MonthCredits += credits
+			row.MonthCostUSD += cost
 			row.MonthTurns++
 			if meteringSupported {
 				row.MeteredMonthTurns++
@@ -241,6 +269,7 @@ func (s *UsageStore) Report(guildID, channelID, userID string, limit int, now ti
 		}
 		if !item.timestamp.Before(weekStart) {
 			row.WeekCredits += credits
+			row.WeekCostUSD += cost
 			row.WeekTurns++
 			if meteringSupported {
 				row.MeteredWeekTurns++
@@ -248,6 +277,7 @@ func (s *UsageStore) Report(guildID, channelID, userID string, limit int, now ti
 		}
 		if !item.timestamp.Before(dayStart) {
 			row.DayCredits += credits
+			row.DayCostUSD += cost
 			row.DayTurns++
 			if meteringSupported {
 				row.MeteredDayTurns++

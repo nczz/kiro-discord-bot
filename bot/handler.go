@@ -118,7 +118,7 @@ func isKnownBangCommand(name, content string) bool {
 	}
 	switch name {
 	case "resume", "pause", "back", "silent", "thread", "reset", "status", "usage", "doctor", "audit", "mcp", "steering", "cancel", "interrupt",
-		"close-thread", "compact", "clear", "cwd", "start", "agent", "model", "models", "memory", "flashmemory", "cron", "help":
+		"close-thread", "compact", "clear", "cwd", "start", "agent", "engine", "model", "models", "memory", "flashmemory", "cron", "help":
 		return true
 	case "remind":
 		return strings.HasPrefix(strings.TrimSpace(content), "!remind ")
@@ -684,6 +684,11 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 	case strings.HasPrefix(content, "!model "):
 		ctx.args = strings.TrimSpace(strings.TrimPrefix(content, "!model "))
 		b.cmdModel(ctx)
+	case content == "!engine":
+		b.cmdEngine(ctx)
+	case strings.HasPrefix(content, "!engine "):
+		ctx.args = strings.TrimSpace(strings.TrimPrefix(content, "!engine "))
+		b.cmdEngine(ctx)
 	case strings.HasPrefix(content, "!memory"):
 		ctx.args = strings.TrimSpace(strings.TrimPrefix(content, "!memory"))
 		b.cmdMemory(ctx)
@@ -894,6 +899,10 @@ func (b *Bot) handleThreadMessage(ds *discordgo.Session, m *discordgo.MessageCre
 		ctx.args = strings.TrimSpace(strings.TrimPrefix(content, "!agent"))
 		b.cmdAgent(ctx)
 		return
+	case content == "!engine" || strings.HasPrefix(content, "!engine "):
+		ctx.args = strings.TrimSpace(strings.TrimPrefix(content, "!engine"))
+		b.cmdEngine(ctx)
+		return
 	case content == "!resume":
 		b.cmdResume(ctx)
 		return
@@ -1003,6 +1012,12 @@ func buildSlashCommands() []*discordgo.ApplicationCommand {
 		{Name: "models", Description: L.Get("cmd.models.desc")},
 		{Name: "agent", Description: L.Get("cmd.agent.desc"), Options: []*discordgo.ApplicationCommandOption{
 			{Type: discordgo.ApplicationCommandOptionString, Name: "mode", Description: L.Get("cmd.agent.opt.mode"), Required: false},
+		}},
+		{Name: "engine", Description: L.Get("cmd.engine.desc"), Options: []*discordgo.ApplicationCommandOption{
+			{Type: discordgo.ApplicationCommandOptionString, Name: "engine", Description: L.Get("cmd.engine.opt.engine"), Required: false, Choices: []*discordgo.ApplicationCommandOptionChoice{
+				{Name: "kiro", Value: "kiro"},
+				{Name: "omp", Value: "omp"},
+			}},
 		}},
 		{Name: "cron", Description: L.Get("cmd.cron.desc")},
 		{Name: "cron-list", Description: L.Get("cmd.cron_list.desc")},
@@ -1413,6 +1428,11 @@ func (b *Bot) handleSlashCommand(ds *discordgo.Session, i *discordgo.Interaction
 				ctx.args = data.Options[0].StringValue()
 			}
 			b.cmdAgent(ctx)
+		case "engine":
+			if len(data.Options) > 0 {
+				ctx.args = data.Options[0].StringValue()
+			}
+			b.cmdEngine(ctx)
 		case "memory":
 			action := data.Options[0].StringValue()
 			value := ""

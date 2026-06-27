@@ -1252,6 +1252,13 @@ func (w *Worker) recordUsage(job *Job, threadID, status string) {
 		return
 	}
 	metrics := w.agent.TurnMetrics()
+	engineLabel := "kiro"
+	for _, item := range metrics.MeteringUsage {
+		if strings.EqualFold(strings.TrimSpace(item.Unit), "USD") {
+			engineLabel = "omp"
+			break
+		}
+	}
 	channelID := job.ChannelID
 	if job.ParentChannelID != "" {
 		channelID = job.ParentChannelID
@@ -1272,6 +1279,7 @@ func (w *Worker) recordUsage(job *Job, threadID, status string) {
 		Username:      job.Username,
 		MessageID:     job.MessageID,
 		Model:         w.model,
+		Engine:        engineLabel,
 		Source:        source,
 		Status:        status,
 		MeteringUsage: metrics.MeteringUsage,
@@ -1768,7 +1776,11 @@ func FormatMetricsFooter(m acp.TurnMetrics) string {
 	} else if len(m.MeteringUsage) > 0 {
 		item := firstNonZeroMeteringItem(m.MeteringUsage)
 		if item.Value > 0 && strings.TrimSpace(item.Unit) != "" {
-			parts = append(parts, fmt.Sprintf("%.2f %s", item.Value, item.Unit))
+			if strings.EqualFold(strings.TrimSpace(item.Unit), "USD") {
+				parts = append(parts, fmt.Sprintf("$%.4f", item.Value))
+			} else {
+				parts = append(parts, fmt.Sprintf("%.2f %s", item.Value, item.Unit))
+			}
 		}
 	}
 	if m.TurnDurationMs > 0 {

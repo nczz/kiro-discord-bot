@@ -9,7 +9,7 @@ exactly that one task. The `NEXT:` pointer is authoritative; if memory disagrees
 
 ---
 
-## NEXT: S4.1 — /engine slash+bang+dispatch, scope handling, i18n keys (engine.current/switched/switching/not_enabled/unknown), admin permission
+## NEXT: S4.4 — /steering engine-aware: maintain AGENTS.md (cross-engine, read by kiro+omp) + keep .kiro/steering/<project>.md (kiro), all via Manager steering-path policy (stay under channel cwd; no handler-side path joins)
 
 (Update this line after each task. It must always name the single next task to do.)
 
@@ -44,11 +44,11 @@ exactly that one task. The `NEXT:` pointer is authoritative; if memory disagrees
 - [x] S3.7 Verify — engine_test.go (parseDialect/parseEnabledEngines/applyEngine strip/engineForChannel/engineForThread inheritance) all PASS; build/vet OK; acp/channel/bot tests ok; i18n 476 aligned; git diff --check clean; doctor test confirmed same pre-existing env failure (new entries render correctly) → COMMIT
 
 ## Stage 4 — /engine command + switch + per-engine usage (M2 primary). Commit when S4.6 green.
-- [ ] S4.1 /engine slash+bang+dispatch, scope handling, i18n keys, permission
-- [ ] S4.2 Switch state machine (busy→cancel→stop→persist→start→history replay→reply; error→revert)
-- [ ] S4.3 Per-engine usage: UsageRecord.Engine, costFromMetering(USD), /usage two columns, footer branch
+- [x] S4.1 /engine slash+bang+dispatch — registered (choices kiro/omp), slash dispatch, bang !engine (channel+thread), command-recognition list; cmdEngine in commands.go; i18n engine.current/switching/switched/unknown/not_enabled + cmd.engine.* (484 aligned)
+- [x] S4.2 Switch state machine — SwitchEngine/SwitchThreadEngine (channel/engine.go): validate enabled, persist Session.Engine (canonical name), fresh session (SessionID cleared), Restart (stop worker+agent→start→history-prefix replay), error→revert. CRITICAL FIX: Reset/Restart/SetCWD-restart/channel-spawn/thread-spawn now preserve Session.Engine (were dropping it → would lose engine on every spawn/model-switch)
+- [x] S4.3 Per-engine usage — costFromMetering(USD), UsageRecord.Engine+CostUSD, Append computes CostUSD, Report aggregates *CostUSD + counts USD turns as metered, formatUsageReport shows USD line, FormatMetricsFooter shows $X.XXXX for USD; recordUsage sets Engine from metering unit
 - [ ] S4.4 /steering engine-aware (AGENTS.md cross-engine + .kiro/steering kiro), via Manager policy
-- [ ] S4.5 Docs/steering sync (project.md, decision-failure-patterns.md, README×2, .env.example, listen-mode-matrix?)
+- [ ] S4.5 Docs/steering sync (project.md, decision-failure-patterns.md, README×2, .env.example done, listen-mode-matrix?)
 - [ ] S4.6 Verify full suite + omp smoke + i18n + git diff --check + manual /engine,/usage,/doctor → COMMIT
 
 ---
@@ -62,3 +62,4 @@ exactly that one task. The `NEXT:` pointer is authoritative; if memory disagrees
 - S2.3: `RUN_OMP_SMOKE=1 OMP_PATH=$(which omp) go test ./acp -run TestOmpSmoke` PASS 3.28s — omp 16.1.23, models=16, modes=2, stopReason=end_turn, ctx=8.34%, metering=[{0.113655 USD}].
 - S2.5: `go test ./acp` (7 new dialect tests PASS) ok; `go vet ./acp ./channel ./bot` OK; `go test ./channel -skip <env test>` ok 13.985s; `go test ./bot` ok 0.572s — kiro zero-regression.
 - S3.7: 5 engine_test.go tests PASS (parseDialect/parseEnabledEngines/applyEngine-strip/engineForChannel/engineForThread); `go build ./...` OK; `go vet ./...` OK; `go test ./acp ./channel ./bot -skip <env test>` all ok; i18n 476 aligned; `git diff --check` clean. Doctor env test = same pre-existing KIRO_CLI_PATH-set failure; new OMP_PATH/AGENT_ENGINE/AGENT_ENGINES_ENABLED entries render correctly (no panic).
+- S4.1–S4.3 (partial Stage 4 commit): `go build ./...` OK; `go vet ./bot ./channel` OK; `go test ./bot ./channel -skip <env test>` ok; i18n 484 aligned. Decision: committing S4.1–S4.3 as a partial-stage commit (verified, kiro zero-regression) rather than holding a large uncommitted diff across the iteration boundary — better for the compaction-resistant workflow. S4.4–S4.6 land in the final Stage-4 commit.
