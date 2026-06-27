@@ -15,6 +15,7 @@ type Session struct {
 	SessionID       string               `json:"sessionId"`
 	CWD             string               `json:"cwd"`
 	Model           string               `json:"model,omitempty"`
+	Engine          string               `json:"engine,omitempty"`
 	GuildID         string               `json:"guildId,omitempty"`
 	BotID           string               `json:"botId,omitempty"`
 	TargetType      string               `json:"targetType,omitempty"`

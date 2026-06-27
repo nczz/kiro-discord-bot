@@ -1,0 +1,102 @@
+package channel
+
+import (
+	"testing"
+
+	"github.com/nczz/kiro-discord-bot/acp"
+)
+
+func TestParseDialect(t *testing.T) {
+	cases := map[string]acp.Dialect{
+		"omp": acp.DialectOmp, "OMP": acp.DialectOmp,
+		"kiro": acp.DialectKiro, "": acp.DialectKiro, "unknown": acp.DialectKiro,
+	}
+	for in, want := range cases {
+		if got := parseDialect(in); got != want {
+			t.Errorf("parseDialect(%q)=%v want %v", in, got, want)
+		}
+	}
+}
+
+func TestParseEnabledEngines(t *testing.T) {
+	// default kiro, no enabled list → kiro only
+	s := parseEnabledEngines("kiro", "")
+	if !s[acp.DialectKiro] || s[acp.DialectOmp] {
+		t.Fatalf("kiro-only set wrong: %v", s)
+	}
+	// default kiro + omp enabled → both
+	s = parseEnabledEngines("kiro", "kiro,omp")
+	if !s[acp.DialectKiro] || !s[acp.DialectOmp] {
+		t.Fatalf("both set wrong: %v", s)
+	}
+	// default omp, empty enabled → omp only (default always enabled)
+	s = parseEnabledEngines("omp", "")
+	if !s[acp.DialectOmp] || s[acp.DialectKiro] {
+		t.Fatalf("omp-only set wrong: %v", s)
+	}
+}
+
+func TestApplyEngineStripsKiroEnvForOmp(t *testing.T) {
+	m := &Manager{}
+	base := acp.AgentOptions{Env: []string{"KIRO_HOME=/x", "FOO=bar", "KIRO_MCP_CONFIG=/y"}}
+	// kiro keeps all env + sets dialect
+	k := m.applyEngine(base, acp.DialectKiro)
+	if k.Dialect != acp.DialectKiro || len(k.Env) != 3 {
+		t.Fatalf("kiro applyEngine wrong: dialect=%v env=%v", k.Dialect, k.Env)
+	}
+	// omp strips KIRO_* but keeps others
+	o := m.applyEngine(base, acp.DialectOmp)
+	if o.Dialect != acp.DialectOmp {
+		t.Fatalf("omp dialect not set: %v", o.Dialect)
+	}
+	for _, e := range o.Env {
+		if e == "KIRO_HOME=/x" || e == "KIRO_MCP_CONFIG=/y" {
+			t.Fatalf("omp env not stripped: %v", o.Env)
+		}
+	}
+	if len(o.Env) != 1 || o.Env[0] != "FOO=bar" {
+		t.Fatalf("omp env wrong: %v", o.Env)
+	}
+}
+
+func newEngineTestManager(t *testing.T, defEngine string) *Manager {
+	t.Helper()
+	store, err := NewSessionStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("store: %v", err)
+	}
+	return &Manager{
+		store:          store,
+		defaultEngine:  parseDialect(defEngine),
+		enabledEngines: parseEnabledEngines(defEngine, "kiro,omp"),
+		kiroCLI:        "kiro-cli",
+		ompPath:        "omp",
+	}
+}
+
+func TestEngineForChannelResolution(t *testing.T) {
+	m := newEngineTestManager(t, "kiro")
+	// unset → default kiro
+	if d, bin := m.engineForChannel("ch1"); d != acp.DialectKiro || bin != "kiro-cli" {
+		t.Fatalf("default channel engine wrong: %v %s", d, bin)
+	}
+	// channel persisted omp → omp + omp binary
+	_ = m.store.Set(m.sessionKey(sessionTargetChannel, "ch1"), &Session{Engine: "omp"})
+	if d, bin := m.engineForChannel("ch1"); d != acp.DialectOmp || bin != "omp" {
+		t.Fatalf("channel omp engine wrong: %v %s", d, bin)
+	}
+}
+
+func TestEngineForThreadInheritance(t *testing.T) {
+	m := newEngineTestManager(t, "kiro")
+	// parent channel = omp; thread with no override inherits omp
+	_ = m.store.Set(m.sessionKey(sessionTargetChannel, "chP"), &Session{Engine: "omp"})
+	if d, _ := m.engineForThread("th1", "chP"); d != acp.DialectOmp {
+		t.Fatalf("thread should inherit parent omp, got %v", d)
+	}
+	// thread override = kiro wins over parent omp
+	_ = m.store.Set(m.sessionKey(sessionTargetThread, "th1"), &Session{Engine: "kiro"})
+	if d, bin := m.engineForThread("th1", "chP"); d != acp.DialectKiro || bin != "kiro-cli" {
+		t.Fatalf("thread override kiro should win, got %v %s", d, bin)
+	}
+}

@@ -11,6 +11,9 @@ import (
 type Config struct {
 	DiscordToken         string
 	KiroCLIPath          string
+	OMPPath              string
+	AgentEngine          string
+	AgentEnginesEnabled  string
 	DefaultCWD           string
 	AllowedCwdRoots      string
 	AskTimeoutSec        int
@@ -55,6 +58,9 @@ func loadConfig() *Config {
 	cfg := &Config{
 		DiscordToken:         mustEnv("DISCORD_TOKEN"),
 		KiroCLIPath:          envOr("KIRO_CLI_PATH", "kiro-cli"),
+		OMPPath:              envOr("OMP_PATH", "omp"),
+		AgentEngine:          envOr("AGENT_ENGINE", "kiro"),
+		AgentEnginesEnabled:  envOr("AGENT_ENGINES_ENABLED", ""),
 		DefaultCWD:           envOr("DEFAULT_CWD", "/projects"),
 		AllowedCwdRoots:      envOr("ALLOWED_CWD_ROOTS", ""),
 		AskTimeoutSec:        envInt("ASK_TIMEOUT_SEC", 3600),

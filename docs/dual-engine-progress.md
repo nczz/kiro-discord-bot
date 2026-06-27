@@ -9,7 +9,7 @@ exactly that one task. The `NEXT:` pointer is authoritative; if memory disagrees
 
 ---
 
-## NEXT: S3.1 — env full path: AGENT_ENGINE / AGENT_ENGINES_ENABLED / OMP_PATH (config.go→ManagerConfig+Manager+NewManager→main.go→doctor_env.go→locale en/zh-TW→README+zh→.env.example)
+## NEXT: S4.1 — /engine slash+bang+dispatch, scope handling, i18n keys (engine.current/switched/switching/not_enabled/unknown), admin permission
 
 (Update this line after each task. It must always name the single next task to do.)
 
@@ -35,13 +35,13 @@ exactly that one task. The `NEXT:` pointer is authoritative; if memory disagrees
 - [x] S2.5 Tests — acp/dialect_test.go: kiro/omp launchArgs, profileFor, parseOmpSession (+malformed), usage delta cost (+compaction reset guard) all PASS; full acp/channel/bot green; kiro zero-regression → COMMIT
 
 ## Stage 3 — engine config + resolution (pure-omp + M1). Commit when S3.7 green.
-- [ ] S3.1 env full path: AGENT_ENGINE / AGENT_ENGINES_ENABLED / OMP_PATH (config→ManagerConfig→main→doctor_env→locale×2→README×2→.env.example)
-- [ ] S3.2 Engine-aware preflight (preflight enabled engines; no kiro ref when kiro disabled)
-- [ ] S3.3 Gate KIRO_HOME/KIRO_MCP_CONFIG + kiro-agent-runtime to kiro dialect only
-- [ ] S3.4 Engine resolution (default→channel→thread→override) at all 4 spawn points
-- [ ] S3.5 Session.Engine field + read/write inherit chain
-- [ ] S3.6 /doctor engine-scoped env + per-engine preflight lines
-- [ ] S3.7 Verify pure-omp acceptance + full tests + i18n parity → COMMIT
+- [x] S3.1 env full path — config.go (OMPPath/AgentEngine/AgentEnginesEnabled) → ManagerConfig + Manager fields + NewManager → main.go assembly → doctor_env.go (3 entries) → locale en/zh-TW (+3 keys, 476 aligned) → .env.example → docs-site environment.md (en+zh)
+- [x] S3.2 Engine-aware preflight — main.go runPreflight + enabledEngineSpecs (preflights only enabled engines; strict/fatal per-engine); pure-omp never references kiro-cli
+- [x] S3.3 Gate KIRO_HOME/KIRO_MCP_CONFIG + kiro-agent-runtime to kiro — applyEngine strips KIRO_* env for non-kiro; NewManager MkdirAll gated on enabledEngines[kiro]; preflightAgentOptions(dialect) skips KIRO_* for omp
+- [x] S3.4 Engine resolution — channel/engine.go engineForChannel/engineForThread + applyEngine; wired into all 4 spawn points (channel/temp/audit/thread) with resolved binary
+- [x] S3.5 Session.Engine field + inherit chain (default→channel→thread→override) — session.go field + engineForChannel/Thread reads
+- [x] S3.6 /doctor engine env display (AGENT_ENGINE/OMP_PATH/AGENT_ENGINES_ENABLED) + startup per-engine preflight log lines. NOTE: live /doctor per-engine re-preflight deferred (env config now visible; startup runPreflight logs per engine).
+- [x] S3.7 Verify — engine_test.go (parseDialect/parseEnabledEngines/applyEngine strip/engineForChannel/engineForThread inheritance) all PASS; build/vet OK; acp/channel/bot tests ok; i18n 476 aligned; git diff --check clean; doctor test confirmed same pre-existing env failure (new entries render correctly) → COMMIT
 
 ## Stage 4 — /engine command + switch + per-engine usage (M2 primary). Commit when S4.6 green.
 - [ ] S4.1 /engine slash+bang+dispatch, scope handling, i18n keys, permission
@@ -61,3 +61,4 @@ exactly that one task. The `NEXT:` pointer is authoritative; if memory disagrees
 - S1.5: `go build ./...` BUILD_OK; `go vet ./acp ./channel ./bot` VET_OK; `go test ./acp` ok 0.575s; `go test ./channel -skip TestDoctorRuntimeOverviewShowsEffectiveDefaultsWhenEnvUnset` ok 14.079s; `go test ./bot` ok 0.613s.
 - S2.3: `RUN_OMP_SMOKE=1 OMP_PATH=$(which omp) go test ./acp -run TestOmpSmoke` PASS 3.28s — omp 16.1.23, models=16, modes=2, stopReason=end_turn, ctx=8.34%, metering=[{0.113655 USD}].
 - S2.5: `go test ./acp` (7 new dialect tests PASS) ok; `go vet ./acp ./channel ./bot` OK; `go test ./channel -skip <env test>` ok 13.985s; `go test ./bot` ok 0.572s — kiro zero-regression.
+- S3.7: 5 engine_test.go tests PASS (parseDialect/parseEnabledEngines/applyEngine-strip/engineForChannel/engineForThread); `go build ./...` OK; `go vet ./...` OK; `go test ./acp ./channel ./bot -skip <env test>` all ok; i18n 476 aligned; `git diff --check` clean. Doctor env test = same pre-existing KIRO_CLI_PATH-set failure; new OMP_PATH/AGENT_ENGINE/AGENT_ENGINES_ENABLED entries render correctly (no panic).

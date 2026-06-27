@@ -35,6 +35,9 @@ type Manager struct {
 	silent          map[string]bool   // channelID → silent mode (default true when absent)
 	store           *SessionStore
 	kiroCLI         string
+	ompPath         string
+	defaultEngine   acp.Dialect
+	enabledEngines  map[acp.Dialect]bool
 	defaultCWD      string
 	allowedCwdRoots []string
 	queueBufSize    int
@@ -131,6 +134,9 @@ func (e *ThreadAgentLimitError) Error() string {
 type ManagerConfig struct {
 	Store                *SessionStore // set by bot.go after creation
 	KiroCLIPath          string
+	OMPPath              string
+	AgentEngine          string // default engine for new scopes: "kiro" | "omp"
+	AgentEnginesEnabled  string // comma list of engines /engine may select; empty = AgentEngine only
 	DefaultCWD           string
 	AllowedCwdRoots      string
 	QueueBufferSize      int
@@ -165,6 +171,9 @@ func NewManager(cfg ManagerConfig) *Manager {
 		threadAgents:        make(map[string]*threadAgentEntry),
 		store:               cfg.Store,
 		kiroCLI:             cfg.KiroCLIPath,
+		ompPath:             cfg.OMPPath,
+		defaultEngine:       parseDialect(cfg.AgentEngine),
+		enabledEngines:      parseEnabledEngines(cfg.AgentEngine, cfg.AgentEnginesEnabled),
 		defaultCWD:          cfg.DefaultCWD,
 		allowedCwdRoots:     parseCwdRoots(cfg.AllowedCwdRoots),
 		queueBufSize:        cfg.QueueBufferSize,
@@ -194,7 +203,7 @@ func NewManager(cfg ManagerConfig) *Manager {
 	if exe, err := os.Executable(); err == nil {
 		m.mcpProxyCommand = exe
 	}
-	if cfg.DataDir != "" {
+	if cfg.DataDir != "" && m.enabledEngines[acp.DialectKiro] {
 		if err := os.MkdirAll(m.agentRuntimeHome, 0755); err != nil {
 			log.Printf("[agent-runtime] create runtime home: %v", err)
 		}
@@ -1671,8 +1680,10 @@ func (m *Manager) startAgentAndWorker(channelID string) (*Worker, error) {
 	if sess, ok := m.getChannelSession(channelID); ok && sess.SessionID != "" {
 		opts.LoadSessionID = sess.SessionID
 	}
+	dialect, binary := m.engineForChannel(channelID)
+	opts = m.applyEngine(opts, dialect)
 
-	agent, err := acp.StartAgent(agentName, m.kiroCLI, cwd, model, opts)
+	agent, err := acp.StartAgent(agentName, binary, cwd, model, opts)
 	if err != nil {
 		return nil, fmt.Errorf("start agent: %w", err)
 	}
@@ -1882,7 +1893,9 @@ func (m *Manager) StartTempAgent(name, cwd, model, channelID string) (*acp.Agent
 	if err != nil {
 		return nil, err
 	}
-	return acp.StartAgent(name, m.kiroCLI, cwd, model, m.agentOptsForTempChannel(name, channelID))
+	dialect, binary := m.engineForChannel(channelID)
+	opts := m.applyEngine(m.agentOptsForTempChannel(name, channelID), dialect)
+	return acp.StartAgent(name, binary, cwd, model, opts)
 }
 
 // StartAuditPromptAgent starts a private, short-lived agent for an already
@@ -1911,7 +1924,9 @@ func (m *Manager) StartAuditPromptAgent(name, channelID, targetChannelID string)
 	opts := m.agentOptsWithRuntime()
 	opts.LoadSessionID = ""
 	opts.MCPServers = servers
-	agent, err := acp.StartAgent(name, m.kiroCLI, cwd, model, opts)
+	dialect, binary := m.engineForChannel(channelID)
+	opts = m.applyEngine(opts, dialect)
+	agent, err := acp.StartAgent(name, binary, cwd, model, opts)
 	if err != nil {
 		return nil, "", err
 	}
@@ -2363,8 +2378,10 @@ func (m *Manager) spawnThreadAgent(threadID, parentChannelID string, modelOverri
 	if hasThreadSession && threadSess.SessionID != "" {
 		opts.LoadSessionID = threadSess.SessionID
 	}
+	dialect, binary := m.engineForThread(threadID, parentChannelID)
+	opts = m.applyEngine(opts, dialect)
 
-	agent, err := acp.StartAgent(agentName, m.kiroCLI, cwd, model, opts)
+	agent, err := acp.StartAgent(agentName, binary, cwd, model, opts)
 	if err != nil {
 		return nil, err
 	}

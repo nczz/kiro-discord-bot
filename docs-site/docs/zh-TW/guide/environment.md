@@ -16,6 +16,9 @@ Bot 不會自行載入 `.env`。請透過 shell、launchd、systemd、Docker 或
 | --- | --- | --- |
 | `DISCORD_GUILD_ID` | 空 | Slash command 註冊 guild。空值使用 Discord global command scope。 |
 | `KIRO_CLI_PATH` | `kiro-cli` | Kiro CLI 執行檔路徑。 |
+| `OMP_PATH` | `omp` | omp 引擎執行檔路徑（僅啟用 omp 時需要）。 |
+| `AGENT_ENGINE` | `kiro` | 新頻道的預設 agent 引擎：`kiro` 或 `omp`。 |
+| `AGENT_ENGINES_ENABLED` | （僅 AGENT_ENGINE） | `/engine` 可切換的引擎清單（逗號分隔，如 `kiro,omp`）。留空則停用切換。 |
 | `KIRO_API_KEY` | 空 | headless 環境的 Kiro 認證金鑰；互動主機也可用 `kiro-cli login`。 |
 | `DEFAULT_CWD` | `/projects` | `/cwd` 設定面板顯示的專案根目錄。 |
 | `ALLOWED_CWD_ROOTS` | 空 | 可選的逗號分隔工作目錄根目錄 allowlist。 |

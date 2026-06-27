@@ -22,6 +22,14 @@ var envSpecs = []envEntry{
 	{Name: "DISCORD_TOKEN", Sensitive: true, Group: "core"},
 	{Name: "DISCORD_GUILD_ID", Group: "core", Effective: func(m *Manager) string { return configuredOrNone(m.guildID) }},
 	{Name: "KIRO_CLI_PATH", Group: "core", Effective: func(m *Manager) string { return defaultIfEmpty(m.kiroCLI, "kiro-cli") }},
+	{Name: "OMP_PATH", Group: "core", Effective: func(m *Manager) string { return defaultIfEmpty(m.ompPath, "omp") }},
+	{Name: "AGENT_ENGINE", Group: "core", Effective: func(m *Manager) string { return m.defaultEngine.String() }},
+	{Name: "AGENT_ENGINES_ENABLED", Group: "core", Effective: func(m *Manager) string {
+		if list := m.enabledEngineList(); len(list) > 0 {
+			return strings.Join(list, ", ")
+		}
+		return m.defaultEngine.String()
+	}},
 	{Name: "KIRO_API_KEY", Sensitive: true, Group: "core"},
 
 	// Agent

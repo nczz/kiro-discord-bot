@@ -16,6 +16,9 @@ Use `/doctor` after startup to inspect effective values. Secrets are redacted in
 | --- | --- | --- |
 | `DISCORD_GUILD_ID` | empty | Guild used for slash command registration. Empty uses Discord's global command scope. |
 | `KIRO_CLI_PATH` | `kiro-cli` | Executable path for Kiro CLI. |
+| `OMP_PATH` | `omp` | Executable path for the omp engine (only needed when omp is enabled). |
+| `AGENT_ENGINE` | `kiro` | Default agent engine for new channels: `kiro` or `omp`. |
+| `AGENT_ENGINES_ENABLED` | (AGENT_ENGINE only) | Comma list of engines `/engine` may switch to (e.g. `kiro,omp`). Empty disables switching. |
 | `KIRO_API_KEY` | empty | Headless Kiro authentication key when `kiro-cli login` is not used. |
 | `DEFAULT_CWD` | `/projects` | Root shown by `/cwd` setup. |
 | `ALLOWED_CWD_ROOTS` | empty | Optional comma-separated root allowlist for channel working directories. |
