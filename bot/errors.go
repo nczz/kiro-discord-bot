@@ -30,6 +30,8 @@ func commandError(err error) string {
 		return L.Getf("error.cwd_not_found", msg)
 	case strings.Contains(lower, "working directory is not a directory"):
 		return L.Getf("error.cwd_not_directory", msg)
+	case strings.Contains(lower, "agent binary not found"):
+		return L.Getf("error.agent_binary_missing", msg)
 	case strings.Contains(lower, "kiro-cli binary not found"):
 		return L.Getf("error.kiro_cli_missing", msg)
 	case strings.Contains(lower, "you are not logged in") || strings.Contains(lower, "kiro-cli login"):

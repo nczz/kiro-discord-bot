@@ -145,7 +145,7 @@ func TestUsageReportMergesEmptyUserIDWhenUsernameHasUniqueUserID(t *testing.T) {
 			GuildID:       "g1",
 			ChannelID:     "c1",
 			UserID:        "u1",
-			Username:      "mxp.tw",
+			Username:      "alice.dev",
 			Source:        "message",
 			MeteringUsage: []acp.MeteringItem{{Value: 1, Unit: "credit"}},
 		},
@@ -153,7 +153,7 @@ func TestUsageReportMergesEmptyUserIDWhenUsernameHasUniqueUserID(t *testing.T) {
 			Timestamp:     "2026-05-28T10:00:00+08:00",
 			GuildID:       "g1",
 			ChannelID:     "c1",
-			Username:      "mxp.tw",
+			Username:      "alice.dev",
 			Source:        "cron",
 			MeteringUsage: []acp.MeteringItem{{Value: 0.5, Unit: "credit"}},
 		},
@@ -173,8 +173,8 @@ func TestUsageReportMergesEmptyUserIDWhenUsernameHasUniqueUserID(t *testing.T) {
 		t.Fatalf("rows = %d, want 1: %+v", len(report.Rows), report.Rows)
 	}
 	row := report.Rows[0]
-	if row.UserID != "u1" || row.Username != "mxp.tw" {
-		t.Fatalf("row identity = %q/%q, want u1/mxp.tw", row.UserID, row.Username)
+	if row.UserID != "u1" || row.Username != "alice.dev" {
+		t.Fatalf("row identity = %q/%q, want u1/alice.dev", row.UserID, row.Username)
 	}
 	if row.MonthTurns != 2 || row.MeteredMonthTurns != 2 || row.MonthCredits != 1.5 {
 		t.Fatalf("row totals = %+v, want two metered turns and 1.5 credits", row)
@@ -186,6 +186,102 @@ func TestUsageReportMergesEmptyUserIDWhenUsernameHasUniqueUserID(t *testing.T) {
 	}
 	if len(filtered.Rows) != 1 || filtered.Rows[0].MonthTurns != 2 {
 		t.Fatalf("filtered rows = %+v, want merged two-turn row", filtered.Rows)
+	}
+}
+
+func TestUsageReportSortsByUSDCostWhenCreditsTie(t *testing.T) {
+	store := NewUsageStore(t.TempDir(), "Asia/Taipei", 0)
+	records := []UsageRecord{
+		{
+			Timestamp:     "2026-05-28T09:00:00+08:00",
+			GuildID:       "g1",
+			ChannelID:     "c1",
+			UserID:        "low",
+			Username:      "low",
+			Engine:        "omp",
+			MeteringUsage: []acp.MeteringItem{{Value: 0.01, Unit: "USD"}},
+		},
+		{
+			Timestamp:     "2026-05-28T10:00:00+08:00",
+			GuildID:       "g1",
+			ChannelID:     "c1",
+			UserID:        "high",
+			Username:      "high",
+			Engine:        "omp",
+			MeteringUsage: []acp.MeteringItem{{Value: 0.20, Unit: "USD"}},
+		},
+	}
+	for _, rec := range records {
+		if err := store.Append(rec); err != nil {
+			t.Fatalf("append usage: %v", err)
+		}
+	}
+
+	report, err := store.Report("g1", "", "", 10, time.Date(2026, 5, 28, 12, 0, 0, 0, store.Location()))
+	if err != nil {
+		t.Fatalf("report: %v", err)
+	}
+	if len(report.Rows) != 2 {
+		t.Fatalf("rows = %d, want 2", len(report.Rows))
+	}
+	if report.Rows[0].UserID != "high" {
+		t.Fatalf("first row = %+v, want high USD cost first", report.Rows[0])
+	}
+}
+
+func TestUsageReportTotalsIncludeCreditsAndUSDCost(t *testing.T) {
+	store := NewUsageStore(t.TempDir(), "Asia/Taipei", 0)
+	records := []UsageRecord{
+		{
+			Timestamp:     "2026-05-28T09:00:00+08:00",
+			GuildID:       "g1",
+			ChannelID:     "c1",
+			UserID:        "kiro-user",
+			Engine:        "kiro",
+			MeteringUsage: []acp.MeteringItem{{Value: 1.25, Unit: "credit"}},
+		},
+		{
+			Timestamp:     "2026-05-28T10:00:00+08:00",
+			GuildID:       "g1",
+			ChannelID:     "c1",
+			UserID:        "omp-user",
+			Engine:        "omp",
+			MeteringUsage: []acp.MeteringItem{{Value: 0.20, Unit: "USD"}},
+		},
+	}
+	for _, rec := range records {
+		if err := store.Append(rec); err != nil {
+			t.Fatalf("append usage: %v", err)
+		}
+	}
+
+	report, err := store.Report("g1", "", "", 10, time.Date(2026, 5, 28, 12, 0, 0, 0, store.Location()))
+	if err != nil {
+		t.Fatalf("report: %v", err)
+	}
+	if report.Totals.MonthCredits != 1.25 || report.Totals.MonthCostUSD != 0.20 || report.Totals.MonthTurns != 2 {
+		t.Fatalf("totals = %+v, want credits+usd across both engines", report.Totals)
+	}
+}
+
+func TestUsageReportKeepsUnattributedRecords(t *testing.T) {
+	store := NewUsageStore(t.TempDir(), "Asia/Taipei", 0)
+	if err := store.Append(UsageRecord{
+		Timestamp:     "2026-05-28T09:00:00+08:00",
+		GuildID:       "g1",
+		ChannelID:     "c1",
+		Engine:        "omp",
+		MeteringUsage: []acp.MeteringItem{{Value: 0.10, Unit: "USD"}},
+	}); err != nil {
+		t.Fatalf("append usage: %v", err)
+	}
+
+	report, err := store.Report("g1", "", "", 10, time.Date(2026, 5, 28, 12, 0, 0, 0, store.Location()))
+	if err != nil {
+		t.Fatalf("report: %v", err)
+	}
+	if len(report.Rows) != 1 || report.Rows[0].UserID != "" || report.Rows[0].MonthCostUSD != 0.10 {
+		t.Fatalf("rows = %+v, want one unattributed USD row", report.Rows)
 	}
 }
 

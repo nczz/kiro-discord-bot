@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/nczz/kiro-discord-bot/acp"
 )
 
 func fakeKiroCLI(t *testing.T) string {
@@ -51,5 +53,48 @@ func TestListModelsMarksCLIDefault(t *testing.T) {
 	}
 	if strings.Contains(got, "▸ `model-a`") {
 		t.Fatalf("did not expect model-a to be marked, got:\n%s", got)
+	}
+}
+
+func TestListModelsOmpRequiresActiveAgent(t *testing.T) {
+	m := newEngineTestManager(t, "omp")
+
+	_, err := m.ListModels("ch1")
+	if err == nil {
+		t.Fatal("expected inactive omp model listing to fail")
+	}
+	if !strings.Contains(err.Error(), "active omp agent") {
+		t.Fatalf("error = %v, want active omp agent guidance", err)
+	}
+}
+
+func TestValidateModelForOmpChannelDoesNotCallKiroCLI(t *testing.T) {
+	m := newEngineTestManager(t, "omp")
+	m.kiroCLI = filepath.Join(t.TempDir(), "missing-kiro-cli")
+
+	err := m.validateModelForChannel("ch1", "gpt-5")
+	if err == nil {
+		t.Fatal("expected inactive omp model validation to fail")
+	}
+	if !strings.Contains(err.Error(), "active omp agent") {
+		t.Fatalf("error = %v, want active omp agent guidance", err)
+	}
+	if strings.Contains(err.Error(), "list models") {
+		t.Fatalf("error shows kiro-cli fallback was used: %v", err)
+	}
+}
+
+func TestListThreadModelsOmpRequiresActiveThreadAgent(t *testing.T) {
+	m := newEngineTestManager(t, "kiro")
+	if err := m.setChannelSession("parent", &Session{Engine: acp.DialectOmp.String()}); err != nil {
+		t.Fatalf("set channel session: %v", err)
+	}
+
+	_, err := m.ListThreadModels("thread", "parent")
+	if err == nil {
+		t.Fatal("expected inactive omp thread model listing to fail")
+	}
+	if !strings.Contains(err.Error(), "active omp thread agent") {
+		t.Fatalf("error = %v, want active omp thread agent guidance", err)
 	}
 }

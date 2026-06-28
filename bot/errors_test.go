@@ -41,6 +41,17 @@ func TestCommandErrorStringRemovesLeadingErrorIcon(t *testing.T) {
 	}
 }
 
+func TestCommandErrorAgentBinaryMissingIsEngineNeutral(t *testing.T) {
+	L.Load("en")
+	msg := commandError(errors.New("agent binary not found: omp"))
+	if !strings.Contains(msg, "Agent binary cannot be resolved") {
+		t.Fatalf("missing agent binary text: %s", msg)
+	}
+	if !strings.Contains(msg, "OMP_PATH") {
+		t.Fatalf("missing OMP_PATH hint: %s", msg)
+	}
+}
+
 func TestCommandErrorThreadAgentLimitWithCandidates(t *testing.T) {
 	L.Load("en")
 	msg := commandError(&channel.ThreadAgentLimitError{

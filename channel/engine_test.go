@@ -34,6 +34,11 @@ func TestParseEnabledEngines(t *testing.T) {
 	if !s[acp.DialectOmp] || s[acp.DialectKiro] {
 		t.Fatalf("omp-only set wrong: %v", s)
 	}
+	// unknown enabled entries are ignored instead of silently widening to kiro.
+	s = parseEnabledEngines("omp", "typo")
+	if !s[acp.DialectOmp] || s[acp.DialectKiro] {
+		t.Fatalf("unknown enabled entry should not enable kiro: %v", s)
+	}
 }
 
 func TestApplyEngineStripsKiroEnvForOmp(t *testing.T) {
@@ -98,5 +103,51 @@ func TestEngineForThreadInheritance(t *testing.T) {
 	_ = m.store.Set(m.sessionKey(sessionTargetThread, "th1"), &Session{Engine: "kiro"})
 	if d, bin := m.engineForThread("th1", "chP"); d != acp.DialectKiro || bin != "kiro-cli" {
 		t.Fatalf("thread override kiro should win, got %v %s", d, bin)
+	}
+}
+
+func TestSwitchEngineRollbackDeletesNewSessionWhenRestartFails(t *testing.T) {
+	m := newEngineTestManager(t, "kiro")
+	m.defaultCWD = "/path/that/does/not/exist"
+
+	err := m.SwitchEngine("ch1", "omp")
+	if err == nil {
+		t.Fatal("expected restart failure")
+	}
+	if _, ok := m.getChannelSession("ch1"); ok {
+		t.Fatal("new session should be deleted after failed switch from no prior session")
+	}
+}
+
+func TestSwitchEngineRollbackRestoresOldSessionWhenRestartFails(t *testing.T) {
+	m := newEngineTestManager(t, "kiro")
+	m.defaultCWD = "/path/that/does/not/exist"
+	old := &Session{CWD: "/path/that/does/not/exist", Model: "model-a", Engine: "kiro"}
+	if err := m.setChannelSession("ch1", old); err != nil {
+		t.Fatalf("set old session: %v", err)
+	}
+
+	err := m.SwitchEngine("ch1", "omp")
+	if err == nil {
+		t.Fatal("expected restart failure")
+	}
+	got, ok := m.getChannelSession("ch1")
+	if !ok {
+		t.Fatal("old session should be restored")
+	}
+	if got.Engine != "kiro" || got.Model != "model-a" || got.CWD != old.CWD {
+		t.Fatalf("restored session = %+v, want old %+v", got, old)
+	}
+}
+
+func TestSwitchThreadEngineRollbackDeletesNewThreadSessionWhenResetFails(t *testing.T) {
+	m := newEngineTestManager(t, "kiro")
+
+	err := m.SwitchThreadEngine("thread", "parent", "omp")
+	if err == nil {
+		t.Fatal("expected reset failure")
+	}
+	if _, ok := m.getThreadSession("thread"); ok {
+		t.Fatal("new thread session should be deleted after failed switch")
 	}
 }

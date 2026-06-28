@@ -19,11 +19,15 @@ type ProjectOption struct {
 }
 
 type SteeringFileStatus struct {
-	ProjectName string
-	FileName    string
-	Path        string
-	Exists      bool
-	Size        int64
+	ProjectName  string
+	FileName     string
+	Path         string
+	Exists       bool
+	Size         int64
+	KiroFileName string
+	KiroPath     string
+	KiroExists   bool
+	KiroSize     int64
 }
 
 type SteeringDraft struct {
@@ -203,7 +207,10 @@ func validProjectName(name string) bool {
 }
 
 func EnsureProjectSteering(projectPath string) error {
-	return os.MkdirAll(filepath.Join(projectPath, ".kiro", "steering"), 0755)
+	if strings.TrimSpace(projectPath) == "" {
+		return fmt.Errorf("project path is empty")
+	}
+	return nil
 }
 
 func (m *Manager) ChannelSteeringStatus(channelID string) (SteeringFileStatus, error) {
@@ -218,6 +225,7 @@ func (m *Manager) ChannelSteeringStatus(channelID string) (SteeringFileStatus, e
 	} else if !os.IsNotExist(err) {
 		return SteeringFileStatus{}, err
 	}
+	fillKiroSteeringStatus(&status)
 	return status, nil
 }
 
@@ -226,13 +234,11 @@ func (m *Manager) EnsureChannelSteeringFile(channelID string) (SteeringFileStatu
 	if err != nil {
 		return SteeringFileStatus{}, false, err
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-		return SteeringFileStatus{}, false, err
-	}
 	if fi, err := os.Stat(path); err == nil {
 		status := steeringFileStatus(path)
 		status.Exists = true
 		status.Size = fi.Size()
+		fillKiroSteeringStatus(&status)
 		return status, false, nil
 	} else if !os.IsNotExist(err) {
 		return SteeringFileStatus{}, false, err
@@ -244,6 +250,7 @@ func (m *Manager) EnsureChannelSteeringFile(channelID string) (SteeringFileStatu
 	status := steeringFileStatus(path)
 	status.Exists = true
 	status.Size = int64(len([]byte(content)))
+	fillKiroSteeringStatus(&status)
 	return status, true, nil
 }
 
@@ -278,57 +285,11 @@ func (m *Manager) WriteChannelSteeringFile(channelID, content string) (SteeringF
 	if err := os.WriteFile(path, []byte(content+"\n"), 0644); err != nil {
 		return SteeringFileStatus{}, err
 	}
-	// Cross-engine: mirror the steering content into a managed block in AGENTS.md
-	// at the project root, which BOTH kiro and omp read at startup (plan §8.2).
-	// Non-destructive: only the bot-managed block is replaced; user content is kept.
-	if cwd, cerr := m.ValidateCWD(m.CWDPath(channelID)); cerr == nil {
-		if aerr := writeAgentsManagedBlock(cwd, content); aerr != nil {
-			return SteeringFileStatus{}, fmt.Errorf("steering written but AGENTS.md mirror failed: %w", aerr)
-		}
-	}
 	status := steeringFileStatus(path)
 	status.Exists = true
 	status.Size = int64(len([]byte(content + "\n")))
+	fillKiroSteeringStatus(&status)
 	return status, nil
-}
-
-const (
-	agentsBlockStart = "<!-- BEGIN kiro-discord-bot steering (managed; do not edit inside) -->"
-	agentsBlockEnd   = "<!-- END kiro-discord-bot steering -->"
-)
-
-// writeAgentsManagedBlock writes the steering content into a marked, bot-managed
-// block in <cwd>/AGENTS.md. If the block already exists it is replaced in place;
-// otherwise the block is appended, preserving any user-authored content. AGENTS.md
-// is the cross-engine steering surface read by both kiro-cli and omp.
-func writeAgentsManagedBlock(cwd, content string) error {
-	path := filepath.Clean(filepath.Join(cwd, "AGENTS.md"))
-	if !pathWithinRoot(path, cwd) {
-		return fmt.Errorf("AGENTS.md path escapes working directory")
-	}
-	block := agentsBlockStart + "\n" + strings.TrimSpace(content) + "\n" + agentsBlockEnd
-	existing, err := os.ReadFile(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return os.WriteFile(path, []byte(block+"\n"), 0644)
-		}
-		return err
-	}
-	s := string(existing)
-	si := strings.Index(s, agentsBlockStart)
-	ei := strings.Index(s, agentsBlockEnd)
-	if si >= 0 && ei > si {
-		newS := s[:si] + block + s[ei+len(agentsBlockEnd):]
-		return os.WriteFile(path, []byte(newS), 0644)
-	}
-	sep := "\n\n"
-	if strings.HasSuffix(s, "\n") {
-		sep = "\n"
-	}
-	if s == "" {
-		sep = ""
-	}
-	return os.WriteFile(path, []byte(s+sep+block+"\n"), 0644)
 }
 
 func (m *Manager) channelSteeringPath(channelID string) (string, error) {
@@ -339,20 +300,33 @@ func (m *Manager) channelSteeringPath(channelID string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	fileName := projectSteeringFileName(filepath.Base(cwd))
-	path := filepath.Join(cwd, ".kiro", "steering", fileName)
+	path := filepath.Join(cwd, "AGENTS.md")
 	clean := filepath.Clean(path)
 	if !pathWithinRoot(clean, cwd) {
-		return "", fmt.Errorf("project steering path escapes working directory")
+		return "", fmt.Errorf("AGENTS.md path escapes working directory")
 	}
 	return clean, nil
 }
 
 func steeringFileStatus(path string) SteeringFileStatus {
+	projectRoot := filepath.Dir(path)
+	kiroFileName := projectSteeringFileName(filepath.Base(projectRoot))
 	return SteeringFileStatus{
-		ProjectName: filepath.Base(filepath.Dir(filepath.Dir(filepath.Dir(path)))),
-		FileName:    filepath.Base(path),
-		Path:        path,
+		ProjectName:  filepath.Base(projectRoot),
+		FileName:     filepath.Base(path),
+		Path:         path,
+		KiroFileName: kiroFileName,
+		KiroPath:     filepath.Join(projectRoot, ".kiro", "steering", kiroFileName),
+	}
+}
+
+func fillKiroSteeringStatus(status *SteeringFileStatus) {
+	if status == nil || status.KiroPath == "" {
+		return
+	}
+	if fi, err := os.Stat(status.KiroPath); err == nil {
+		status.KiroExists = true
+		status.KiroSize = fi.Size()
 	}
 }
 

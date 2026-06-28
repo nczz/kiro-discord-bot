@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/bwmarrin/discordgo"
+	"github.com/nczz/kiro-discord-bot/acp"
 	"github.com/nczz/kiro-discord-bot/audit"
 	"github.com/nczz/kiro-discord-bot/channel"
 	"github.com/nczz/kiro-discord-bot/internal/secrets"
@@ -230,7 +231,7 @@ func (b *Bot) runAuditPrompt(ctx cmdCtx, prompt string) {
 	} else if strings.TrimSpace(response) == "" {
 		response = L.Get("worker.empty_response")
 	}
-	metrics := agent.TurnMetrics()
+	metrics := channel.MetricsWithElapsed(agent.TurnMetrics(), startedAt)
 	if err := b.manager.RecordUsage(channel.UsageRecord{
 		GuildID:       ctx.guildID,
 		ChannelID:     ctx.channelID,
@@ -241,6 +242,7 @@ func (b *Bot) runAuditPrompt(ctx cmdCtx, prompt string) {
 		InteractionID: ctx.interactionID,
 		InvocationID:  auditPromptInvocationID(ctx),
 		Model:         model,
+		Engine:        agent.Dialect().String(),
 		Source:        "audit_prompt",
 		Status:        status,
 		MeteringUsage: metrics.MeteringUsage,
@@ -390,7 +392,15 @@ func (b *Bot) cmdThreadMode(ctx cmdCtx) {
 }
 
 func (b *Bot) cmdModels(ctx cmdCtx) {
-	msg, err := b.manager.ListModels(ctx.channelID)
+	var (
+		msg string
+		err error
+	)
+	if ctx.inThread {
+		msg, err = b.manager.ListThreadModels(ctx.targetID, ctx.channelID)
+	} else {
+		msg, err = b.manager.ListModels(ctx.channelID)
+	}
 	if err != nil {
 		ctx.reply(commandError(err))
 	} else {
@@ -448,13 +458,18 @@ func formatUsageReport(report channel.UsageReport, userID string) string {
 		return sb.String()
 	}
 	sb.WriteString("\n")
+	sb.WriteString(L.Getf("usage.report.bot_totals",
+		report.Totals.DayCredits, report.Totals.DayCostUSD, report.Totals.DayTurns,
+		report.Totals.WeekCredits, report.Totals.WeekCostUSD, report.Totals.WeekTurns,
+		report.Totals.MonthCredits, report.Totals.MonthCostUSD, report.Totals.MonthTurns))
+	sb.WriteString("\n")
 	for i, row := range report.Rows {
 		name := row.Username
 		if name == "" {
 			name = row.UserID
 		}
 		if name == "" {
-			name = L.Get("usage.report.unknown_user")
+			name = L.Get("usage.report.unattributed_user")
 		}
 		if userID == "" {
 			if row.UserID == "" {
@@ -766,6 +781,14 @@ func (b *Bot) recordAgentCommandUsage(ctx cmdCtx, command string, result channel
 	if ctx.inThread {
 		threadID = ctx.targetID
 	}
+	engine := result.Engine
+	if strings.TrimSpace(engine) == "" {
+		if ctx.inThread {
+			engine = b.manager.ThreadEngine(ctx.targetID, ctx.channelID)
+		} else {
+			engine = b.manager.ChannelEngine(ctx.channelID)
+		}
+	}
 	if err := b.manager.RecordUsage(channel.UsageRecord{
 		GuildID:       ctx.guildID,
 		ChannelID:     targetChannelID,
@@ -776,6 +799,7 @@ func (b *Bot) recordAgentCommandUsage(ctx cmdCtx, command string, result channel
 		InteractionID: ctx.interactionID,
 		InvocationID:  agentCommandUsageID(ctx),
 		Model:         result.Model,
+		Engine:        engine,
 		Source:        "command:" + strings.TrimPrefix(command, "/"),
 		Status:        status,
 		MeteringUsage: result.Metrics.MeteringUsage,
@@ -817,7 +841,13 @@ func (b *Bot) cmdAgent(ctx cmdCtx) {
 	}
 	if ctx.args == "" {
 		// List available modes
-		current, modes := b.manager.AgentModes(ctx.channelID)
+		var current string
+		var modes []acp.ModeEntry
+		if ctx.inThread {
+			current, modes = b.manager.ThreadAgentModes(ctx.targetID)
+		} else {
+			current, modes = b.manager.AgentModes(ctx.channelID)
+		}
 		if modes == nil {
 			ctx.reply(L.Get("agent.no_session"))
 			return
@@ -836,7 +866,13 @@ func (b *Bot) cmdAgent(ctx cmdCtx) {
 		return
 	}
 	// Switch mode
-	if err := b.manager.SwitchMode(ctx.channelID, ctx.args); err != nil {
+	var err error
+	if ctx.inThread {
+		err = b.manager.SwitchThreadMode(ctx.targetID, ctx.args)
+	} else {
+		err = b.manager.SwitchMode(ctx.channelID, ctx.args)
+	}
+	if err != nil {
 		ctx.reply(L.Getf("agent.mode_switch_failed", err.Error()))
 	} else {
 		ctx.reply(L.Getf("agent.mode_switched", ctx.args))

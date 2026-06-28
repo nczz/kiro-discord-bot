@@ -1,10 +1,13 @@
 package channel
 
 import (
+	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/nczz/kiro-discord-bot/acp"
 	L "github.com/nczz/kiro-discord-bot/locale"
 )
 
@@ -124,5 +127,40 @@ func TestDoctorListenModeConsistencyReportsPausedThreadModeOn(t *testing.T) {
 	}
 	if strings.Contains(got, "channel channel-2") {
 		t.Fatalf("doctor listen mode consistency reported full-listen channel as inconsistent:\n%s", got)
+	}
+}
+
+func TestResolveEngineBinaryUsesPathForOmp(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "omp")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
+		t.Fatalf("write fake omp: %v", err)
+	}
+
+	got, err := resolveEngineBinary(acp.DialectOmp, path)
+	if err != nil {
+		t.Fatalf("resolve omp path: %v", err)
+	}
+	if got != path {
+		t.Fatalf("resolved omp = %q, want %q", got, path)
+	}
+}
+
+func TestDoctorEngineDiagnosticsPureOmpDoesNotRequireKiro(t *testing.T) {
+	L.Load("en")
+	m := NewManager(ManagerConfig{
+		KiroCLIPath:         filepath.Join(t.TempDir(), "missing-kiro-cli"),
+		OMPPath:             filepath.Join(t.TempDir(), "missing-omp"),
+		AgentEngine:         "omp",
+		AgentEnginesEnabled: "omp",
+		DataDir:             t.TempDir(),
+	})
+	defer m.StopAll()
+
+	got := m.doctorEngineDiagnostics(context.Background())
+	if strings.Contains(got, "kiro") {
+		t.Fatalf("pure-omp diagnostics should not reference kiro:\n%s", got)
+	}
+	if !strings.Contains(got, "omp binary") {
+		t.Fatalf("pure-omp diagnostics should report omp binary:\n%s", got)
 	}
 }

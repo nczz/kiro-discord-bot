@@ -2,6 +2,7 @@ package channel
 
 import (
 	"errors"
+	"log"
 	"strings"
 
 	"github.com/nczz/kiro-discord-bot/acp"
@@ -28,6 +29,10 @@ func parseEnabledEngines(defaultEngine, enabled string) map[acp.Dialect]bool {
 	for _, part := range strings.Split(enabled, ",") {
 		part = strings.TrimSpace(part)
 		if part == "" {
+			continue
+		}
+		if !ValidEngineName(part) {
+			log.Printf("[engine] ignoring unknown AGENT_ENGINES_ENABLED entry %q", part)
 			continue
 		}
 		set[parseDialect(part)] = true
@@ -163,6 +168,11 @@ func (m *Manager) SwitchEngine(channelID, engineName string) error {
 		return nil // already on this engine
 	}
 	oldSess, _ := m.getChannelSession(channelID)
+	var oldCopy *Session
+	if oldSess != nil {
+		cp := *oldSess
+		oldCopy = &cp
+	}
 	newSess := &Session{Engine: d.String()}
 	if oldSess != nil {
 		newSess.CWD = oldSess.CWD
@@ -172,8 +182,10 @@ func (m *Manager) SwitchEngine(channelID, engineName string) error {
 		return err
 	}
 	if err := m.Restart(channelID); err != nil {
-		if oldSess != nil {
-			_ = m.setChannelSession(channelID, oldSess)
+		if oldCopy != nil {
+			_ = m.setChannelSession(channelID, oldCopy)
+		} else {
+			_ = m.deleteChannelSession(channelID)
 		}
 		return err
 	}
@@ -193,15 +205,28 @@ func (m *Manager) SwitchThreadEngine(threadID, parentChannelID, engineName strin
 	if cur, _ := m.engineForThread(threadID, parentChannelID); cur == d {
 		return nil
 	}
-	sess, ok := m.getThreadSession(threadID)
+	oldSess, ok := m.getThreadSession(threadID)
+	var oldCopy *Session
 	if !ok {
-		sess = &Session{}
+		oldSess = &Session{}
+	} else {
+		cp := *oldSess
+		oldCopy = &cp
 	}
+	sess := *oldSess
 	sess.Engine = d.String()
 	sess.SessionID = "" // fresh session on the new engine
 	sess.AgentName = ""
-	if err := m.setThreadSession(threadID, parentChannelID, sess); err != nil {
+	if err := m.setThreadSession(threadID, parentChannelID, &sess); err != nil {
 		return err
 	}
-	return m.ResetThreadAgent(threadID)
+	if err := m.ResetThreadAgent(threadID); err != nil {
+		if oldCopy != nil {
+			_ = m.setThreadSession(threadID, parentChannelID, oldCopy)
+		} else {
+			_ = m.deleteThreadSession(threadID)
+		}
+		return err
+	}
+	return nil
 }

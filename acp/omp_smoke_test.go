@@ -9,7 +9,9 @@ import (
 )
 
 // Gated omp ACP smoke test. Run with:
-//   RUN_OMP_SMOKE=1 OMP_PATH=$(which omp) go test ./acp/ -run TestOmpSmoke -v
+//
+//	RUN_OMP_SMOKE=1 OMP_PATH=$(which omp) go test ./acp/ -run TestOmpSmoke -v
+//
 // Exercises the real ompProfile through StartAgent: handshake (configOptions
 // parsing), a prompt turn (streaming + stopReason), and per-turn USD usage.
 func TestOmpSmoke(t *testing.T) {
@@ -38,6 +40,25 @@ func TestOmpSmoke(t *testing.T) {
 	}
 	t.Logf("omp version=%s currentModel=%s modes=%d models=%d",
 		agent.AgentVersion(), agent.CurrentModelID(), len(agent.AvailableModes()), len(agent.AvailableModels()))
+	if models := agent.AvailableModels(); len(models) > 1 {
+		wanted := models[0].ModelID
+		if wanted == agent.CurrentModelID() {
+			wanted = models[1].ModelID
+		}
+		agent.Stop()
+		agent, err = StartAgent("omp-smoke", omp, os.TempDir(), wanted, AgentOptions{
+			Dialect:       DialectOmp,
+			TrustAllTools: true,
+		})
+		if err != nil {
+			t.Fatalf("StartAgent(omp, model=%s): %v", wanted, err)
+		}
+		defer agent.Stop()
+		if got := agent.CurrentModelID(); got != wanted {
+			t.Fatalf("omp current model after StartAgent model override = %q, want %q", got, wanted)
+		}
+		t.Logf("omp model override currentModel=%s", agent.CurrentModelID())
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()

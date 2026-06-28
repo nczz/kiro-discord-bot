@@ -46,8 +46,8 @@ func TestInitializeChannelCWDRequiresDefaultRoot(t *testing.T) {
 	if !m.ChannelInitialized("channel-1") {
 		t.Fatal("channel should be initialized after selecting a project")
 	}
-	if _, err := os.Stat(filepath.Join(project, ".kiro", "steering")); err != nil {
-		t.Fatalf("expected steering dir: %v", err)
+	if _, err := os.Stat(filepath.Join(project, ".kiro", "steering")); !os.IsNotExist(err) {
+		t.Fatalf("steering dir should not be created during channel setup, err=%v", err)
 	}
 
 	if _, err := m.InitializeChannelCWD("channel-2", outside); err == nil {
@@ -69,8 +69,8 @@ func TestCreateDefaultProjectSanitizesAndInitializes(t *testing.T) {
 	if project.Relative != "customer-portal" {
 		t.Fatalf("relative = %q, want customer-portal", project.Relative)
 	}
-	if _, err := os.Stat(filepath.Join(project.Path, ".kiro", "steering")); err != nil {
-		t.Fatalf("expected steering dir: %v", err)
+	if _, err := os.Stat(filepath.Join(project.Path, ".kiro", "steering")); !os.IsNotExist(err) {
+		t.Fatalf("steering dir should not be created during project setup, err=%v", err)
 	}
 	if _, err := m.CreateDefaultProject("../escape"); err == nil {
 		t.Fatal("expected unsafe project name to be rejected")
@@ -94,8 +94,8 @@ func TestCreateDefaultProjectAllowsUnicodeNames(t *testing.T) {
 	if project.Relative != "專案_2026-測試.v1" {
 		t.Fatalf("relative = %q, want unicode project name", project.Relative)
 	}
-	if _, err := os.Stat(filepath.Join(project.Path, ".kiro", "steering")); err != nil {
-		t.Fatalf("expected steering dir: %v", err)
+	if _, err := os.Stat(filepath.Join(project.Path, ".kiro", "steering")); !os.IsNotExist(err) {
+		t.Fatalf("steering dir should not be created during project setup, err=%v", err)
 	}
 }
 
@@ -220,8 +220,11 @@ func TestChannelSteeringFileLifecycle(t *testing.T) {
 	if status.Exists {
 		t.Fatal("steering file should not exist before create")
 	}
-	if status.FileName != "客戶-Portal.md" {
-		t.Fatalf("file name = %q, want sanitized project name", status.FileName)
+	if status.FileName != "AGENTS.md" {
+		t.Fatalf("file name = %q, want AGENTS.md", status.FileName)
+	}
+	if status.KiroFileName != "客戶-Portal.md" {
+		t.Fatalf("kiro file name = %q, want sanitized project name", status.KiroFileName)
 	}
 
 	status, created, err := m.EnsureChannelSteeringFile("channel-1")
@@ -230,6 +233,19 @@ func TestChannelSteeringFileLifecycle(t *testing.T) {
 	}
 	if !created || !status.Exists {
 		t.Fatalf("created=%v status=%+v, want created file", created, status)
+	}
+	if !status.Exists || status.Size == 0 {
+		t.Fatalf("AGENTS.md status = %+v, want created file", status)
+	}
+	if status.KiroExists {
+		t.Fatalf("Kiro legacy steering should not be created by default: %+v", status)
+	}
+	agentsRaw, err := os.ReadFile(status.Path)
+	if err != nil {
+		t.Fatalf("read AGENTS.md: %v", err)
+	}
+	if !strings.Contains(string(agentsRaw), "inclusion: always") || !strings.Contains(string(agentsRaw), "安全與敏感資料") {
+		t.Fatalf("unexpected AGENTS.md:\n%s", string(agentsRaw))
 	}
 	_, content, err := m.ReadChannelSteeringFile("channel-1")
 	if err != nil {
@@ -245,6 +261,13 @@ func TestChannelSteeringFileLifecycle(t *testing.T) {
 	}
 	if status.Size == 0 {
 		t.Fatalf("status = %+v, want size", status)
+	}
+	agentsRaw, err = os.ReadFile(status.Path)
+	if err != nil {
+		t.Fatalf("read updated AGENTS.md: %v", err)
+	}
+	if !strings.Contains(string(agentsRaw), "# Updated") {
+		t.Fatalf("AGENTS.md was not updated:\n%s", string(agentsRaw))
 	}
 }
 

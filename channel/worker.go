@@ -92,6 +92,7 @@ type Worker struct {
 	usage           *UsageStore
 	audit           AuditSink
 	model           string
+	engine          string
 
 	cancelMu sync.Mutex
 	cancelFn context.CancelFunc
@@ -137,10 +138,18 @@ type workerAgent interface {
 }
 
 func NewWorker(channelID string, agent *acp.Agent, bufSize, askTimeoutSec, streamUpdateSec, threadArchive int, logger *ChatLogger, model string) *Worker {
-	return newWorker(channelID, agent, bufSize, askTimeoutSec, streamUpdateSec, threadArchive, logger, model)
+	return newWorkerWithEngine(channelID, agent, bufSize, askTimeoutSec, streamUpdateSec, threadArchive, logger, model, agent.Dialect().String())
 }
 
 func newWorker(channelID string, agent workerAgent, bufSize, askTimeoutSec, streamUpdateSec, threadArchive int, logger *ChatLogger, model string) *Worker {
+	return newWorkerWithEngine(channelID, agent, bufSize, askTimeoutSec, streamUpdateSec, threadArchive, logger, model, acp.DialectKiro.String())
+}
+
+func newWorkerWithEngine(channelID string, agent workerAgent, bufSize, askTimeoutSec, streamUpdateSec, threadArchive int, logger *ChatLogger, model, engine string) *Worker {
+	engine = strings.TrimSpace(engine)
+	if engine == "" {
+		engine = acp.DialectKiro.String()
+	}
 	return &Worker{
 		channelID:       channelID,
 		agent:           agent,
@@ -154,6 +163,7 @@ func newWorker(channelID string, agent workerAgent, bufSize, askTimeoutSec, stre
 		idleCh:          make(chan struct{}, 1),
 		logger:          logger,
 		model:           model,
+		engine:          engine,
 	}
 }
 
@@ -581,10 +591,7 @@ func (w *Worker) execute(job *Job) {
 			if w.onActivity != nil {
 				w.onActivity()
 			}
-			title := evt.Title
-			if title == "" {
-				title = L.Get("worker.tool_fallback")
-			}
+			title := toolDisplayTitle(evt)
 			icon := ToolKindIcon(evt.Kind)
 			silent := w.isSilent != nil && w.isSilent()
 			if silent {
@@ -604,9 +611,10 @@ func (w *Worker) execute(job *Job) {
 			}
 			swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "⚙️")
 			w.auditJobEvent("agent_tool_call", job, threadID, "", map[string]any{
-				"kind":         evt.Kind,
-				"title":        evt.Title,
-				"tool_call_id": evt.ToolCallID,
+				"kind":          evt.Kind,
+				"title":         evt.Title,
+				"display_title": title,
+				"tool_call_id":  evt.ToolCallID,
 			})
 		},
 		OnToolResult: func(evt acp.ToolCallEvent) {
@@ -614,16 +622,18 @@ func (w *Worker) execute(job *Job) {
 				w.onActivity()
 			}
 			swapReaction(ds, job.ChannelID, job.MessageID, "⚙️", "🔄")
+			title := toolDisplayTitle(evt)
 			w.auditJobEvent("agent_tool_result", job, threadID, evt.Status, map[string]any{
-				"kind":         evt.Kind,
-				"title":        evt.Title,
-				"tool_call_id": evt.ToolCallID,
+				"kind":          evt.Kind,
+				"title":         evt.Title,
+				"display_title": title,
+				"tool_call_id":  evt.ToolCallID,
 			})
 			silent := w.isSilent != nil && w.isSilent()
 			if silent {
 				// Compact: only show one-line failure
 				if evt.Status == "failed" {
-					SendProcessMessage(ds, threadID, "❌ "+EscapeDiscordMarkdown(evt.Title))
+					SendProcessMessage(ds, threadID, "❌ "+EscapeDiscordMarkdown(title))
 				}
 				return
 			}
@@ -635,7 +645,7 @@ func (w *Worker) execute(job *Job) {
 				}
 				SendProcessMessage(ds, threadID, "```\n"+out+"\n```")
 			} else if evt.Status == "failed" {
-				msg := "❌ " + EscapeDiscordMarkdown(evt.Title)
+				msg := "❌ " + EscapeDiscordMarkdown(title)
 				if evt.RawOutput != "" {
 					o := evt.RawOutput
 					if len(o) > 500 {
@@ -706,11 +716,11 @@ func (w *Worker) execute(job *Job) {
 						"suppressed_agent_error":  askErr.Error(),
 						"suppressed_error_reason": "safe_egress_delivered",
 					})
-					w.recordUsage(job, threadID, "success")
+					w.recordUsage(job, threadID, "success", startTime)
 					finishJob()
 					return
 				}
-				SendLongThreadWithMentions(ds, threadID, AppendMetricsFooter(errorContent, w.agent.TurnMetrics()), job.MentionRefs)
+				SendLongThreadWithMentions(ds, threadID, AppendMetricsFooter(errorContent, MetricsWithElapsed(w.agent.TurnMetrics(), startTime)), job.MentionRefs)
 				swapReaction(ds, job.ChannelID, job.MessageID, "🔄", emoji)
 				swapReaction(ds, job.ChannelID, job.MessageID, "⚙️", emoji)
 				if w.logger != nil {
@@ -722,7 +732,7 @@ func (w *Worker) execute(job *Job) {
 					"elapsed_ms": time.Since(startTime).Milliseconds(),
 				})
 				w.auditResponseEvent(job, threadID, "error", errorContent)
-				w.recordUsage(job, threadID, "error")
+				w.recordUsage(job, threadID, "error", startTime)
 				finishJob()
 				return
 			}
@@ -737,7 +747,7 @@ func (w *Worker) execute(job *Job) {
 			w.drainBeforeFinal(threadID)
 			stopReason := w.agent.StopReason()
 			response = AppendStopReasonNotice(response, stopReason)
-			SendLongThreadWithMentions(ds, threadID, AppendMetricsFooter(response, w.agent.TurnMetrics()), job.MentionRefs)
+			SendLongThreadWithMentions(ds, threadID, AppendMetricsFooter(response, MetricsWithElapsed(w.agent.TurnMetrics(), startTime)), job.MentionRefs)
 			w.auditResponseEvent(job, threadID, "success", response)
 
 			log.Printf("[worker %s] job done | user=%s msg=%s elapsed=%s len=%d",
@@ -747,7 +757,7 @@ func (w *Worker) execute(job *Job) {
 				w.logger.Log(w.channelID, ChatEntry{Role: "assistant", Content: response, Model: w.model})
 			}
 
-			w.recordUsage(job, threadID, "success")
+			w.recordUsage(job, threadID, "success", startTime)
 			completedMeta := map[string]any{
 				"elapsed_ms":   time.Since(startTime).Milliseconds(),
 				"response_len": len(response),
@@ -1017,9 +1027,10 @@ func (w *Worker) executeInline(job *Job) {
 			}
 			pulse.Tool()
 			w.auditJobEvent("agent_tool_call", job, "", "", map[string]any{
-				"kind":         evt.Kind,
-				"title":        evt.Title,
-				"tool_call_id": evt.ToolCallID,
+				"kind":          evt.Kind,
+				"title":         evt.Title,
+				"display_title": toolDisplayTitle(evt),
+				"tool_call_id":  evt.ToolCallID,
 			})
 		},
 		OnToolResult: func(evt acp.ToolCallEvent) {
@@ -1027,9 +1038,10 @@ func (w *Worker) executeInline(job *Job) {
 				w.onActivity()
 			}
 			w.auditJobEvent("agent_tool_result", job, "", evt.Status, map[string]any{
-				"kind":         evt.Kind,
-				"title":        evt.Title,
-				"tool_call_id": evt.ToolCallID,
+				"kind":          evt.Kind,
+				"title":         evt.Title,
+				"display_title": toolDisplayTitle(evt),
+				"tool_call_id":  evt.ToolCallID,
 			})
 			if evt.Status == "failed" {
 				pulse.set("⚠️")
@@ -1082,11 +1094,11 @@ func (w *Worker) executeInline(job *Job) {
 						"suppressed_agent_error":  askErr.Error(),
 						"suppressed_error_reason": "safe_egress_delivered",
 					})
-					w.recordUsage(job, "", "success")
+					w.recordUsage(job, "", "success", startTime)
 					finishJob("✅")
 					return
 				}
-				job.sendInlineFinalReply(ds, AppendMetricsFooter(errorContent, w.agent.TurnMetrics()))
+				job.sendInlineFinalReply(ds, AppendMetricsFooter(errorContent, MetricsWithElapsed(w.agent.TurnMetrics(), startTime)))
 				if w.logger != nil {
 					w.logger.Log(w.channelID, ChatEntry{Role: "assistant", Content: errorContent, Model: w.model})
 				}
@@ -1097,7 +1109,7 @@ func (w *Worker) executeInline(job *Job) {
 					"elapsed_ms":    time.Since(startTime).Milliseconds(),
 				})
 				w.auditResponseEvent(job, "", "error", errorContent)
-				w.recordUsage(job, "", "error")
+				w.recordUsage(job, "", "error", startTime)
 				finishJob(emoji)
 				return
 			}
@@ -1107,7 +1119,7 @@ func (w *Worker) executeInline(job *Job) {
 			}
 			stopReason := w.agent.StopReason()
 			response = AppendStopReasonNotice(response, stopReason)
-			responseWithMetrics := AppendMetricsFooter(response, w.agent.TurnMetrics())
+			responseWithMetrics := AppendMetricsFooter(response, MetricsWithElapsed(w.agent.TurnMetrics(), startTime))
 			if !job.DisableBotEgress {
 				w.drainBeforeFinal(targetID)
 			}
@@ -1116,7 +1128,7 @@ func (w *Worker) executeInline(job *Job) {
 			if w.logger != nil {
 				w.logger.Log(w.channelID, ChatEntry{Role: "assistant", Content: response, Model: w.model})
 			}
-			w.recordUsage(job, "", "success")
+			w.recordUsage(job, "", "success", startTime)
 			inlineCompletedMeta := map[string]any{
 				"delivery_mode": DeliveryInline.String(),
 				"elapsed_ms":    time.Since(startTime).Milliseconds(),
@@ -1160,7 +1172,7 @@ func (w *Worker) executeInline(job *Job) {
 			"elapsed_ms":    time.Since(startTime).Milliseconds(),
 		})
 		w.auditResponseEvent(job, "", "error", errMsg)
-		w.recordUsage(job, "", "error")
+		w.recordUsage(job, "", "error", startTime)
 		cancel()
 		finishJob("⚠️")
 	})
@@ -1247,18 +1259,11 @@ func (w *Worker) auditResponseEvent(job *Job, threadID, status, content string) 
 	})
 }
 
-func (w *Worker) recordUsage(job *Job, threadID, status string) {
+func (w *Worker) recordUsage(job *Job, threadID, status string, startTime time.Time) {
 	if w.usage == nil || job == nil {
 		return
 	}
-	metrics := w.agent.TurnMetrics()
-	engineLabel := "kiro"
-	for _, item := range metrics.MeteringUsage {
-		if strings.EqualFold(strings.TrimSpace(item.Unit), "USD") {
-			engineLabel = "omp"
-			break
-		}
-	}
+	metrics := MetricsWithElapsed(w.agent.TurnMetrics(), startTime)
 	channelID := job.ChannelID
 	if job.ParentChannelID != "" {
 		channelID = job.ParentChannelID
@@ -1279,7 +1284,7 @@ func (w *Worker) recordUsage(job *Job, threadID, status string) {
 		Username:      job.Username,
 		MessageID:     job.MessageID,
 		Model:         w.model,
-		Engine:        engineLabel,
+		Engine:        w.engine,
 		Source:        source,
 		Status:        status,
 		MeteringUsage: metrics.MeteringUsage,
@@ -1288,6 +1293,17 @@ func (w *Worker) recordUsage(job *Job, threadID, status string) {
 	}); err != nil {
 		log.Printf("[usage] append failed | user=%s msg=%s err=%v", job.UserID, job.MessageID, err)
 	}
+}
+
+// MetricsWithElapsed fills missing turn duration with local elapsed time.
+func MetricsWithElapsed(metrics acp.TurnMetrics, startTime time.Time) acp.TurnMetrics {
+	if metrics.TurnDurationMs > 0 || startTime.IsZero() {
+		return metrics
+	}
+	if elapsed := time.Since(startTime).Milliseconds(); elapsed > 0 {
+		metrics.TurnDurationMs = elapsed
+	}
+	return metrics
 }
 
 // isImageFile returns true if the path has an image extension supported by ACP.
@@ -1404,6 +1420,7 @@ func (w *Worker) executeFallback(job *Job) {
 		w.scheduleInterruptEscalation(currentJobSeq, w.escalationGrace, "fallback timeout cancel ineffective")
 	}()
 
+	startTime := time.Now()
 	response, askErr := w.agent.Ask(ctx, job.Prompt, func(chunk string) {
 		if w.onActivity != nil {
 			w.onActivity()
@@ -1425,13 +1442,13 @@ func (w *Worker) executeFallback(job *Job) {
 				w.channelID, job.Username, job.MessageID, delivered)
 			swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "✅")
 			w.auditResponseEvent(job, "", "success", "")
-			w.recordUsage(job, "", "success")
+			w.recordUsage(job, "", "success", startTime)
 			logContent = ""
 		} else {
-			sendLongWithMentions(ds, job.ChannelID, replyMsg.ID, AppendMetricsFooter(logContent, w.agent.TurnMetrics()), job.MentionRefs)
+			sendLongWithMentions(ds, job.ChannelID, replyMsg.ID, AppendMetricsFooter(logContent, MetricsWithElapsed(w.agent.TurnMetrics(), startTime)), job.MentionRefs)
 			swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "❌")
 			w.auditResponseEvent(job, "", "error", logContent)
-			w.recordUsage(job, "", "error")
+			w.recordUsage(job, "", "error", startTime)
 		}
 	} else {
 		if response == "" {
@@ -1440,11 +1457,11 @@ func (w *Worker) executeFallback(job *Job) {
 		response = AppendStopReasonNotice(response, w.agent.StopReason())
 		logContent = response
 		swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "✅")
-		responseWithMetrics := AppendMetricsFooter(response, w.agent.TurnMetrics())
+		responseWithMetrics := AppendMetricsFooter(response, MetricsWithElapsed(w.agent.TurnMetrics(), startTime))
 		w.drainBeforeFinal(job.ChannelID)
 		sendLongWithMentions(ds, job.ChannelID, replyMsg.ID, responseWithMetrics, job.MentionRefs)
 		w.auditResponseEvent(job, "", "success", response)
-		w.recordUsage(job, "", "success")
+		w.recordUsage(job, "", "success", startTime)
 	}
 
 	if w.logger != nil {
@@ -1620,10 +1637,7 @@ func ToolKindIcon(kind string) string {
 }
 
 func CompactToolStartMessage(icon string, evt acp.ToolCallEvent) string {
-	title := strings.TrimSpace(evt.Title)
-	if title == "" {
-		title = L.Get("worker.tool_fallback")
-	}
+	title := toolDisplayTitle(evt)
 	if evt.Kind == "execute" {
 		return icon + " " + compactExecuteTitle(title)
 	}
@@ -1631,6 +1645,86 @@ func CompactToolStartMessage(icon string, evt acp.ToolCallEvent) string {
 		title = truncateUTF8(title, 77) + "..."
 	}
 	return icon + " " + EscapeDiscordMarkdown(title)
+}
+
+func toolDisplayTitle(evt acp.ToolCallEvent) string {
+	title := strings.TrimSpace(evt.Title)
+	if shouldDeriveToolTitle(title) {
+		if derived := toolTitleFromRawInput(evt); derived != "" {
+			title = derived
+		}
+	}
+	if title == "" {
+		title = L.Get("worker.tool_fallback")
+	}
+	return secrets.RedactEnv(title)
+}
+
+func shouldDeriveToolTitle(title string) bool {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return true
+	}
+	switch strings.ToLower(title) {
+	case "tool", "running tool", "execute", "executing", "command", "run command", "shell", "bash":
+		return true
+	default:
+		return false
+	}
+}
+
+func toolTitleFromRawInput(evt acp.ToolCallEvent) string {
+	if len(evt.RawInput) == 0 {
+		return ""
+	}
+	for _, key := range []string{"command", "cmd"} {
+		raw, ok := evt.RawInput[key]
+		if !ok {
+			continue
+		}
+		cmd, ok := raw.(string)
+		cmd = strings.TrimSpace(cmd)
+		if !ok || cmd == "" {
+			continue
+		}
+		if args := toolArgsFromRawInput(evt.RawInput); args != "" {
+			cmd += " " + args
+		}
+		if evt.Kind == "execute" {
+			return "Running: " + cmd
+		}
+		return cmd
+	}
+	return ""
+}
+
+func toolArgsFromRawInput(raw map[string]interface{}) string {
+	for _, key := range []string{"args", "arguments"} {
+		value, ok := raw[key]
+		if !ok {
+			continue
+		}
+		switch args := value.(type) {
+		case []string:
+			return strings.Join(args, " ")
+		case []interface{}:
+			parts := make([]string, 0, len(args))
+			for _, arg := range args {
+				switch v := arg.(type) {
+				case string:
+					parts = append(parts, v)
+				case float64:
+					parts = append(parts, fmt.Sprintf("%g", v))
+				case bool:
+					parts = append(parts, fmt.Sprintf("%t", v))
+				default:
+					return ""
+				}
+			}
+			return strings.Join(parts, " ")
+		}
+	}
+	return ""
 }
 
 func compactExecuteTitle(title string) string {

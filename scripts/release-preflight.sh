@@ -6,6 +6,7 @@ cd "$ROOT_DIR"
 
 RUN_DOCKER_BUILD="${RUN_DOCKER_BUILD:-1}"
 RUN_ACP_SMOKE="${RUN_ACP_SMOKE:-0}"
+RUN_OMP_SMOKE="${RUN_OMP_SMOKE:-0}"
 DOCKER_IMAGE="${DOCKER_IMAGE:-kiro-discord-bot:preflight}"
 TMP_BASE="${TMPDIR:-/tmp}"
 GOCACHE="${GOCACHE:-$TMP_BASE/kiro-discord-bot-gocache}"
@@ -72,6 +73,14 @@ if is_true "$RUN_ACP_SMOKE"; then
   GOCACHE="$GOCACHE" GOMODCACHE="$GOMODCACHE" KIRO_CLI="$KIRO_CLI" KIRO_HOME="$ACP_RUNTIME_HOME" KIRO_MCP_CONFIG="$ACP_MCP_CONFIG" go test -count=1 -run '^TestPreflightCheck$' -v ./acp
 else
   step "ACP smoke skipped (set RUN_ACP_SMOKE=1 KIRO_CLI=/path/to/kiro-cli)"
+fi
+
+if is_true "$RUN_OMP_SMOKE"; then
+  OMP_BIN="${OMP_PATH:-omp}"
+  step "OMP ACP smoke with $OMP_BIN"
+  GOCACHE="$GOCACHE" GOMODCACHE="$GOMODCACHE" RUN_OMP_SMOKE=1 OMP_PATH="$OMP_BIN" go test -count=1 -run '^TestOmpSmoke$' -v ./acp
+else
+  step "OMP ACP smoke skipped (set RUN_OMP_SMOKE=1 OMP_PATH=/path/to/omp)"
 fi
 
 step "git diff --check"

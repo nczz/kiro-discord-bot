@@ -64,6 +64,7 @@ func (a *cronAdapter) RecordAgentUsage(agent *acp.Agent, job *heartbeat.CronJob,
 		Username:      job.CreatedBy,
 		MessageID:     job.ID,
 		Model:         model,
+		Engine:        agent.Dialect().String(),
 		Source:        source,
 		Status:        status,
 		MeteringUsage: metrics.MeteringUsage,
@@ -293,7 +294,7 @@ func (a *cronAdapter) AskAgentInThread(ctx context.Context, agent *acp.Agent, jo
 					_, _ = editDiscordText(ds, threadID, statusMsgID, L.Getf("cron.progress.failed", elapsed, count))
 				}
 				a.drainSafeEgress(threadID)
-				sentCount, sendErr := channel.SendLongThread(ds, threadID, channel.AppendMetricsFooter("❌ "+errMsg, agent.TurnMetrics()))
+				sentCount, sendErr := channel.SendLongThread(ds, threadID, channel.AppendMetricsFooter("❌ "+errMsg, channel.MetricsWithElapsed(agent.TurnMetrics(), startTime)))
 				if sendErr != nil {
 					log.Printf("[cron] failed to send agent error response thread=%s: %v", threadID, sendErr)
 				}
@@ -316,7 +317,7 @@ func (a *cronAdapter) AskAgentInThread(ctx context.Context, agent *acp.Agent, jo
 				})
 			}
 			a.drainSafeEgress(threadID)
-			sentCount, sendErr := channel.SendLongThread(ds, threadID, channel.AppendMetricsFooter(response, agent.TurnMetrics()))
+			sentCount, sendErr := channel.SendLongThread(ds, threadID, channel.AppendMetricsFooter(response, channel.MetricsWithElapsed(agent.TurnMetrics(), startTime)))
 			if sendErr != nil {
 				log.Printf("[cron] failed to send agent response thread=%s: %v", threadID, sendErr)
 			}
@@ -345,7 +346,7 @@ func (a *cronAdapter) AskAgentInThread(ctx context.Context, agent *acp.Agent, jo
 			_, _ = editDiscordText(ds, threadID, statusMsgID, L.Getf("cron.progress.failed", elapsed, count))
 		}
 		a.drainSafeEgress(threadID)
-		sentCount, sendErr := channel.SendLongThread(ds, threadID, channel.AppendMetricsFooter("❌ "+errMsg, agent.TurnMetrics()))
+		sentCount, sendErr := channel.SendLongThread(ds, threadID, channel.AppendMetricsFooter("❌ "+errMsg, channel.MetricsWithElapsed(agent.TurnMetrics(), startTime)))
 		if sendErr != nil {
 			log.Printf("[cron] failed to send agent timeout response thread=%s: %v", threadID, sendErr)
 		}

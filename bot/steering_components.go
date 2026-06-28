@@ -263,19 +263,26 @@ func (b *Bot) steeringStatusMessage(channelID string) string {
 	if status.Exists {
 		return steeringExistsMessage(status)
 	}
-	return L.Getf("steering.status.missing", status.FileName, status.Path)
+	return secrets.RedactEnv(L.Getf("steering.status.missing", status.Path, steeringKiroLegacyLine(status)))
 }
 
 func steeringCreatedMessage(status channel.SteeringFileStatus) string {
-	return secrets.RedactEnv(L.Getf("steering.created", status.FileName, status.Path))
+	return secrets.RedactEnv(L.Getf("steering.created", status.Path))
 }
 
 func steeringExistsMessage(status channel.SteeringFileStatus) string {
-	return secrets.RedactEnv(L.Getf("steering.exists", status.FileName, status.Path, status.Size))
+	return secrets.RedactEnv(L.Getf("steering.exists", status.Path, status.Size, steeringKiroLegacyLine(status)))
 }
 
 func steeringSavedMessage(status channel.SteeringFileStatus) string {
-	return secrets.RedactEnv(L.Getf("steering.saved", status.FileName, status.Path))
+	return secrets.RedactEnv(L.Getf("steering.saved", status.Path))
+}
+
+func steeringKiroLegacyLine(status channel.SteeringFileStatus) string {
+	if status.KiroExists {
+		return L.Getf("steering.kiro_legacy.exists", status.KiroPath, status.KiroSize)
+	}
+	return L.Getf("steering.kiro_legacy.missing", status.KiroPath)
 }
 
 func steeringSetupComponents(channelID string) []discordgo.MessageComponent {

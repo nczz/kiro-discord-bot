@@ -56,6 +56,7 @@ type UsageReport struct {
 	WeekStart   time.Time
 	MonthStart  time.Time
 	Rows        []UsageReportRow
+	Totals      UsageReportTotals
 }
 
 type UsageReportRow struct {
@@ -73,6 +74,18 @@ type UsageReportRow struct {
 	MeteredDayTurns   int
 	MeteredWeekTurns  int
 	MeteredMonthTurns int
+}
+
+type UsageReportTotals struct {
+	DayCredits   float64
+	WeekCredits  float64
+	MonthCredits float64
+	DayCostUSD   float64
+	WeekCostUSD  float64
+	MonthCostUSD float64
+	DayTurns     int
+	WeekTurns    int
+	MonthTurns   int
 }
 
 func NewUsageStore(dataDir, timezone string, retentionMonths int) *UsageStore {
@@ -232,6 +245,7 @@ func (s *UsageStore) Report(guildID, channelID, userID string, limit int, now ti
 		scoped = append(scoped, usageRecordWithTime{record: rec, timestamp: t})
 	}
 	usernameAliases := uniqueUsernameAliases(scoped)
+	var total UsageReportTotals
 	for _, item := range scoped {
 		rec := item.record
 		resolvedUserID := resolveUsageUserID(rec, usernameAliases)
@@ -263,6 +277,7 @@ func (s *UsageStore) Report(guildID, channelID, userID string, limit int, now ti
 			row.MonthCredits += credits
 			row.MonthCostUSD += cost
 			row.MonthTurns++
+			reportAddMonth(&total, credits, cost)
 			if meteringSupported {
 				row.MeteredMonthTurns++
 			}
@@ -271,6 +286,7 @@ func (s *UsageStore) Report(guildID, channelID, userID string, limit int, now ti
 			row.WeekCredits += credits
 			row.WeekCostUSD += cost
 			row.WeekTurns++
+			reportAddWeek(&total, credits, cost)
 			if meteringSupported {
 				row.MeteredWeekTurns++
 			}
@@ -279,6 +295,7 @@ func (s *UsageStore) Report(guildID, channelID, userID string, limit int, now ti
 			row.DayCredits += credits
 			row.DayCostUSD += cost
 			row.DayTurns++
+			reportAddDay(&total, credits, cost)
 			if meteringSupported {
 				row.MeteredDayTurns++
 			}
@@ -293,11 +310,20 @@ func (s *UsageStore) Report(guildID, channelID, userID string, limit int, now ti
 		if out[i].MonthCredits != out[j].MonthCredits {
 			return out[i].MonthCredits > out[j].MonthCredits
 		}
+		if out[i].MonthCostUSD != out[j].MonthCostUSD {
+			return out[i].MonthCostUSD > out[j].MonthCostUSD
+		}
 		if out[i].WeekCredits != out[j].WeekCredits {
 			return out[i].WeekCredits > out[j].WeekCredits
 		}
+		if out[i].WeekCostUSD != out[j].WeekCostUSD {
+			return out[i].WeekCostUSD > out[j].WeekCostUSD
+		}
 		if out[i].DayCredits != out[j].DayCredits {
 			return out[i].DayCredits > out[j].DayCredits
+		}
+		if out[i].DayCostUSD != out[j].DayCostUSD {
+			return out[i].DayCostUSD > out[j].DayCostUSD
 		}
 		return out[i].UserID < out[j].UserID
 	})
@@ -311,7 +337,26 @@ func (s *UsageStore) Report(guildID, channelID, userID string, limit int, now ti
 		WeekStart:   weekStart,
 		MonthStart:  monthStart,
 		Rows:        out,
+		Totals:      total,
 	}, nil
+}
+
+func reportAddDay(total *UsageReportTotals, credits, cost float64) {
+	total.DayCredits += credits
+	total.DayCostUSD += cost
+	total.DayTurns++
+}
+
+func reportAddWeek(total *UsageReportTotals, credits, cost float64) {
+	total.WeekCredits += credits
+	total.WeekCostUSD += cost
+	total.WeekTurns++
+}
+
+func reportAddMonth(total *UsageReportTotals, credits, cost float64) {
+	total.MonthCredits += credits
+	total.MonthCostUSD += cost
+	total.MonthTurns++
 }
 
 type usageRecordWithTime struct {

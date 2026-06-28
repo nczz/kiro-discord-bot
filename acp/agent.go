@@ -16,7 +16,7 @@ import (
 	"time"
 )
 
-// Agent wraps a kiro-cli ACP child process.
+// Agent wraps an ACP child process.
 type Agent struct {
 	Name      string
 	SessionID string
@@ -51,25 +51,25 @@ type Agent struct {
 	profile       dialectProfile // dialect-specific behavior; set in StartAgent
 	stopOnce      sync.Once
 	exited        chan struct{} // closed when child process exits
-	stderrBuf     *ringBuffer   // captures recent stderr from kiro-cli
+	stderrBuf     *ringBuffer   // captures recent stderr from the agent process
 	mcpReady      map[string]struct{}
 }
 
 // AgentOptions configures how an agent is spawned.
 type AgentOptions struct {
-	MaxBuffer     int    // scanner buffer upper limit (bytes); 0 = 64 MiB
+	MaxBuffer     int     // scanner buffer upper limit (bytes); 0 = 64 MiB
 	Dialect       Dialect // ACP backend dialect; zero value = DialectKiro
-	Agent         string // --agent flag; empty = kiro default
-	TrustAllTools bool   // --trust-all-tools; default true
-	TrustTools    string // --trust-tools <names>; comma-separated, overrides TrustAllTools
-	BotName       string // clientInfo.name
-	BotVersion    string // clientInfo.version
-	LoadSessionID string // if non-empty, use session/load instead of session/new
+	Agent         string  // --agent flag; empty = kiro default
+	TrustAllTools bool    // --trust-all-tools; default true
+	TrustTools    string  // --trust-tools <names>; comma-separated, overrides TrustAllTools
+	BotName       string  // clientInfo.name
+	BotVersion    string  // clientInfo.version
+	LoadSessionID string  // if non-empty, use session/load instead of session/new
 	Env           []string
 	MCPServers    []MCPServerConfig
 }
 
-// MCPServerConfig is passed to Kiro ACP session/new and session/load.
+// MCPServerConfig is passed to ACP session/new and session/load.
 type MCPServerConfig struct {
 	Name          string            `json:"name"`
 	Command       string            `json:"command,omitempty"`
@@ -119,14 +119,15 @@ func (c MCPServerConfig) MarshalJSON() ([]byte, error) {
 	})
 }
 
-// StartAgent spawns kiro-cli acp and performs the ACP handshake (initialize + session/new).
-func StartAgent(name, kiroCLI, cwd, model string, opts AgentOptions) (*Agent, error) {
-	resolvedCLI, err := ResolveKiroCLI(kiroCLI)
+// StartAgent spawns an ACP agent process and performs the ACP handshake
+// (initialize + session/new).
+func StartAgent(name, binary, cwd, model string, opts AgentOptions) (*Agent, error) {
+	resolvedCLI, err := ResolveAgentBinary(binary, opts.Dialect)
 	if err != nil {
 		return nil, err
 	}
 	if _, err := os.Stat(resolvedCLI); err != nil {
-		return nil, fmt.Errorf("kiro-cli binary not found: %s", kiroCLI)
+		return nil, fmt.Errorf("agent binary not found: %s", binary)
 	}
 	if _, err := os.Stat(cwd); err != nil {
 		return nil, fmt.Errorf("working directory not found: %s", cwd)
@@ -244,7 +245,7 @@ func StartAgent(name, kiroCLI, cwd, model string, opts AgentOptions) (*Agent, er
 	if initResp.AgentInfo != nil {
 		version = initResp.AgentInfo.Version
 	}
-	log.Printf("[agent:%s] pid=%d protocol=%v kiro=%s", name, cmd.Process.Pid, initResp.ProtocolVersion, version)
+	log.Printf("[agent:%s] pid=%d protocol=%v agent=%s version=%s", name, cmd.Process.Pid, initResp.ProtocolVersion, a.Dialect(), version)
 
 	// Handshake: session setup — try session/load if requested, fallback to session/new.
 	var sessResp SessionNewResult
@@ -280,6 +281,13 @@ func StartAgent(name, kiroCLI, cwd, model string, opts AgentOptions) (*Agent, er
 	}
 	a.SessionID = sessResp.SessionID
 	a.sessResult = &sessResp
+	if opts.Dialect == DialectOmp && strings.TrimSpace(model) != "" {
+		if err := prof.setModel(a, model); err != nil {
+			a.Kill()
+			return nil, a.wrapHandshakeError("session/set_config_option model", err)
+		}
+		a.setCurrentModelID(model)
+	}
 	a.state = "idle"
 
 	log.Printf("[agent:%s] session=%s", name, a.SessionID)
@@ -305,6 +313,29 @@ func (a *Agent) wrapHandshakeError(stage string, err error) error {
 		return fmt.Errorf("%s: %w | stderr: %s", stage, err, stderr)
 	}
 	return fmt.Errorf("%s: %w", stage, err)
+}
+
+// ResolveAgentBinary resolves an ACP agent backend binary. Kiro keeps the
+// historical error text for user-facing compatibility; other engines use
+// backend-neutral wording.
+func ResolveAgentBinary(binary string, dialect Dialect) (string, error) {
+	if dialect == DialectKiro {
+		return ResolveKiroCLI(binary)
+	}
+	if binary == "" {
+		binary = dialect.String()
+	}
+	if filepath.IsAbs(binary) || strings.Contains(binary, string(os.PathSeparator)) {
+		if _, err := os.Stat(binary); err != nil {
+			return "", fmt.Errorf("agent binary not found: %s", binary)
+		}
+		return binary, nil
+	}
+	resolved, err := exec.LookPath(binary)
+	if err != nil {
+		return "", fmt.Errorf("agent binary not found in PATH: %s", binary)
+	}
+	return resolved, nil
 }
 
 // ResolveKiroCLI resolves a kiro-cli path. Absolute or path-like values are
@@ -596,7 +627,7 @@ func (a *Agent) Pid() int {
 	return 0
 }
 
-// RecentStderr returns the most recent stderr output from kiro-cli (up to 4 KB).
+// RecentStderr returns the most recent stderr output from the agent process (up to 4 KB).
 func (a *Agent) RecentStderr() string {
 	if a.stderrBuf == nil {
 		return ""
@@ -682,12 +713,20 @@ func (a *Agent) Uptime() time.Duration {
 	return time.Since(startedAt)
 }
 
-// AgentVersion returns the kiro-cli version from the initialize response.
+// AgentVersion returns the agent backend version from the initialize response.
 func (a *Agent) AgentVersion() string {
 	if a.initResult != nil && a.initResult.AgentInfo != nil {
 		return a.initResult.AgentInfo.Version
 	}
 	return ""
+}
+
+// Dialect returns the ACP backend dialect this agent drives.
+func (a *Agent) Dialect() Dialect {
+	if a.dialect == DialectOmp {
+		return DialectOmp
+	}
+	return DialectKiro
 }
 
 // ProtocolVersion returns the protocol version from the initialize response.
@@ -1038,12 +1077,12 @@ func PreflightCheck(kiroCLI string) error {
 
 // PreflightCheckWithOptions validates the full ACP lifecycle using the same
 // process options as production runtime agents.
-func PreflightCheckWithOptions(kiroCLI string, opts AgentOptions) error {
+func PreflightCheckWithOptions(binary string, opts AgentOptions) error {
 	opts.TrustAllTools = true
 	opts.TrustTools = ""
 	opts.LoadSessionID = ""
 	opts.MCPServers = nil
-	agent, err := StartAgent("preflight", kiroCLI, "/tmp", "", opts)
+	agent, err := StartAgent("preflight", binary, "/tmp", "", opts)
 	if err != nil {
 		return fmt.Errorf("handshake failed: %w", err)
 	}
@@ -1060,6 +1099,6 @@ func PreflightCheckWithOptions(kiroCLI string, opts AgentOptions) error {
 		return fmt.Errorf("unexpected response: %.100s", resp)
 	}
 
-	log.Printf("[preflight] kiro-cli v%s, protocol=%v, check passed", agent.AgentVersion(), agent.ProtocolVersion())
+	log.Printf("[preflight] %s v%s, protocol=%v, check passed", agent.Dialect(), agent.AgentVersion(), agent.ProtocolVersion())
 	return nil
 }

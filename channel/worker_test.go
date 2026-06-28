@@ -114,6 +114,36 @@ func TestCompactToolStartMessageHidesLongExecuteCommand(t *testing.T) {
 	}
 }
 
+func TestCompactToolStartMessageDerivesGenericExecuteTitleFromRawInput(t *testing.T) {
+	evt := acp.ToolCallEvent{
+		Kind:  "execute",
+		Title: "Running tool",
+		RawInput: map[string]interface{}{
+			"command": "go",
+			"args":    []interface{}{"test", "./..."},
+		},
+	}
+	got := CompactToolStartMessage("▶️", evt)
+	want := "▶️ Running: go test ./..."
+	if got != want {
+		t.Fatalf("CompactToolStartMessage() = %q, want %q", got, want)
+	}
+}
+
+func TestToolDisplayTitleDoesNotDumpArbitraryRawInput(t *testing.T) {
+	evt := acp.ToolCallEvent{
+		Kind:  "execute",
+		Title: "Running tool",
+		RawInput: map[string]interface{}{
+			"payload": map[string]interface{}{"secret": "value"},
+		},
+	}
+	got := toolDisplayTitle(evt)
+	if got != "Running tool" {
+		t.Fatalf("toolDisplayTitle() = %q, want generic title preserved", got)
+	}
+}
+
 func TestCompactToolStartMessageTruncatesLongNonExecuteTitle(t *testing.T) {
 	evt := acp.ToolCallEvent{
 		Kind:  "read",
@@ -1225,6 +1255,52 @@ func TestMetricsMetadataIncludesCostDurationAndContext(t *testing.T) {
 	}
 	if _, ok := got["metering_usage"].([]acp.MeteringItem); !ok {
 		t.Fatalf("metering_usage = %#v, want []acp.MeteringItem", got["metering_usage"])
+	}
+}
+
+func TestWorkerRecordUsageUsesConfiguredEngineWhenMeteringEmpty(t *testing.T) {
+	store := NewUsageStore(t.TempDir(), "Asia/Taipei", 0)
+	w := newWorkerWithEngine("ch1", &fakeWorkerAgent{}, 1, 30, 1, 1440, nil, "model-1", acp.DialectOmp.String())
+	w.SetUsageStore(store)
+
+	startedAt := time.Now().Add(-2 * time.Second)
+	w.recordUsage(&Job{
+		GuildID:   "g1",
+		ChannelID: "ch1",
+		UserID:    "u1",
+		Username:  "user",
+		MessageID: "m1",
+	}, "", "success", startedAt)
+
+	records, err := store.readRange(time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatalf("read usage: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("records = %d, want 1", len(records))
+	}
+	if records[0].Engine != acp.DialectOmp.String() {
+		t.Fatalf("engine = %q, want omp", records[0].Engine)
+	}
+	if len(records[0].MeteringUsage) != 0 {
+		t.Fatalf("metering = %+v, want empty", records[0].MeteringUsage)
+	}
+	if records[0].DurationMs <= 0 {
+		t.Fatalf("duration_ms = %d, want local elapsed fallback", records[0].DurationMs)
+	}
+}
+
+func TestMetricsWithElapsedPreservesAgentDuration(t *testing.T) {
+	got := MetricsWithElapsed(acp.TurnMetrics{TurnDurationMs: 1234}, time.Now().Add(-5*time.Second))
+	if got.TurnDurationMs != 1234 {
+		t.Fatalf("duration = %d, want original 1234", got.TurnDurationMs)
+	}
+}
+
+func TestMetricsWithElapsedFillsMissingDuration(t *testing.T) {
+	got := MetricsWithElapsed(acp.TurnMetrics{}, time.Now().Add(-1500*time.Millisecond))
+	if got.TurnDurationMs <= 0 {
+		t.Fatalf("duration = %d, want local elapsed fallback", got.TurnDurationMs)
 	}
 }
 

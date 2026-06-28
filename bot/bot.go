@@ -169,7 +169,7 @@ func (b *Bot) Start() error {
 		log.Printf("Bot running as %s#%s", r.User.Username, r.User.Discriminator)
 		b.manager.SetBotID(r.User.ID)
 		b.discoverBotPeers(ds, r)
-		_ = ds.UpdateGameStatus(0, "kiro-cli agent "+b.version)
+		_ = ds.UpdateGameStatus(0, "ACP agent "+b.version)
 		b.registerSlashCommands()
 	})
 	if err := b.discord.Open(); err != nil {

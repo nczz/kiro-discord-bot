@@ -108,6 +108,7 @@ type AgentCommandResult struct {
 	Response string
 	Metrics  acp.TurnMetrics
 	Model    string
+	Engine   string
 	Executed bool
 }
 
@@ -416,6 +417,17 @@ func (m *Manager) setChannelSession(channelID string, sess *Session) error {
 	return m.store.Set(key, sess)
 }
 
+func (m *Manager) deleteChannelSession(channelID string) error {
+	if m.store == nil {
+		return fmt.Errorf("session store unavailable")
+	}
+	key := m.sessionKey(sessionTargetChannel, channelID)
+	if key == "" {
+		return fmt.Errorf("empty channel session key")
+	}
+	return m.store.Delete(key)
+}
+
 func (m *Manager) getThreadSession(threadID string) (*Session, bool) {
 	if m.store == nil {
 		return nil, false
@@ -440,6 +452,17 @@ func (m *Manager) setThreadSession(threadID, parentChannelID string, sess *Sessi
 	sess.TargetID = threadID
 	sess.ParentChannelID = parentChannelID
 	return m.store.Set(key, sess)
+}
+
+func (m *Manager) deleteThreadSession(threadID string) error {
+	if m.store == nil {
+		return fmt.Errorf("session store unavailable")
+	}
+	key := m.sessionKey(sessionTargetThread, threadID)
+	if key == "" {
+		return fmt.Errorf("empty thread session key")
+	}
+	return m.store.Delete(key)
 }
 
 func (m *Manager) updateChannelMentionRefs(channelID string, refs []discordmention.Ref) {
@@ -801,13 +824,13 @@ func (m *Manager) Status(channelID string) string {
 	}
 
 	state := "unknown"
-	kiroVersion := ""
+	agentVersion := ""
 	agentUptime := "n/a"
 	ctxUsage := 0.0
 	qLen := 0
 	if agent, ok := m.agents[channelID]; ok {
 		state = agent.State()
-		kiroVersion = agent.AgentVersion()
+		agentVersion = agent.AgentVersion()
 		ctxUsage = agent.ContextUsage()
 		if agent.IsAlive() {
 			agentUptime = textutil.FormatUptime(agent.Uptime())
@@ -822,7 +845,8 @@ func (m *Manager) Status(channelID string) string {
 		qLen = w.QueueLen()
 	}
 
-	return m.formatStatus(sess, state, qLen, kiroVersion, agentUptime, ctxUsage)
+	engine := m.resolveEngine(sess.Engine).String()
+	return m.formatStatus(sess, state, qLen, engine, agentVersion, agentUptime, ctxUsage)
 }
 
 // ThreadStatus returns the status string for a thread agent.
@@ -836,13 +860,13 @@ func (m *Manager) ThreadStatus(threadID string) string {
 	}
 
 	state := "unknown"
-	kiroVersion := ""
+	agentVersion := ""
 	agentUptime := "n/a"
 	ctxUsage := 0.0
 	qLen := 0
 	if entry, ok := m.threadAgents[threadID]; ok {
 		state = entry.agent.State()
-		kiroVersion = entry.agent.AgentVersion()
+		agentVersion = entry.agent.AgentVersion()
 		ctxUsage = entry.agent.ContextUsage()
 		if entry.agent.IsAlive() {
 			agentUptime = textutil.FormatUptime(entry.agent.Uptime())
@@ -854,21 +878,32 @@ func (m *Manager) ThreadStatus(threadID string) string {
 		state = L.Get("status.inactive")
 	}
 
-	return m.formatStatus(sess, state, qLen, kiroVersion, agentUptime, ctxUsage)
+	engine := m.defaultEngine.String()
+	parentChannelID := strings.TrimSpace(sess.ParentChannelID)
+	if parentChannelID != "" {
+		d, _ := m.engineForThread(threadID, parentChannelID)
+		engine = d.String()
+	} else {
+		engine = m.resolveEngine(sess.Engine).String()
+	}
+	return m.formatStatus(sess, state, qLen, engine, agentVersion, agentUptime, ctxUsage)
 }
 
-func (m *Manager) formatStatus(sess *Session, state string, qLen int, kiroVersion, agentUptime string, ctxUsage float64) string {
+func (m *Manager) formatStatus(sess *Session, state string, qLen int, engine, agentVersion, agentUptime string, ctxUsage float64) string {
 	sid := sess.SessionID
 	if len(sid) > 8 {
 		sid = sid[:8]
 	}
-	if kiroVersion == "" {
-		kiroVersion = "n/a"
+	if engine == "" {
+		engine = m.defaultEngine.String()
+	}
+	if agentVersion == "" {
+		agentVersion = "n/a"
 	}
 	if agentUptime == "" {
 		agentUptime = "n/a"
 	}
-	return L.Getf("status.format", sess.AgentName, state, qLen, sid, modelDisplay(sess.Model), kiroVersion, m.botVersion, agentUptime, ctxUsage)
+	return L.Getf("status.format", sess.AgentName, state, qLen, sid, modelDisplay(sess.Model), engine, agentVersion, m.botVersion, agentUptime, ctxUsage)
 }
 
 // MCPCatalogStatus is a backward-compatible alias for the combined MCP checklist.
@@ -1372,7 +1407,7 @@ func (m *Manager) SwitchModel(channelID, model string) (bool, error) {
 		log.Printf("[manager] dynamic model switch failed, restarting: %v", model)
 	}
 
-	if err := m.validateModelID(model); err != nil {
+	if err := m.validateModelForChannel(channelID, model); err != nil {
 		return false, err
 	}
 	oldSess, _ := m.getChannelSession(channelID)
@@ -1415,6 +1450,20 @@ func (m *Manager) SwitchMode(channelID, modeID string) error {
 	return agent.SetMode(modeID)
 }
 
+// SwitchThreadMode attempts a dynamic mode switch on a thread agent.
+func (m *Manager) SwitchThreadMode(threadID, modeID string) error {
+	m.mu.Lock()
+	entry, ok := m.threadAgents[threadID]
+	m.mu.Unlock()
+	if !ok || entry.agent == nil || !entry.agent.IsAlive() {
+		return ErrNoThreadAgent
+	}
+	if modes := entry.agent.AvailableModes(); len(modes) > 0 && !entry.agent.HasMode(modeID) {
+		return fmt.Errorf("unknown mode %q; available modes: %s", modeID, modeIDs(modes))
+	}
+	return entry.agent.SetMode(modeID)
+}
+
 func modelIDs(models []acp.ModelEntry) string {
 	ids := make([]string, 0, len(models))
 	for _, model := range models {
@@ -1437,6 +1486,40 @@ func (m *Manager) validateModelID(model string) error {
 		}
 	}
 	return fmt.Errorf("unknown model %q; available models: %s", model, modelIDs(models))
+}
+
+func (m *Manager) validateModelForChannel(channelID, model string) error {
+	if model == "" {
+		return nil
+	}
+	m.mu.Lock()
+	agent, ok := m.agents[channelID]
+	m.mu.Unlock()
+	if ok && agent.IsAlive() {
+		return validateAgentModel(agent, model)
+	}
+	dialect, _ := m.engineForChannel(channelID)
+	if dialect != acp.DialectKiro {
+		return fmt.Errorf("model validation requires an active %s agent; start the agent first or use `/models` while it is running", dialect.String())
+	}
+	return m.validateModelID(model)
+}
+
+func (m *Manager) validateModelForThread(threadID, parentChannelID, model string) error {
+	if model == "" {
+		return nil
+	}
+	m.mu.Lock()
+	entry, ok := m.threadAgents[threadID]
+	m.mu.Unlock()
+	if ok && entry.agent != nil && entry.agent.IsAlive() {
+		return validateAgentModel(entry.agent, model)
+	}
+	dialect, _ := m.engineForThread(threadID, parentChannelID)
+	if dialect != acp.DialectKiro {
+		return fmt.Errorf("model validation requires an active %s thread agent; start the thread agent first or use `/models` while it is running", dialect.String())
+	}
+	return m.validateModelID(model)
 }
 
 func (m *Manager) cliModels() ([]acp.ModelEntry, string, error) {
@@ -1487,6 +1570,17 @@ func (m *Manager) AgentModes(channelID string) (current string, modes []acp.Mode
 	return agent.CurrentModeID(), agent.AvailableModes()
 }
 
+// ThreadAgentModes returns available modes for a thread's agent.
+func (m *Manager) ThreadAgentModes(threadID string) (current string, modes []acp.ModeEntry) {
+	m.mu.Lock()
+	entry, ok := m.threadAgents[threadID]
+	m.mu.Unlock()
+	if !ok || entry.agent == nil || !entry.agent.IsAlive() {
+		return "", nil
+	}
+	return entry.agent.CurrentModeID(), entry.agent.AvailableModes()
+}
+
 func modelDisplay(model string) string {
 	if model == "" {
 		return "default"
@@ -1505,8 +1599,9 @@ func (m *Manager) Model(channelID string) string {
 	return L.Get("model.current_default")
 }
 
-// ListModels calls kiro-cli to get available models.
-// If channelID is provided, it marks the channel's current model instead of global default.
+// ListModels returns available models for a channel scope.
+// Kiro can fall back to kiro-cli when no agent is active; other engines require
+// an active ACP session because their model catalog is reported by session/new.
 func (m *Manager) ListModels(channelID string) (string, error) {
 	// Try to get models from active agent's session response (no subprocess needed)
 	m.mu.Lock()
@@ -1516,6 +1611,11 @@ func (m *Manager) ListModels(channelID string) (string, error) {
 		if models := agent.AvailableModels(); len(models) > 0 {
 			return m.formatAgentModels(channelID, agent.CurrentModelID(), models), nil
 		}
+	}
+
+	dialect, _ := m.engineForChannel(channelID)
+	if dialect != acp.DialectKiro {
+		return "", fmt.Errorf("model listing requires an active %s agent; start the agent first", dialect.String())
 	}
 
 	models, defaultModel, err := m.cliModels()
@@ -1532,27 +1632,41 @@ func (m *Manager) ListModels(channelID string) (string, error) {
 		}
 	}
 
-	var sb strings.Builder
-	sb.WriteString(L.Get("models.header"))
-	for _, m := range models {
-		marker := " "
-		if m.ModelID == currentModel {
-			marker = "▸"
-		}
-		sb.WriteString(fmt.Sprintf("%s `%s` — %s\n", marker, m.ModelID, m.Description))
-	}
-	sb.WriteString(L.Get("models.footer"))
-	return sb.String(), nil
+	return m.formatModels(currentModel, models), nil
 }
 
-// formatAgentModels formats the model list from agent's session response.
-func (m *Manager) formatAgentModels(channelID, agentCurrentModel string, models []acp.ModelEntry) string {
-	// Use channel's configured model as current if available
-	currentModel := agentCurrentModel
-	if sess, ok := m.getChannelSession(channelID); ok && sess.Model != "" {
-		currentModel = sess.Model
+// ListThreadModels returns available models for a thread scope.
+func (m *Manager) ListThreadModels(threadID, parentChannelID string) (string, error) {
+	m.mu.Lock()
+	entry, ok := m.threadAgents[threadID]
+	m.mu.Unlock()
+	if ok && entry.agent != nil && entry.agent.IsAlive() {
+		if models := entry.agent.AvailableModels(); len(models) > 0 {
+			return m.formatModels(entry.agent.CurrentModelID(), models), nil
+		}
 	}
 
+	dialect, _ := m.engineForThread(threadID, parentChannelID)
+	if dialect != acp.DialectKiro {
+		return "", fmt.Errorf("model listing requires an active %s thread agent; start the thread agent first", dialect.String())
+	}
+
+	models, defaultModel, err := m.cliModels()
+	if err != nil {
+		return "", err
+	}
+	currentModel := defaultModel
+	if sess, ok := m.getThreadSession(threadID); ok && sess.Model != "" {
+		currentModel = sess.Model
+	} else if sess, ok := m.getChannelSession(parentChannelID); ok && sess.Model != "" {
+		currentModel = sess.Model
+	} else if m.defaultModel != "" {
+		currentModel = m.defaultModel
+	}
+	return m.formatModels(currentModel, models), nil
+}
+
+func (m *Manager) formatModels(currentModel string, models []acp.ModelEntry) string {
 	var sb strings.Builder
 	sb.WriteString(L.Get("models.header"))
 	for _, model := range models {
@@ -1564,6 +1678,11 @@ func (m *Manager) formatAgentModels(channelID, agentCurrentModel string, models 
 	}
 	sb.WriteString(L.Get("models.footer"))
 	return sb.String()
+}
+
+// formatAgentModels formats the model list from agent's session response.
+func (m *Manager) formatAgentModels(channelID, agentCurrentModel string, models []acp.ModelEntry) string {
+	return m.formatModels(agentCurrentModel, models)
 }
 
 // --- Memory (persistent) ---
@@ -1760,7 +1879,7 @@ func (m *Manager) GetSession(channelID string) (*Session, bool) {
 	return m.getChannelSession(channelID)
 }
 
-// UsageReport returns credit usage aggregated for the current day, week, and month.
+// UsageReport returns metered agent usage aggregated for the current day, week, and month.
 func (m *Manager) UsageReport(guildID, channelID, userID string, limit int) (UsageReport, error) {
 	if m.usage == nil {
 		return UsageReport{}, fmt.Errorf("usage store not configured")
@@ -1817,18 +1936,7 @@ func (m *Manager) Doctor(ctx context.Context) string {
 	var sb strings.Builder
 	sb.WriteString(L.Get("doctor.header"))
 
-	resolvedCLI, err := acp.ResolveKiroCLI(m.kiroCLI)
-	if err != nil {
-		sb.WriteString(L.Getf("doctor.kiro_cli.error", err.Error()))
-	} else {
-		sb.WriteString(L.Getf("doctor.kiro_cli.ok", resolvedCLI))
-		if out, err := exec.CommandContext(ctx, resolvedCLI, "--version").Output(); err == nil {
-			sb.WriteString(" — `" + strings.TrimSpace(string(out)) + "`")
-		} else {
-			sb.WriteString(L.Getf("doctor.kiro_cli.version_failed", err.Error()))
-		}
-		sb.WriteString("\n")
-	}
+	sb.WriteString(m.doctorEngineDiagnostics(ctx))
 
 	if cwd, err := m.ValidateCWD(m.defaultCWD); err != nil {
 		sb.WriteString(L.Getf("doctor.default_cwd.error", err.Error()))
@@ -1868,12 +1976,6 @@ func (m *Manager) Doctor(ctx context.Context) string {
 		}
 	}
 
-	if err := acp.PreflightCheckWithOptions(m.kiroCLI, m.preflightAgentOptions()); err != nil {
-		sb.WriteString(L.Getf("doctor.acp_preflight.error", err.Error()))
-	} else {
-		sb.WriteString(L.Get("doctor.acp_preflight.ok"))
-	}
-
 	sb.WriteString(m.doctorRuntimeOverview())
 	sb.WriteString(m.doctorListenModeConsistency())
 
@@ -1881,12 +1983,47 @@ func (m *Manager) Doctor(ctx context.Context) string {
 }
 
 func (m *Manager) preflightAgentOptions() acp.AgentOptions {
+	return m.preflightAgentOptionsFor(acp.DialectKiro)
+}
+
+func (m *Manager) preflightAgentOptionsFor(dialect acp.Dialect) acp.AgentOptions {
 	opts := m.agentOptsForChannel("")
 	opts.TrustAllTools = true
 	opts.TrustTools = ""
 	opts.LoadSessionID = ""
 	opts.MCPServers = nil
-	return opts
+	return m.applyEngine(opts, dialect)
+}
+
+func (m *Manager) doctorEngineDiagnostics(ctx context.Context) string {
+	var sb strings.Builder
+	sb.WriteString(L.Get("doctor.engine.header"))
+	for _, name := range m.enabledEngineList() {
+		dialect := parseDialect(name)
+		binary := m.binaryFor(dialect)
+		resolved, err := resolveEngineBinary(dialect, binary)
+		if err != nil {
+			sb.WriteString(L.Getf("doctor.engine.binary_error", name, err.Error()))
+			continue
+		}
+		sb.WriteString(L.Getf("doctor.engine.binary_ok", name, resolved))
+		if out, err := exec.CommandContext(ctx, resolved, "--version").Output(); err == nil {
+			sb.WriteString(" — `" + strings.TrimSpace(string(out)) + "`")
+		} else {
+			sb.WriteString(L.Getf("doctor.engine.version_failed", err.Error()))
+		}
+		sb.WriteString("\n")
+		if err := acp.PreflightCheckWithOptions(resolved, m.preflightAgentOptionsFor(dialect)); err != nil {
+			sb.WriteString(L.Getf("doctor.engine.preflight_error", name, err.Error()))
+		} else {
+			sb.WriteString(L.Getf("doctor.engine.preflight_ok", name))
+		}
+	}
+	return sb.String()
+}
+
+func resolveEngineBinary(dialect acp.Dialect, binary string) (string, error) {
+	return acp.ResolveAgentBinary(binary, dialect)
 }
 
 // StartTempAgent starts a temporary agent (for cron jobs).
@@ -1955,11 +2092,13 @@ func (m *Manager) SendCommandResult(channelID, command string) (AgentCommandResu
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	startedAt := time.Now()
 	resp, err := agent.Ask(ctx, command, nil)
 	result := AgentCommandResult{
 		Response: resp,
-		Metrics:  agent.TurnMetrics(),
+		Metrics:  MetricsWithElapsed(agent.TurnMetrics(), startedAt),
 		Model:    agent.CurrentModelID(),
+		Engine:   agent.Dialect().String(),
 		Executed: true,
 	}
 	if err != nil {
@@ -2641,11 +2780,13 @@ func (m *Manager) SendCommandThreadResult(threadID, command string) (AgentComman
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	startedAt := time.Now()
 	resp, err := entry.agent.Ask(ctx, command, nil)
 	result := AgentCommandResult{
 		Response: resp,
-		Metrics:  entry.agent.TurnMetrics(),
+		Metrics:  MetricsWithElapsed(entry.agent.TurnMetrics(), startedAt),
 		Model:    entry.agent.CurrentModelID(),
+		Engine:   entry.agent.Dialect().String(),
 		Executed: true,
 	}
 	if err != nil {
@@ -2665,9 +2806,6 @@ func (m *Manager) ResetThreadAgentWithModel(threadID, model string) error {
 }
 
 func (m *Manager) resetThreadAgentWithModel(threadID, model string) error {
-	if err := m.validateModelID(model); err != nil {
-		return err
-	}
 	m.mu.Lock()
 	entry, ok := m.threadAgents[threadID]
 	threadSess, hasThreadSession := m.getThreadSession(threadID)
@@ -2676,6 +2814,24 @@ func (m *Manager) resetThreadAgentWithModel(threadID, model string) error {
 		return ErrNoThreadAgent
 	}
 	parentChannelID := ""
+	if ok {
+		parentChannelID = entry.parentChannelID
+	} else {
+		parentChannelID = strings.TrimSpace(threadSess.ParentChannelID)
+	}
+	m.mu.Unlock()
+
+	if err := m.validateModelForThread(threadID, parentChannelID, model); err != nil {
+		return err
+	}
+
+	m.mu.Lock()
+	entry, ok = m.threadAgents[threadID]
+	threadSess, hasThreadSession = m.getThreadSession(threadID)
+	if !ok && (!hasThreadSession || strings.TrimSpace(threadSess.ParentChannelID) == "") {
+		m.mu.Unlock()
+		return ErrNoThreadAgent
+	}
 	if ok {
 		parentChannelID = entry.parentChannelID
 		entry.worker.Stop()

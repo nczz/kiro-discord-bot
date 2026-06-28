@@ -9,7 +9,7 @@ import (
 	"github.com/nczz/kiro-discord-bot/internal/discordmention"
 )
 
-// Session holds the mapping between a Discord target and a kiro-cli agent.
+// Session holds the mapping between a Discord target and an ACP agent.
 type Session struct {
 	AgentName       string               `json:"agentName"`
 	SessionID       string               `json:"sessionId"`

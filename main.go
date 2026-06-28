@@ -146,13 +146,22 @@ type engineSpec struct {
 func enabledEngineSpecs(cfg *Config) []engineSpec {
 	names := map[string]bool{}
 	if d := strings.ToLower(strings.TrimSpace(cfg.AgentEngine)); d != "" {
-		names[d] = true
+		if d == "kiro" || d == "omp" {
+			names[d] = true
+		} else {
+			log.Printf("[preflight] unknown AGENT_ENGINE=%q, falling back to kiro", cfg.AgentEngine)
+			names["kiro"] = true
+		}
 	} else {
 		names["kiro"] = true
 	}
 	for _, p := range strings.Split(cfg.AgentEnginesEnabled, ",") {
 		if p = strings.ToLower(strings.TrimSpace(p)); p != "" {
-			names[p] = true
+			if p == "kiro" || p == "omp" {
+				names[p] = true
+			} else {
+				log.Printf("[preflight] ignoring unknown AGENT_ENGINES_ENABLED entry %q", p)
+			}
 		}
 	}
 	var out []engineSpec
