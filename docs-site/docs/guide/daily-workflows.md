@@ -14,11 +14,11 @@ Use `/memory` for lightweight Discord-native rules that should affect future tur
 
 Use `/flashmemory` for temporary emphasis that should not become long-term project behavior.
 
-Use `/steering create` and `/steering edit` for project guidance that should live with the repository under `.kiro/steering/`.
+Use `/steering create` and `/steering edit` for project guidance that should live with the repository. The shared file is `AGENTS.md`; Kiro-only `.kiro/steering/*.md` files are optional and not managed by default.
 
 ## Manage Stale Context
 
-If a persistent memory rule was wrong or has expired, remove it. If the current Kiro session has already seen that rule, also run `/clear` and `/reset` so future turns start without the old injected context.
+If a persistent memory rule was wrong or has expired, remove it. If the current ACP agent session has already seen that rule, also run `/clear` and `/reset` so future turns start without the old injected context.
 
 ## Coordinate Multiple Bots
 

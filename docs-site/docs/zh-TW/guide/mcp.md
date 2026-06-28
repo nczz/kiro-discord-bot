@@ -1,6 +1,6 @@
 # MCP 權限
 
-MCP 工具讓 agent 能觸及核心 Kiro session 以外的系統：Discord API、媒體生成、內部服務、搜尋工具或專案自訂自動化。
+MCP 工具讓 agent 能觸及核心 ACP session 以外的系統：Discord API、媒體生成、內部服務、搜尋工具或專案自訂自動化。
 
 ## Catalog 與 Channel Policy
 

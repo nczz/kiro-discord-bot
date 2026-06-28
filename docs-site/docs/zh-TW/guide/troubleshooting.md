@@ -33,4 +33,4 @@ Thread 可能有對話紀錄，但沒有 active in-memory thread agent。Idle cl
 
 ## 移除 Memory 後仍影響回覆
 
-如果已移除的 memory rule 仍像是在影響 agent，代表目前 Kiro session 可能已經包含先前注入該 rule 的對話。請先移除規則，再執行 `/clear` 與 `/reset`。
+如果已移除的 memory rule 仍像是在影響 agent，代表目前 ACP agent session 可能已經包含先前注入該 rule 的對話。請先移除規則，再執行 `/clear` 與 `/reset`。

@@ -30,10 +30,10 @@ Commands are available as slash commands. Most also have `!` text-command equiva
 | Command | Purpose |
 | --- | --- |
 | `/model` | Show the current model. |
-| `/model <model-id>` | Switch the model when Kiro supports dynamic model changes. |
-| `/models` | List available models. |
-| `/agent` | List available Kiro agent modes. |
-| `/agent <mode-id>` | Switch agent mode, such as planner or guide modes advertised by Kiro CLI. |
+| `/model <model-id>` | Switch the model for the current channel/thread agent. Non-Kiro engines validate model IDs from the active ACP session. |
+| `/models` | List available models. Kiro can fall back to `kiro-cli`; OMP requires the channel/thread agent to be running because models come from ACP `session/new`. |
+| `/agent` | List available modes for the current channel/thread agent. |
+| `/agent <mode-id>` | Switch agent mode, such as planner/guide modes or OMP modes advertised by the active ACP session. |
 | `/engine` | Show the current agent engine (kiro/omp) and which engines are enabled. |
 | `/engine <kiro\|omp>` | Switch the engine for this channel/thread (only engines listed in `AGENT_ENGINES_ENABLED`). Starts a fresh session on the new engine; recent conversation context is replayed. |
 
@@ -43,7 +43,7 @@ Commands are available as slash commands. Most also have `!` text-command equiva
 | --- | --- |
 | `/memory` | Add, list, remove, or clear persistent Discord-native memory rules. |
 | `/flashmemory` | Manage session-scoped emphasis rules. |
-| `/steering <status|create|edit>` | Manage the current project steering file under `.kiro/steering/`. |
+| `/steering <status|create|edit>` | Manage shared `AGENTS.md` guidance for the current project. |
 
 If a memory rule is visible in `/memory list`, it affects future turns. To retire stale persistent guidance completely, remove it, then run `/clear` and `/reset`.
 
@@ -57,7 +57,7 @@ See [Daily Workflows](daily-workflows.md) for the operational difference between
 | `/mcp enable` / `/mcp disable` | Enable or disable a server at channel scope. |
 | `/mcp manage` | Open the private MCP policy panel, scan tools, and manage tool allowlists. |
 | `/audit [limit]` | Privately inspect recent audit events for the current channel or thread. |
-| `/usage [user]` | Show Kiro credit usage for today, week, and month-to-date. |
+| `/usage [user]` | Show agent usage for today, week, and month-to-date, including credits or USD cost when the engine reports metering metadata. |
 
 Use slash `/audit` for audit data. Text `!audit` is intentionally not supported for audit rows because Discord cannot make those replies private.
 

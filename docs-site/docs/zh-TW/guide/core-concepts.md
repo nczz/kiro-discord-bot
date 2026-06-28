@@ -2,7 +2,7 @@
 
 ## Channel Agent
 
-一個 parent Discord channel 對應一個專案工作目錄與一個長生命週期 Kiro agent session。Channel agent 擁有主要專案脈絡、memory block、steering 檔案、MCP policy 與對話延續性。
+一個 parent Discord channel 對應一個專案工作目錄與一個長生命週期 ACP agent session。Channel agent 擁有主要專案脈絡、memory block、steering 檔案、MCP policy 與對話延續性。
 
 ## Thread Agent
 
@@ -18,9 +18,9 @@
 | --- | --- | --- |
 | `/memory` | 持久 Discord-native 規則 | 個人偏好、回應語言、固定風格 |
 | `/flashmemory` | 目前 session 重點 | 當前任務或 sprint 的臨時優先事項 |
-| `.kiro/steering/*.md` | 版本化專案指引 | 架構、建置指令、安全規則、工作流程、領域背景 |
+| `AGENTS.md` | 版本化專案指引 | 架構、建置指令、安全規則、工作流程、領域背景 |
 
-只要規則還在 `/memory list` 看得到，就會在每次 agent turn 前被注入。移除 memory rule 會停止未來注入，但目前 Kiro session 可能已經在先前對話看過舊規則。若要完全淘汰過期或衝突規則，移除後再執行 `/clear` 與 `/reset`。
+只要規則還在 `/memory list` 看得到，就會在每次 agent turn 前被注入。移除 memory rule 會停止未來注入，但目前 ACP agent session 可能已經在先前對話看過舊規則。若要完全淘汰過期或衝突規則，移除後再執行 `/clear` 與 `/reset`。
 
 ## MCP Policy
 

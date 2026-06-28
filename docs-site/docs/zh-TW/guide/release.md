@@ -10,10 +10,11 @@ Tag、publish 或部署新 release 前使用這份 runbook。
 scripts/release-preflight.sh
 ```
 
-若修改 ACP、Kiro CLI 整合、MCP policy、`bot-tools` 或 cron pending ingestion，也執行對應 smoke checks：
+若修改 ACP、engine 整合、MCP policy、`bot-tools` 或 cron pending ingestion，也執行對應 smoke checks：
 
 ```bash
 RUN_ACP_SMOKE=1 KIRO_CLI=$(which kiro-cli) scripts/release-preflight.sh
+RUN_OMP_SMOKE=1 OMP_PATH=$(which omp) scripts/release-preflight.sh
 ```
 
 ## 2. Review Diff
@@ -75,6 +76,9 @@ macOS launchd hosts：
 - 如果 MCP 有變更，開 `/mcp manage` 掃描 configured server。
 - 如果 cron 有變更，跑一個安全的 `/cron-run`。
 - 如果 thread 行為有變更，開新任務並在 thread 內延續。
+- 如果 engine 行為有變更，在每個 enabled engine 的 channel/thread scope 測 `/engine`、`/models`、`/model`、`/agent`、`/status` 與 `/usage`。
+
+完整 channel/thread 與 Kiro/OMP checklist 請使用 [操作矩陣](operation-matrix.md)。
 
 ## 7. Rollback
 

@@ -4,7 +4,7 @@
 
 **A trainable AI agent that lives in Discord.**
 
-`kiro-discord-bot` connects Discord channels to [Kiro CLI](https://kiro.dev) agents through ACP over stdio. Each initialized channel can bind to a real project directory, keep its own agent session, remember project guidance, and expose MCP tools through explicit channel policy.
+`kiro-discord-bot` connects Discord channels to ACP agents through stdio. It supports Kiro CLI and OMP engines behind the same Discord command, MCP policy, audit, usage, cron, memory, and thread-agent control plane. Each initialized channel can bind to a real project directory, keep its own agent session, remember project guidance, and expose MCP tools through explicit channel policy.
 
 This repository README is intentionally short. The detailed user guide, admin guide, MCP setup, release runbook, and troubleshooting docs live on the [documentation site][docs].
 
@@ -18,13 +18,13 @@ This repository README is intentionally short. The detailed user guide, admin gu
 
 ## Quick Start
 
-1. Install and authenticate `kiro-cli`.
+1. Install and authenticate at least one ACP engine: `kiro-cli` or `omp`.
 2. Create a Discord bot with `bot` and `applications.commands` scopes, Message Content Intent, and the required channel/message permissions.
 3. Download the latest release archive or build from source.
 4. Provide environment variables such as `DISCORD_TOKEN`, `DISCORD_GUILD_ID`, `DEFAULT_CWD`, and `DATA_DIR`.
 5. Run the bot once in the foreground and confirm it logs in.
 6. In Discord, run `/cwd` in a channel to bind it to a project.
-7. Run `/doctor` to verify permissions and Kiro readiness.
+7. Run `/doctor` to verify permissions and enabled engine readiness.
 
 Continue with the [full installation guide][install-doc].
 

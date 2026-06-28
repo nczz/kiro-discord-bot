@@ -1,6 +1,6 @@
 # Architecture
 
-`kiro-discord-bot` is a Discord gateway bot that manages Kiro CLI ACP sessions, channel state, thread state, MCP policy, cron jobs, audit events, and delivery behavior.
+`kiro-discord-bot` is a Discord gateway bot that manages ACP agent sessions, channel state, thread state, MCP policy, cron jobs, audit events, and delivery behavior. Kiro CLI and OMP are implemented as agent engines behind the same manager, command, usage, and audit layers.
 
 ## Runtime Components
 
@@ -22,9 +22,11 @@ Discord Gateway
 
 ## Agent Runtime Isolation
 
-The bot treats user Kiro MCP settings as a catalog, not as direct runtime inheritance. Agent sessions use an isolated runtime home under `DATA_DIR/kiro-agent-runtime`, and the runtime MCP config is kept empty unless the bot injects channel-approved servers through ACP.
+The bot treats user Kiro MCP settings as a catalog, not as direct runtime inheritance. Kiro agent sessions use an isolated runtime home under `DATA_DIR/kiro-agent-runtime`, and the runtime MCP config is kept empty unless the bot injects channel-approved servers through ACP.
 
 This prevents a user's global Kiro MCP configuration from silently becoming available in every Discord channel.
+
+OMP sessions are launched through the same ACP transport and MCP injection path, but they do not receive `KIRO_HOME` or `KIRO_MCP_CONFIG`. OMP model and mode catalogs come from ACP `session/new`, so model listing for OMP requires an active agent session.
 
 ## Channel and Thread State
 
@@ -46,9 +48,9 @@ Enabled MCP servers are launched through the bot's policy proxy. The proxy:
 - Filters `tools/list` so the agent only sees allowed tools.
 - Rejects unauthorized `tools/call`.
 - Applies the channel's allowlist.
-- Keeps policy enforcement outside Kiro prompt behavior.
+- Keeps policy enforcement outside agent prompt behavior.
 
-Kiro `disabledTools` is not treated as the security boundary.
+Engine-specific disabled-tool settings are not treated as the security boundary.
 
 ## Delivery and Redaction
 

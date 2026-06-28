@@ -4,7 +4,7 @@
 
 **一個住在 Discord 裡、可以被訓練的 AI agent。**
 
-`kiro-discord-bot` 透過 ACP over stdio 把 Discord 頻道連到 [Kiro CLI](https://kiro.dev) agent。每個完成初始化的頻道都可以綁定真實專案目錄、維持自己的 agent session、累積專案指引，並透過明確的頻道 policy 安全開放 MCP tools。
+`kiro-discord-bot` 透過 ACP over stdio 把 Discord 頻道連到 ACP agent。它用同一套 Discord 指令、MCP policy、audit、usage、cron、memory 與 thread-agent 控制面支援 Kiro CLI 與 OMP engines。每個完成初始化的頻道都可以綁定真實專案目錄、維持自己的 agent session、累積專案指引，並透過明確的頻道 policy 安全開放 MCP tools。
 
 這份 README 刻意保持精簡。完整使用指南、管理指南、MCP 設定、release runbook 與疑難排解都放在 [完整文件網站][docs-zh]。
 
@@ -18,13 +18,13 @@
 
 ## 快速開始
 
-1. 安裝並認證 `kiro-cli`。
+1. 安裝並認證至少一個 ACP engine：`kiro-cli` 或 `omp`。
 2. 建立 Discord bot，包含 `bot` 與 `applications.commands` scopes、Message Content Intent，以及必要 channel/message 權限。
 3. 下載 latest release archive，或從原始碼建置。
 4. 提供 `DISCORD_TOKEN`、`DISCORD_GUILD_ID`、`DEFAULT_CWD`、`DATA_DIR` 等 environment variables。
 5. 先用 foreground 啟動一次，確認 bot 登入。
 6. 在 Discord 頻道執行 `/cwd` 綁定專案。
-7. 執行 `/doctor` 確認權限與 Kiro 狀態。
+7. 執行 `/doctor` 確認權限與已啟用 engine 的狀態。
 
 下一步請看 [完整安裝指南][install-doc-zh]。
 

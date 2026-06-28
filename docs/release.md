@@ -14,17 +14,18 @@ The canonical release and deployment runbooks now live on the static documentati
    scripts/release-preflight.sh
    ```
 
-2. Add ACP smoke checks when touching Kiro/ACP behavior:
+2. Add ACP smoke checks when touching engine/ACP behavior:
 
    ```bash
    RUN_ACP_SMOKE=1 KIRO_CLI=$(which kiro-cli) scripts/release-preflight.sh
+   RUN_OMP_SMOKE=1 OMP_PATH=$(which omp) scripts/release-preflight.sh
    ```
 
 3. Review docs, tests, environment variables, and deployment notes.
 4. Tag and push `vX.Y.Z`.
 5. Wait for the release workflow and GitHub release artifacts.
 6. Deploy binaries to target hosts.
-7. Verify with `/doctor`, a simple agent reply, and any feature-specific smoke checks.
+7. Verify with `/doctor`, a simple agent reply, and any feature-specific smoke checks. For engine changes, use the operation matrix linked from the release runbook.
 
 Do not delete `DATA_DIR`, Docker volumes, `.kiro/`, or `.env` during release or rollback.
 

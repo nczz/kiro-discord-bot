@@ -2,9 +2,11 @@
 
 這是 canonical 安裝指南。repo 裡的 `INSTALL.md` 保留為 agent-friendly checklist，詳細說明以本頁為準。
 
-## 1. 準備 Kiro CLI
+## 1. 準備 ACP Engine
 
-先安裝並完成認證：
+啟動 bot 前，至少要安裝並完成一個支援的 ACP engine 認證。
+
+Kiro CLI：
 
 ```bash
 curl -fsSL https://cli.kiro.dev/install | bash
@@ -19,6 +21,12 @@ kiro-cli login
 ```
 
 Headless 主機請在 bot service environment 設定 `KIRO_API_KEY`。
+
+OMP 請先安裝並完成 `omp` 認證；若不在 `PATH`，用 `OMP_PATH` 指定：
+
+```bash
+omp --version
+```
 
 ## 2. 建立 Discord Bot
 
@@ -77,6 +85,8 @@ BOT_LOCALE=zh-TW
 
 ```env
 KIRO_API_KEY=your-headless-key
+AGENT_ENGINE=kiro
+AGENT_ENGINES_ENABLED=kiro
 ALLOWED_CWD_ROOTS=/projects
 CRON_TIMEZONE=Asia/Taipei
 USAGE_TIMEZONE=Asia/Taipei
@@ -98,7 +108,7 @@ set +a
 
 預期 log：
 
-1. ACP preflight 執行並回報 Kiro CLI 相容性。
+1. ACP preflight 執行並回報每個已啟用 engine 的狀態。
 2. `kiro-discord-bot <version> starting`。
 3. Slash commands 註冊。
 4. `Bot running as <name>#<discriminator>`。
@@ -107,7 +117,7 @@ set +a
 
 在 Discord 頻道執行 `/cwd`。Setup panel 會讓頻道管理員在 `DEFAULT_CWD` 下選擇或建立專案。完成後，該頻道可以開始 agent 工作，並以安全預設 allowlist 啟用內建 `bot-tools` MCP。
 
-在初始化後的頻道執行 `/doctor`，確認 bot 可以 view/send/create thread/read history，並可連到 Kiro CLI。
+在初始化後的頻道執行 `/doctor`，確認 bot 可以 view/send/create thread/read history，並可連到已啟用的 ACP engine。
 
 ## 7. 決定下一步
 

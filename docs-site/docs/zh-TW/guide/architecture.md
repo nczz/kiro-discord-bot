@@ -1,6 +1,6 @@
 # 架構
 
-`kiro-discord-bot` 是 Discord gateway bot，負責管理 Kiro CLI ACP sessions、channel state、thread state、MCP policy、cron jobs、audit events 與 delivery behavior。
+`kiro-discord-bot` 是 Discord gateway bot，負責管理 ACP agent sessions、channel state、thread state、MCP policy、cron jobs、audit events 與 delivery behavior。Kiro CLI 與 OMP 是同一套 manager、command、usage、audit layers 後面的 agent engines。
 
 ## Runtime Components
 
@@ -22,9 +22,11 @@ Discord Gateway
 
 ## Agent Runtime Isolation
 
-bot 會把使用者 Kiro MCP settings 視為 catalog，而不是直接 runtime inheritance。Agent sessions 使用 `DATA_DIR/kiro-agent-runtime` 底下的隔離 runtime home；runtime MCP config 保持空白，除非 bot 透過 ACP 注入 channel-approved servers。
+bot 會把使用者 Kiro MCP settings 視為 catalog，而不是直接 runtime inheritance。Kiro agent sessions 使用 `DATA_DIR/kiro-agent-runtime` 底下的隔離 runtime home；runtime MCP config 保持空白，除非 bot 透過 ACP 注入 channel-approved servers。
 
 這可以避免使用者全域 Kiro MCP 設定默默暴露給所有 Discord 頻道。
+
+OMP sessions 走同一套 ACP transport 與 MCP injection path，但不會收到 `KIRO_HOME` 或 `KIRO_MCP_CONFIG`。OMP 的 model 與 mode catalog 來自 ACP `session/new`，因此 OMP 的 model listing 需要 active agent session。
 
 ## Channel and Thread State
 
@@ -46,9 +48,9 @@ Threads 可以用 parent channel context 與 bounded thread transcript 建立獨
 - 過濾 `tools/list`，讓 agent 只看見 allowed tools。
 - 拒絕未授權的 `tools/call`。
 - 套用 channel allowlist。
-- 把 policy enforcement 放在 Kiro prompt behavior 之外。
+- 把 policy enforcement 放在 agent prompt behavior 之外。
 
-Kiro `disabledTools` 不被視為安全邊界。
+各 engine 自己的 disabled-tool 設定不被視為安全邊界。
 
 ## Delivery and Redaction
 

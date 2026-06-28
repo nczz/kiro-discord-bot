@@ -10,10 +10,11 @@ Run the standard preflight:
 scripts/release-preflight.sh
 ```
 
-When changing ACP behavior, Kiro CLI integration, MCP policy, `bot-tools`, or cron pending ingestion, also run the relevant smoke checks:
+When changing ACP behavior, engine integration, MCP policy, `bot-tools`, or cron pending ingestion, also run the relevant smoke checks:
 
 ```bash
 RUN_ACP_SMOKE=1 KIRO_CLI=$(which kiro-cli) scripts/release-preflight.sh
+RUN_OMP_SMOKE=1 OMP_PATH=$(which omp) scripts/release-preflight.sh
 ```
 
 ## 2. Review the Diff
@@ -75,6 +76,9 @@ For macOS launchd hosts:
 - If MCP changed, open `/mcp manage` and scan a configured server.
 - If cron changed, run one safe `/cron-run`.
 - If thread behavior changed, start a task and continue inside its thread.
+- If engine behavior changed, test `/engine`, `/models`, `/model`, `/agent`, `/status`, and `/usage` in both channel and thread scopes for each enabled engine.
+
+Use the [Operation Matrix](operation-matrix.md) for the full channel/thread and Kiro/OMP checklist.
 
 ## 7. Rollback
 

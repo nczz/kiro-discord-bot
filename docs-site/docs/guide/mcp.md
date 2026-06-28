@@ -1,6 +1,6 @@
 # MCP Policy
 
-MCP tools let the agent reach systems outside the core Kiro session: Discord APIs, media generation, internal services, search tools, or project-specific automation.
+MCP tools let the agent reach systems outside the core ACP session: Discord APIs, media generation, internal services, search tools, or project-specific automation.
 
 ## Catalog vs Channel Policy
 

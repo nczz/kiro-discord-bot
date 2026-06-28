@@ -1,28 +1,26 @@
 # Steering 檔案
 
-Steering 檔案是 `.kiro/steering/` 底下的 Markdown 文件，用來提供 agent 穩定的專案脈絡。它最適合放需要被 review、版本控制，並且每個未來 agent session 都應該知道的專案知識。
+Steering 檔案是提供 agent 穩定專案脈絡的 Markdown 文件。雙 engine 部署下，共用的跨 agent 入口是專案根目錄的 `AGENTS.md`。bot 預設只管理 `AGENTS.md`；`.kiro/steering/*.md` 保留給 legacy 或進階 Kiro-only guidance。
 
 ## 必要與可選檔案
 
-bot 沒有強制要求任何固定檔名。新頻道 setup 需要時會建立 `.kiro/steering/` 目錄，`/steering create` 可以替目前頻道建立專案 context 檔。
+bot 沒有強制要求任何固定檔案才能執行。`/steering create` 會建立：
 
-如果團隊希望某些 steering 檔案必須存在，那應該視為團隊規範。例如 repo 可以規定正式作業前必須有 `.kiro/steering/project.md`，但這不是 bot runtime 的硬性要求。
+- `AGENTS.md`：Kiro CLI 與 OMP 都會讀取的共用 agent guidance。
+
+bot 預設不建立也不同步 `.kiro/steering/<project>.md`。如果專案已經有 Kiro-only steering files，`/steering status` 會顯示 legacy path 方便辨識。
+
+如果團隊希望某些 steering 檔案必須存在，那應該視為團隊規範。例如 repo 可以規定正式作業前必須有 `AGENTS.md`，但這不是 bot runtime 的硬性要求。
 
 ## 建議命名
 
-建議使用穩定、明確、小寫 kebab-case 檔名：
+建議使用穩定、明確的檔名：
 
 ```text
-.kiro/steering/
-  project.md
-  architecture.md
-  coding-style.md
-  release-process.md
-  security-boundaries.md
-  operations.md
+AGENTS.md
 ```
 
-好的檔名應描述文件責任，而不是建立日期。避免 `notes.md`、`misc.md`、`important.md` 這類模糊名稱。
+進階 Kiro-only steering 可以額外使用 `.kiro/steering/*.md`，例如 `architecture.md`、`release-process.md` 或 `security-boundaries.md`。好的檔名應描述文件責任，而不是建立日期。
 
 ## 目錄結構
 
@@ -31,21 +29,15 @@ bot 沒有強制要求任何固定檔名。新頻道 setup 需要時會建立 `.
 建議基礎結構：
 
 ```text
-.kiro/
-  steering/
-    project.md
-    architecture.md
-    workflow.md
-    release.md
-    safety.md
+AGENTS.md
 ```
 
-大型 workspace 可以使用聚焦的子目錄：
+大型且偏 Kiro-heavy 的 workspace 可以手動加入聚焦的 Kiro-only 檔案：
 
 ```text
+AGENTS.md
 .kiro/
   steering/
-    project.md
     engineering/
       architecture.md
       coding-style.md
@@ -78,7 +70,7 @@ bot 沒有強制要求任何固定檔名。新頻道 setup 需要時會建立 `.
 
 建議慣例：
 
-1. 全域專案規則放在 `project.md`。
+1. 跨 engine 的全域專案規則放在 `AGENTS.md`。
 2. 專門主題放在 `release.md` 或 `security-boundaries.md` 這類 topic file。
 3. 如果 topic file 要覆蓋一般規則，明確寫出來。
 4. 移除過期規則，不要把歷史替代方案留在 active steering。
@@ -89,7 +81,7 @@ bot 沒有強制要求任何固定檔名。新頻道 setup 需要時會建立 `.
 ```md
 # Release Process
 
-This file overrides the generic test command in project.md for release work.
+This file overrides the generic test command in AGENTS.md for release work.
 Before tagging a release, run:
 
     scripts/release-preflight.sh

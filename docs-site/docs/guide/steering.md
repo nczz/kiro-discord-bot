@@ -1,28 +1,26 @@
 # Steering Files
 
-Steering files are Markdown documents under `.kiro/steering/` that teach the agent stable project context. They are best for information that should be reviewed, versioned, and shared with every future agent session for that project.
+Steering files are Markdown documents that teach the agent stable project context. In dual-engine deployments, the shared cross-engine surface is `AGENTS.md` at the project root. The bot manages `AGENTS.md` by default; `.kiro/steering/*.md` is reserved for legacy or advanced Kiro-only guidance.
 
 ## Required vs Optional Files
 
-No steering file name is strictly required by the bot. A new channel setup creates the `.kiro/steering/` directory when needed, and `/steering create` can create a project context file for the current channel.
+No steering file is strictly required before a channel can run. `/steering create` creates:
 
-Use required files only as a team convention. For example, a repository may decide that `.kiro/steering/project.md` must exist before production work starts, but that is a project policy, not a bot runtime requirement.
+- `AGENTS.md`: shared agent guidance read by Kiro CLI and OMP.
+
+The bot does not create or synchronize `.kiro/steering/<project>.md` by default. If a project already has Kiro-only steering files, `/steering status` shows the legacy path for awareness.
+
+Use required files only as a team convention. For example, a repository may decide that `AGENTS.md` must exist before production work starts, but that is a project policy, not a bot runtime requirement.
 
 ## Recommended Naming
 
-Prefer stable, descriptive, lowercase kebab-case names:
+Prefer stable, descriptive names:
 
 ```text
-.kiro/steering/
-  project.md
-  architecture.md
-  coding-style.md
-  release-process.md
-  security-boundaries.md
-  operations.md
+AGENTS.md
 ```
 
-Good names describe the responsibility of the document, not the date it was written. Avoid vague names such as `notes.md`, `misc.md`, or `important.md`.
+For advanced Kiro-only steering, additional `.kiro/steering/*.md` files can use lowercase kebab-case names such as `architecture.md`, `release-process.md`, or `security-boundaries.md`. Good names describe the responsibility of the document, not the date it was written.
 
 ## Directory Structure
 
@@ -31,21 +29,15 @@ Keep steering flat unless the project is large enough to justify deeper organiza
 Recommended baseline:
 
 ```text
-.kiro/
-  steering/
-    project.md
-    architecture.md
-    workflow.md
-    release.md
-    safety.md
+AGENTS.md
 ```
 
-For a larger workspace, use focused subdirectories:
+For a larger Kiro-heavy workspace, add focused Kiro-only files manually:
 
 ```text
+AGENTS.md
 .kiro/
   steering/
-    project.md
     engineering/
       architecture.md
       coding-style.md
@@ -78,7 +70,7 @@ The safest rule is: steering files should not conflict. The bot does not turn st
 
 Use these conventions:
 
-1. Put global project rules in `project.md`.
+1. Put cross-engine global project rules in `AGENTS.md`.
 2. Put specialized rules in topic files such as `release.md` or `security-boundaries.md`.
 3. When a topic file overrides a general rule, write that explicitly.
 4. Remove outdated rules instead of leaving historical alternatives in active steering.
@@ -89,7 +81,7 @@ Example:
 ```md
 # Release Process
 
-This file overrides the generic test command in project.md for release work.
+This file overrides the generic test command in AGENTS.md for release work.
 Before tagging a release, run:
 
     scripts/release-preflight.sh

@@ -3,7 +3,7 @@
 Audit 與 usage 回答的是不同問題：
 
 - Audit 說明 Discord 與 bot 內發生了什麼。
-- Usage 說明是哪個 Discord 使用者觸發了可計量的 Kiro 工作。
+- Usage 說明是哪個 Discord 使用者觸發了可計量的 agent 工作。
 
 ## Audit 儲存
 
@@ -33,9 +33,9 @@ Audit 管理需要與敏感 channel controls 相同的 channel/admin 授權。
 
 Usage record 是 agent work 完成後追加寫入的 ledger。若工作來自使用者 command、prompt、mention、audit prompt、compact、clear 或 scheduled command context，會歸屬到觸發的 Discord 使用者。
 
-Cron job 會使用 job owner 或設定的 user context。當 Kiro 回傳 metering metadata 時，bot 會加總 `credit` 或 `credits` 單位。
+Cron job 會使用 job owner 或設定的 user context。Kiro usage 會加總 `credit` 或 `credits` metering metadata；OMP usage 會加總 `usage_update` 回傳的 USD cost metadata。
 
-如果 Kiro 沒有對某個 turn 回傳 credit metadata，`/usage` 仍會計入該 turn，但顯示為缺少 Kiro credits metadata。這代表 turn 有發生，只是 bot 無法從缺失的 ACP metadata 推算 credits。
+如果 engine 沒有對某個 turn 回傳 metering metadata，`/usage` 仍會計入該 turn，但會顯示缺少 metadata。這代表 turn 有發生，只是 bot 無法從缺失的 ACP metadata 推算 credits 或 cost。
 
 ## 彙總方式
 

@@ -3,7 +3,7 @@
 The audit and usage systems answer different questions:
 
 - Audit explains what happened in Discord and through the bot.
-- Usage explains which Discord user caused metered Kiro work.
+- Usage explains which Discord user caused metered agent work.
 
 ## Audit Storage
 
@@ -33,9 +33,9 @@ Audit management requires the same channel/admin authorization used by sensitive
 
 Usage records are append-only ledgers written after completed agent work. They are attributed to the invoking Discord user when the job came from a user command, prompt, mention, audit prompt, compact, clear, or scheduled command context.
 
-For cron jobs, the record uses the job owner or configured user context. When Kiro reports metering metadata, credits are summed from `credit` or `credits` units.
+For cron jobs, the record uses the job owner or configured user context. Kiro usage sums `credit` or `credits` metering metadata when present. OMP usage sums USD cost metadata from `usage_update`.
 
-If Kiro does not return credit metadata for a turn, `/usage` still counts the turn but reports it as missing Kiro credits metadata. This means the turn happened, but the bot cannot infer credits from absent ACP metadata.
+If an engine does not return metering metadata for a turn, `/usage` still counts the turn but reports the missing metadata. This means the turn happened, but the bot cannot infer credits or cost from absent ACP metadata.
 
 ## Aggregation
 

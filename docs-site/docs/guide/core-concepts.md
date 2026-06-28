@@ -2,7 +2,7 @@
 
 ## Channel Agents
 
-A parent Discord channel maps to one project working directory and one long-lived Kiro agent session. The channel agent owns the main project context, memory block, steering files, MCP policy, and conversation continuity.
+A parent Discord channel maps to one project working directory and one long-lived ACP agent session. The channel agent owns the main project context, memory block, steering files, MCP policy, and conversation continuity.
 
 ## Thread Agents
 
@@ -18,9 +18,9 @@ Use the three context layers for different jobs:
 | --- | --- | --- |
 | `/memory` | Persistent Discord-native rules | Personal preferences, response language, recurring style rules |
 | `/flashmemory` | Current session emphasis | Temporary priorities for the current task or sprint |
-| `.kiro/steering/*.md` | Versioned project guidance | Architecture, build commands, safety rules, workflow, domain background |
+| `AGENTS.md` | Versioned project guidance | Architecture, build commands, safety rules, workflow, domain background |
 
-Rules visible in `/memory list` are injected before every agent turn. Removing a memory rule stops future injection, but the current Kiro session may already contain older turns where the rule appeared. When retiring a stale or conflicting persistent rule, remove it, then run `/clear` and `/reset`.
+Rules visible in `/memory list` are injected before every agent turn. Removing a memory rule stops future injection, but the current ACP agent session may already contain older turns where the rule appeared. When retiring a stale or conflicting persistent rule, remove it, then run `/clear` and `/reset`.
 
 ## MCP Policy
 

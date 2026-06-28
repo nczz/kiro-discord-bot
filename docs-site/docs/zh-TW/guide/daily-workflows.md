@@ -14,11 +14,11 @@
 
 用 `/flashmemory` 管理暫時性強調，不應成為長期專案行為。
 
-用 `/steering create` 與 `/steering edit` 管理應該跟著 repository 走的專案指引，檔案位於 `.kiro/steering/`。
+用 `/steering create` 與 `/steering edit` 管理應該跟著 repository 走的專案指引。共用檔案是 `AGENTS.md`；Kiro-only `.kiro/steering/*.md` 是選用項目，預設不由 bot 管理。
 
 ## 清理過期 Context
 
-如果 persistent memory rule 錯誤或過期，先移除它。如果目前 Kiro session 已經看過該規則，也要執行 `/clear` 與 `/reset`，讓後續 turns 不再受到舊注入 context 影響。
+如果 persistent memory rule 錯誤或過期，先移除它。如果目前 ACP agent session 已經看過該規則，也要執行 `/clear` 與 `/reset`，讓後續 turns 不再受到舊注入 context 影響。
 
 ## 多 Bot 協作
 

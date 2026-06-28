@@ -2,9 +2,11 @@
 
 This page is the canonical installation guide. The short `INSTALL.md` in the repository is kept as an agent-friendly checklist and points back here for details.
 
-## 1. Prepare Kiro CLI
+## 1. Prepare an ACP Engine
 
-Install and authenticate `kiro-cli` before starting the bot:
+Install and authenticate at least one supported ACP engine before starting the bot.
+
+For Kiro CLI:
 
 ```bash
 curl -fsSL https://cli.kiro.dev/install | bash
@@ -19,6 +21,12 @@ kiro-cli login
 ```
 
 For headless hosts, set `KIRO_API_KEY` in the bot service environment.
+
+For OMP, install and authenticate `omp`, then expose it with `OMP_PATH` when it is not already on `PATH`:
+
+```bash
+omp --version
+```
 
 ## 2. Create a Discord Bot
 
@@ -77,6 +85,8 @@ Recommended production additions:
 
 ```env
 KIRO_API_KEY=your-headless-key
+AGENT_ENGINE=kiro
+AGENT_ENGINES_ENABLED=kiro
 ALLOWED_CWD_ROOTS=/projects
 CRON_TIMEZONE=Asia/Taipei
 USAGE_TIMEZONE=Asia/Taipei
@@ -98,7 +108,7 @@ set +a
 
 Expected log sequence:
 
-1. ACP preflight starts and reports Kiro CLI compatibility.
+1. ACP preflight starts and reports each enabled engine.
 2. `kiro-discord-bot <version> starting`.
 3. Slash commands register.
 4. `Bot running as <name>#<discriminator>`.
@@ -107,7 +117,7 @@ Expected log sequence:
 
 In a Discord channel, run `/cwd`. The setup panel lets a channel manager select or create a project under `DEFAULT_CWD`. Once setup completes, the channel can start agent work and the built-in `bot-tools` MCP server is enabled with a safe default allowlist.
 
-Run `/doctor` in the initialized channel to verify the channel can view, send, create threads, read history, and talk to Kiro CLI.
+Run `/doctor` in the initialized channel to verify the channel can view, send, create threads, read history, and talk to the enabled ACP engine.
 
 ## 7. Decide What to Enable Next
 

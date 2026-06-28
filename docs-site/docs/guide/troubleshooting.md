@@ -33,4 +33,4 @@ A thread may have conversation history without an active in-memory thread agent.
 
 ## Stale Memory Still Affects Replies
 
-If a removed memory rule still appears to influence the agent, the current Kiro session may already contain previous turns where the rule was injected. Remove the rule, then run `/clear` and `/reset`.
+If a removed memory rule still appears to influence the agent, the current ACP agent session may already contain previous turns where the rule was injected. Remove the rule, then run `/clear` and `/reset`.
