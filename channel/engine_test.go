@@ -1,6 +1,7 @@
 package channel
 
 import (
+	"path/filepath"
 	"testing"
 
 	"github.com/nczz/kiro-discord-bot/acp"
@@ -92,6 +93,22 @@ func TestEngineForChannelResolution(t *testing.T) {
 	}
 }
 
+func TestOmpDefaultKeepsKiroAsOptionalSecondary(t *testing.T) {
+	m := newEngineTestManager(t, "omp")
+	m.kiroCLI = "/path/that/does/not/exist/kiro-cli"
+
+	if got := m.ChannelEngine("ch1"); got != acp.DialectOmp.String() {
+		t.Fatalf("default channel engine = %q, want omp", got)
+	}
+	if d, bin := m.engineForChannel("ch1"); d != acp.DialectOmp || bin != "omp" {
+		t.Fatalf("engineForChannel = %v %q, want omp/omp", d, bin)
+	}
+	enabled := m.EnabledEngines()
+	if len(enabled) != 2 || enabled[0] != "kiro" || enabled[1] != "omp" {
+		t.Fatalf("enabled engines = %v, want [kiro omp]", enabled)
+	}
+}
+
 func TestEngineForThreadInheritance(t *testing.T) {
 	m := newEngineTestManager(t, "kiro")
 	// parent channel = omp; thread with no override inherits omp
@@ -103,6 +120,32 @@ func TestEngineForThreadInheritance(t *testing.T) {
 	_ = m.store.Set(m.sessionKey(sessionTargetThread, "th1"), &Session{Engine: "kiro"})
 	if d, bin := m.engineForThread("th1", "chP"); d != acp.DialectKiro || bin != "kiro-cli" {
 		t.Fatalf("thread override kiro should win, got %v %s", d, bin)
+	}
+}
+
+func TestSwitchEngineFromOmpToMissingKiroRollsBack(t *testing.T) {
+	m := newEngineTestManager(t, "omp")
+	cwd := t.TempDir()
+	m.defaultCWD = cwd
+	m.kiroCLI = filepath.Join(t.TempDir(), "missing-kiro-cli")
+	old := &Session{CWD: cwd, Model: "model-a", Engine: "omp"}
+	if err := m.setChannelSession("ch1", old); err != nil {
+		t.Fatalf("set old session: %v", err)
+	}
+
+	err := m.SwitchEngine("ch1", "kiro")
+	if err == nil {
+		t.Fatal("expected missing kiro binary to fail")
+	}
+	got, ok := m.getChannelSession("ch1")
+	if !ok {
+		t.Fatal("old omp session should be restored")
+	}
+	if got.Engine != "omp" || got.Model != old.Model || got.CWD != old.CWD {
+		t.Fatalf("restored session = %+v, want old %+v", got, old)
+	}
+	if got := m.ChannelEngine("ch1"); got != "omp" {
+		t.Fatalf("channel engine after rollback = %q, want omp", got)
 	}
 }
 
