@@ -278,10 +278,57 @@ func (m *Manager) WriteChannelSteeringFile(channelID, content string) (SteeringF
 	if err := os.WriteFile(path, []byte(content+"\n"), 0644); err != nil {
 		return SteeringFileStatus{}, err
 	}
+	// Cross-engine: mirror the steering content into a managed block in AGENTS.md
+	// at the project root, which BOTH kiro and omp read at startup (plan §8.2).
+	// Non-destructive: only the bot-managed block is replaced; user content is kept.
+	if cwd, cerr := m.ValidateCWD(m.CWDPath(channelID)); cerr == nil {
+		if aerr := writeAgentsManagedBlock(cwd, content); aerr != nil {
+			return SteeringFileStatus{}, fmt.Errorf("steering written but AGENTS.md mirror failed: %w", aerr)
+		}
+	}
 	status := steeringFileStatus(path)
 	status.Exists = true
 	status.Size = int64(len([]byte(content + "\n")))
 	return status, nil
+}
+
+const (
+	agentsBlockStart = "<!-- BEGIN kiro-discord-bot steering (managed; do not edit inside) -->"
+	agentsBlockEnd   = "<!-- END kiro-discord-bot steering -->"
+)
+
+// writeAgentsManagedBlock writes the steering content into a marked, bot-managed
+// block in <cwd>/AGENTS.md. If the block already exists it is replaced in place;
+// otherwise the block is appended, preserving any user-authored content. AGENTS.md
+// is the cross-engine steering surface read by both kiro-cli and omp.
+func writeAgentsManagedBlock(cwd, content string) error {
+	path := filepath.Clean(filepath.Join(cwd, "AGENTS.md"))
+	if !pathWithinRoot(path, cwd) {
+		return fmt.Errorf("AGENTS.md path escapes working directory")
+	}
+	block := agentsBlockStart + "\n" + strings.TrimSpace(content) + "\n" + agentsBlockEnd
+	existing, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return os.WriteFile(path, []byte(block+"\n"), 0644)
+		}
+		return err
+	}
+	s := string(existing)
+	si := strings.Index(s, agentsBlockStart)
+	ei := strings.Index(s, agentsBlockEnd)
+	if si >= 0 && ei > si {
+		newS := s[:si] + block + s[ei+len(agentsBlockEnd):]
+		return os.WriteFile(path, []byte(newS), 0644)
+	}
+	sep := "\n\n"
+	if strings.HasSuffix(s, "\n") {
+		sep = "\n"
+	}
+	if s == "" {
+		sep = ""
+	}
+	return os.WriteFile(path, []byte(s+sep+block+"\n"), 0644)
 }
 
 func (m *Manager) channelSteeringPath(channelID string) (string, error) {

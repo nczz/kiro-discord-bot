@@ -34,6 +34,8 @@
 | `/models` | 列出可用 models。 |
 | `/agent` | 列出 Kiro agent modes。 |
 | `/agent <mode-id>` | 切換 agent mode，例如 planner 或 guide mode。 |
+| `/engine` | 顯示目前的 agent 引擎（kiro/omp）與已啟用的引擎清單。 |
+| `/engine <kiro\|omp>` | 切換此頻道/討論串的引擎（僅限 `AGENT_ENGINES_ENABLED` 列出的引擎）。會在新引擎開全新 session，並重放最近的對話內容。 |
 
 ## Memory 與 Steering
 

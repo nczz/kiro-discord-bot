@@ -34,6 +34,8 @@ Commands are available as slash commands. Most also have `!` text-command equiva
 | `/models` | List available models. |
 | `/agent` | List available Kiro agent modes. |
 | `/agent <mode-id>` | Switch agent mode, such as planner or guide modes advertised by Kiro CLI. |
+| `/engine` | Show the current agent engine (kiro/omp) and which engines are enabled. |
+| `/engine <kiro\|omp>` | Switch the engine for this channel/thread (only engines listed in `AGENT_ENGINES_ENABLED`). Starts a fresh session on the new engine; recent conversation context is replayed. |
 
 ## Memory and Steering
 

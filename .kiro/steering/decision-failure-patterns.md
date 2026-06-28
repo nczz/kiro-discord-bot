@@ -201,8 +201,15 @@ Rejected alternatives:
 
 Current scope:
 
-- Stage 1 adds the dialect scaffolding with kiro behavior byte-identical (kiroProfile). omp dialect,
-  config/resolution, `/engine`, and per-engine usage land in later stages per the plan §9.
+- Implemented across all stages: kiroProfile keeps kiro byte-identical; ompProfile drives `omp acp`
+  (configOptions→models/modes, set_config_option model switch, session/cancel as notification, USD
+  usage via usage_update + prompt usage). `AGENT_ENGINE`/`AGENT_ENGINES_ENABLED`/`OMP_PATH` config with
+  engine-aware preflight and KIRO_* gating (pure-omp runs without kiro-cli). `Session.Engine` resolves
+  per scope (default→channel→thread→/engine override) and is preserved across all session reconstructions.
+  `/engine` (slash+bang) switches engine via stop→fresh-session→restart→history-prefix replay. Usage is
+  per-engine: credits (kiro) vs USD cost (omp), never cross-summed; footer + /usage render both. Steering
+  is mirrored into a managed block in `AGENTS.md` (cross-engine) while `.kiro/steering` stays kiro-rich.
+  Product shape is M2 (single bot identity, switchable engine, single DATA_DIR).
 
 Future trigger:
 
