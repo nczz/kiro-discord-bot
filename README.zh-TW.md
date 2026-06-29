@@ -2,9 +2,11 @@
 
 [English README](README.md) | [完整文件網站][docs-zh]
 
-**一個住在 Discord 裡、可以被訓練的 ACP agent control plane。**
+**一個給專案型 ACP agents 使用的 Discord bot 與 control plane。**
 
-`kiro-discord-bot` 透過 ACP over stdio 把 Discord 頻道連到 ACP agent。Kiro CLI 是預設 engine，OMP 可作為可替換 ACP engine 啟用，並共用同一套 Discord 指令、MCP policy、audit、usage、cron、memory 與 thread-agent 控制面。每個完成初始化的頻道都可以綁定真實專案目錄、維持自己的 agent session、累積專案指引，並透過明確的頻道 policy 安全開放 MCP tools。
+`kiro-discord-bot` 透過 stdio 把 Discord 頻道與討論串連到 ACP-compatible coding agents。Kiro CLI 是預設 engine，OMP 可作為可選替代 engine 啟用，並共用同一套 Discord 指令、MCP policy、audit、usage、cron、memory 與 thread-agent 控制面。
+
+每個完成初始化的頻道都可以綁定真實專案目錄、維持自己的 agent session、累積專案指引，並透過明確的頻道 policy 安全開放 Model Context Protocol（MCP）tools。
 
 這份 README 刻意保持精簡。完整使用指南、管理指南、MCP 設定、release runbook 與疑難排解都放在 [完整文件網站][docs-zh]。
 

@@ -2,9 +2,11 @@
 
 [繁體中文 README](README.zh-TW.md) | [Full documentation][docs]
 
-**A trainable ACP agent control plane that lives in Discord.**
+**A Discord bot and control plane for project-bound ACP agents.**
 
-`kiro-discord-bot` connects Discord channels to ACP agents through stdio. Kiro CLI is the default engine, and OMP can be enabled as a replaceable ACP engine behind the same Discord command, MCP policy, audit, usage, cron, memory, and thread-agent control plane. Each initialized channel can bind to a real project directory, keep its own agent session, remember project guidance, and expose MCP tools through explicit channel policy.
+`kiro-discord-bot` connects Discord channels and threads to ACP-compatible coding agents over stdio. Kiro CLI is the default engine, while OMP can be enabled as an optional replacement behind the same Discord commands, MCP policy, audit, usage, cron, memory, and thread-agent controls.
+
+Each initialized channel can bind to a real project directory, keep its own agent session, remember project guidance, and expose Model Context Protocol (MCP) tools through explicit channel policy.
 
 This repository README is intentionally short. The detailed user guide, admin guide, MCP setup, release runbook, and troubleshooting docs live on the [documentation site][docs].
 
