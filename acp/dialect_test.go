@@ -18,11 +18,18 @@ func TestKiroProfileLaunchArgsIncludesFlags(t *testing.T) {
 	}
 }
 
-func TestOmpProfileLaunchArgsHasNoFlags(t *testing.T) {
-	// omp acp takes no flags regardless of trust/model/agent options.
+func TestOmpProfileLaunchArgsUsesOnlyOmpRuntimeFlags(t *testing.T) {
+	// omp acp does not take Kiro-style trust/model/agent flags; model is
+	// selected through session/set_config_option after the handshake.
 	args := ompProfile().launchArgs("openai-codex/gpt-5.5", AgentOptions{TrustAllTools: true, Agent: "x", TrustTools: "y"})
 	if len(args) != 1 || args[0] != "acp" {
 		t.Fatalf("omp launchArgs must be exactly [acp], got %v", args)
+	}
+
+	args = ompProfile().launchArgs("", AgentOptions{SessionDir: "/tmp/omp-sessions"})
+	want := []string{"--session-dir", "/tmp/omp-sessions", "acp"}
+	if !equalStringSlices(args, want) {
+		t.Fatalf("omp launchArgs = %v, want %v", args, want)
 	}
 }
 
@@ -126,7 +133,13 @@ func TestOmpUsageUpdateCompactionResetGuard(t *testing.T) {
 	}
 }
 
-func approx(a, b float64) bool { d := a - b; if d < 0 { d = -d }; return d < 1e-9 }
+func approx(a, b float64) bool {
+	d := a - b
+	if d < 0 {
+		d = -d
+	}
+	return d < 1e-9
+}
 func contains(ss []string, s string) bool {
 	for _, x := range ss {
 		if x == s {
@@ -144,4 +157,16 @@ func join(ss []string) string {
 		out += s
 	}
 	return out
+}
+
+func equalStringSlices(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }

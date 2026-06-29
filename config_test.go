@@ -70,9 +70,10 @@ func TestEnabledEngineSpecsOmpDefaultWithoutEnabledListIsOmpOnly(t *testing.T) {
 	}
 }
 
-func TestPreflightAgentOptionsForOmpDoNotCarryKiroRuntimeEnv(t *testing.T) {
+func TestPreflightAgentOptionsForOmpUsesIsolatedRuntimeEnv(t *testing.T) {
 	cfg := &Config{
 		DataDir:          t.TempDir(),
+		OMPProfile:       "bot-profile",
 		AgentProfile:     "planner",
 		MaxScannerBuffer: 12345,
 	}
@@ -84,10 +85,15 @@ func TestPreflightAgentOptionsForOmpDoNotCarryKiroRuntimeEnv(t *testing.T) {
 	if omp.Agent != "" {
 		t.Fatalf("omp agent profile = %q, want empty", omp.Agent)
 	}
+	var hasProfile bool
 	for _, env := range omp.Env {
 		if strings.HasPrefix(env, "KIRO_") {
 			t.Fatalf("omp preflight env contains Kiro runtime variable: %v", omp.Env)
 		}
+		hasProfile = hasProfile || env == "OMP_PROFILE=bot-profile"
+	}
+	if !hasProfile || omp.SessionDir != filepath.Join(cfg.DataDir, "omp-agent-runtime", "sessions") {
+		t.Fatalf("omp preflight env/session = %v/%q, want OMP_PROFILE and OMP session dir", omp.Env, omp.SessionDir)
 	}
 
 	kiro := preflightAgentOptions(cfg, acp.DialectKiro)
@@ -101,5 +107,35 @@ func TestPreflightAgentOptionsForOmpDoNotCarryKiroRuntimeEnv(t *testing.T) {
 	}
 	if !hasHome || !hasMCPConfig {
 		t.Fatalf("kiro preflight env = %v, want KIRO_HOME and KIRO_MCP_CONFIG", kiro.Env)
+	}
+}
+
+func TestPreflightAgentOptionsForOmpDoesNotForceProfileWhenUnset(t *testing.T) {
+	cfg := &Config{
+		DataDir:          t.TempDir(),
+		MaxScannerBuffer: 12345,
+	}
+
+	omp := preflightAgentOptions(cfg, acp.DialectOmp)
+	for _, env := range omp.Env {
+		if strings.HasPrefix(env, "OMP_PROFILE=") {
+			t.Fatalf("unset OMP_PROFILE should not be forced into omp preflight env: %v", omp.Env)
+		}
+	}
+	if omp.SessionDir != filepath.Join(cfg.DataDir, "omp-agent-runtime", "sessions") {
+		t.Fatalf("omp preflight session dir = %q, want default runtime session dir", omp.SessionDir)
+	}
+}
+
+func TestPreflightAgentOptionsForOmpUsesConfiguredSessionDir(t *testing.T) {
+	cfg := &Config{
+		DataDir:          t.TempDir(),
+		OMPSessionDir:    filepath.Join(t.TempDir(), "omp-sessions"),
+		MaxScannerBuffer: 12345,
+	}
+
+	omp := preflightAgentOptions(cfg, acp.DialectOmp)
+	if omp.SessionDir != cfg.OMPSessionDir {
+		t.Fatalf("omp preflight session dir = %q, want %q", omp.SessionDir, cfg.OMPSessionDir)
 	}
 }

@@ -22,10 +22,12 @@ func TestOmpSmoke(t *testing.T) {
 	if omp == "" {
 		omp = "omp"
 	}
-	agent, err := StartAgent("omp-smoke", omp, os.TempDir(), "", AgentOptions{
+	opts := AgentOptions{
 		Dialect:       DialectOmp,
 		TrustAllTools: true,
-	})
+		SessionDir:    os.Getenv("OMP_SESSION_DIR"),
+	}
+	agent, err := StartAgent("omp-smoke", omp, os.TempDir(), "", opts)
 	if err != nil {
 		t.Fatalf("StartAgent(omp): %v", err)
 	}
@@ -46,10 +48,7 @@ func TestOmpSmoke(t *testing.T) {
 			wanted = models[1].ModelID
 		}
 		agent.Stop()
-		agent, err = StartAgent("omp-smoke", omp, os.TempDir(), wanted, AgentOptions{
-			Dialect:       DialectOmp,
-			TrustAllTools: true,
-		})
+		agent, err = StartAgent("omp-smoke", omp, os.TempDir(), wanted, opts)
 		if err != nil {
 			t.Fatalf("StartAgent(omp, model=%s): %v", wanted, err)
 		}

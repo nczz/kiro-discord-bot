@@ -226,6 +226,7 @@ type fakeWorkerAgent struct {
 	askResponse    string
 	askErr         error
 	stopReason     string
+	currentModel   string
 }
 
 type recordingAuditSink struct {
@@ -281,6 +282,8 @@ func (f *fakeWorkerAgent) Stop() {
 func (f *fakeWorkerAgent) ContextUsage() float64 { return 0 }
 
 func (f *fakeWorkerAgent) TurnMetrics() acp.TurnMetrics { return f.metrics }
+
+func (f *fakeWorkerAgent) CurrentModelID() string { return f.currentModel }
 
 func (f *fakeWorkerAgent) StopReason() string {
 	f.mu.Lock()
@@ -1260,7 +1263,7 @@ func TestMetricsMetadataIncludesCostDurationAndContext(t *testing.T) {
 
 func TestWorkerRecordUsageUsesConfiguredEngineWhenMeteringEmpty(t *testing.T) {
 	store := NewUsageStore(t.TempDir(), "Asia/Taipei", 0)
-	w := newWorkerWithEngine("ch1", &fakeWorkerAgent{}, 1, 30, 1, 1440, nil, "model-1", acp.DialectOmp.String())
+	w := newWorkerWithEngine("ch1", &fakeWorkerAgent{currentModel: "openai-codex/gpt-5.5"}, 1, 30, 1, 1440, nil, "default", acp.DialectOmp.String())
 	w.SetUsageStore(store)
 
 	startedAt := time.Now().Add(-2 * time.Second)
@@ -1281,6 +1284,9 @@ func TestWorkerRecordUsageUsesConfiguredEngineWhenMeteringEmpty(t *testing.T) {
 	}
 	if records[0].Engine != acp.DialectOmp.String() {
 		t.Fatalf("engine = %q, want omp", records[0].Engine)
+	}
+	if records[0].Model != "openai-codex/gpt-5.5" {
+		t.Fatalf("model = %q, want active agent current model", records[0].Model)
 	}
 	if len(records[0].MeteringUsage) != 0 {
 		t.Fatalf("metering = %+v, want empty", records[0].MeteringUsage)
@@ -1535,6 +1541,29 @@ func TestWorkerInlineAuditRecordsToolEvents(t *testing.T) {
 	}
 	if !sawCall || !sawResult {
 		t.Fatalf("saw call/result = %v/%v; events=%+v", sawCall, sawResult, sink.Snapshot())
+	}
+}
+
+func TestWorkerAuditEventsUseActiveAgentCurrentModel(t *testing.T) {
+	sink := &recordingAuditSink{}
+	w := newWorkerWithEngine("ch1", &fakeWorkerAgent{currentModel: "openai-codex/gpt-5.5"}, 1, 30, 1, 1440, nil, "default", acp.DialectOmp.String())
+	w.SetAuditSink(sink)
+
+	w.auditJobEvent("agent_job_completed", &Job{
+		GuildID:   "guild-1",
+		ChannelID: "ch1",
+		MessageID: "m1",
+		UserID:    "user-1",
+		Username:  "alice",
+		Source:    "message",
+	}, "", "success", nil)
+
+	events := sink.Snapshot()
+	if len(events) != 1 {
+		t.Fatalf("events = %d, want 1", len(events))
+	}
+	if events[0].Model != "openai-codex/gpt-5.5" {
+		t.Fatalf("event model = %q, want active agent current model", events[0].Model)
 	}
 }
 

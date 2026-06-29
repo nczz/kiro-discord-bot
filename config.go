@@ -12,6 +12,8 @@ type Config struct {
 	DiscordToken         string
 	KiroCLIPath          string
 	OMPPath              string
+	OMPProfile           string
+	OMPSessionDir        string
 	AgentEngine          string
 	AgentEnginesEnabled  string
 	DefaultCWD           string
@@ -59,6 +61,8 @@ func loadConfig() *Config {
 		DiscordToken:         mustEnv("DISCORD_TOKEN"),
 		KiroCLIPath:          envOr("KIRO_CLI_PATH", "kiro-cli"),
 		OMPPath:              envOr("OMP_PATH", "omp"),
+		OMPProfile:           envOr("OMP_PROFILE", ""),
+		OMPSessionDir:        envOr("OMP_SESSION_DIR", ""),
 		AgentEngine:          envOr("AGENT_ENGINE", "kiro"),
 		AgentEnginesEnabled:  envOr("AGENT_ENGINES_ENABLED", ""),
 		DefaultCWD:           envOr("DEFAULT_CWD", "/projects"),

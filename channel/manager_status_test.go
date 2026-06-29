@@ -79,6 +79,23 @@ func TestChannelStatusShowsInactiveStoredSession(t *testing.T) {
 	}
 }
 
+func TestFormatStatusUsesActiveAgentModelWhenProvided(t *testing.T) {
+	L.Load("en")
+	m := NewManager(ManagerConfig{BotVersion: "test-bot"})
+	got := m.formatStatus(&Session{
+		AgentName: "channel-agent",
+		SessionID: "channel-session",
+		Model:     "",
+	}, "ready", 0, "omp", "openai-codex/gpt-5.5", "16.2.3", "1m", 12.5)
+
+	if !strings.Contains(got, "openai-codex/gpt-5.5") {
+		t.Fatalf("status should show active agent model, got:\n%s", got)
+	}
+	if strings.Contains(got, "Model: `default`") {
+		t.Fatalf("status should not fall back to default when active model is known, got:\n%s", got)
+	}
+}
+
 func TestThreadStatusWithoutThreadSession(t *testing.T) {
 	L.Load("en")
 	store, err := NewSessionStore(t.TempDir())

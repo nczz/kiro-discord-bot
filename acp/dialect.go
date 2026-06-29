@@ -100,15 +100,20 @@ type ompConfigOption struct {
 }
 
 // ompProfile drives the `omp acp` ACP dialect (omp 16.x). Differences from kiro:
-// launch has no flags; model switch uses session/set_config_option; cancel must
-// be a JSON-RPC notification; session/new returns configOptions (not modes/models).
+// launch only uses generic omp flags such as --session-dir; model switch uses
+// session/set_config_option; cancel must be a JSON-RPC notification; session/new
+// returns configOptions (not modes/models).
 func ompProfile() dialectProfile {
 	return dialectProfile{
 		launchArgs: func(model string, opts AgentOptions) []string {
-			// `omp acp` takes no flags; tool permission is always via
+			args := []string{}
+			if opts.SessionDir != "" {
+				args = append(args, "--session-dir", opts.SessionDir)
+			}
+			// `omp acp` takes no kiro-style flags; tool permission is always via
 			// session/request_permission (handled by the shared OnRequest path).
 			// Model is selected post-handshake via setModel, not at launch.
-			return []string{"acp"}
+			return append(args, "acp")
 		},
 		setModel: func(a *Agent, modelID string) error {
 			_, err := a.transport.Send(MethodSetConfigOption, map[string]interface{}{

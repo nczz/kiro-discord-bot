@@ -65,6 +65,7 @@ type AgentOptions struct {
 	BotName       string  // clientInfo.name
 	BotVersion    string  // clientInfo.version
 	LoadSessionID string  // if non-empty, use session/load instead of session/new
+	SessionDir    string  // optional agent session storage directory when supported by dialect
 	Env           []string
 	MCPServers    []MCPServerConfig
 }

@@ -3,6 +3,7 @@ package channel
 import (
 	"errors"
 	"log"
+	"path/filepath"
 	"strings"
 
 	"github.com/nczz/kiro-discord-bot/acp"
@@ -101,9 +102,9 @@ func (m *Manager) engineForThread(threadID, parentChannelID string) (acp.Dialect
 	return d, m.binaryFor(d)
 }
 
-// applyEngine stamps the resolved dialect onto spawn options and, for non-kiro
-// engines, strips kiro-specific runtime env (KIRO_HOME / KIRO_MCP_CONFIG) so a
-// pure-omp scope never carries kiro settings (plan §4.1 S3.3).
+// applyEngine stamps the resolved dialect onto spawn options. OMP receives its
+// own runtime profile/session directory and never inherits Kiro-specific runtime
+// env (KIRO_HOME / KIRO_MCP_CONFIG).
 func (m *Manager) applyEngine(opts acp.AgentOptions, d acp.Dialect) acp.AgentOptions {
 	opts.Dialect = d
 	if d != acp.DialectKiro {
@@ -116,7 +117,37 @@ func (m *Manager) applyEngine(opts acp.AgentOptions, d acp.Dialect) acp.AgentOpt
 		}
 		opts.Env = filtered
 	}
+	if d == acp.DialectOmp {
+		if profile := strings.TrimSpace(m.ompProfile); profile != "" {
+			opts.Env = upsertEnv(opts.Env, "OMP_PROFILE", profile)
+		}
+		if sessionDir := strings.TrimSpace(m.ompSessionDir); sessionDir != "" {
+			opts.SessionDir = sessionDir
+		}
+	}
 	return opts
+}
+
+func DefaultOMPSessionDir(dataDir, configured string) string {
+	if configured = strings.TrimSpace(configured); configured != "" {
+		return configured
+	}
+	if strings.TrimSpace(dataDir) == "" {
+		return ""
+	}
+	return filepath.Join(dataDir, "omp-agent-runtime", "sessions")
+}
+
+func upsertEnv(env []string, key, value string) []string {
+	prefix := key + "="
+	out := make([]string, 0, len(env)+1)
+	for _, item := range env {
+		if strings.HasPrefix(item, prefix) {
+			continue
+		}
+		out = append(out, item)
+	}
+	return append(out, prefix+value)
 }
 
 // ValidEngineName reports whether name is a known engine ("kiro" or "omp").

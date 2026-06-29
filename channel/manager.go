@@ -36,6 +36,8 @@ type Manager struct {
 	store           *SessionStore
 	kiroCLI         string
 	ompPath         string
+	ompProfile      string
+	ompSessionDir   string
 	defaultEngine   acp.Dialect
 	enabledEngines  map[acp.Dialect]bool
 	defaultCWD      string
@@ -136,6 +138,8 @@ type ManagerConfig struct {
 	Store                *SessionStore // set by bot.go after creation
 	KiroCLIPath          string
 	OMPPath              string
+	OMPProfile           string
+	OMPSessionDir        string
 	AgentEngine          string // default engine for new scopes: "kiro" | "omp"
 	AgentEnginesEnabled  string // comma list of engines /engine may select; empty = AgentEngine only
 	DefaultCWD           string
@@ -173,6 +177,8 @@ func NewManager(cfg ManagerConfig) *Manager {
 		store:               cfg.Store,
 		kiroCLI:             cfg.KiroCLIPath,
 		ompPath:             cfg.OMPPath,
+		ompProfile:          strings.TrimSpace(cfg.OMPProfile),
+		ompSessionDir:       DefaultOMPSessionDir(cfg.DataDir, cfg.OMPSessionDir),
 		defaultEngine:       parseDialect(cfg.AgentEngine),
 		enabledEngines:      parseEnabledEngines(cfg.AgentEngine, cfg.AgentEnginesEnabled),
 		defaultCWD:          cfg.DefaultCWD,
@@ -207,6 +213,11 @@ func NewManager(cfg ManagerConfig) *Manager {
 	if cfg.DataDir != "" && m.enabledEngines[acp.DialectKiro] {
 		if err := os.MkdirAll(m.agentRuntimeHome, 0755); err != nil {
 			log.Printf("[agent-runtime] create runtime home: %v", err)
+		}
+	}
+	if m.ompSessionDir != "" && m.enabledEngines[acp.DialectOmp] {
+		if err := os.MkdirAll(m.ompSessionDir, 0755); err != nil {
+			log.Printf("[agent-runtime] create omp session dir: %v", err)
 		}
 	}
 	if store, err := OpenMCPPolicyStore(cfg.DataDir); err != nil {
@@ -826,11 +837,15 @@ func (m *Manager) Status(channelID string) string {
 	state := "unknown"
 	agentVersion := ""
 	agentUptime := "n/a"
+	model := sess.Model
 	ctxUsage := 0.0
 	qLen := 0
 	if agent, ok := m.agents[channelID]; ok {
 		state = agent.State()
 		agentVersion = agent.AgentVersion()
+		if currentModel := strings.TrimSpace(agent.CurrentModelID()); currentModel != "" {
+			model = currentModel
+		}
 		ctxUsage = agent.ContextUsage()
 		if agent.IsAlive() {
 			agentUptime = textutil.FormatUptime(agent.Uptime())
@@ -846,7 +861,7 @@ func (m *Manager) Status(channelID string) string {
 	}
 
 	engine := m.resolveEngine(sess.Engine).String()
-	return m.formatStatus(sess, state, qLen, engine, agentVersion, agentUptime, ctxUsage)
+	return m.formatStatus(sess, state, qLen, engine, model, agentVersion, agentUptime, ctxUsage)
 }
 
 // ThreadStatus returns the status string for a thread agent.
@@ -862,11 +877,15 @@ func (m *Manager) ThreadStatus(threadID string) string {
 	state := "unknown"
 	agentVersion := ""
 	agentUptime := "n/a"
+	model := sess.Model
 	ctxUsage := 0.0
 	qLen := 0
 	if entry, ok := m.threadAgents[threadID]; ok {
 		state = entry.agent.State()
 		agentVersion = entry.agent.AgentVersion()
+		if currentModel := strings.TrimSpace(entry.agent.CurrentModelID()); currentModel != "" {
+			model = currentModel
+		}
 		ctxUsage = entry.agent.ContextUsage()
 		if entry.agent.IsAlive() {
 			agentUptime = textutil.FormatUptime(entry.agent.Uptime())
@@ -886,10 +905,10 @@ func (m *Manager) ThreadStatus(threadID string) string {
 	} else {
 		engine = m.resolveEngine(sess.Engine).String()
 	}
-	return m.formatStatus(sess, state, qLen, engine, agentVersion, agentUptime, ctxUsage)
+	return m.formatStatus(sess, state, qLen, engine, model, agentVersion, agentUptime, ctxUsage)
 }
 
-func (m *Manager) formatStatus(sess *Session, state string, qLen int, engine, agentVersion, agentUptime string, ctxUsage float64) string {
+func (m *Manager) formatStatus(sess *Session, state string, qLen int, engine, model, agentVersion, agentUptime string, ctxUsage float64) string {
 	sid := sess.SessionID
 	if len(sid) > 8 {
 		sid = sid[:8]
@@ -903,7 +922,7 @@ func (m *Manager) formatStatus(sess *Session, state string, qLen int, engine, ag
 	if agentUptime == "" {
 		agentUptime = "n/a"
 	}
-	return L.Getf("status.format", sess.AgentName, state, qLen, sid, modelDisplay(sess.Model), engine, agentVersion, m.botVersion, agentUptime, ctxUsage)
+	return L.Getf("status.format", sess.AgentName, state, qLen, sid, modelDisplay(model), engine, agentVersion, m.botVersion, agentUptime, ctxUsage)
 }
 
 // MCPCatalogStatus is a backward-compatible alias for the combined MCP checklist.
@@ -1590,6 +1609,14 @@ func modelDisplay(model string) string {
 
 // Model returns the current model for a channel.
 func (m *Manager) Model(channelID string) string {
+	m.mu.Lock()
+	agent, ok := m.agents[channelID]
+	m.mu.Unlock()
+	if ok && agent.IsAlive() {
+		if model := strings.TrimSpace(agent.CurrentModelID()); model != "" {
+			return L.Getf("model.current", model)
+		}
+	}
 	if sess, ok := m.getChannelSession(channelID); ok && sess.Model != "" {
 		return L.Getf("model.current", sess.Model)
 	}
@@ -2870,6 +2897,11 @@ func (m *Manager) ThreadModel(threadID string) string {
 	m.mu.Unlock()
 	if !ok {
 		return L.Get("model.current_default")
+	}
+	if entry.agent != nil && entry.agent.IsAlive() {
+		if model := strings.TrimSpace(entry.agent.CurrentModelID()); model != "" {
+			return L.Getf("model.current", model)
+		}
 	}
 	if entry.worker.model != "" {
 		return L.Getf("model.current", entry.worker.model)

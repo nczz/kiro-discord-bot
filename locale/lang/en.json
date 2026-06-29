@@ -409,6 +409,8 @@
   "doctor.env.desc.DISCORD_GUILD_ID": "restrict to a single guild",
   "doctor.env.desc.KIRO_CLI_PATH": "path to kiro-cli binary [default: kiro-cli]",
   "doctor.env.desc.OMP_PATH": "path to omp binary (omp engine) [default: omp]",
+  "doctor.env.desc.OMP_PROFILE": "optional omp runtime profile for isolated auth, settings, sessions, and caches [unset = omp default profile]",
+  "doctor.env.desc.OMP_SESSION_DIR": "bot-managed omp session directory [default: DATA_DIR/omp-agent-runtime/sessions]",
   "doctor.env.desc.AGENT_ENGINE": "default agent engine for new channels: kiro or omp [default: kiro]",
   "doctor.env.desc.AGENT_ENGINES_ENABLED": "comma list of engines /engine may switch to [default: AGENT_ENGINE only]",
   "doctor.env.desc.KIRO_API_KEY": "headless auth key (alternative to kiro-cli login)",

@@ -50,6 +50,8 @@ func main() {
 		ManagerConfig: channel.ManagerConfig{
 			KiroCLIPath:          cfg.KiroCLIPath,
 			OMPPath:              cfg.OMPPath,
+			OMPProfile:           cfg.OMPProfile,
+			OMPSessionDir:        cfg.OMPSessionDir,
 			AgentEngine:          cfg.AgentEngine,
 			AgentEnginesEnabled:  cfg.AgentEnginesEnabled,
 			DefaultCWD:           cfg.DefaultCWD,
@@ -114,8 +116,11 @@ func preflightAgentOptions(cfg *Config, dialect acp.Dialect) acp.AgentOptions {
 		MaxBuffer: cfg.MaxScannerBuffer,
 		Dialect:   dialect,
 	}
+	if dialect == acp.DialectOmp {
+		return appendOmpRuntimeEnv(opts, cfg.DataDir, cfg.OMPProfile, cfg.OMPSessionDir)
+	}
 	if dialect != acp.DialectKiro {
-		// Non-kiro engines (omp) take no --agent profile and no KIRO_* runtime env.
+		// Unknown future engines take no --agent profile and no KIRO_* runtime env.
 		return opts
 	}
 	opts.Agent = cfg.AgentProfile
@@ -131,6 +136,22 @@ func preflightAgentOptions(cfg *Config, dialect acp.Dialect) acp.AgentOptions {
 		log.Printf("[preflight] prepare runtime Kiro settings: %v", err)
 	} else {
 		opts.Env = append(opts.Env, "KIRO_MCP_CONFIG="+mcpConfig)
+	}
+	return opts
+}
+
+func appendOmpRuntimeEnv(opts acp.AgentOptions, dataDir, profile, configuredSessionDir string) acp.AgentOptions {
+	profile = strings.TrimSpace(profile)
+	if profile != "" {
+		opts.Env = append(opts.Env, "OMP_PROFILE="+profile)
+	}
+	sessionDir := channel.DefaultOMPSessionDir(dataDir, configuredSessionDir)
+	if sessionDir != "" {
+		if err := os.MkdirAll(sessionDir, 0755); err != nil {
+			log.Printf("[preflight] create runtime OMP_SESSION_DIR: %v", err)
+		} else {
+			opts.SessionDir = sessionDir
+		}
 	}
 	return opts
 }

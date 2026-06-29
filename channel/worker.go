@@ -131,6 +131,7 @@ type workerAgent interface {
 	Stop()
 	ContextUsage() float64
 	TurnMetrics() acp.TurnMetrics
+	CurrentModelID() string
 	StopReason() string
 	OnReadErrorFunc(func(error))
 	RecentStderr() string
@@ -165,6 +166,18 @@ func newWorkerWithEngine(channelID string, agent workerAgent, bufSize, askTimeou
 		model:           model,
 		engine:          engine,
 	}
+}
+
+func (w *Worker) currentModel() string {
+	if w == nil {
+		return ""
+	}
+	if w.agent != nil {
+		if model := strings.TrimSpace(w.agent.CurrentModelID()); model != "" {
+			return model
+		}
+	}
+	return w.model
 }
 
 // OnActivityFunc sets a callback invoked during work to signal liveness.
@@ -724,7 +737,7 @@ func (w *Worker) execute(job *Job) {
 				swapReaction(ds, job.ChannelID, job.MessageID, "🔄", emoji)
 				swapReaction(ds, job.ChannelID, job.MessageID, "⚙️", emoji)
 				if w.logger != nil {
-					w.logger.Log(w.channelID, ChatEntry{Role: "assistant", Content: errorContent, Model: w.model})
+					w.logger.Log(w.channelID, ChatEntry{Role: "assistant", Content: errorContent, Model: w.currentModel()})
 				}
 				w.auditJobEvent("agent_job_failed", job, threadID, "error", map[string]any{
 					"error":      errMsg,
@@ -754,7 +767,7 @@ func (w *Worker) execute(job *Job) {
 				w.channelID, job.Username, job.MessageID, time.Since(startTime).Round(time.Millisecond), len(response))
 
 			if w.logger != nil {
-				w.logger.Log(w.channelID, ChatEntry{Role: "assistant", Content: response, Model: w.model})
+				w.logger.Log(w.channelID, ChatEntry{Role: "assistant", Content: response, Model: w.currentModel()})
 			}
 
 			w.recordUsage(job, threadID, "success", startTime)
@@ -1100,7 +1113,7 @@ func (w *Worker) executeInline(job *Job) {
 				}
 				job.sendInlineFinalReply(ds, AppendMetricsFooter(errorContent, MetricsWithElapsed(w.agent.TurnMetrics(), startTime)))
 				if w.logger != nil {
-					w.logger.Log(w.channelID, ChatEntry{Role: "assistant", Content: errorContent, Model: w.model})
+					w.logger.Log(w.channelID, ChatEntry{Role: "assistant", Content: errorContent, Model: w.currentModel()})
 				}
 				w.auditJobEvent("agent_job_failed", job, "", "error", map[string]any{
 					"delivery_mode": DeliveryInline.String(),
@@ -1126,7 +1139,7 @@ func (w *Worker) executeInline(job *Job) {
 			job.sendInlineFinalReply(ds, responseWithMetrics)
 			w.auditResponseEvent(job, "", "success", response)
 			if w.logger != nil {
-				w.logger.Log(w.channelID, ChatEntry{Role: "assistant", Content: response, Model: w.model})
+				w.logger.Log(w.channelID, ChatEntry{Role: "assistant", Content: response, Model: w.currentModel()})
 			}
 			w.recordUsage(job, "", "success", startTime)
 			inlineCompletedMeta := map[string]any{
@@ -1164,7 +1177,7 @@ func (w *Worker) executeInline(job *Job) {
 		}
 		job.sendInlineFinalReply(ds, errMsg)
 		if w.logger != nil {
-			w.logger.Log(w.channelID, ChatEntry{Role: "assistant", Content: errMsg, Model: w.model})
+			w.logger.Log(w.channelID, ChatEntry{Role: "assistant", Content: errMsg, Model: w.currentModel()})
 		}
 		w.auditJobEvent("agent_job_failed", job, "", "error", map[string]any{
 			"delivery_mode": DeliveryInline.String(),
@@ -1216,7 +1229,7 @@ func (w *Worker) auditJobEvent(eventType string, job *Job, threadID, status stri
 		Username:        job.Username,
 		Source:          job.Source,
 		Status:          status,
-		Model:           w.model,
+		Model:           w.currentModel(),
 		Metadata:        metadata,
 	})
 }
@@ -1254,7 +1267,7 @@ func (w *Worker) auditResponseEvent(job *Job, threadID, status, content string) 
 		Source:          job.Source,
 		Status:          status,
 		Content:         content,
-		Model:           w.model,
+		Model:           w.currentModel(),
 		Metadata:        metadata,
 	})
 }
@@ -1283,7 +1296,7 @@ func (w *Worker) recordUsage(job *Job, threadID, status string, startTime time.T
 		UserID:        job.UserID,
 		Username:      job.Username,
 		MessageID:     job.MessageID,
-		Model:         w.model,
+		Model:         w.currentModel(),
 		Engine:        w.engine,
 		Source:        source,
 		Status:        status,
@@ -1465,7 +1478,7 @@ func (w *Worker) executeFallback(job *Job) {
 	}
 
 	if w.logger != nil {
-		w.logger.Log(w.channelID, ChatEntry{Role: "assistant", Content: logContent, Model: w.model})
+		w.logger.Log(w.channelID, ChatEntry{Role: "assistant", Content: logContent, Model: w.currentModel()})
 	}
 }
 

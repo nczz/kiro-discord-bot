@@ -212,14 +212,17 @@ func (b *Bot) cmdAuditPrompt(ctx cmdCtx, prompt string) {
 func (b *Bot) runAuditPrompt(ctx cmdCtx, prompt string) {
 	agentName := "audit-" + auditPromptInvocationID(ctx)
 	startedAt := time.Now()
-	b.recordAuditPromptAgentEvent(ctx, "agent_job_started", "", "", map[string]any{"delivery_mode": channel.DeliveryInline.String()})
+	b.recordAuditPromptAgentEvent(ctx, "agent_job_started", "", "", "", map[string]any{"delivery_mode": channel.DeliveryInline.String()})
 	agent, model, err := b.manager.StartAuditPromptAgent(agentName, ctx.channelID, ctx.targetID)
 	if err != nil {
-		b.recordAuditPromptAgentEvent(ctx, "agent_job_failed", "error", err.Error(), map[string]any{"elapsed_ms": time.Since(startedAt).Milliseconds(), "stage": "start_agent"})
+		b.recordAuditPromptAgentEvent(ctx, "agent_job_failed", "error", err.Error(), "", map[string]any{"elapsed_ms": time.Since(startedAt).Milliseconds(), "stage": "start_agent"})
 		replyLongWithMetadata(ctx, commandError(err), map[string]any{"audit_prompt_result": true, "status": "error"})
 		return
 	}
 	defer agent.Stop()
+	if currentModel := strings.TrimSpace(agent.CurrentModelID()); currentModel != "" {
+		model = currentModel
+	}
 
 	runCtx, cancel := context.WithTimeout(context.Background(), b.manager.AskTimeout())
 	defer cancel()
@@ -256,16 +259,16 @@ func (b *Bot) runAuditPrompt(ctx cmdCtx, prompt string) {
 	metadata["response_len"] = len(response)
 	if askErr != nil {
 		metadata["error"] = askErr.Error()
-		b.recordAuditPromptAgentEvent(ctx, "agent_job_failed", status, response, metadata)
+		b.recordAuditPromptAgentEvent(ctx, "agent_job_failed", status, response, model, metadata)
 	} else {
-		b.recordAuditPromptAgentEvent(ctx, "agent_job_completed", status, "", metadata)
+		b.recordAuditPromptAgentEvent(ctx, "agent_job_completed", status, "", model, metadata)
 	}
 	content := channel.AppendMetricsFooter(response, metrics)
-	b.recordAuditPromptAgentEvent(ctx, "agent_response_sent", status, response, map[string]any{"content_len": len(content), "delivery_mode": channel.DeliveryInline.String()})
+	b.recordAuditPromptAgentEvent(ctx, "agent_response_sent", status, response, model, map[string]any{"content_len": len(content), "delivery_mode": channel.DeliveryInline.String()})
 	replyLongWithMetadata(ctx, content, map[string]any{"audit_prompt_result": true, "status": status})
 }
 
-func (b *Bot) recordAuditPromptAgentEvent(ctx cmdCtx, eventType, status, content string, metadata map[string]any) {
+func (b *Bot) recordAuditPromptAgentEvent(ctx cmdCtx, eventType, status, content string, model string, metadata map[string]any) {
 	if b == nil || b.auditRecorder == nil {
 		return
 	}
@@ -289,6 +292,7 @@ func (b *Bot) recordAuditPromptAgentEvent(ctx cmdCtx, eventType, status, content
 		Source:          "audit_prompt",
 		Status:          status,
 		Content:         content,
+		Model:           model,
 		Metadata:        metadata,
 	})
 }

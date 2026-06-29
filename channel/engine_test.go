@@ -2,6 +2,7 @@ package channel
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/nczz/kiro-discord-bot/acp"
@@ -42,26 +43,53 @@ func TestParseEnabledEngines(t *testing.T) {
 	}
 }
 
-func TestApplyEngineStripsKiroEnvForOmp(t *testing.T) {
-	m := &Manager{}
-	base := acp.AgentOptions{Env: []string{"KIRO_HOME=/x", "FOO=bar", "KIRO_MCP_CONFIG=/y"}}
+func TestApplyEngineUsesIsolatedRuntimeEnvForOmp(t *testing.T) {
+	dir := t.TempDir()
+	m := &Manager{ompProfile: "bot-profile", ompSessionDir: filepath.Join(dir, "omp-agent-runtime", "sessions")}
+	base := acp.AgentOptions{Env: []string{
+		"KIRO_HOME=/x",
+		"FOO=bar",
+		"KIRO_MCP_CONFIG=/y",
+		"OMP_PROFILE=user-profile",
+		"OTHER_ENV=/user/value",
+	}, SessionDir: "/user/session-dir"}
 	// kiro keeps all env + sets dialect
 	k := m.applyEngine(base, acp.DialectKiro)
-	if k.Dialect != acp.DialectKiro || len(k.Env) != 3 {
+	if k.Dialect != acp.DialectKiro || len(k.Env) != len(base.Env) {
 		t.Fatalf("kiro applyEngine wrong: dialect=%v env=%v", k.Dialect, k.Env)
 	}
-	// omp strips KIRO_* but keeps others
+	// omp strips KIRO_*, keeps unrelated env, and overrides session dir with
+	// the bot-managed runtime boundary.
 	o := m.applyEngine(base, acp.DialectOmp)
 	if o.Dialect != acp.DialectOmp {
 		t.Fatalf("omp dialect not set: %v", o.Dialect)
 	}
+	seen := map[string]bool{}
 	for _, e := range o.Env {
 		if e == "KIRO_HOME=/x" || e == "KIRO_MCP_CONFIG=/y" {
 			t.Fatalf("omp env not stripped: %v", o.Env)
 		}
+		seen[e] = true
 	}
-	if len(o.Env) != 1 || o.Env[0] != "FOO=bar" {
+	if !seen["FOO=bar"] || !seen["OMP_PROFILE=bot-profile"] || o.SessionDir != m.ompSessionDir {
 		t.Fatalf("omp env wrong: %v", o.Env)
+	}
+	if seen["OMP_PROFILE=user-profile"] {
+		t.Fatalf("omp env should override caller profile: %v", o.Env)
+	}
+}
+
+func TestApplyEngineDoesNotForceOmpProfileWhenUnset(t *testing.T) {
+	m := &Manager{ompSessionDir: filepath.Join(t.TempDir(), "omp-agent-runtime", "sessions")}
+
+	o := m.applyEngine(acp.AgentOptions{}, acp.DialectOmp)
+	for _, env := range o.Env {
+		if strings.HasPrefix(env, "OMP_PROFILE=") {
+			t.Fatalf("unset OMP_PROFILE should not be forced into omp env: %v", o.Env)
+		}
+	}
+	if o.SessionDir != m.ompSessionDir {
+		t.Fatalf("omp session dir = %q, want %q", o.SessionDir, m.ompSessionDir)
 	}
 }
 

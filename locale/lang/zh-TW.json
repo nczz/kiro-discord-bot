@@ -401,6 +401,8 @@
   "doctor.env.desc.DISCORD_GUILD_ID": "限定單一 guild",
   "doctor.env.desc.KIRO_CLI_PATH": "kiro-cli 路徑 [預設: kiro-cli]",
   "doctor.env.desc.OMP_PATH": "omp 路徑（omp 引擎）[預設: omp]",
+  "doctor.env.desc.OMP_PROFILE": "可選 omp runtime profile，用於隔離 auth、settings、sessions、caches [未設定 = omp default profile]",
+  "doctor.env.desc.OMP_SESSION_DIR": "bot-managed omp session 目錄 [預設: DATA_DIR/omp-agent-runtime/sessions]",
   "doctor.env.desc.AGENT_ENGINE": "新頻道的預設 agent 引擎：kiro 或 omp [預設: kiro]",
   "doctor.env.desc.AGENT_ENGINES_ENABLED": "/engine 可切換的引擎清單（逗號分隔）[預設: 僅 AGENT_ENGINE]",
   "doctor.env.desc.KIRO_API_KEY": "headless 驗證 key（替代 kiro-cli login）",

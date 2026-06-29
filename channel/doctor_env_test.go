@@ -18,6 +18,8 @@ func TestDoctorRuntimeOverviewDoesNotLeakRawEnvironmentValues(t *testing.T) {
 	t.Setenv("STT_API_KEY", "stt-api-key-secret-value")
 	t.Setenv("DEFAULT_CWD", "/raw/env/default-cwd")
 	t.Setenv("KIRO_MCP_CONFIG", "/raw/env/mcp.json")
+	t.Setenv("OMP_PROFILE", "raw-user-profile")
+	t.Setenv("OMP_SESSION_DIR", "/raw/env/omp-session")
 
 	dir := t.TempDir()
 	m := NewManager(ManagerConfig{
@@ -43,6 +45,7 @@ func TestDoctorRuntimeOverviewDoesNotLeakRawEnvironmentValues(t *testing.T) {
 		"stt-api-key-secret-value",
 		"/raw/env/default-cwd",
 		"/raw/env/mcp.json",
+		"/raw/env/omp-session",
 	} {
 		if strings.Contains(got, notWant) {
 			t.Fatalf("doctor runtime overview leaked %q:\n%s", notWant, got)
@@ -54,6 +57,8 @@ func TestDoctorRuntimeOverviewDoesNotLeakRawEnvironmentValues(t *testing.T) {
 		"(effective: `/projects/default`)",
 		"(effective: `/projects, /work`)",
 		filepath.Join(dir, "kiro-agent-runtime", "settings", "mcp.json"),
+		"(effective: `default`)",
+		filepath.Join(dir, "omp-agent-runtime", "sessions"),
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("doctor runtime overview missing %q:\n%s", want, got)
