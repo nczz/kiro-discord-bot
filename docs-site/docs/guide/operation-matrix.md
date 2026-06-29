@@ -20,7 +20,7 @@ Use this matrix before releasing changes that affect agent engines, Discord comm
 | `/model <id>` | Switches channel model dynamically when possible, otherwise restarts. | Respawns thread agent with the model. | Validates through Kiro CLI fallback. | Validates through the active ACP session. |
 | `/agent` | Lists channel agent modes. | Lists thread agent modes. | Requires active session. | Requires active session. |
 | `/agent <id>` | Switches channel agent mode. | Switches thread agent mode. | Uses ACP `session/set_mode`. | Uses ACP `session/set_mode`. |
-| `/status` | Shows engine, agent version, model, queue, context usage. | Same for thread agent. | Should not label version as Kiro-only. | Should not label version as Kiro-only. |
+| `/status` | Shows engine, agent version, model, queue, context usage. | Same for thread agent. | Shows active Kiro version/model. | Shows active OMP version/model. |
 | `/usage` | Aggregates by Discord user and includes credits/USD when present. | Thread turns roll up to parent channel scope. | Credits come from Kiro metering metadata. | USD cost comes from OMP `usage_update`. |
 | `/audit prompt` | Uses a short-lived scoped agent and records usage under the Discord caller. | Same, with thread target metadata. | Uses channel engine. | Uses channel engine. |
 

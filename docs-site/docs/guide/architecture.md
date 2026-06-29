@@ -1,6 +1,6 @@
 # Architecture
 
-`kiro-discord-bot` is a Discord gateway bot that manages ACP agent sessions, channel state, thread state, MCP policy, cron jobs, audit events, and delivery behavior. Kiro CLI and OMP are implemented as agent engines behind the same manager, command, usage, and audit layers.
+`kiro-discord-bot` is a Discord gateway bot that manages ACP agent sessions, channel state, thread state, MCP policy, cron jobs, audit events, and delivery behavior. Kiro CLI and OMP are implemented as replaceable agent engines behind the same manager, command, usage, and audit layers.
 
 ## Runtime Components
 
@@ -26,7 +26,7 @@ The bot treats user Kiro MCP settings as a catalog, not as direct runtime inheri
 
 This prevents a user's global Kiro MCP configuration from silently becoming available in every Discord channel.
 
-OMP sessions are launched through the same ACP transport and MCP injection path, but they do not receive `KIRO_HOME` or `KIRO_MCP_CONFIG`. OMP model and mode catalogs come from ACP `session/new`, so model listing for OMP requires an active agent session.
+OMP sessions are launched through the same ACP transport and MCP injection path, but they do not receive `KIRO_HOME` or `KIRO_MCP_CONFIG`. The bot passes `--session-dir DATA_DIR/omp-agent-runtime/sessions` to OMP child processes so ACP session files are bot-managed without moving the existing OMP auth/model database. When `OMP_PROFILE` is configured, auth/settings/cache state is profile-scoped as well; leaving it empty keeps OMP's default profile for backward compatibility. OMP model and mode catalogs come from ACP `session/new`, so model listing for OMP requires an active agent session.
 
 ## Channel and Thread State
 
@@ -60,8 +60,10 @@ ACP prompt results may include a `stopReason`. Normal `end_turn` completion is s
 
 Kiro subagent progress notifications are rendered conservatively. The bot trusts the verified top-level subagent and pending-stage counts, and displays best-effort labels only when the notification includes recognizable names or statuses.
 
+This rendering is Kiro-specific. OMP tool and progress updates use the shared ACP update path when available.
+
 ## Audit
 
 Audit storage records semantic bot events such as command calls, command responses, agent job lifecycle, and final response delivery. Audit prompt investigations use short-lived private agents with only the audit query tool injected.
 
-See [Bot Tools MCP](bot-tools.md), [Audit, Usage, and Privacy](audit-usage-privacy.md), and [Security Model](security-model.md) for the detailed behavior and trust boundaries that sit on top of this architecture.
+See [Agent Engines](agent-engines.md), [Bot Tools MCP](bot-tools.md), [Audit, Usage, and Privacy](audit-usage-privacy.md), and [Security Model](security-model.md) for the detailed behavior and trust boundaries that sit on top of this architecture.

@@ -6,12 +6,12 @@ MCP tools let the agent reach systems outside the core ACP session: Discord APIs
 
 The bot separates discovery from permission:
 
-1. MCP server definitions are loaded into a catalog from configured Kiro MCP settings.
+1. MCP server definitions are loaded into a catalog from a Kiro-format MCP settings source.
 2. A Discord channel manager explicitly enables a server or selected tools with `/mcp manage`.
 3. The bot injects only the allowed server/tool set into the current channel or thread agent.
 4. A policy proxy filters `tools/list` and blocks unauthorized `tools/call` requests.
 
-This means adding a server to `~/.kiro/settings/mcp.json` does not automatically expose it to every Discord channel.
+This means adding a server to `~/.kiro/settings/mcp.json` or another catalog source does not automatically expose it to every Discord channel or every ACP engine. Kiro and OMP both receive MCP servers only through the bot's policy-controlled ACP injection path.
 
 ## Built-in Bot Tools
 

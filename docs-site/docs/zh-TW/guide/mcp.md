@@ -6,12 +6,12 @@ MCP 工具讓 agent 能觸及核心 ACP session 以外的系統：Discord API、
 
 bot 會把 discovery 與 permission 分開：
 
-1. MCP server 定義先從 Kiro MCP 設定載入 catalog。
+1. MCP server 定義先從 Kiro-format MCP settings source 載入 catalog。
 2. Discord 頻道管理員用 `/mcp manage` 明確啟用 server 或指定工具。
 3. bot 只把目前 channel/thread 允許的 server/tool set 注入 agent。
 4. policy proxy 會過濾 `tools/list` 並阻擋未授權的 `tools/call`。
 
-因此，把 server 加到 `~/.kiro/settings/mcp.json` 不代表它會自動暴露給所有 Discord 頻道。
+因此，把 server 加到 `~/.kiro/settings/mcp.json` 或其他 catalog source，不代表它會自動暴露給所有 Discord 頻道或所有 ACP engine。Kiro 與 OMP 都只會透過 bot 的 channel policy injection path 收到 MCP servers。
 
 ## 內建 Bot Tools
 

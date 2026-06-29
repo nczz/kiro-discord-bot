@@ -22,10 +22,11 @@ kiro-cli login
 
 For headless hosts, set `KIRO_API_KEY` in the bot service environment.
 
-For OMP, install and authenticate `omp`, then expose it with `OMP_PATH` when it is not already on `PATH`:
+For OMP, install and authenticate `omp`, then expose it with `OMP_PATH` when it is not already on `PATH`. New production deployments should use a bot-specific profile and authenticate it before enabling the OMP engine:
 
 ```bash
 omp --version
+OMP_PROFILE=kiro-discord-bot omp setup
 ```
 
 ## 2. Create a Discord Bot
@@ -96,6 +97,8 @@ THREAD_AGENT_IDLE_SEC=900
 ```
 
 Use `/doctor` after startup to inspect effective runtime values. Sensitive values are redacted. See [Environment Reference](environment.md) for every supported variable and default.
+
+See [Agent Engines](agent-engines.md) before enabling OMP or allowing `/engine` switches in production.
 
 ## 5. Run Once in Foreground
 

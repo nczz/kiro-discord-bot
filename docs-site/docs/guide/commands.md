@@ -12,7 +12,7 @@ Commands are available as slash commands. Most also have `!` text-command equiva
 | `/doctor` | Run deployment, permission, and ACP diagnostics for the current target. |
 | `/reset` | Restart the current channel or thread agent. |
 | `/clear` | Clear conversation history for the current target. |
-| `/compact` | Ask Kiro to compact conversation context where supported. |
+| `/compact` | Ask the active engine to compact conversation context where supported. |
 
 ## Work Control
 
@@ -30,7 +30,7 @@ Commands are available as slash commands. Most also have `!` text-command equiva
 | Command | Purpose |
 | --- | --- |
 | `/model` | Show the current model. |
-| `/model <model-id>` | Switch the model for the current channel/thread agent. Non-Kiro engines validate model IDs from the active ACP session. |
+| `/model <model-id>` | Switch the model for the current channel/thread agent. Kiro can use its fallback model list; OMP validates model IDs from the active ACP session. |
 | `/models` | List available models. Kiro can fall back to `kiro-cli`; OMP requires the channel/thread agent to be running because models come from ACP `session/new`. |
 | `/agent` | List available modes for the current channel/thread agent. |
 | `/agent <mode-id>` | Switch agent mode, such as planner/guide modes or OMP modes advertised by the active ACP session. |

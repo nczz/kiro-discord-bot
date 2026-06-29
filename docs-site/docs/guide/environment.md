@@ -4,6 +4,94 @@ The bot does not load `.env` by itself. Inject these variables through your shel
 
 Use `/doctor` after startup to inspect effective values. Secrets are redacted in diagnostics.
 
+## How to Use This Page
+
+Environment variables fall into three groups:
+
+- Main bot runtime: Discord connection, ACP agent engines, channel/thread behavior, audit, usage, and background maintenance.
+- MCP helper servers: standalone processes such as `mcp-discord-server` and `mcp-media-server`.
+- Provider credentials: API keys for Kiro, STT, media generation, or other external services.
+
+Required variables must be set before startup. Optional variables can usually stay empty because the bot applies conservative defaults. After changing any process-level environment variable, restart the service and run `/doctor` in Discord to confirm the effective runtime. `/doctor` redacts secrets, so it is the safest way to validate production configuration.
+
+Existing Kiro-only deployments do not need new OMP variables. Add OMP variables only when the host has `omp` installed, authenticated, and intentionally enabled.
+
+## Common Configuration Shapes
+
+### Kiro-Only Default
+
+This is the default upgrade path for existing deployments. OMP is not required.
+
+```env
+AGENT_ENGINE=kiro
+AGENT_ENGINES_ENABLED=
+```
+
+### Dual-Engine Bot
+
+Use this when the same bot should allow channel admins to switch between Kiro and OMP with `/engine`.
+
+```env
+AGENT_ENGINE=kiro
+AGENT_ENGINES_ENABLED=kiro,omp
+OMP_PATH=omp
+```
+
+Only enable OMP after `omp` is installed and authenticated for the service user.
+
+### OMP With a Production Profile
+
+Use a named profile when you want bot-managed OMP auth, settings, sessions, and caches to stay isolated from your interactive OMP profile.
+
+```bash
+OMP_PROFILE=kiro-discord-bot omp setup
+```
+
+```env
+OMP_PROFILE=kiro-discord-bot
+```
+
+Leave `OMP_PROFILE` empty if you intentionally want the service to use OMP's default profile for backward compatibility.
+
+### Pure OMP Bot
+
+Use this only when Kiro should not be available to the bot.
+
+```env
+AGENT_ENGINE=omp
+AGENT_ENGINES_ENABLED=omp
+OMP_PATH=omp
+```
+
+### Multi-Bot Deployment
+
+When running multiple department bots, give each bot its own Discord token and persistent data directory.
+
+```env
+DISCORD_TOKEN=...
+DATA_DIR=/var/lib/kiro-discord-bot/marketing
+BOT_PEERS=...
+```
+
+Do not share `DATA_DIR` between bot identities. Audit ledgers, usage files, channel settings, MCP policy, and agent runtime files are bot-owned state.
+
+## Variable Relationships
+
+- `DATA_DIR` owns persistent bot state: channel metadata, audit DB, usage ledgers, MCP policy, downloaded attachments, and bot-managed engine runtime directories.
+- `DEFAULT_CWD` is the default project root shown during setup. `ALLOWED_CWD_ROOTS` restricts what channel working directories may be selected.
+- `AGENT_ENGINE` selects the default engine for new scopes. `AGENT_ENGINES_ENABLED` controls what `/engine` may switch to.
+- `OMP_SESSION_DIR` controls where bot-started OMP ACP session files live. `OMP_PROFILE` controls OMP auth/settings/cache identity. They solve different isolation problems.
+- `KIRO_MCP_CONFIG` is treated as an MCP catalog source. Runtime agents receive bot-managed, per-policy MCP settings under `DATA_DIR`, rather than inheriting the user's Kiro settings directly.
+- `TRUST_ALL_TOOLS` and `TRUST_TOOLS` approve ACP server permission requests. They do not replace Discord command ACLs or MCP channel policy.
+- `PREFLIGHT_MODE=skip` is the explicit way to disable ACP preflight. `SKIP_PREFLIGHT` exists for compatibility and skips preflight when non-empty.
+
+## Upgrade Notes
+
+- Upgrading a Kiro-only deployment keeps working with no new environment variables.
+- Do not copy `OMP_PROFILE` into production until that profile has been authenticated as the same OS service user that runs the bot.
+- After changing engine, MCP, audit, or storage variables, restart the service and run `/doctor`.
+- For launchd, systemd, or Docker deployments, put variables in the service definition rather than assuming an interactive shell profile will be inherited.
+
 ## Required
 
 | Variable | Default | Purpose |
@@ -17,12 +105,14 @@ Use `/doctor` after startup to inspect effective values. Secrets are redacted in
 | `DISCORD_GUILD_ID` | empty | Guild used for slash command registration. Empty uses Discord's global command scope. |
 | `KIRO_CLI_PATH` | `kiro-cli` | Executable path for Kiro CLI. |
 | `OMP_PATH` | `omp` | Executable path for the omp engine (only needed when omp is enabled). |
+| `OMP_PROFILE` | empty | Optional OMP profile used by bot-managed OMP agents. OMP profiles isolate auth, settings, sessions, and caches. New production deployments should set `kiro-discord-bot` and authenticate that profile before enabling OMP. Empty keeps OMP's default profile for backward compatibility. |
+| `OMP_SESSION_DIR` | `DATA_DIR/omp-agent-runtime/sessions` | Bot-managed OMP session directory passed to `omp --session-dir`. Leave empty to use the data-dir default, or set an absolute path when the service needs a shared session directory. |
 | `AGENT_ENGINE` | `kiro` | Default agent engine for new channels: `kiro` or `omp`. |
 | `AGENT_ENGINES_ENABLED` | (AGENT_ENGINE only) | Comma list of engines `/engine` may switch to (e.g. `kiro,omp`). Empty disables switching. |
 | `KIRO_API_KEY` | empty | Headless Kiro authentication key when `kiro-cli login` is not used. |
 | `DEFAULT_CWD` | `/projects` | Root shown by `/cwd` setup. |
 | `ALLOWED_CWD_ROOTS` | empty | Optional comma-separated root allowlist for channel working directories. |
-| `DATA_DIR` | `./data` | Persistent bot data, channel metadata, sessions, audit DB, usage ledgers, MCP policy, and runtime Kiro settings. |
+| `DATA_DIR` | `./data` | Persistent bot data, channel metadata, sessions, audit DB, usage ledgers, MCP policy, and bot-managed engine runtime directories. |
 | `BOT_LOCALE` | `en` | Bot response locale. Supported project locales are English and Traditional Chinese. |
 
 ## Agent Execution

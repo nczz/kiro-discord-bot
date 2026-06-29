@@ -27,6 +27,15 @@ Before tagging:
 - Confirm deployment notes mention any manual migration.
 - Confirm generated artifacts are not staged.
 
+For agent-engine architecture changes, also confirm:
+
+- Kiro-only upgrades require no new environment variables.
+- OMP remains opt-in and is documented as requiring an installed and authenticated `omp` binary.
+- `AGENT_ENGINE` defaults to `kiro`, and `AGENT_ENGINES_ENABLED` controls only allowed `/engine` switches.
+- Runtime isolation is documented for both `DATA_DIR/kiro-agent-runtime` and `DATA_DIR/omp-agent-runtime/sessions`.
+- `OMP_PROFILE` is not presented as mandatory; when used, it must be authenticated by the same OS service user that runs the bot.
+- `/status`, `/models`, `/model`, `/agent`, `/usage`, `/audit prompt`, MCP policy, cron, and thread agents are covered by tests or release smoke checks for the changed engine paths.
+
 ## 3. Tag and Push
 
 ```bash

@@ -20,7 +20,7 @@
 | `/model <id>` | 盡可能動態切換 channel model，否則 restart。 | 用指定 model respawn thread agent。 | 透過 Kiro CLI fallback 驗證。 | 透過 active ACP session 驗證。 |
 | `/agent` | 列出 channel agent modes。 | 列出 thread agent modes。 | 需要 active session。 | 需要 active session。 |
 | `/agent <id>` | 切換 channel agent mode。 | 切換 thread agent mode。 | 使用 ACP `session/set_mode`。 | 使用 ACP `session/set_mode`。 |
-| `/status` | 顯示 engine、agent version、model、queue、context usage。 | thread agent 也相同。 | 不應把版本標成 Kiro-only。 | 不應把版本標成 Kiro-only。 |
+| `/status` | 顯示 engine、agent version、model、queue、context usage。 | thread agent 也相同。 | 顯示 active Kiro version/model。 | 顯示 active OMP version/model。 |
 | `/usage` | 依 Discord 使用者彙總，並在有資料時顯示 credits/USD。 | Thread turns 彙總到 parent channel scope。 | Credits 來自 Kiro metering metadata。 | USD cost 來自 OMP `usage_update`。 |
 | `/audit prompt` | 使用短生命週期 scoped agent，並把 usage 歸到 Discord caller。 | 相同，並帶 thread target metadata。 | 使用 channel engine。 | 使用 channel engine。 |
 

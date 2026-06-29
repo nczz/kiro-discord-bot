@@ -1,6 +1,6 @@
 # Getting Started
 
-`kiro-discord-bot` connects Discord to ACP agents through stdio. It supports Kiro CLI and OMP engines behind the same Discord command, MCP policy, audit, usage, cron, memory, and thread-agent control plane. It is designed for teams that want an agent to understand a project, keep useful context, and work from Discord without losing operational control.
+`kiro-discord-bot` connects Discord to ACP agents through stdio. Kiro CLI is the default engine, and OMP can be enabled as a replaceable ACP engine behind the same Discord command, MCP policy, audit, usage, cron, memory, and thread-agent control plane. It is designed for teams that want an agent to understand a project, keep useful context, and work from Discord without losing operational control.
 
 ## Requirements
 
@@ -31,3 +31,4 @@ After setup, the channel can start normal agent work. Use `/pause` for mention-o
 - Add task-specific emphasis with `/flashmemory`.
 - Put shared project rules, architecture, and workflow guidance in `AGENTS.md` through `/steering create` or `/steering edit`.
 - Enable MCP tools per channel with `/mcp manage`.
+- Review [Agent Engines](agent-engines.md) before enabling OMP or changing `AGENT_ENGINES_ENABLED`.

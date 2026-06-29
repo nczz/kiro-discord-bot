@@ -12,7 +12,7 @@
 | `/doctor` | 執行部署、權限與 ACP 診斷。 |
 | `/reset` | 重啟目前 channel 或 thread agent。 |
 | `/clear` | 清除目前目標的對話歷史。 |
-| `/compact` | 在支援時要求 Kiro 壓縮對話 context。 |
+| `/compact` | 在支援時要求 active engine 壓縮對話 context。 |
 
 ## 工作控制
 
@@ -30,7 +30,7 @@
 | Command | 用途 |
 | --- | --- |
 | `/model` | 顯示目前 model。 |
-| `/model <model-id>` | 切換目前頻道/討論串 agent 的 model。非 Kiro 引擎會從 active ACP session 驗證 model ID。 |
+| `/model <model-id>` | 切換目前頻道/討論串 agent 的 model。Kiro 可使用 fallback model list；OMP 會從 active ACP session 驗證 model ID。 |
 | `/models` | 列出可用 models。Kiro 可 fallback 到 `kiro-cli`；OMP 的 model catalog 來自 ACP `session/new`，因此需要頻道/討論串 agent 已啟動。 |
 | `/agent` | 列出目前頻道/討論串 agent 的可用 modes。 |
 | `/agent <mode-id>` | 切換 agent mode，例如 planner/guide mode 或 active ACP session 回報的 OMP modes。 |

@@ -10,6 +10,12 @@
 
 在 thread 內使用 `/status`、`/reset`、`/cancel`、`/interrupt`、`/compact`、`/clear`、`/model` 時，會優先作用在目前 thread agent。
 
+## Agent Engines
+
+Kiro CLI 是預設 ACP engine。OMP 可以作為替代 engine 啟用，並共用同一套 Discord 指令、MCP policy、audit、usage、cron、memory 與 thread-agent 控制面。
+
+Engine 選擇是目前 channel 或 thread 的 scope。把某個 channel 切到 OMP 不會改變其他 channel；切換某個 thread 也不會反寫 parent channel。完整 scope 與 runtime isolation model 見 [Agent Engines](agent-engines.md)。
+
 ## Memory、Flash Memory 與 Steering
 
 三個 context layer 的用途不同：
@@ -24,7 +30,7 @@
 
 ## MCP Policy
 
-bot 會從 `KIRO_MCP_CONFIG`、`KIRO_HOME/settings/mcp.json` 或 `~/.kiro/settings/mcp.json` 讀取 MCP server 定義作為 catalog，但不會預設暴露給 agent。
+bot 會從 Kiro-format settings source 讀取 MCP server 定義作為 catalog，例如 `KIRO_MCP_CONFIG`、`KIRO_HOME/settings/mcp.json` 或 `~/.kiro/settings/mcp.json`，但不會預設暴露給 agent。
 
 Runtime 時，每個 agent 只會透過 ACP `mcpServers` 收到目前 Discord 頻道 policy 允許的 MCP server。bot 會透過 policy proxy 啟動 server，過濾 `tools/list` 並阻擋未授權的 `tools/call`。
 

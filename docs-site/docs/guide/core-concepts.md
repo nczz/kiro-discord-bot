@@ -10,6 +10,12 @@ By default, new parent-channel tasks open Discord threads. A thread gets a dedic
 
 Thread commands such as `/status`, `/reset`, `/cancel`, `/interrupt`, `/compact`, `/clear`, and `/model` target the current thread agent when run inside a thread.
 
+## Agent Engines
+
+Kiro CLI is the default ACP engine. OMP can be enabled as an alternate engine behind the same Discord command, MCP policy, audit, usage, cron, memory, and thread-agent control plane.
+
+Engine choice is scoped to the current channel or thread. Switching one channel to OMP does not change sibling channels, and switching a thread does not rewrite its parent channel. See [Agent Engines](agent-engines.md) for the full scope and runtime isolation model.
+
 ## Memory, Flash Memory, and Steering
 
 Use the three context layers for different jobs:
@@ -24,7 +30,7 @@ Rules visible in `/memory list` are injected before every agent turn. Removing a
 
 ## MCP Policy
 
-The bot reads MCP server definitions as a catalog from `KIRO_MCP_CONFIG`, `KIRO_HOME/settings/mcp.json`, or `~/.kiro/settings/mcp.json`. It does not expose catalog servers to agents by default.
+The bot reads MCP server definitions as a catalog from Kiro-format settings sources such as `KIRO_MCP_CONFIG`, `KIRO_HOME/settings/mcp.json`, or `~/.kiro/settings/mcp.json`. It does not expose catalog servers to agents by default.
 
 At runtime, each agent receives only the MCP servers allowed for the current Discord channel through ACP `mcpServers`. The bot launches allowed servers through a policy proxy that filters `tools/list` and blocks unauthorized `tools/call` requests.
 

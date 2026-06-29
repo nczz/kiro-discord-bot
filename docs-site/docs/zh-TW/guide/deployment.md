@@ -23,7 +23,7 @@ Linux host 使用 service unit 設定 `WorkingDirectory`、`EnvironmentFile` 與
 
 ## Docker
 
-Compose 設定使用 host networking，掛載 Kiro authentication 與 project roots，並讓 runtime MCP config 和全域 Kiro MCP settings 隔離。Catalog servers 仍需透過 `/mcp` 依頻道啟用。
+Compose 設定使用 host networking，掛載所選 engine 的 authentication state 與 project roots，並讓 runtime MCP config 和全域 catalog sources 隔離。Catalog servers 仍需透過 `/mcp` 依頻道啟用。
 
 ## Release 更新
 

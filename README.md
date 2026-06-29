@@ -2,16 +2,17 @@
 
 [繁體中文 README](README.zh-TW.md) | [Full documentation][docs]
 
-**A trainable AI agent that lives in Discord.**
+**A trainable ACP agent control plane that lives in Discord.**
 
-`kiro-discord-bot` connects Discord channels to ACP agents through stdio. It supports Kiro CLI and OMP engines behind the same Discord command, MCP policy, audit, usage, cron, memory, and thread-agent control plane. Each initialized channel can bind to a real project directory, keep its own agent session, remember project guidance, and expose MCP tools through explicit channel policy.
+`kiro-discord-bot` connects Discord channels to ACP agents through stdio. Kiro CLI is the default engine, and OMP can be enabled as a replaceable ACP engine behind the same Discord command, MCP policy, audit, usage, cron, memory, and thread-agent control plane. Each initialized channel can bind to a real project directory, keep its own agent session, remember project guidance, and expose MCP tools through explicit channel policy.
 
 This repository README is intentionally short. The detailed user guide, admin guide, MCP setup, release runbook, and troubleshooting docs live on the [documentation site][docs].
 
 ## Why It Is Different
 
-- **Project-bound agents**: each Discord channel maps to a working directory and an agent session.
-- **Trainable context**: use memory, flash memory, steering files, conversation history, and Kiro knowledge instead of starting from zero every time.
+- **Project-bound ACP agents**: each Discord channel maps to a working directory and an agent session.
+- **Engine flexibility**: keep Kiro as the default, or enable OMP for selected channels and threads without changing the Discord workflow.
+- **Trainable context**: use memory, flash memory, steering files, conversation history, and project knowledge instead of starting from zero every time.
 - **Safe tool expansion**: MCP servers are discovered as a catalog, then exposed per channel through policy and a proxy.
 - **Operational controls**: admin panels and sensitive diagnostics use private replies where Discord supports them.
 - **Automation**: cron jobs and reminders let an agent run scheduled work under channel ownership.
@@ -34,6 +35,7 @@ Continue with the [full installation guide][install-doc].
 | --- | --- |
 | First-time setup | [Getting Started][getting-started] · [Installation][install-doc] |
 | Daily use | [Command Reference][commands] · [Listen Modes][listen-modes] |
+| Agent engines | [Agent Engines][agent-engines] · [Environment][environment] |
 | Agent context | [Steering Files][steering] · [Core Concepts][core-concepts] |
 | Tool access | [MCP Policy][mcp] · [Bot Tools][bot-tools] · [Discord MCP Server][mcp-discord] |
 | Operations | [Environment][environment] · [Deployment][deployment] · [Release Runbook][release] |
@@ -66,6 +68,7 @@ MIT
 [docs]: https://nczz.github.io/kiro-discord-bot/
 [getting-started]: https://nczz.github.io/kiro-discord-bot/guide/getting-started.html
 [install-doc]: https://nczz.github.io/kiro-discord-bot/guide/installation.html
+[agent-engines]: https://nczz.github.io/kiro-discord-bot/guide/agent-engines.html
 [commands]: https://nczz.github.io/kiro-discord-bot/guide/commands.html
 [listen-modes]: https://nczz.github.io/kiro-discord-bot/guide/listen-modes.html
 [core-concepts]: https://nczz.github.io/kiro-discord-bot/guide/core-concepts.html

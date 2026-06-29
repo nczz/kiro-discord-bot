@@ -1,8 +1,8 @@
 # Bot Tools MCP
 
-Every initialized channel gets a built-in `bot-tools` MCP server. It exposes bot-native operations to Kiro while still enforcing the current Discord channel, thread, MCP policy, and safe egress rules.
+Every initialized channel gets a built-in `bot-tools` MCP server. It exposes bot-native operations to the active ACP agent while still enforcing the current Discord channel, thread, MCP policy, and safe egress rules.
 
-This server is separate from external MCP servers listed in your Kiro MCP catalog.
+This server is separate from external MCP servers listed in the MCP catalog.
 
 ## Default Tool Policy
 

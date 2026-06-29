@@ -22,10 +22,11 @@ kiro-cli login
 
 Headless 主機請在 bot service environment 設定 `KIRO_API_KEY`。
 
-OMP 請先安裝並完成 `omp` 認證；若不在 `PATH`，用 `OMP_PATH` 指定：
+OMP 請先安裝並完成 `omp` 認證；若不在 `PATH`，用 `OMP_PATH` 指定。新的 production 部署建議使用 bot 專屬 profile，並在啟用 OMP 前先完成此 profile 認證：
 
 ```bash
 omp --version
+OMP_PROFILE=kiro-discord-bot omp setup
 ```
 
 ## 2. 建立 Discord Bot
@@ -96,6 +97,8 @@ THREAD_AGENT_IDLE_SEC=900
 ```
 
 啟動後用 `/doctor` 查看有效 runtime 設定；敏感值會被遮蔽。完整變數與預設值見 [環境變數參考](environment.md)。
+
+啟用 OMP 或允許 production 使用 `/engine` 切換前，請先閱讀 [Agent Engines](agent-engines.md)。
 
 ## 5. Foreground 啟動一次
 

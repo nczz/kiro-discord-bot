@@ -27,6 +27,15 @@ Tag 前確認：
 - 部署注意事項包含必要 migration。
 - 產物檔沒有被 staged。
 
+若這次包含 agent-engine 架構變更，也要確認：
+
+- Kiro-only 升級不需要新增環境變數。
+- OMP 仍是 opt-in，並明確記載需要先安裝且認證 `omp` binary。
+- `AGENT_ENGINE` 預設為 `kiro`，`AGENT_ENGINES_ENABLED` 只控制 `/engine` 可切換的清單。
+- Kiro 與 OMP runtime isolation 都已文件化：`DATA_DIR/kiro-agent-runtime` 與 `DATA_DIR/omp-agent-runtime/sessions`。
+- `OMP_PROFILE` 沒有被描述成必填；若使用，必須由執行 bot 的同一個 OS service user 先完成認證。
+- `/status`、`/models`、`/model`、`/agent`、`/usage`、`/audit prompt`、MCP policy、cron 與 thread agents 都有針對變更的 engine path 做測試或 release smoke check。
+
 ## 3. Tag and Push
 
 ```bash

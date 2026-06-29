@@ -23,7 +23,7 @@ For Linux hosts, use a service unit with `WorkingDirectory`, `EnvironmentFile`, 
 
 ## Docker
 
-The Compose setup uses host networking, mounts Kiro authentication and project roots, and keeps runtime MCP config isolated from global Kiro MCP settings. Catalog servers still must be enabled per channel through `/mcp`.
+The Compose setup uses host networking, mounts the selected engine authentication state and project roots, and keeps runtime MCP config isolated from global catalog sources. Catalog servers still must be enabled per channel through `/mcp`.
 
 ## Release Updates
 

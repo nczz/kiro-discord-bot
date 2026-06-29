@@ -1,8 +1,8 @@
 # Bot Tools MCP
 
-每個已初始化的頻道都會取得內建 `bot-tools` MCP server。它把 bot 原生能力提供給 Kiro，同時仍然套用目前 Discord channel、thread、MCP policy 與 safe egress 規則。
+每個已初始化的頻道都會取得內建 `bot-tools` MCP server。它把 bot 原生能力提供給 active ACP agent，同時仍然套用目前 Discord channel、thread、MCP policy 與 safe egress 規則。
 
-這個 server 與 Kiro MCP catalog 裡的外部 MCP server 是分開的。
+這個 server 與 MCP catalog 裡的外部 MCP server 是分開的。
 
 ## 預設工具權限
 

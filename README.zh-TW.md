@@ -2,16 +2,17 @@
 
 [English README](README.md) | [完整文件網站][docs-zh]
 
-**一個住在 Discord 裡、可以被訓練的 AI agent。**
+**一個住在 Discord 裡、可以被訓練的 ACP agent control plane。**
 
-`kiro-discord-bot` 透過 ACP over stdio 把 Discord 頻道連到 ACP agent。它用同一套 Discord 指令、MCP policy、audit、usage、cron、memory 與 thread-agent 控制面支援 Kiro CLI 與 OMP engines。每個完成初始化的頻道都可以綁定真實專案目錄、維持自己的 agent session、累積專案指引，並透過明確的頻道 policy 安全開放 MCP tools。
+`kiro-discord-bot` 透過 ACP over stdio 把 Discord 頻道連到 ACP agent。Kiro CLI 是預設 engine，OMP 可作為可替換 ACP engine 啟用，並共用同一套 Discord 指令、MCP policy、audit、usage、cron、memory 與 thread-agent 控制面。每個完成初始化的頻道都可以綁定真實專案目錄、維持自己的 agent session、累積專案指引，並透過明確的頻道 policy 安全開放 MCP tools。
 
 這份 README 刻意保持精簡。完整使用指南、管理指南、MCP 設定、release runbook 與疑難排解都放在 [完整文件網站][docs-zh]。
 
 ## 為什麼不只是聊天機器人
 
-- **綁定專案的 agent**：每個 Discord 頻道對應工作目錄與 agent session。
-- **可累積的脈絡**：memory、flash memory、steering files、對話歷史與 Kiro knowledge 不必每次從零開始。
+- **綁定專案的 ACP agents**：每個 Discord 頻道對應工作目錄與 agent session。
+- **Engine 彈性**：保留 Kiro 作為預設，也可針對指定 channel/thread 啟用 OMP，而不改變 Discord 操作流程。
+- **可累積的脈絡**：memory、flash memory、steering files、對話歷史與專案知識不必每次從零開始。
 - **安全擴充工具**：MCP server 先作為 catalog 被發現，再依頻道 policy 與 proxy 控制可見與可呼叫 tools。
 - **維運控制面**：管理面板與敏感診斷在 Discord 支援時使用私密回覆。
 - **自動化**：cron jobs 與 reminders 可讓 agent 在頻道 owner 脈絡下執行排程工作。
@@ -34,6 +35,7 @@
 | --- | --- |
 | 初次設定 | [快速開始][getting-started-zh] · [安裝][install-doc-zh] |
 | 日常使用 | [指令參考][commands-zh] · [監聽模式][listen-modes-zh] |
+| Agent engines | [Agent Engines][agent-engines-zh] · [環境變數][environment-zh] |
 | Agent 脈絡 | [Steering 檔案][steering-zh] · [核心概念][core-concepts-zh] |
 | 工具權限 | [MCP 權限][mcp-zh] · [Bot Tools][bot-tools-zh] · [Discord MCP Server][mcp-discord-zh] |
 | 維運 | [環境變數][environment-zh] · [部署][deployment-zh] · [Release Runbook][release-zh] |
@@ -66,6 +68,7 @@ MIT
 [docs-zh]: https://nczz.github.io/kiro-discord-bot/zh-TW/
 [getting-started-zh]: https://nczz.github.io/kiro-discord-bot/zh-TW/guide/getting-started.html
 [install-doc-zh]: https://nczz.github.io/kiro-discord-bot/zh-TW/guide/installation.html
+[agent-engines-zh]: https://nczz.github.io/kiro-discord-bot/zh-TW/guide/agent-engines.html
 [commands-zh]: https://nczz.github.io/kiro-discord-bot/zh-TW/guide/commands.html
 [listen-modes-zh]: https://nczz.github.io/kiro-discord-bot/zh-TW/guide/listen-modes.html
 [core-concepts-zh]: https://nczz.github.io/kiro-discord-bot/zh-TW/guide/core-concepts.html

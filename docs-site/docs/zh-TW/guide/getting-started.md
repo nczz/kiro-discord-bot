@@ -1,6 +1,6 @@
 # 快速開始
 
-`kiro-discord-bot` 透過 ACP over stdio 把 Discord 連到 ACP agent。它用同一套 Discord 指令、MCP policy、audit、usage、cron、memory 與 thread-agent 控制面支援 Kiro CLI 與 OMP engines。它適合希望 agent 理解專案、累積脈絡，並從 Discord 安全執行開發或維運工作的團隊。
+`kiro-discord-bot` 透過 ACP over stdio 把 Discord 連到 ACP agent。Kiro CLI 是預設 engine，OMP 可作為可替換 ACP engine 啟用，並共用同一套 Discord 指令、MCP policy、audit、usage、cron、memory 與 thread-agent 控制面。它適合希望 agent 理解專案、累積脈絡，並從 Discord 安全執行開發或維運工作的團隊。
 
 ## 需求
 
@@ -31,3 +31,4 @@
 - 用 `/flashmemory` 加入目前 session 的臨時重點。
 - 透過 `/steering create` 或 `/steering edit` 把共用專案規則、架構與流程放進 `AGENTS.md`。
 - 用 `/mcp manage` 依頻道啟用 MCP 工具。
+- 啟用 OMP 或調整 `AGENT_ENGINES_ENABLED` 前，先閱讀 [Agent Engines](agent-engines.md)。

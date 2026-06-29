@@ -13,10 +13,10 @@ This file is a short pointer for agents and operators. The canonical MCP documen
 
 MCP setup has two separate layers:
 
-1. **Catalog registration**: add the MCP server to `KIRO_MCP_CONFIG`, `KIRO_HOME/settings/mcp.json`, or `~/.kiro/settings/mcp.json`.
+1. **Catalog registration**: add the MCP server to the Kiro-format MCP catalog source: `KIRO_MCP_CONFIG`, `KIRO_HOME/settings/mcp.json`, or `~/.kiro/settings/mcp.json`.
 2. **Channel policy**: use `/mcp manage` in Discord to scan the server and allow only the tools that channel should use.
 
-Registering a server in Kiro settings does not automatically expose it to every Discord channel.
+Registering a server in the catalog does not automatically expose it to every Discord channel or every ACP engine. Kiro and OMP both receive tools only through the bot's channel policy injection path.
 
 ## Discord MCP Example
 
