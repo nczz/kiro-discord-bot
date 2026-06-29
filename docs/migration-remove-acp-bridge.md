@@ -1,5 +1,11 @@
 # Migration Plan: Remove acp-bridge, Direct ACP over stdio
 
+> Historical note: this document describes the earlier Kiro-only migration from acp-bridge to direct stdio ACP. It is kept as implementation history, not as the current architecture reference. The maintained docs for the current Agent ACP model are:
+>
+> - [Agent Engines](https://nczz.github.io/kiro-discord-bot/guide/agent-engines.html)
+> - [Architecture](https://nczz.github.io/kiro-discord-bot/guide/architecture.html)
+> - [Operation Matrix](https://nczz.github.io/kiro-discord-bot/guide/operation-matrix.html)
+
 ## Background
 
 The bot currently depends on [acp-bridge](https://www.npmjs.com/package/acp-bridge) (Node.js daemon) as a middleman between the Go bot and kiro-cli. This adds:

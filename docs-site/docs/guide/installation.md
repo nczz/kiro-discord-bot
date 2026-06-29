@@ -29,6 +29,14 @@ omp --version
 OMP_PROFILE=kiro-discord-bot omp setup
 ```
 
+### Recommended Engine Paths
+
+| Path | Use when | Notes |
+| --- | --- | --- |
+| Kiro-only | You are installing for the first time or want the most conservative production path. | No OMP setup required. |
+| Dual-engine | You want Kiro as the default but selected channels or threads may switch to OMP. | Install and authenticate both engines before enabling `/engine` switches. |
+| OMP-only | This bot process should use only OMP. | Make sure `omp` is authenticated for the same OS service user that runs the bot. |
+
 ## 2. Create a Discord Bot
 
 Create an application in the Discord Developer Portal, then configure:
@@ -94,6 +102,22 @@ USAGE_TIMEZONE=Asia/Taipei
 PREFLIGHT_MODE=warn
 THREAD_AGENT_MAX=5
 THREAD_AGENT_IDLE_SEC=900
+```
+
+For a dual-engine bot:
+
+```env
+AGENT_ENGINE=kiro
+AGENT_ENGINES_ENABLED=kiro,omp
+OMP_PATH=omp
+```
+
+For an OMP-only bot:
+
+```env
+AGENT_ENGINE=omp
+AGENT_ENGINES_ENABLED=omp
+OMP_PATH=omp
 ```
 
 Use `/doctor` after startup to inspect effective runtime values. Sensitive values are redacted. See [Environment Reference](environment.md) for every supported variable and default.

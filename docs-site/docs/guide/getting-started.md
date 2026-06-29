@@ -10,6 +10,12 @@
 - At least one ACP engine installed and authenticated: `kiro-cli` or `omp`.
 - A project directory the bot is allowed to use as the channel working directory.
 
+## Choose an Agent Engine
+
+New deployments should start with Kiro CLI unless you already have an OMP workflow prepared. Kiro is the default and best-tested path, so it is the fastest way to confirm that Discord permissions, project binding, MCP policy, audit, and usage tracking are working.
+
+Enable OMP after the basic bot workflow is stable, or when a specific channel needs OMP's model/mode catalog and profile isolation. A dual-engine bot can keep Kiro as the default while allowing selected channels or threads to switch with `/engine`.
+
 ## Install Flow
 
 1. Download a release archive from GitHub Releases or build from source.

@@ -10,6 +10,12 @@
 - 至少一個已安裝並完成認證的 ACP engine：`kiro-cli` 或 `omp`。
 - 一個允許 bot 作為頻道工作目錄的專案路徑。
 
+## 選擇 Agent Engine
+
+新的部署建議先從 Kiro CLI 開始，除非你已經準備好 OMP workflow。Kiro 是預設且最完整驗證的路徑，最適合先確認 Discord 權限、專案綁定、MCP policy、audit 與 usage tracking 都正常。
+
+等基礎 bot workflow 穩定後，再啟用 OMP；或在特定 channel 需要 OMP 的 model/mode catalog 與 profile isolation 時啟用。Dual-engine bot 可以保留 Kiro 作為預設，同時讓特定 channel 或 thread 透過 `/engine` 切換。
+
 ## 安裝流程
 
 1. 從 GitHub Releases 下載 release archive，或從原始碼建置。

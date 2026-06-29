@@ -1,6 +1,59 @@
 # Agent Engines
 
-`kiro-discord-bot` is now an ACP agent control plane for Discord. Kiro CLI remains the default and best-tested engine, but engine selection is a first-class runtime concept rather than a hard-coded identity.
+`kiro-discord-bot` is a Discord control plane for project-bound ACP agents. The bot owns the Discord experience, channel policy, project binding, audit, usage, cron, memory, and thread lifecycle. The agent engine owns the actual coding-agent session that reasons over the project.
+
+Kiro CLI remains the default and best-tested engine. OMP can be enabled when a team wants an alternate ACP engine without changing the Discord workflow.
+
+## Why Engines Matter
+
+Most teams should not have to think about protocol details. In practice, an engine choice answers a simpler product question:
+
+- Which coding agent should this Discord channel talk to?
+- Which authentication, model catalog, and metering system should be used?
+- Can a team try another agent without rebuilding its Discord operations?
+
+The bot keeps those decisions scoped and reversible. A channel can stay on Kiro, another channel can use OMP, and a thread can temporarily switch engines for one investigation. The surrounding controls remain the same: `/cwd`, `/mcp`, `/status`, `/usage`, `/audit`, cron, memory, steering, and thread agents.
+
+## Kiro CLI
+
+Kiro CLI is the default engine and the recommended starting point for new deployments. It is the path with the broadest project history in this repository and the most complete fallback behavior.
+
+Use Kiro when you want:
+
+- The default, best-tested production path.
+- Kiro model fallback behavior for `/models` and `/model`.
+- Kiro runtime settings isolated under `DATA_DIR/kiro-agent-runtime`.
+- Kiro metering metadata, reported as credits when the engine provides it.
+- Existing Kiro workflows and MCP catalog sources to continue working.
+
+For a Kiro-only deployment, leave OMP disabled. Existing installations upgrade cleanly without new environment variables.
+
+## OMP
+
+OMP is an optional replaceable ACP engine. It is useful when your team already uses OMP, wants to evaluate another ACP-compatible agent, or wants a separate engine profile for selected channels.
+
+Use OMP when you want:
+
+- A second engine behind the same Discord commands and MCP policy.
+- Model and mode catalogs reported by the active ACP session.
+- USD cost metadata when OMP emits `usage_update` events.
+- Profile-scoped OMP auth/settings/cache through `OMP_PROFILE`.
+- Bot-managed OMP session files through `OMP_SESSION_DIR`.
+
+OMP is opt-in. Install and authenticate `omp` before enabling it, and use `/doctor` after restart to confirm readiness.
+
+## Choosing a Deployment Shape
+
+| Shape | Best for | Configuration |
+| --- | --- | --- |
+| Kiro-only | First install, conservative production rollout, existing Kiro teams. | `AGENT_ENGINE=kiro`, empty or `kiro`-only `AGENT_ENGINES_ENABLED`. |
+| Dual-engine bot | Teams that want selected channels or threads to try OMP without adding another Discord bot. | `AGENT_ENGINE=kiro`, `AGENT_ENGINES_ENABLED=kiro,omp`. |
+| OMP-only | Teams that intentionally do not want Kiro available in this bot process. | `AGENT_ENGINE=omp`, `AGENT_ENGINES_ENABLED=omp`. |
+| Multiple bot identities | Departments that want separate Discord bot personas, data directories, and ownership. | Run one process per bot token and use distinct `DATA_DIR` values. |
+
+Start with Kiro-only unless you already know why OMP should be available. Add OMP after the basic Discord, project, MCP, and audit workflow is stable.
+
+## What the Bot Owns
 
 An engine is the ACP-speaking command that the bot starts for a channel, thread, cron job, or private audit prompt. Today the supported engines are:
 
@@ -8,6 +61,8 @@ An engine is the ACP-speaking command that the bot starts for a channel, thread,
 | --- | --- | --- | --- |
 | `kiro` | `kiro-cli` | Kiro ACP | Default engine, Kiro model fallback, Kiro runtime settings, existing Kiro workflows. |
 | `omp` | `omp` | OMP ACP | Alternative ACP engine with model and mode catalog reported by `session/new`, USD cost metadata when available, and OMP profile support. |
+
+The engine does not bypass the bot's policy model. Kiro and OMP both receive tools through the same MCP policy injection path, both write usage through the bot ledger, and both are represented in audit events as the engine that handled the work.
 
 ## Scope Rules
 
@@ -60,12 +115,14 @@ If `OMP_PROFILE` is not configured, OMP uses the default profile. This is intent
 
 ## Operational Differences
 
-| Area | Kiro | OMP |
+| Area | Kiro CLI | OMP |
 | --- | --- | --- |
+| Recommended default | Yes. | No, opt-in after setup. |
 | Model listing | Can use Kiro fallback paths. | Requires an active ACP session because models come from `session/new`. |
 | Model switching | Uses Kiro ACP model APIs. | Uses `session/set_config_option` with `configId=model`. |
 | Usage metadata | Credits when Kiro metering metadata is present. | USD cost when OMP `usage_update` metadata is present. |
 | Runtime settings | Isolated `KIRO_HOME` and `KIRO_MCP_CONFIG`. | Isolated `--session-dir`, optional `OMP_PROFILE`. |
 | MCP injection | Same bot policy and proxy layer. | Same bot policy and proxy layer. |
+| Best rollout path | Start here. | Enable after Kiro-only operation is stable or when OMP is already part of the team's workflow. |
 
 Use `/doctor` to inspect enabled engines and effective runtime values. Use `/status`, `/model`, and `/usage` after switching engines to confirm the active engine, actual model, and usage attribution.

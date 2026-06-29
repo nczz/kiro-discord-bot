@@ -10,6 +10,8 @@ Each initialized channel can bind to a real project directory, keep its own agen
 
 This repository README is intentionally short. The detailed user guide, admin guide, MCP setup, release runbook, and troubleshooting docs live on the [documentation site][docs].
 
+New deployments should start with Kiro CLI unless an OMP workflow is already prepared. See [Agent Engines][agent-engines] for the product-level tradeoffs and runtime details.
+
 ## Why It Is Different
 
 - **Project-bound ACP agents**: each Discord channel maps to a working directory and an agent session.

@@ -10,6 +10,8 @@
 
 這份 README 刻意保持精簡。完整使用指南、管理指南、MCP 設定、release runbook 與疑難排解都放在 [完整文件網站][docs-zh]。
 
+新的部署建議先從 Kiro CLI 開始，除非你已經準備好 OMP workflow。產品取捨與 runtime 細節請看 [Agent Engines][agent-engines-zh]。
+
 ## 為什麼不只是聊天機器人
 
 - **綁定專案的 ACP agents**：每個 Discord 頻道對應工作目錄與 agent session。

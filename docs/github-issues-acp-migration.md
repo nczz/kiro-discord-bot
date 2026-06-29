@@ -1,5 +1,11 @@
 # GitHub Issues for acp-bridge Removal Migration
 
+> Historical note: this file captures the earlier Kiro-only acp-bridge removal plan. It is not the current architecture reference. The maintained documentation for today's Kiro CLI / OMP engine model lives in the static site:
+>
+> - [Agent Engines](https://nczz.github.io/kiro-discord-bot/guide/agent-engines.html)
+> - [Architecture](https://nczz.github.io/kiro-discord-bot/guide/architecture.html)
+> - [Operation Matrix](https://nczz.github.io/kiro-discord-bot/guide/operation-matrix.html)
+
 Below are the 6 issues to create on https://github.com/nczz/kiro-discord-bot/issues.
 Use label: `refactor`, milestone: `v2.0 - Remove acp-bridge`
 

@@ -29,6 +29,14 @@ omp --version
 OMP_PROFILE=kiro-discord-bot omp setup
 ```
 
+### 建議 Engine 路徑
+
+| 路徑 | 適合情境 | 注意事項 |
+| --- | --- | --- |
+| Kiro-only | 第一次安裝，或希望採用最保守的 production path。 | 不需要 OMP setup。 |
+| Dual-engine | 想保留 Kiro 作為預設，但讓特定 channel 或 thread 可切換到 OMP。 | 啟用 `/engine` 切換前，兩個 engines 都要先安裝並認證。 |
+| OMP-only | 這個 bot process 只應使用 OMP。 | 確認 `omp` 已用執行 bot 的同一個 OS service user 完成認證。 |
+
 ## 2. 建立 Discord Bot
 
 在 Discord Developer Portal 建立 application，並設定：
@@ -94,6 +102,22 @@ USAGE_TIMEZONE=Asia/Taipei
 PREFLIGHT_MODE=warn
 THREAD_AGENT_MAX=5
 THREAD_AGENT_IDLE_SEC=900
+```
+
+Dual-engine bot：
+
+```env
+AGENT_ENGINE=kiro
+AGENT_ENGINES_ENABLED=kiro,omp
+OMP_PATH=omp
+```
+
+OMP-only bot：
+
+```env
+AGENT_ENGINE=omp
+AGENT_ENGINES_ENABLED=omp
+OMP_PATH=omp
 ```
 
 啟動後用 `/doctor` 查看有效 runtime 設定；敏感值會被遮蔽。完整變數與預設值見 [環境變數參考](environment.md)。
