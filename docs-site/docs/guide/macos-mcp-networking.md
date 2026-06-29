@@ -34,9 +34,12 @@ printf '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion
 
 NO_PROXY='*' no_proxy='*' \
 MCP_PROXY_URL="$URL" \
+MCP_PROXY_HEADERS_JSON='{"Authorization":"Bearer <token>"}' \
 MCP_PROXY_ALLOW_ALL_TOOLS=true \
 /path/to/kiro-discord-bot mcp-proxy </tmp/kiro-mcp-smoke.jsonl
 ```
+
+Omit `MCP_PROXY_HEADERS_JSON` when the URL server does not require authentication. Keep real tokens out of shell history and support logs.
 
 If this fails only under launchd, the problem is service context, not Discord policy.
 

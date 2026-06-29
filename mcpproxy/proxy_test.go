@@ -187,6 +187,7 @@ func TestRunHTTPReturnsJSONRPCErrorOnUpstreamFailure(t *testing.T) {
 func TestRunHTTPSupportsStreamableHTTPSessionAndSSEResponses(t *testing.T) {
 	var sawAccept bool
 	var sawSession bool
+	var sawAuth bool
 	mux := http.NewServeMux()
 	mux.HandleFunc("/mcp", func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
@@ -200,6 +201,9 @@ func TestRunHTTPSupportsStreamableHTTPSessionAndSSEResponses(t *testing.T) {
 		}
 		if msg.Method == "tools/list" && r.Header.Get("Mcp-Session-Id") == "session-1" {
 			sawSession = true
+		}
+		if r.Header.Get("Authorization") == "Bearer test-token" {
+			sawAuth = true
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		if msg.Method == "initialize" {
@@ -221,7 +225,7 @@ data: {"jsonrpc":"2.0","id":` + idJSON(msg.ID) + `,"result":{}}
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	cfg := Config{URL: srv.URL + "/mcp", AllowedTools: map[string]struct{}{"allowed": {}}}
+	cfg := Config{URL: srv.URL + "/mcp", Headers: map[string]string{"Authorization": "Bearer test-token"}, AllowedTools: map[string]struct{}{"allowed": {}}}
 	stdin := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}` + "\n" +
 		`{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}` + "\n")
 	var stdout bytes.Buffer
@@ -233,6 +237,9 @@ data: {"jsonrpc":"2.0","id":` + idJSON(msg.ID) + `,"result":{}}
 	}
 	if !sawSession {
 		t.Fatal("proxy did not preserve MCP session ID")
+	}
+	if !sawAuth {
+		t.Fatal("proxy did not send custom MCP headers")
 	}
 	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
 	if len(lines) != 2 {
@@ -260,6 +267,8 @@ func TestRunSSEProxiesAndFilters(t *testing.T) {
 	}
 	posted := make(chan postedMessage, 4)
 	sseEvents := make(chan string, 4)
+	sawSSEAuth := make(chan struct{}, 1)
+	sawPostAuth := make(chan struct{}, 2)
 	var blockedPosted bool
 	var blockedMu sync.Mutex
 
@@ -269,6 +278,9 @@ func TestRunSSEProxiesAndFilters(t *testing.T) {
 			t.Errorf("/sse method = %s, want GET", r.Method)
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
+		}
+		if r.Header.Get("Authorization") == "Bearer test-token" {
+			sawSSEAuth <- struct{}{}
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
 		flusher, ok := w.(http.Flusher)
@@ -291,6 +303,9 @@ func TestRunSSEProxiesAndFilters(t *testing.T) {
 	})
 	mux.HandleFunc("/messages/", func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
+		if r.Header.Get("Authorization") == "Bearer test-token" {
+			sawPostAuth <- struct{}{}
+		}
 		var msg postedMessage
 		_ = json.Unmarshal(body, &msg)
 		if msg.Method == "tools/call" && strings.Contains(string(body), `"blocked"`) {
@@ -323,7 +338,7 @@ data: {"jsonrpc":"2.0","id":` + idJSON(msg.ID) + `,"result":{}}
 	defer cancel()
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- Run(ctx, Config{URL: srv.URL + "/sse", AllowedTools: map[string]struct{}{"allowed": {}}}, stdinR, &stdout, &stderr)
+		errCh <- Run(ctx, Config{URL: srv.URL + "/sse", Headers: map[string]string{"Authorization": "Bearer test-token"}, AllowedTools: map[string]struct{}{"allowed": {}}}, stdinR, &stdout, &stderr)
 	}()
 	_, _ = io.WriteString(stdinW, `{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}`+"\n")
 	_, _ = io.WriteString(stdinW, `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"blocked","arguments":{}}}`+"\n")
@@ -361,6 +376,16 @@ collect:
 	blockedMu.Unlock()
 	if gotBlockedPosted {
 		t.Fatal("blocked tool call was posted upstream")
+	}
+	select {
+	case <-sawSSEAuth:
+	default:
+		t.Fatal("proxy did not send custom headers to SSE endpoint")
+	}
+	select {
+	case <-sawPostAuth:
+	default:
+		t.Fatal("proxy did not send custom headers to SSE message endpoint")
 	}
 
 	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")

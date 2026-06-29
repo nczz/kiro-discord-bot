@@ -24,6 +24,7 @@ const (
 	envAllowedJSON   = "MCP_PROXY_ALLOWED_TOOLS_JSON"
 	envAllowAllTools = "MCP_PROXY_ALLOW_ALL_TOOLS"
 	envURL           = "MCP_PROXY_URL"
+	envHeadersJSON   = "MCP_PROXY_HEADERS_JSON"
 )
 
 type Config struct {
@@ -31,6 +32,7 @@ type Config struct {
 	Args          []string
 	Env           map[string]string
 	URL           string
+	Headers       map[string]string
 	AllowedTools  map[string]struct{}
 	AllowAllTools bool
 }
@@ -58,13 +60,18 @@ func ConfigEnv(command string, args []string, env map[string]string, allowedTool
 }
 
 // ConfigEnvURL produces proxy env vars for a URL-based MCP server.
-func ConfigEnvURL(url string, allowedTools []string, allowAll bool) []string {
+func ConfigEnvURL(url string, headers map[string]string, allowedTools []string, allowAll bool) []string {
+	if headers == nil {
+		headers = map[string]string{}
+	}
 	if allowedTools == nil {
 		allowedTools = []string{}
 	}
+	headersRaw, _ := json.Marshal(headers)
 	toolsRaw, _ := json.Marshal(allowedTools)
 	return []string{
 		envURL + "=" + url,
+		envHeadersJSON + "=" + string(headersRaw),
 		envAllowedJSON + "=" + string(toolsRaw),
 		envAllowAllTools + "=" + fmt.Sprintf("%t", allowAll),
 	}
@@ -80,6 +87,7 @@ func LoadConfigFromEnv() (Config, error) {
 	}
 	_ = json.Unmarshal([]byte(os.Getenv(envArgsJSON)), &cfg.Args)
 	_ = json.Unmarshal([]byte(os.Getenv(envEnvJSON)), &cfg.Env)
+	_ = json.Unmarshal([]byte(os.Getenv(envHeadersJSON)), &cfg.Headers)
 	cfg.AllowAllTools = strings.EqualFold(os.Getenv(envAllowAllTools), "true")
 	var allowed []string
 	_ = json.Unmarshal([]byte(os.Getenv(envAllowedJSON)), &allowed)
@@ -116,11 +124,25 @@ func writeLineLocked(mu *sync.Mutex, w io.Writer, line []byte) error {
 	return nil
 }
 
-func newMCPHTTPPostRequest(ctx context.Context, rawURL string, body []byte, sessionID string) (*http.Request, error) {
+func applyCustomHeaders(req *http.Request, headers map[string]string) {
+	if req == nil {
+		return
+	}
+	for name, value := range headers {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+		req.Header.Set(name, value)
+	}
+}
+
+func newMCPHTTPPostRequest(ctx context.Context, rawURL string, headers map[string]string, body []byte, sessionID string) (*http.Request, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, rawURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
+	applyCustomHeaders(req, headers)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
 	if sessionID != "" {
@@ -153,7 +175,7 @@ func runHTTP(ctx context.Context, cfg Config, stdin io.Reader, stdout, stderr io
 			}
 			continue
 		}
-		req, err := newMCPHTTPPostRequest(ctx, cfg.URL, line, sessionID)
+		req, err := newMCPHTTPPostRequest(ctx, cfg.URL, cfg.Headers, line, sessionID)
 		if err != nil {
 			return err
 		}
@@ -243,6 +265,7 @@ func runSSE(ctx context.Context, cfg Config, stdin io.Reader, stdout, stderr io.
 	if err != nil {
 		return err
 	}
+	applyCustomHeaders(req, cfg.Headers)
 	req.Header.Set("Accept", "text/event-stream")
 	resp, err := client.Do(req)
 	if err != nil {
@@ -295,6 +318,7 @@ func runSSE(ctx context.Context, cfg Config, stdin io.Reader, stdout, stderr io.
 		if err != nil {
 			return err
 		}
+		applyCustomHeaders(req, cfg.Headers)
 		req.Header.Set("Content-Type", "application/json")
 		resp, err := client.Do(req)
 		if err != nil {

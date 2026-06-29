@@ -30,6 +30,7 @@ type MCPCatalogEntry struct {
 	Args    []string
 	Env     map[string]string
 	URL     string
+	Headers map[string]string
 	Source  string
 	Builtin bool
 }
@@ -223,7 +224,7 @@ func (s *MCPPolicyStore) DiscoverTools(ctx context.Context, serverName string) (
 		if proxyCommand == "" {
 			return nil, errors.New("mcp proxy command is not available for URL server discovery")
 		}
-		env := mcpproxy.ConfigEnvURL(entry.URL, nil, true)
+		env := mcpproxy.ConfigEnvURL(entry.URL, entry.Headers, nil, true)
 		c, err = mcpclient.NewStdioMCPClient(proxyCommand, env, "mcp-proxy")
 	} else {
 		env := make([]string, 0, len(entry.Env))
@@ -419,6 +420,12 @@ func redactedCatalogEntry(entry MCPCatalogEntry) MCPCatalogEntry {
 		cp.Env = make(map[string]string, len(entry.Env))
 		for k := range entry.Env {
 			cp.Env[k] = "<redacted>"
+		}
+	}
+	if len(cp.Headers) > 0 {
+		cp.Headers = make(map[string]string, len(entry.Headers))
+		for k := range entry.Headers {
+			cp.Headers[k] = "<redacted>"
 		}
 	}
 	return cp
@@ -713,7 +720,7 @@ func (p MCPChannelPolicy) ToACPServer(entry MCPCatalogEntry, proxyCommand string
 
 	var envItems []string
 	if entry.URL != "" {
-		envItems = mcpproxy.ConfigEnvURL(entry.URL, allowedTools, p.AllowAllTools)
+		envItems = mcpproxy.ConfigEnvURL(entry.URL, entry.Headers, allowedTools, p.AllowAllTools)
 	} else {
 		env := make(map[string]string, len(entry.Env))
 		for k, v := range entry.Env {
@@ -791,6 +798,7 @@ func readMCPConfig(path string) (map[string]MCPCatalogEntry, error) {
 			Args    []string          `json:"args"`
 			Env     map[string]string `json:"env"`
 			URL     string            `json:"url"`
+			Headers map[string]string `json:"headers"`
 		} `json:"mcpServers"`
 	}
 	if err := json.Unmarshal(raw, &doc); err != nil {
@@ -806,7 +814,11 @@ func readMCPConfig(path string) (map[string]MCPCatalogEntry, error) {
 		for k, v := range cfg.Env {
 			env[k] = v
 		}
-		out[name] = MCPCatalogEntry{Name: name, Command: cfg.Command, Args: cfg.Args, Env: env, URL: strings.TrimSpace(cfg.URL)}
+		headers := make(map[string]string, len(cfg.Headers))
+		for k, v := range cfg.Headers {
+			headers[k] = v
+		}
+		out[name] = MCPCatalogEntry{Name: name, Command: cfg.Command, Args: cfg.Args, Env: env, URL: strings.TrimSpace(cfg.URL), Headers: headers}
 	}
 	return out, nil
 }

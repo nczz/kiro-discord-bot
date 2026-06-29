@@ -37,6 +37,28 @@ For local multi-bot setups, make sure the catalog command loads the `.env` for t
 
 See [Discord MCP](mcp-discord.md) for the complete tool categories and policy guards. See [Media MCP](media-mcp.md) for optional media-generation tools.
 
+## URL and SSE Servers with Headers
+
+URL-based MCP servers are also loaded from the Kiro-format catalog. If a server requires HTTP headers, define them in the catalog entry:
+
+```json
+{
+  "mcpServers": {
+    "ga4": {
+      "type": "sse",
+      "url": "http://127.0.0.1:8766/sse",
+      "headers": {
+        "Authorization": "Bearer <token>"
+      }
+    }
+  }
+}
+```
+
+The bot preserves these headers only for runtime MCP proxy traffic. `/mcp manage` scan, channel/thread agent injection, streamable HTTP POST requests, SSE endpoint GET requests, and SSE message POST requests all use the same headers. Catalog records stored by the bot redact header values, so authorization secrets are not persisted in the policy database.
+
+If scan reports a generic transport failure, check the bot logs for the upstream status. A `401 Unauthorized` or `403 Forbidden` usually means the URL server did not receive the expected header or the token lacks access.
+
 ## Operational Checks
 
 - Use `/mcp status` to see catalog and channel policy status.

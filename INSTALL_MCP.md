@@ -18,6 +18,22 @@ MCP setup has two separate layers:
 
 Registering a server in the catalog does not automatically expose it to every Discord channel or every ACP engine. Kiro and OMP both receive tools only through the bot's channel policy injection path.
 
+URL or SSE servers that require authentication can define `headers` in the same catalog entry. The bot uses those headers for `/mcp manage` scans and for injected channel/thread MCP traffic, while redacting header values in stored catalog records:
+
+```json
+{
+  "mcpServers": {
+    "ga4": {
+      "type": "sse",
+      "url": "http://127.0.0.1:8766/sse",
+      "headers": {
+        "Authorization": "Bearer <token>"
+      }
+    }
+  }
+}
+```
+
 ## Discord MCP Example
 
 ```json

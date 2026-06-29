@@ -34,9 +34,12 @@ printf '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion
 
 NO_PROXY='*' no_proxy='*' \
 MCP_PROXY_URL="$URL" \
+MCP_PROXY_HEADERS_JSON='{"Authorization":"Bearer <token>"}' \
 MCP_PROXY_ALLOW_ALL_TOOLS=true \
 /path/to/kiro-discord-bot mcp-proxy </tmp/kiro-mcp-smoke.jsonl
 ```
+
+URL server 不需要驗證時可省略 `MCP_PROXY_HEADERS_JSON`。不要把真實 token 留在 shell history 或支援紀錄中。
 
 如果只在 launchd 下失敗，問題在 service context，不是 Discord policy。
 

@@ -139,13 +139,57 @@ func TestRedactedCatalogEntryDoesNotPersistEnvSecrets(t *testing.T) {
 		Name:    "generic-tools",
 		Command: "/tmp/generic-tools",
 		Env:     map[string]string{"TOKEN": "secret-token"},
+		Headers: map[string]string{"Authorization": "Bearer secret-token"},
 	}
 	got := redactedCatalogEntry(entry)
 	if got.Env["TOKEN"] == "secret-token" {
 		t.Fatalf("catalog redaction leaked env value")
 	}
+	if got.Headers["Authorization"] == "Bearer secret-token" {
+		t.Fatalf("catalog redaction leaked header value")
+	}
 	if entry.Env["TOKEN"] != "secret-token" {
 		t.Fatalf("redaction should not mutate runtime catalog")
+	}
+	if entry.Headers["Authorization"] != "Bearer secret-token" {
+		t.Fatalf("redaction should not mutate runtime catalog headers")
+	}
+}
+
+func TestMCPPolicyStorePersistsRedactedHeaderSecrets(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "mcp.json")
+	if err := os.WriteFile(cfgPath, []byte(`{"mcpServers":{"url-tools":{"url":"http://127.0.0.1:9999/sse","headers":{"Authorization":"Bearer secret-token"}}}}`), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	t.Setenv("KIRO_MCP_CONFIG", cfgPath)
+	store, err := OpenMCPPolicyStore(dir)
+	if err != nil {
+		t.Fatalf("open policy store: %v", err)
+	}
+	defer store.Close()
+
+	var raw string
+	if err := store.db.QueryRowContext(context.Background(), `SELECT config_json FROM mcp_catalog WHERE server_name=?`, "url-tools").Scan(&raw); err != nil {
+		t.Fatalf("read catalog config: %v", err)
+	}
+	if strings.Contains(raw, "secret-token") {
+		t.Fatalf("persisted catalog config leaked header secret: %s", raw)
+	}
+	var persisted MCPCatalogEntry
+	if err := json.Unmarshal([]byte(raw), &persisted); err != nil {
+		t.Fatalf("decode persisted catalog config: %v", err)
+	}
+	if persisted.Headers["Authorization"] != "<redacted>" {
+		t.Fatalf("persisted catalog config did not redact header value: %+v", persisted.Headers)
+	}
+
+	entry, ok := store.CatalogEntry("url-tools")
+	if !ok {
+		t.Fatal("runtime catalog entry missing")
+	}
+	if entry.Headers["Authorization"] != "Bearer secret-token" {
+		t.Fatalf("runtime catalog header should remain available for proxy: %+v", entry.Headers)
 	}
 }
 
@@ -169,7 +213,7 @@ func TestReadMCPConfigCatalog(t *testing.T) {
 
 func TestReadMCPConfigURLType(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "mcp.json")
-	if err := os.WriteFile(path, []byte(`{"mcpServers":{"meta-ads":{"url":"http://127.0.0.1:18900"},"cli-tool":{"command":"/bin/echo"}}}`), 0644); err != nil {
+	if err := os.WriteFile(path, []byte(`{"mcpServers":{"meta-ads":{"url":"http://127.0.0.1:18900","headers":{"Authorization":"Bearer token"}},"cli-tool":{"command":"/bin/echo"}}}`), 0644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 	entries, err := readMCPConfig(path)
@@ -183,7 +227,7 @@ func TestReadMCPConfigURLType(t *testing.T) {
 	if !ok {
 		t.Fatalf("missing meta-ads entry")
 	}
-	if meta.URL != "http://127.0.0.1:18900" || meta.Command != "" {
+	if meta.URL != "http://127.0.0.1:18900" || meta.Command != "" || meta.Headers["Authorization"] != "Bearer token" {
 		t.Fatalf("unexpected meta-ads entry: %+v", meta)
 	}
 	cli, ok := entries["cli-tool"]
@@ -197,7 +241,7 @@ func TestReadMCPConfigURLType(t *testing.T) {
 
 func TestToACPServerURLType(t *testing.T) {
 	p := defaultMCPPolicy("guild-1", "channel-1", "meta-ads").ApplyPreset("full")
-	entry := MCPCatalogEntry{Name: "meta-ads", URL: "http://127.0.0.1:18900"}
+	entry := MCPCatalogEntry{Name: "meta-ads", URL: "http://127.0.0.1:18900", Headers: map[string]string{"Authorization": "Bearer token"}}
 	cfg := p.ToACPServer(entry, "/tmp/bot", "guild-1", "channel-1", "thread-1")
 
 	if cfg.Name != "meta-ads" || cfg.Command != "/tmp/bot" || len(cfg.Args) != 1 || cfg.Args[0] != "mcp-proxy" {
@@ -208,6 +252,13 @@ func TestToACPServerURLType(t *testing.T) {
 	}
 	if _, hasCommand := cfg.Env["MCP_PROXY_COMMAND"]; hasCommand {
 		t.Fatalf("URL type should not have MCP_PROXY_COMMAND: %+v", cfg.Env)
+	}
+	var headers map[string]string
+	if err := json.Unmarshal([]byte(cfg.Env["MCP_PROXY_HEADERS_JSON"]), &headers); err != nil {
+		t.Fatalf("proxy headers json: %v", err)
+	}
+	if headers["Authorization"] != "Bearer token" {
+		t.Fatalf("expected proxy headers to preserve auth, got %+v", headers)
 	}
 }
 
@@ -960,6 +1011,12 @@ func main() {
 		fmt.Fprintf(os.Stderr, "unexpected url: %s\n", os.Getenv("MCP_PROXY_URL"))
 		os.Exit(3)
 	}
+	var headers map[string]string
+	_ = json.Unmarshal([]byte(os.Getenv("MCP_PROXY_HEADERS_JSON")), &headers)
+	if headers["Authorization"] != "Bearer test-token" {
+		fmt.Fprintf(os.Stderr, "unexpected headers: %v\n", headers)
+		os.Exit(4)
+	}
 	scanner := bufio.NewScanner(os.Stdin)
 	for scanner.Scan() {
 		var req map[string]any
@@ -985,7 +1042,7 @@ func mustJSON(v any) string {
 		t.Fatalf("build fake proxy: %v\n%s", err, out)
 	}
 	cfgPath := filepath.Join(dir, "mcp.json")
-	if err := os.WriteFile(cfgPath, []byte(`{"mcpServers":{"url-tools":{"url":"http://127.0.0.1:9999/mcp"}}}`), 0644); err != nil {
+	if err := os.WriteFile(cfgPath, []byte(`{"mcpServers":{"url-tools":{"url":"http://127.0.0.1:9999/mcp","headers":{"Authorization":"Bearer test-token"}}}}`), 0644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 	t.Setenv("KIRO_MCP_CONFIG", cfgPath)

@@ -37,6 +37,28 @@ MCP_DISCORD_ALLOW_DESTRUCTIVE=false
 
 完整 Discord MCP tools 與 policy guards 見 [Discord MCP](mcp-discord.md)。可選媒體生成工具見 [Media MCP](media-mcp.md)。
 
+## 帶 Headers 的 URL/SSE Servers
+
+URL-based MCP servers 同樣從 Kiro-format catalog 載入。如果 server 需要 HTTP headers，請在 catalog entry 裡定義：
+
+```json
+{
+  "mcpServers": {
+    "ga4": {
+      "type": "sse",
+      "url": "http://127.0.0.1:8766/sse",
+      "headers": {
+        "Authorization": "Bearer <token>"
+      }
+    }
+  }
+}
+```
+
+bot 只會在 runtime MCP proxy traffic 使用這些 headers。`/mcp manage` scan、channel/thread agent injection、streamable HTTP POST、SSE endpoint GET 與 SSE message POST 都會使用同一份 headers。bot 儲存 catalog record 時會遮蔽 header values，因此 authorization secrets 不會明文寫入 policy database。
+
+如果 scan 只顯示 generic transport failure，請看 bot logs 的 upstream status。`401 Unauthorized` 或 `403 Forbidden` 通常代表 URL server 沒收到預期 header，或 token 沒有足夠權限。
+
 ## 操作檢查
 
 - 用 `/mcp status` 查看 catalog 與目前 channel policy。
