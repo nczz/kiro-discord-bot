@@ -12,6 +12,8 @@ This repository README is intentionally short. The detailed user guide, admin gu
 
 New deployments should start with Kiro CLI unless an OMP workflow is already prepared. See [Agent Engines][agent-engines] for the product-level tradeoffs and runtime details.
 
+Kiro CLI and OMP are external agent CLIs. This project starts and controls them from Discord, but their installation, authentication, model access, and CLI updates are maintained by their own projects.
+
 ## Why It Is Different
 
 - **Project-bound ACP agents**: each Discord channel maps to a working directory and an agent session.

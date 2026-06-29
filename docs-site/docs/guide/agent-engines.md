@@ -4,6 +4,8 @@
 
 Kiro CLI remains the default and best-tested engine. OMP can be enabled when a team wants an alternate ACP engine without changing the Discord workflow.
 
+Both engines are external projects. This repository does not maintain `kiro-cli` or `omp`; it provides the Discord control plane around them. Install, authenticate, and update each CLI through its own upstream tooling. See [Installation](installation.md) for the basic commands and links.
+
 ## Why Engines Matter
 
 Most teams should not have to think about protocol details. In practice, an engine choice answers a simpler product question:
@@ -31,6 +33,8 @@ For a Kiro-only deployment, leave OMP disabled. Existing installations upgrade c
 ## OMP
 
 OMP is an optional replaceable ACP engine. It is useful when your team already uses OMP, wants to evaluate another ACP-compatible agent, or wants a separate engine profile for selected channels.
+
+Start from the OMP project site: [omp.sh](https://omp.sh/).
 
 Use OMP when you want:
 

@@ -95,13 +95,17 @@ Keep previous binaries until the new release has passed live checks. A rollback 
 
 After rollback, restart the service and run `/doctor`.
 
-## 8. Kiro CLI Upgrades
+## 8. Agent CLI Upgrades
 
-Use the Kiro CLI's own update command where available:
+Kiro CLI and OMP are external agent CLIs. This repository does not publish or update those CLIs; update them with their own tools and restart the bot afterward.
 
 ```bash
 kiro-cli update -y
 kiro-cli --version
+
+omp update --check
+omp update
+omp --version
 ```
 
-Restart the bot after a CLI upgrade so preflight and agent sessions use the new binary.
+Restart the bot after any agent CLI upgrade so preflight and future agent sessions use the new binary. Run `/doctor` after restart to verify the enabled engines.

@@ -6,6 +6,8 @@ This page is the canonical installation guide. The short `INSTALL.md` in the rep
 
 Install and authenticate at least one supported ACP engine before starting the bot.
 
+Kiro CLI and OMP are external agent CLIs. `kiro-discord-bot` does not package or maintain either CLI; it only starts them as ACP engines and applies Discord-side policy, audit, usage, and delivery behavior around them. Use the upstream installation instructions when they differ from the examples below.
+
 For Kiro CLI:
 
 ```bash
@@ -22,12 +24,28 @@ kiro-cli login
 
 For headless hosts, set `KIRO_API_KEY` in the bot service environment.
 
-For OMP, install and authenticate `omp`, then expose it with `OMP_PATH` when it is not already on `PATH`. New production deployments should use a bot-specific profile and authenticate it before enabling the OMP engine:
+For OMP, start from the official project site: [omp.sh](https://omp.sh/). Install and authenticate `omp`, then expose it with `OMP_PATH` when it is not already on `PATH`. New production deployments should use a bot-specific profile and authenticate it before enabling the OMP engine:
 
 ```bash
 omp --version
+omp setup
+```
+
+For an isolated production profile:
+
+```bash
 OMP_PROFILE=kiro-discord-bot omp setup
 ```
+
+Keep the CLIs updated through their own commands:
+
+```bash
+kiro-cli update -y
+omp update --check
+omp update
+```
+
+Restart the bot after updating either CLI so ACP preflight and future agent sessions use the new binary.
 
 ### Recommended Engine Paths
 

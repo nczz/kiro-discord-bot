@@ -6,6 +6,8 @@
 
 啟動 bot 前，至少要安裝並完成一個支援的 ACP engine 認證。
 
+Kiro CLI 與 OMP 都是外部 agent CLI。`kiro-discord-bot` 不打包、也不維護這兩個 CLI；它只會把它們作為 ACP engines 啟動，並在外層套用 Discord policy、audit、usage 與 delivery behavior。若官方安裝方式與下方範例不同，請以各自 upstream 文件為準。
+
 Kiro CLI：
 
 ```bash
@@ -22,12 +24,28 @@ kiro-cli login
 
 Headless 主機請在 bot service environment 設定 `KIRO_API_KEY`。
 
-OMP 請先安裝並完成 `omp` 認證；若不在 `PATH`，用 `OMP_PATH` 指定。新的 production 部署建議使用 bot 專屬 profile，並在啟用 OMP 前先完成此 profile 認證：
+OMP 請從官方專案網站 [omp.sh](https://omp.sh/) 開始。先安裝並完成 `omp` 認證；若不在 `PATH`，用 `OMP_PATH` 指定。新的 production 部署建議使用 bot 專屬 profile，並在啟用 OMP 前先完成此 profile 認證：
 
 ```bash
 omp --version
+omp setup
+```
+
+隔離 production profile：
+
+```bash
 OMP_PROFILE=kiro-discord-bot omp setup
 ```
+
+CLI 更新請使用各自指令：
+
+```bash
+kiro-cli update -y
+omp update --check
+omp update
+```
+
+更新任一 CLI 後請重啟 bot，讓 ACP preflight 與後續 agent sessions 使用新的 binary。
 
 ### 建議 Engine 路徑
 

@@ -12,6 +12,8 @@
 
 新的部署建議先從 Kiro CLI 開始，除非你已經準備好 OMP workflow。產品取捨與 runtime 細節請看 [Agent Engines][agent-engines-zh]。
 
+Kiro CLI 與 OMP 都是外部 agent CLI。這個專案會從 Discord 啟動與控制它們，但安裝、認證、model access 與 CLI 更新由各自專案維護。
+
 ## 為什麼不只是聊天機器人
 
 - **綁定專案的 ACP agents**：每個 Discord 頻道對應工作目錄與 agent session。

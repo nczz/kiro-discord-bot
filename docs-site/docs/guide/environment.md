@@ -16,6 +16,8 @@ Required variables must be set before startup. Optional variables can usually st
 
 Existing Kiro-only deployments do not need new OMP variables. Add OMP variables only when the host has `omp` installed, authenticated, and intentionally enabled.
 
+`kiro-cli` and `omp` are installed and updated outside this repository. See [Installation](installation.md) for basic CLI setup and update commands, and use the upstream docs for platform-specific details.
+
 ## Common Configuration Shapes
 
 ### Kiro-Only Default

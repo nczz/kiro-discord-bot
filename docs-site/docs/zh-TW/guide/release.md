@@ -95,13 +95,17 @@ macOS launchd hosts：
 
 Rollback 後重啟 service 並跑 `/doctor`。
 
-## 8. Kiro CLI 升級
+## 8. Agent CLI 升級
 
-可用時優先使用 Kiro CLI 自己的 update command：
+Kiro CLI 與 OMP 都是外部 agent CLI。這個 repository 不發布也不更新這兩個 CLI；請使用各自工具更新，並在更新後重啟 bot。
 
 ```bash
 kiro-cli update -y
 kiro-cli --version
+
+omp update --check
+omp update
+omp --version
 ```
 
-升級 CLI 後重啟 bot，讓 preflight 與 agent sessions 使用新 binary。
+任一 agent CLI 升級後都要重啟 bot，讓 preflight 與後續 agent sessions 使用新的 binary。重啟後執行 `/doctor` 驗證 enabled engines。

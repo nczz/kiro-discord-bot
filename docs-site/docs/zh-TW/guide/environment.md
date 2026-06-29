@@ -16,6 +16,8 @@ Bot 不會自行載入 `.env`。請透過 shell、launchd、systemd、Docker 或
 
 既有 Kiro-only 部署不需要新增 OMP 相關變數。只有在主機已安裝 `omp`、完成認證，並且明確要啟用 OMP 時才加入 OMP 設定。
 
+`kiro-cli` 與 `omp` 都是在本 repository 之外安裝與更新。基本 CLI setup 與更新指令見 [安裝](installation.md)；平台細節請以各自 upstream 文件為準。
+
 ## 常見設定型態
 
 ### Kiro-Only 預設

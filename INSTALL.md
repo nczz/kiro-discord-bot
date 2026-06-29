@@ -18,12 +18,26 @@ This file is a short agent-friendly checklist. The canonical installation guide 
    kiro-cli --version
    ```
 
-   OMP is optional. If you enable it, confirm the binary and authenticate the intended profile:
+   Kiro CLI is external to this repository. Use its own update command when needed:
+
+   ```bash
+   kiro-cli update -y
+   ```
+
+   OMP is optional and external to this repository. Start from the OMP project site, https://omp.sh/. If you enable it, confirm the binary and authenticate the intended profile:
 
    ```bash
    omp --version
+   omp setup
    # Optional isolated production profile:
    # OMP_PROFILE=kiro-discord-bot omp setup
+   ```
+
+   Keep OMP updated with its own updater:
+
+   ```bash
+   omp update --check
+   omp update
    ```
 
 3. Create a Discord bot:
