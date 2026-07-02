@@ -1406,6 +1406,60 @@ func TestMCPArgsFromSlashOptions(t *testing.T) {
 
 }
 
+func TestCmdClearThreadClearsLocalHistoryWithoutActiveAgent(t *testing.T) {
+	L.Load("en")
+	dataDir := t.TempDir()
+	store, err := channel.NewSessionStore(dataDir)
+	if err != nil {
+		t.Fatalf("session store: %v", err)
+	}
+	m := channel.NewManager(channel.ManagerConfig{DataDir: dataDir, Store: store, GuildID: "guild-1"})
+	b := &Bot{manager: m}
+
+	var reply string
+	b.cmdClear(cmdCtx{
+		channelID: "channel-1",
+		targetID:  "thread-1",
+		inThread:  true,
+		reply: func(s string) {
+			reply = s
+		},
+		replyWithMetadata: func(s string, _ map[string]any) {
+			reply = s
+		},
+	})
+
+	if strings.Contains(reply, "no thread agent") {
+		t.Fatalf("clear should not fail when only local thread history exists: %q", reply)
+	}
+	if !strings.Contains(reply, "No active thread agent was running") {
+		t.Fatalf("clear response should describe local-only clear, got: %q", reply)
+	}
+	var sessions map[string]channel.Session
+	data, err := os.ReadFile(filepath.Join(dataDir, "sessions.json"))
+	if err != nil {
+		t.Fatalf("read sessions: %v", err)
+	}
+	if err := json.Unmarshal(data, &sessions); err != nil {
+		t.Fatalf("unmarshal sessions: %v", err)
+	}
+	var found bool
+	for _, sess := range sessions {
+		if sess.TargetType == "thread" && sess.TargetID == "thread-1" {
+			found = true
+			if sess.ParentChannelID != "channel-1" {
+				t.Fatalf("parent channel = %q, want channel-1", sess.ParentChannelID)
+			}
+			if sess.SessionID != "" || sess.AgentName != "" {
+				t.Fatalf("local clear should not persist reusable agent session: %+v", sess)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("thread session with cleared agent metadata not found in %#v", sessions)
+	}
+}
+
 func TestBuildMCPManagePanel(t *testing.T) {
 	L.Load("en")
 	dir := t.TempDir()

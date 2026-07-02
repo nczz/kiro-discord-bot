@@ -34,3 +34,13 @@ A thread may have conversation history without an active in-memory thread agent.
 ## Stale Memory Still Affects Replies
 
 If a removed memory rule still appears to influence the agent, the current ACP agent session may already contain previous turns where the rule was injected. Remove the rule, then run `/clear` and `/reset`.
+
+## Thread Still Knows Cleared Details
+
+Thread `/clear` clears the active thread session, bot-local thread chat log, and saved ACP session metadata. If old details still appear afterward, check:
+
+- A visible message in the Discord thread may still quote or summarize the old detail. Future turns can rebuild context from messages that remain visible through the Discord API.
+- A memory rule, flash memory entry, steering file, or project file may still contain it.
+- Another bot or MCP tool may have access to the same information outside this bot's thread history.
+
+Deleting Discord messages does not delete historical audit or usage ledgers, but those ledgers are not injected into normal turns unless an authorized audit/tool flow queries them.

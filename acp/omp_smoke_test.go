@@ -15,7 +15,7 @@ import (
 // Exercises the real ompProfile through StartAgent: handshake (configOptions
 // parsing), a prompt turn (streaming + stopReason), and per-turn USD usage.
 func TestOmpSmoke(t *testing.T) {
-	if os.Getenv("RUN_OMP_SMOKE") == "" {
+	if !isTruthyEnv(os.Getenv("RUN_OMP_SMOKE")) {
 		t.Skip("set RUN_OMP_SMOKE=1 (and OMP_PATH) to run")
 	}
 	omp := os.Getenv("OMP_PATH")
@@ -84,5 +84,14 @@ func TestOmpSmoke(t *testing.T) {
 	}
 	if !hasUSD {
 		t.Logf("omp: no USD metering captured this turn (may be 0 if cached); ctx=%.2f", m.ContextUsage)
+	}
+}
+
+func isTruthyEnv(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
 	}
 }

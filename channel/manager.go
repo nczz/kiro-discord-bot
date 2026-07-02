@@ -1717,7 +1717,35 @@ func (m *Manager) formatAgentModels(channelID, agentCurrentModel string, models 
 func (m *Manager) MemoryAdd(channelID, entry string) error { return m.memory.Add(channelID, entry) }
 
 // ClearHistory truncates the JSONL conversation log for a channel.
-func (m *Manager) ClearHistory(channelID string)        { m.logger.ClearLog(channelID) }
+func (m *Manager) ClearHistory(channelID string) { m.logger.ClearLog(channelID) }
+
+// ClearThreadHistory truncates bot-local thread history and clears persisted
+// ACP session metadata. Future turns may still rebuild context from Discord
+// messages that remain visible in the thread.
+func (m *Manager) ClearThreadHistory(threadID, parentChannelID string) error {
+	if strings.TrimSpace(threadID) == "" {
+		return fmt.Errorf("thread id is empty")
+	}
+	m.logger.ClearLog("thread-" + threadID)
+	if m.store == nil {
+		return nil
+	}
+	parentChannelID = strings.TrimSpace(parentChannelID)
+	sess, ok := m.getThreadSession(threadID)
+	if !ok {
+		sess = &Session{}
+	} else {
+		cp := *sess
+		sess = &cp
+		if parentChannelID == "" {
+			parentChannelID = strings.TrimSpace(sess.ParentChannelID)
+		}
+	}
+	sess.AgentName = ""
+	sess.SessionID = ""
+	return m.setThreadSession(threadID, parentChannelID, sess)
+}
+
 func (m *Manager) MemoryList(channelID string) []string { return m.memory.List(channelID) }
 func (m *Manager) MemoryRemove(channelID string, idx int) error {
 	return m.memory.Remove(channelID, idx)

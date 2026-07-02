@@ -2,6 +2,7 @@ package bot
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -751,8 +752,20 @@ func (b *Bot) cmdCompact(ctx cmdCtx) {
 func (b *Bot) cmdClear(ctx cmdCtx) {
 	var result channel.AgentCommandResult
 	var err error
+	localThreadOnly := false
 	if ctx.inThread {
 		result, err = b.manager.SendCommandThreadResult(ctx.targetID, "/clear")
+		if err == nil || errors.Is(err, channel.ErrNoThreadAgent) {
+			if clearErr := b.manager.ClearThreadHistory(ctx.targetID, ctx.channelID); clearErr != nil {
+				log.Printf("[clear] thread history clear failed thread=%s parent=%s: %v", ctx.targetID, ctx.channelID, clearErr)
+				if err == nil {
+					err = clearErr
+				}
+			} else if errors.Is(err, channel.ErrNoThreadAgent) {
+				err = nil
+				localThreadOnly = true
+			}
+		}
 	} else {
 		result, err = b.manager.SendCommandResult(ctx.channelID, "/clear")
 		if err == nil {
@@ -769,7 +782,15 @@ func (b *Bot) cmdClear(ctx cmdCtx) {
 	} else {
 		resp := result.Response
 		if resp == "" {
-			resp = L.Get("clear.success")
+			if localThreadOnly {
+				resp = L.Get("clear.thread_local_success")
+			} else if ctx.inThread {
+				resp = L.Get("clear.thread_success")
+			} else {
+				resp = L.Get("clear.success")
+			}
+		} else if ctx.inThread {
+			resp += "\n\n" + L.Get("clear.thread_scope_note")
 		}
 		replyLongWithMetadata(ctx, "✅ "+channel.AppendMetricsFooter(resp, result.Metrics), agentCommandMetadata(result, "success"))
 		b.recordAgentCommandUsage(ctx, "/clear", result, "success")

@@ -14,6 +14,8 @@
 | `/clear` | 清除目前目標的對話歷史。 |
 | `/compact` | 在支援時要求 active engine 壓縮對話 context。 |
 
+在 parent channel 使用 `/clear` 時，會清 active agent session，並清除 bot-local channel chat log，避免未來 session continuity 再使用。於 Discord thread 內使用 `/clear` 時，若 active thread agent 正在執行會同步清除該 agent session，並且一定會截斷 bot-local `thread-<id>` chat log、清除已保存的 ACP session metadata，避免 `/reset` 載回先前 agent session；即使目前沒有 active in-memory thread agent，本地 thread 清除仍會執行。Discord thread 中仍可見的訊息，後續仍可能透過 Discord API 被用來重建 context，因此不想保留的細節請直接刪除或編輯。Memory rules、flash memory、steering 與專案檔案仍會生效。
+
 ## 工作控制
 
 | Command | 用途 |

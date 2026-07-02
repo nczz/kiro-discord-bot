@@ -106,3 +106,43 @@ func TestManagerClearHistoryTruncatesChatLog(t *testing.T) {
 		t.Fatalf("history len after clear = %d, want 0", len(history))
 	}
 }
+
+func TestManagerClearThreadHistoryTruncatesThreadLogAndClearsStoredSession(t *testing.T) {
+	dataDir := t.TempDir()
+	store, err := NewSessionStore(dataDir)
+	if err != nil {
+		t.Fatalf("new session store: %v", err)
+	}
+	m := NewManager(ManagerConfig{DataDir: dataDir, Store: store, GuildID: "guild-1"})
+	m.logger.Log("thread-thread-1", ChatEntry{Role: "user", Content: "secret thread detail"})
+	m.logger.Log("channel-1", ChatEntry{Role: "user", Content: "parent context"})
+	if err := m.setThreadSession("thread-1", "channel-1", &Session{SessionID: "session-1", CWD: "/tmp/project"}); err != nil {
+		t.Fatalf("set thread session: %v", err)
+	}
+
+	if err := m.ClearThreadHistory("thread-1", "channel-1"); err != nil {
+		t.Fatalf("clear thread history: %v", err)
+	}
+
+	threadPath := filepath.Join(dataDir, "ch-thread-thread-1", "chat.jsonl")
+	threadData, err := os.ReadFile(threadPath)
+	if err != nil {
+		t.Fatalf("read thread chat log: %v", err)
+	}
+	if len(threadData) != 0 {
+		t.Fatalf("thread chat log after clear = %q, want empty", threadData)
+	}
+	if parentHistory := m.logger.RecentHistory("channel-1", 10); len(parentHistory) != 1 {
+		t.Fatalf("parent history should not be cleared, got %d entries", len(parentHistory))
+	}
+	sess, ok := m.getThreadSession("thread-1")
+	if !ok {
+		t.Fatal("thread session missing after clear")
+	}
+	if sess.SessionID != "" || sess.AgentName != "" {
+		t.Fatalf("clear should prevent session/load reuse, got agent=%q session=%q", sess.AgentName, sess.SessionID)
+	}
+	if sess.CWD != "/tmp/project" || sess.ParentChannelID != "channel-1" {
+		t.Fatalf("clear should preserve thread binding metadata: %+v", sess)
+	}
+}
