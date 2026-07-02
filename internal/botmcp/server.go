@@ -211,6 +211,7 @@ func NewServer() *server.MCPServer {
 			mcp.WithNumber("limit", mcp.Description("Maximum rows to return, 1-100. Defaults to 50.")),
 			mcp.WithString("contains", mcp.Description("Optional substring filter across event metadata such as type, target, message ID, user, command, status, and error. Message content is not searched.")),
 			mcp.WithString("event_type", mcp.Description("Optional exact event type filter, such as message_create or agent_tool_call.")),
+			mcp.WithBoolean("include_content", mcp.Description("When true, include stored content fields and deleted-message content snippets if audit content retention is enabled. Use only when the manager's audit question requires message content.")),
 			mcp.WithReadOnlyHintAnnotation(true),
 			mcp.WithDestructiveHintAnnotation(false),
 			mcp.WithIdempotentHintAnnotation(true),
@@ -223,11 +224,12 @@ func NewServer() *server.MCPServer {
 			}
 			dbPath := audit.AuditDBPath(dataDir())
 			rows, err := audit.QueryTimelineReadOnly(dbPath, audit.TimelineQueryOptions{
-				GuildID:   strings.TrimSpace(os.Getenv("BOT_TOOLS_GUILD_ID")),
-				TargetID:  targetID,
-				Limit:     req.GetInt("limit", 50),
-				Contains:  req.GetString("contains", ""),
-				EventType: req.GetString("event_type", ""),
+				GuildID:        strings.TrimSpace(os.Getenv("BOT_TOOLS_GUILD_ID")),
+				TargetID:       targetID,
+				Limit:          req.GetInt("limit", 50),
+				Contains:       req.GetString("contains", ""),
+				EventType:      req.GetString("event_type", ""),
+				IncludeContent: req.GetBool("include_content", false),
 			})
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil

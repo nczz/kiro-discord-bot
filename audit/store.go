@@ -70,17 +70,26 @@ type BotEvent struct {
 }
 
 type TimelineEvent struct {
-	Kind       string `json:"kind"`
-	Type       string `json:"type"`
-	ChannelID  string `json:"channel_id"`
-	TargetID   string `json:"target_id"`
-	ThreadID   string `json:"thread_id"`
-	MessageID  string `json:"message_id"`
-	UserID     string `json:"user_id"`
-	Command    string `json:"command"`
-	Status     string `json:"status"`
-	Content    string `json:"content,omitempty"`
-	RecordedAt string `json:"recorded_at"`
+	Kind                   string   `json:"kind"`
+	Type                   string   `json:"type"`
+	ChannelID              string   `json:"channel_id"`
+	TargetID               string   `json:"target_id"`
+	ThreadID               string   `json:"thread_id"`
+	MessageID              string   `json:"message_id"`
+	UserID                 string   `json:"user_id"`
+	Command                string   `json:"command"`
+	Status                 string   `json:"status"`
+	Content                string   `json:"content,omitempty"`
+	RecordedAt             string   `json:"recorded_at"`
+	OriginalAuthorID       string   `json:"original_author_id,omitempty"`
+	OriginalAuthorUsername string   `json:"original_author_username,omitempty"`
+	ContentSnippet         string   `json:"content_snippet,omitempty"`
+	DeletionActorID        string   `json:"deletion_actor_id,omitempty"`
+	DeletionActorSource    string   `json:"deletion_actor_source,omitempty"`
+	DeletionNote           string   `json:"deletion_note,omitempty"`
+	DeletedMessageCount    int      `json:"deleted_message_count,omitempty"`
+	DeletedMessageIDs      []string `json:"deleted_message_ids,omitempty"`
+	rawJSON                string
 }
 
 func Open(cfg Config) (*Store, error) {
@@ -585,13 +594,29 @@ func (s *Store) RecentTimeline(ctx context.Context, targetID string, limit int) 
 	if limit <= 0 || limit > 100 {
 		limit = 20
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT kind, event_type, channel_id, target_id, thread_id, message_id, user_id, command, status, content, recorded_at
+	rows, err := s.db.QueryContext(ctx, `SELECT kind, event_type, channel_id, target_id, thread_id, message_id, user_id, command, status, content, recorded_at,
+	original_author_id, original_author_username, content_snippet, deletion_actor_id, deletion_actor_source, deletion_note, raw_json
 FROM (
-	SELECT 'discord' AS kind, event_type, COALESCE(channel_id, '') AS channel_id, COALESCE(channel_id, '') AS target_id, COALESCE(thread_id, '') AS thread_id, COALESCE(message_id, '') AS message_id, COALESCE(user_id, '') AS user_id, '' AS command, '' AS status, COALESCE(content, '') AS content, recorded_at
-	FROM discord_events
-	WHERE channel_id = ? OR thread_id = ? OR parent_channel_id = ?
+	SELECT 'discord' AS kind, de.event_type, COALESCE(de.channel_id, '') AS channel_id, COALESCE(de.channel_id, '') AS target_id, COALESCE(de.thread_id, '') AS thread_id, COALESCE(de.message_id, '') AS message_id, COALESCE(de.user_id, '') AS user_id, '' AS command, '' AS status, COALESCE(de.content, '') AS content, de.recorded_at,
+		CASE WHEN de.event_type = 'message_delete' THEN COALESCE(dm.author_id, '') ELSE '' END AS original_author_id,
+		CASE WHEN de.event_type = 'message_delete' THEN COALESCE(dm.author_username, '') ELSE '' END AS original_author_username,
+		CASE WHEN de.event_type = 'message_delete' THEN COALESCE(dm.content, '') ELSE '' END AS content_snippet,
+		'' AS deletion_actor_id,
+		CASE WHEN de.event_type IN ('message_delete', 'message_delete_bulk') THEN 'discord_gateway_delete_event' ELSE '' END AS deletion_actor_source,
+		CASE
+			WHEN de.event_type = 'message_delete' THEN 'Discord gateway message_delete does not identify who deleted the message. user_id is the original message author when available, not the deleter.'
+			WHEN de.event_type = 'message_delete_bulk' THEN 'Discord gateway message_delete_bulk identifies deleted message IDs but not who deleted them.'
+			ELSE ''
+		END AS deletion_note,
+		COALESCE(de.raw_json, '') AS raw_json
+	FROM discord_events de
+	LEFT JOIN discord_messages dm ON de.event_type = 'message_delete' AND de.message_id = dm.message_id
+	WHERE de.channel_id = ? OR de.thread_id = ? OR de.parent_channel_id = ?
 	UNION ALL
-	SELECT 'bot' AS kind, event_type, COALESCE(channel_id, '') AS channel_id, COALESCE(target_id, '') AS target_id, COALESCE(thread_id, '') AS thread_id, COALESCE(message_id, '') AS message_id, COALESCE(user_id, '') AS user_id, COALESCE(command, '') AS command, COALESCE(status, '') AS status, COALESCE(content, '') AS content, recorded_at
+	SELECT 'bot' AS kind, event_type, COALESCE(channel_id, '') AS channel_id, COALESCE(target_id, '') AS target_id, COALESCE(thread_id, '') AS thread_id, COALESCE(message_id, '') AS message_id, COALESCE(user_id, '') AS user_id, COALESCE(command, '') AS command, COALESCE(status, '') AS status, COALESCE(content, '') AS content, recorded_at,
+		'' AS original_author_id, '' AS original_author_username, '' AS content_snippet,
+		'' AS deletion_actor_id, '' AS deletion_actor_source, '' AS deletion_note,
+		'' AS raw_json
 	FROM bot_audit_events
 	WHERE target_id = ? OR channel_id = ? OR thread_id = ? OR parent_channel_id = ?
 )
@@ -605,9 +630,10 @@ LIMIT ?`, targetID, targetID, targetID, targetID, targetID, targetID, targetID, 
 	var out []TimelineEvent
 	for rows.Next() {
 		var e TimelineEvent
-		if err := rows.Scan(&e.Kind, &e.Type, &e.ChannelID, &e.TargetID, &e.ThreadID, &e.MessageID, &e.UserID, &e.Command, &e.Status, &e.Content, &e.RecordedAt); err != nil {
+		if err := rows.Scan(&e.Kind, &e.Type, &e.ChannelID, &e.TargetID, &e.ThreadID, &e.MessageID, &e.UserID, &e.Command, &e.Status, &e.Content, &e.RecordedAt, &e.OriginalAuthorID, &e.OriginalAuthorUsername, &e.ContentSnippet, &e.DeletionActorID, &e.DeletionActorSource, &e.DeletionNote, &e.rawJSON); err != nil {
 			return nil, err
 		}
+		normalizeTimelineEvent(&e)
 		out = append(out, e)
 	}
 	return out, rows.Err()
@@ -863,30 +889,34 @@ func QueryTimelineReadOnly(dbPath string, opts TimelineQueryOptions) ([]Timeline
 	defer cancel()
 
 	contentExpr := "''"
+	discordDeleteSnippetExpr := "''"
+	botContentExpr := "''"
 	if opts.IncludeContent {
-		contentExpr = "COALESCE(content, '')"
+		contentExpr = "COALESCE(de.content, '')"
+		discordDeleteSnippetExpr = "COALESCE(dm.content, '')"
+		botContentExpr = "COALESCE(content, '')"
 	}
 	discordFilter := ""
 	botFilter := ""
 	var discordArgs []any
 	var botArgs []any
 	if strings.TrimSpace(opts.GuildID) != "" {
-		discordFilter += " AND guild_id = ?"
+		discordFilter += " AND de.guild_id = ?"
 		botFilter += " AND guild_id = ?"
 		discordArgs = append(discordArgs, opts.GuildID)
 		botArgs = append(botArgs, opts.GuildID)
 	}
 	if strings.TrimSpace(opts.EventType) != "" {
-		discordFilter += " AND event_type = ?"
+		discordFilter += " AND de.event_type = ?"
 		botFilter += " AND event_type = ?"
 		discordArgs = append(discordArgs, opts.EventType)
 		botArgs = append(botArgs, opts.EventType)
 	}
 	if strings.TrimSpace(opts.Contains) != "" {
 		needle := "%" + opts.Contains + "%"
-		discordFilter += " AND (event_type LIKE ? OR channel_id LIKE ? OR thread_id LIKE ? OR message_id LIKE ? OR user_id LIKE ? OR author_id LIKE ? OR author_username LIKE ?)"
+		discordFilter += " AND (de.event_type LIKE ? OR de.channel_id LIKE ? OR de.thread_id LIKE ? OR de.message_id LIKE ? OR de.user_id LIKE ? OR de.author_id LIKE ? OR de.author_username LIKE ? OR dm.author_id LIKE ? OR dm.author_username LIKE ?)"
 		botFilter += " AND (event_type LIKE ? OR channel_id LIKE ? OR target_id LIKE ? OR thread_id LIKE ? OR message_id LIKE ? OR user_id LIKE ? OR username LIKE ? OR command LIKE ? OR status LIKE ? OR error LIKE ?)"
-		for range 7 {
+		for range 9 {
 			discordArgs = append(discordArgs, needle)
 		}
 		for range 10 {
@@ -899,18 +929,34 @@ func QueryTimelineReadOnly(dbPath string, opts TimelineQueryOptions) ([]Timeline
 	args = append(args, botArgs...)
 	args = append(args, opts.Limit)
 
-	rows, err := db.QueryContext(ctx, fmt.Sprintf(`SELECT kind, event_type, channel_id, target_id, thread_id, message_id, user_id, command, status, content, recorded_at
+	rows, err := db.QueryContext(ctx, fmt.Sprintf(`SELECT kind, event_type, channel_id, target_id, thread_id, message_id, user_id, command, status, content, recorded_at,
+	original_author_id, original_author_username, content_snippet, deletion_actor_id, deletion_actor_source, deletion_note, raw_json
 FROM (
-	SELECT 'discord' AS kind, event_type, COALESCE(channel_id, '') AS channel_id, COALESCE(channel_id, '') AS target_id, COALESCE(thread_id, '') AS thread_id, COALESCE(message_id, '') AS message_id, COALESCE(user_id, '') AS user_id, '' AS command, '' AS status, %s AS content, recorded_at
-	FROM discord_events
-	WHERE (channel_id = ? OR thread_id = ? OR parent_channel_id = ?)%s
+	SELECT 'discord' AS kind, de.event_type, COALESCE(de.channel_id, '') AS channel_id, COALESCE(de.channel_id, '') AS target_id, COALESCE(de.thread_id, '') AS thread_id, COALESCE(de.message_id, '') AS message_id, COALESCE(de.user_id, '') AS user_id, '' AS command, '' AS status, %s AS content, de.recorded_at,
+		CASE WHEN de.event_type = 'message_delete' THEN COALESCE(dm.author_id, '') ELSE '' END AS original_author_id,
+		CASE WHEN de.event_type = 'message_delete' THEN COALESCE(dm.author_username, '') ELSE '' END AS original_author_username,
+		CASE WHEN de.event_type = 'message_delete' THEN %s ELSE '' END AS content_snippet,
+		'' AS deletion_actor_id,
+		CASE WHEN de.event_type IN ('message_delete', 'message_delete_bulk') THEN 'discord_gateway_delete_event' ELSE '' END AS deletion_actor_source,
+		CASE
+			WHEN de.event_type = 'message_delete' THEN 'Discord gateway message_delete does not identify who deleted the message. user_id is the original message author when available, not the deleter. Correlate with Discord Guild Audit Log separately for moderator/bot deletions; self-deletes usually cannot be proven.'
+			WHEN de.event_type = 'message_delete_bulk' THEN 'Discord gateway message_delete_bulk identifies deleted message IDs but not who deleted them. Correlate with Discord Guild Audit Log separately for moderator/bot deletions; self-deletes usually cannot be proven.'
+			ELSE ''
+		END AS deletion_note,
+		COALESCE(de.raw_json, '') AS raw_json
+	FROM discord_events de
+	LEFT JOIN discord_messages dm ON de.event_type = 'message_delete' AND de.message_id = dm.message_id
+	WHERE (de.channel_id = ? OR de.thread_id = ? OR de.parent_channel_id = ?)%s
 	UNION ALL
-	SELECT 'bot' AS kind, event_type, COALESCE(channel_id, '') AS channel_id, COALESCE(target_id, '') AS target_id, COALESCE(thread_id, '') AS thread_id, COALESCE(message_id, '') AS message_id, COALESCE(user_id, '') AS user_id, COALESCE(command, '') AS command, COALESCE(status, '') AS status, %s AS content, recorded_at
+	SELECT 'bot' AS kind, event_type, COALESCE(channel_id, '') AS channel_id, COALESCE(target_id, '') AS target_id, COALESCE(thread_id, '') AS thread_id, COALESCE(message_id, '') AS message_id, COALESCE(user_id, '') AS user_id, COALESCE(command, '') AS command, COALESCE(status, '') AS status, %s AS content, recorded_at,
+		'' AS original_author_id, '' AS original_author_username, '' AS content_snippet,
+		'' AS deletion_actor_id, '' AS deletion_actor_source, '' AS deletion_note,
+		'' AS raw_json
 	FROM bot_audit_events
 	WHERE (target_id = ? OR channel_id = ? OR thread_id = ? OR parent_channel_id = ?)%s
 )
 ORDER BY recorded_at DESC
-LIMIT ?`, contentExpr, discordFilter, contentExpr, botFilter), args...)
+LIMIT ?`, contentExpr, discordDeleteSnippetExpr, discordFilter, botContentExpr, botFilter), args...)
 	if err != nil {
 		return nil, fmt.Errorf("query: %w", err)
 	}
@@ -919,15 +965,61 @@ LIMIT ?`, contentExpr, discordFilter, contentExpr, botFilter), args...)
 	var out []TimelineEvent
 	for rows.Next() {
 		var e TimelineEvent
-		if err := rows.Scan(&e.Kind, &e.Type, &e.ChannelID, &e.TargetID, &e.ThreadID, &e.MessageID, &e.UserID, &e.Command, &e.Status, &e.Content, &e.RecordedAt); err != nil {
+		if err := rows.Scan(&e.Kind, &e.Type, &e.ChannelID, &e.TargetID, &e.ThreadID, &e.MessageID, &e.UserID, &e.Command, &e.Status, &e.Content, &e.RecordedAt, &e.OriginalAuthorID, &e.OriginalAuthorUsername, &e.ContentSnippet, &e.DeletionActorID, &e.DeletionActorSource, &e.DeletionNote, &e.rawJSON); err != nil {
 			return nil, err
 		}
+		normalizeTimelineEvent(&e)
 		out = append(out, e)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 	return out, nil
+}
+
+func normalizeTimelineEvent(e *TimelineEvent) {
+	if e == nil {
+		return
+	}
+	e.ContentSnippet = compactSnippet(e.ContentSnippet, 240)
+	if e.Type == "message_delete_bulk" {
+		e.DeletedMessageIDs = deletedMessageIDsFromRaw(e.rawJSON)
+		e.DeletedMessageCount = len(e.DeletedMessageIDs)
+	}
+}
+
+func deletedMessageIDsFromRaw(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	var payload struct {
+		IDs []string `json:"ids"`
+	}
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil || len(payload.IDs) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(payload.IDs))
+	for _, id := range payload.IDs {
+		if id = strings.TrimSpace(id); id != "" {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+func compactSnippet(s string, maxRunes int) string {
+	s = strings.Join(strings.Fields(strings.TrimSpace(s)), " ")
+	if s == "" || maxRunes <= 0 {
+		return s
+	}
+	runes := []rune(s)
+	if len(runes) <= maxRunes {
+		return s
+	}
+	if maxRunes <= 1 {
+		return string(runes[:maxRunes])
+	}
+	return string(runes[:maxRunes-1]) + "…"
 }
 
 // AuditDBPath returns the expected audit database file path for a given data directory.
@@ -938,5 +1030,5 @@ func AuditDBPath(dataDir string) string {
 // SchemaDescription returns a human-readable description of the scoped audit timeline
 // for use in MCP tool descriptions.
 func SchemaDescription() string {
-	return `Returns scoped audit timeline rows only. Available fields: kind, type, channel_id, target_id, thread_id, message_id, user_id, command, status, recorded_at. Message content is omitted from MCP tool output. Supported filters: target_id, limit, contains, event_type. The tool cannot query raw tables or raw_json.`
+	return `Returns scoped audit timeline rows only. Available fields: kind, type, channel_id, target_id, thread_id, message_id, user_id, command, status, recorded_at, original_author_id, original_author_username, content_snippet, deletion_actor_id, deletion_actor_source, deletion_note, deleted_message_count, deleted_message_ids. For message_delete rows, user_id/original_author_id identify the original author when known, not the deleter; Discord gateway delete events do not identify the deletion actor. For message_delete_bulk rows, deleted_message_ids lists the deleted IDs but still does not identify the deleter. Message content and content_snippet are omitted unless include_content is true and content retention is enabled. Supported filters: target_id, limit, contains, event_type, include_content. The tool cannot query raw tables or raw_json.`
 }

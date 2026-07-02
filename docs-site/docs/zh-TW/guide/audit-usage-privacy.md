@@ -13,6 +13,12 @@ Recorder 會記錄 Discord gateway 活動與 bot-side events，包含 message cr
 
 Typing event 只有在 `AUDIT_LOG_RECORD_TYPING=true` 時才會記錄。
 
+## 訊息刪除歸屬
+
+Discord gateway 的 `message_delete` event 能確認某則訊息消失，但不會指出刪除操作者。若 bot 先前已記錄原訊息，audit query 可以顯示原作者；在內容保留已啟用且查詢明確要求時，也能顯示短內容摘要。原作者不等於刪除者，也不能單獨證明是自刪。
+
+管理員或 bot 刪除他人訊息時，可能會出現在 Discord Guild Audit Log 的 `MESSAGE_DELETE` 或 `MESSAGE_BULK_DELETE`，但那是另一個 Discord audit-log 資料來源，欄位有限且有保留期限。使用者自行刪除自己的訊息，通常無法只靠 Discord gateway event 證明。
+
 ## 內容紀錄
 
 `AUDIT_LOG_RECORD_CONTENT=true` 會在 audit projection 與 raw payload 中記錄訊息內容。若部署環境不適合保留內容，請設為 `false`。

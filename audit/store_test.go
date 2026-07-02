@@ -352,6 +352,129 @@ func TestQueryTimelineReadOnlyOmitsContentByDefault(t *testing.T) {
 	}
 }
 
+func TestQueryTimelineReadOnlyDecoratesMessageDeleteFromProjection(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "discord.sqlite")
+	store, err := Open(Config{Enabled: true, DBPath: dbPath, RecordContent: true})
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+
+	created := &discordgo.Message{
+		ID:        "m-delete",
+		GuildID:   "g1",
+		ChannelID: "thread-1",
+		Content:   "private detail that should be summarized for authorized audit only",
+		Timestamp: time.Now(),
+		Author:    &discordgo.User{ID: "author-1", Username: "alice"},
+	}
+	createPayload := &discordgo.MessageCreate{Message: created}
+	if err := store.Record(context.Background(), EventFromPayload("message_create", createPayload, func(string) string { return "channel-1" }), createPayload); err != nil {
+		t.Fatalf("record message: %v", err)
+	}
+
+	deletePayload := &discordgo.MessageDelete{Message: &discordgo.Message{
+		ID:        "m-delete",
+		GuildID:   "g1",
+		ChannelID: "thread-1",
+	}}
+	if err := store.Record(context.Background(), EventFromPayload("message_delete", deletePayload, func(string) string { return "channel-1" }), deletePayload); err != nil {
+		t.Fatalf("record delete: %v", err)
+	}
+
+	events, err := QueryTimelineReadOnly(dbPath, TimelineQueryOptions{
+		GuildID:   "g1",
+		TargetID:  "thread-1",
+		EventType: "message_delete",
+		Limit:     10,
+	})
+	if err != nil {
+		t.Fatalf("query delete timeline: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("events = %d, want 1: %+v", len(events), events)
+	}
+	evt := events[0]
+	if evt.OriginalAuthorID != "author-1" || evt.OriginalAuthorUsername != "alice" {
+		t.Fatalf("original author = %q/%q, want author-1/alice: %+v", evt.OriginalAuthorID, evt.OriginalAuthorUsername, evt)
+	}
+	if evt.UserID != "" {
+		t.Fatalf("message_delete user_id = %q, want empty because gateway event does not expose deleter", evt.UserID)
+	}
+	if evt.ContentSnippet != "" {
+		t.Fatalf("content snippet should be omitted by default, got %q", evt.ContentSnippet)
+	}
+	if evt.DeletionActorID != "" || !strings.Contains(evt.DeletionNote, "does not identify who deleted") {
+		t.Fatalf("deletion attribution fields = actor %q note %q", evt.DeletionActorID, evt.DeletionNote)
+	}
+	events, err = QueryTimelineReadOnly(dbPath, TimelineQueryOptions{
+		GuildID:   "g1",
+		TargetID:  "thread-1",
+		EventType: "message_delete",
+		Contains:  "alice",
+		Limit:     10,
+	})
+	if err != nil {
+		t.Fatalf("query delete timeline by original author: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("delete search by original author returned %d events: %+v", len(events), events)
+	}
+
+	events, err = QueryTimelineReadOnly(dbPath, TimelineQueryOptions{
+		GuildID:        "g1",
+		TargetID:       "thread-1",
+		EventType:      "message_delete",
+		IncludeContent: true,
+		Limit:          10,
+	})
+	if err != nil {
+		t.Fatalf("query delete timeline with content: %v", err)
+	}
+	if len(events) != 1 || !strings.Contains(events[0].ContentSnippet, "private detail") {
+		t.Fatalf("content snippet not returned for authorized content query: %+v", events)
+	}
+}
+
+func TestQueryTimelineReadOnlyDecoratesMessageDeleteBulk(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "discord.sqlite")
+	store, err := Open(Config{Enabled: true, DBPath: dbPath, RecordContent: true})
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+
+	payload := &discordgo.MessageDeleteBulk{
+		GuildID:   "g1",
+		ChannelID: "thread-1",
+		Messages:  []string{"m1", "m2"},
+	}
+	if err := store.Record(context.Background(), EventFromPayload("message_delete_bulk", payload, func(string) string { return "channel-1" }), payload); err != nil {
+		t.Fatalf("record bulk delete: %v", err)
+	}
+
+	events, err := QueryTimelineReadOnly(dbPath, TimelineQueryOptions{
+		GuildID:   "g1",
+		TargetID:  "thread-1",
+		EventType: "message_delete_bulk",
+		Limit:     10,
+	})
+	if err != nil {
+		t.Fatalf("query bulk delete timeline: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("events = %d, want 1: %+v", len(events), events)
+	}
+	if events[0].DeletedMessageCount != 2 || strings.Join(events[0].DeletedMessageIDs, ",") != "m1,m2" {
+		t.Fatalf("bulk deleted messages = count %d ids %+v", events[0].DeletedMessageCount, events[0].DeletedMessageIDs)
+	}
+	if events[0].DeletionActorID != "" || !strings.Contains(events[0].DeletionNote, "not who deleted") {
+		t.Fatalf("bulk deletion attribution = actor %q note %q", events[0].DeletionActorID, events[0].DeletionNote)
+	}
+}
+
 func openTestDB(t *testing.T, path string) *sql.DB {
 	t.Helper()
 	db, err := sql.Open("sqlite", path)

@@ -13,6 +13,12 @@ The recorder stores Discord gateway activity and bot-side events, including mess
 
 Typing events are recorded only when `AUDIT_LOG_RECORD_TYPING=true`.
 
+## Message Deletion Attribution
+
+Discord gateway `message_delete` events confirm that a message disappeared, but they do not identify the deletion actor. When the bot previously recorded the original message, audit queries can show the original author and, when content retention is enabled and explicitly requested, a short content snippet. That original author is not proof of who deleted the message.
+
+Moderator or bot deletions may appear in Discord Guild Audit Log as `MESSAGE_DELETE` or `MESSAGE_BULK_DELETE`, but that is a separate Discord audit-log data source with limited fields and a finite retention window. User self-deletes generally cannot be proven from Discord gateway events alone.
+
 ## Content Recording
 
 `AUDIT_LOG_RECORD_CONTENT=true` records message content in audit projections and raw payloads. Set it to `false` when content retention is not acceptable for the deployment.

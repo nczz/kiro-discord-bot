@@ -202,6 +202,7 @@ func (b *Bot) cmdAuditPrompt(ctx cmdCtx, prompt string) {
 	augmented := fmt.Sprintf("[Audit investigation request]\n"+
 		"The user asks you to investigate the Discord audit database and provide a report.\n"+
 		"Use the bot_query_audit tool to inspect scoped audit timeline rows for this Discord target. Do not generate SQL; use the tool filters such as target_id, limit, contains, and event_type.\n"+
+		"For message_delete rows, user_id is the original message author when available, not the deletion actor. Discord gateway delete events do not identify who deleted the message. Use original_author_id/original_author_username and content_snippet to describe the deleted message when available. Use include_content=true only when the user's audit question requires message content. If no separate deletion actor is available, say the deleter is unknown and do not claim self-delete as proven.\n"+
 		"Do not use Discord or file egress tools such as bot_send_message or bot_send_file for this audit report. Return the final report normally; the bot will deliver it privately to the requesting manager.\n"+
 		"Target channel/thread ID for this query context: %s\n\n"+
 		"User question: %s", ctx.targetID, prompt)
@@ -330,13 +331,25 @@ func formatAuditTimeline(events []audit.TimelineEvent) string {
 		if user != "" {
 			user = " <@" + user + ">"
 		}
+		if evt.Type == "message_delete" {
+			user = ""
+			if evt.OriginalAuthorID != "" {
+				user = " original author:<@" + evt.OriginalAuthorID + ">"
+			}
+		}
 		content := strings.TrimSpace(evt.Content)
+		if evt.ContentSnippet != "" {
+			content = evt.ContentSnippet
+		}
 		if len([]rune(content)) > 120 {
 			content = string([]rune(content)[:120]) + "..."
 		}
 		sb.WriteString(fmt.Sprintf("\n- `%s` `%s`%s", evt.Kind, label, user))
 		if evt.MessageID != "" {
 			sb.WriteString(" msg:`" + evt.MessageID + "`")
+		}
+		if evt.Type == "message_delete_bulk" && evt.DeletedMessageCount > 0 {
+			sb.WriteString(fmt.Sprintf(" deleted:%d", evt.DeletedMessageCount))
 		}
 		if content != "" {
 			sb.WriteString(" — " + channel.EscapeDiscordMarkdown(content))

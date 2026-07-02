@@ -51,5 +51,6 @@ File egress 採保守設計：
 - `event_type`，exact match。
 - `contains`，搜尋 metadata 欄位。
 - `target_id`，只能是已綁定 channel 或 thread context。
+- `include_content`，針對 manager-authorized audit question 明確要求時，回傳已保留內容與 deleted-message snippets。
 
-這個工具回傳 timeline rows，不提供任意 SQL access。
+刪除事件 row 會在可取得時提供 `original_author_id`、`original_author_username` 與 `content_snippet` 來描述被刪訊息；批量刪除 row 會提供 `deleted_message_count` 與 `deleted_message_ids`。`deletion_note` 會說明歸屬限制。這個工具回傳 timeline rows，不提供任意 SQL access。

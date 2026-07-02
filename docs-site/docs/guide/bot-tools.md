@@ -51,5 +51,6 @@ File egress is intentionally conservative:
 - `event_type`, exact match.
 - `contains`, for metadata-field search.
 - `target_id`, only when it matches the bound channel or thread context.
+- `include_content`, opt-in stored content and deleted-message snippets for manager-authorized audit questions.
 
-The tool returns timeline rows, not unrestricted SQL access.
+For deletion rows, `original_author_id`, `original_author_username`, and `content_snippet` describe the deleted message when available. Bulk deletion rows include `deleted_message_count` and `deleted_message_ids`. `deletion_note` explains attribution limits. The tool returns timeline rows, not unrestricted SQL access.
