@@ -153,6 +153,69 @@ func TestMediaJobStoreSupportsGenericMediaKinds(t *testing.T) {
 	}
 }
 
+func TestMediaJobStoreStartAndWaitReturnsCompletedJob(t *testing.T) {
+	store := NewMediaJobStore(time.Hour, 0)
+	job, err := store.StartAndWait("image", "draw a cat", "fake-image", time.Minute, time.Second, func(ctx context.Context) (*MediaResult, error) {
+		return &MediaResult{Path: "/tmp/generated.png", MimeType: "image/png"}, nil
+	})
+	if err != nil {
+		t.Fatalf("start and wait: %v", err)
+	}
+	if job.Status != mediaJobSucceeded {
+		t.Fatalf("job status = %q, want succeeded", job.Status)
+	}
+	text := formatAdaptiveMediaJob(job, "Image saved")
+	if !strings.Contains(text, "Image saved: /tmp/generated.png") || strings.Contains(text, "Job ID:") {
+		t.Fatalf("adaptive completed response = %q", text)
+	}
+}
+
+func TestMediaJobStoreStartAndWaitReturnsRunningJobWithoutRetry(t *testing.T) {
+	wait := make(chan struct{})
+	store := NewMediaJobStore(time.Hour, 0)
+	job, err := store.StartAndWait("image", "draw a cat", "fake-image", time.Minute, 10*time.Millisecond, func(ctx context.Context) (*MediaResult, error) {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-wait:
+			return &MediaResult{Path: "/tmp/generated.png", MimeType: "image/png"}, nil
+		}
+	})
+	if err != nil {
+		t.Fatalf("start and wait: %v", err)
+	}
+	if job.Status != mediaJobRunning && job.Status != mediaJobQueued {
+		t.Fatalf("job status = %q, want queued or running", job.Status)
+	}
+	text := formatAdaptiveMediaJob(job, "Image saved")
+	if !strings.Contains(text, "Job ID: "+job.ID) || !strings.Contains(text, "Do not start another generation") {
+		t.Fatalf("adaptive running response missing polling guidance:\n%s", text)
+	}
+
+	close(wait)
+	got := waitForMediaJob(t, store, job.ID, mediaJobSucceeded)
+	if got.Path != "/tmp/generated.png" {
+		t.Fatalf("completed path = %q", got.Path)
+	}
+}
+
+func TestAdaptiveMediaJobFailureFormatsAsProviderError(t *testing.T) {
+	store := NewMediaJobStore(time.Hour, 0)
+	job, err := store.StartAndWait("image", "draw a cat", "fake-image", time.Minute, time.Second, func(ctx context.Context) (*MediaResult, error) {
+		return nil, errors.New("provider failed")
+	})
+	if err != nil {
+		t.Fatalf("start and wait: %v", err)
+	}
+	if job.Status != mediaJobFailed {
+		t.Fatalf("job status = %q, want failed", job.Status)
+	}
+	text := formatAdaptiveMediaJob(job, "Image saved")
+	if !strings.Contains(text, "[fake-image] provider failed") {
+		t.Fatalf("adaptive failure response = %q", text)
+	}
+}
+
 func TestMediaJobStoreEnforcesMaxActiveJobs(t *testing.T) {
 	store := NewMediaJobStore(time.Hour, 1)
 	wait := make(chan struct{})

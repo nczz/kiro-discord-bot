@@ -202,7 +202,8 @@ BOT_PEERS=...
 | `MEDIA_DEFAULT_VIDEO_MODEL` | provider default | 預設 video model override。 |
 | `MEDIA_DEFAULT_MUSIC_MODEL` | provider default | 預設 music model override。 |
 | `MEDIA_DEFAULT_TTS_MODEL` | provider default | 預設 TTS model override。 |
-| `MEDIA_SYNC_TIMEOUT_SEC` | `600` | 單次同步 media tool call 的最長執行秒數。非同步 jobs 使用 `MEDIA_JOB_TIMEOUT_SEC`。 |
+| `MEDIA_SYNC_WAIT_SEC` | `20` | 舊名稱 media tool 在回傳 `job_id` 前，等待即時結果的秒數。這個值應低於 MCP client request timeout。 |
+| `MEDIA_SYNC_TIMEOUT_SEC` | `600` | 舊名稱 media tool 啟動的 managed job 最長執行秒數。明確 async jobs 使用 `MEDIA_JOB_TIMEOUT_SEC`。 |
 | `MEDIA_JOB_TIMEOUT_SEC` | `900` | 非同步 media job 的最長執行秒數。 |
 | `MEDIA_JOB_RETENTION_SEC` | `86400` | completed async job metadata 可被列出的保留秒數。 |
 | `MEDIA_JOB_MAX_ACTIVE` | `4` | 單一 `mcp-media-server` process 中 queued 或 running async media jobs 的上限。設為 `0` 可停用限制。 |

@@ -202,7 +202,8 @@ These variables configure `mcp-media-server`.
 | `MEDIA_DEFAULT_VIDEO_MODEL` | provider default | Default video model override. |
 | `MEDIA_DEFAULT_MUSIC_MODEL` | provider default | Default music model override. |
 | `MEDIA_DEFAULT_TTS_MODEL` | provider default | Default TTS model override. |
-| `MEDIA_SYNC_TIMEOUT_SEC` | `600` | Maximum runtime for one synchronous media tool call. Async jobs use `MEDIA_JOB_TIMEOUT_SEC` instead. |
+| `MEDIA_SYNC_WAIT_SEC` | `20` | How long a legacy media tool waits for an immediate result before returning a `job_id`. Keep this below the MCP client's request timeout. |
+| `MEDIA_SYNC_TIMEOUT_SEC` | `600` | Maximum runtime for a managed job started by a legacy media tool. Explicit async jobs use `MEDIA_JOB_TIMEOUT_SEC` instead. |
 | `MEDIA_JOB_TIMEOUT_SEC` | `900` | Maximum runtime for an async media job. |
 | `MEDIA_JOB_RETENTION_SEC` | `86400` | How long completed async job metadata remains listable. |
 | `MEDIA_JOB_MAX_ACTIVE` | `4` | Maximum queued or running async media jobs in one `mcp-media-server` process. Set `0` to disable the limit. |

@@ -91,6 +91,38 @@ func (s *MediaJobStore) Start(kind, prompt, model string, timeout time.Duration,
 	return s.snapshot(job), nil
 }
 
+func (s *MediaJobStore) StartAndWait(kind, prompt, model string, timeout, wait time.Duration, run MediaJobRunner) (*MediaJob, error) {
+	job, err := s.Start(kind, prompt, model, timeout, run)
+	if err != nil {
+		return nil, err
+	}
+	if wait <= 0 {
+		return job, nil
+	}
+	deadline := time.NewTimer(wait)
+	defer deadline.Stop()
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		current, ok := s.Get(job.ID)
+		if !ok {
+			return job, nil
+		}
+		if isTerminalMediaJobStatus(current.Status) {
+			return current, nil
+		}
+		select {
+		case <-deadline.C:
+			current, ok := s.Get(job.ID)
+			if ok {
+				return current, nil
+			}
+			return job, nil
+		case <-ticker.C:
+		}
+	}
+}
+
 func (s *MediaJobStore) run(ctx context.Context, jobID string, run MediaJobRunner) {
 	s.markRunning(jobID)
 	result, err := run(ctx)
@@ -212,6 +244,15 @@ func (s *MediaJobStore) activeLocked() int {
 	return active
 }
 
+func isTerminalMediaJobStatus(status string) bool {
+	switch status {
+	case mediaJobSucceeded, mediaJobFailed, mediaJobCanceled:
+		return true
+	default:
+		return false
+	}
+}
+
 func (s *MediaJobStore) snapshot(job *MediaJob) *MediaJob {
 	if job == nil {
 		return nil
@@ -263,6 +304,22 @@ func formatMediaJobStarted(job *MediaJob) string {
 		return "Media job was not started."
 	}
 	return fmt.Sprintf("%s job started.\nJob ID: %s\nStatus: %s\nModel: %s\nUse get_media_job with job_id=%s to check progress and retrieve the saved path.", job.Kind, job.ID, job.Status, job.Model, job.ID)
+}
+
+func formatAdaptiveMediaJob(job *MediaJob, completedPrefix string) string {
+	if job == nil {
+		return "Media job was not started."
+	}
+	if job.Status == mediaJobSucceeded {
+		return fmt.Sprintf("%s: %s\nType: %s\nModel: %s", completedPrefix, job.Path, job.MimeType, job.Model)
+	}
+	if job.Status == mediaJobFailed {
+		return fmt.Sprintf("[%s] %s", job.Model, job.Error)
+	}
+	if job.Status == mediaJobCanceled {
+		return fmt.Sprintf("[%s] media job was canceled", job.Model)
+	}
+	return fmt.Sprintf("%s job is still running.\nJob ID: %s\nStatus: %s\nModel: %s\nUse get_media_job with job_id=%s to check progress and retrieve the saved path. Do not start another generation for the same request unless this job fails.", job.Kind, job.ID, job.Status, job.Model, job.ID)
 }
 
 func formatMediaJobList(jobs []*MediaJob) string {
