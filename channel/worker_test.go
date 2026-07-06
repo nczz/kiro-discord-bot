@@ -1000,6 +1000,72 @@ func TestWorkerThreadDeliveryAppendsMetricsToFinalResponse(t *testing.T) {
 	}
 }
 
+func TestWorkerThreadPlanUpdateSendsOnceAndDeduplicates(t *testing.T) {
+	L.Load("en")
+	rt := &recordingRoundTripper{}
+	ds := testDiscordSession(rt)
+	agent := &fakeWorkerAgent{}
+	w := newWorker("ch1", agent, 1, 30, 1, 1440, nil, "")
+
+	w.execute(&Job{
+		ChannelID: "ch1",
+		ThreadID:  "thread-1",
+		MessageID: "m1",
+		Prompt:    "hello",
+		Session:   ds,
+	})
+	cb := agent.Callbacks()
+	if cb.OnPlan == nil {
+		t.Fatal("expected thread plan callback to be registered")
+	}
+	state := acp.PlanState{Entries: []acp.PlanEntry{{Text: "Implement handler", Active: true}}}
+	cb.OnPlan(state)
+	cb.OnPlan(state)
+
+	_, bodies := rt.Snapshot()
+	var planPosts int
+	for _, body := range bodies {
+		if strings.Contains(body, "📋 **Plan:**") {
+			planPosts++
+			if !strings.Contains(body, "▶️ Implement handler") {
+				t.Fatalf("plan body = %q, want active step", body)
+			}
+		}
+	}
+	if planPosts != 1 {
+		t.Fatalf("plan posts = %d, want 1; bodies=%v", planPosts, bodies)
+	}
+}
+
+func TestWorkerThreadPlanUpdateSilentModeSkipsMessage(t *testing.T) {
+	L.Load("en")
+	rt := &recordingRoundTripper{}
+	ds := testDiscordSession(rt)
+	agent := &fakeWorkerAgent{}
+	w := newWorker("ch1", agent, 1, 30, 1, 1440, nil, "")
+	w.OnSilentFunc(func() bool { return true })
+
+	w.execute(&Job{
+		ChannelID: "ch1",
+		ThreadID:  "thread-1",
+		MessageID: "m1",
+		Prompt:    "hello",
+		Session:   ds,
+	})
+	cb := agent.Callbacks()
+	if cb.OnPlan == nil {
+		t.Fatal("expected thread plan callback to be registered")
+	}
+	cb.OnPlan(acp.PlanState{Entries: []acp.PlanEntry{{Text: "Implement handler", Active: true}}})
+
+	_, bodies := rt.Snapshot()
+	for _, body := range bodies {
+		if strings.Contains(body, "📋 **Plan:**") {
+			t.Fatalf("silent mode should skip plan update, body=%q", body)
+		}
+	}
+}
+
 func TestWorkerThreadDrainsBotToolsBeforeFinalResponse(t *testing.T) {
 	L.Load("en")
 	rt := &recordingRoundTripper{}
@@ -1855,5 +1921,235 @@ func TestFormatSubagentProgress(t *testing.T) {
 	}
 	if !strings.Contains(got, "research-a") || !strings.Contains(got, "running") {
 		t.Fatalf("progress should include best-effort entry name/status: %q", got)
+	}
+}
+
+func TestCompactToolStartMessageWithLocations(t *testing.T) {
+	line10 := 10
+	line42 := 42
+	evt := acp.ToolCallEvent{
+		Kind:  "edit",
+		Title: "Editing files",
+		Locations: []acp.ToolCallLocation{
+			{Path: "src/main.go", Line: &line10},
+			{Path: "src/handler.go", Line: &line42},
+		},
+	}
+	got := CompactToolStartMessage("✏️", evt)
+	if !strings.Contains(got, "src/main.go:10") {
+		t.Fatalf("expected location with line number, got %q", got)
+	}
+	if !strings.Contains(got, "src/handler.go:42") {
+		t.Fatalf("expected second location, got %q", got)
+	}
+	if !strings.Contains(got, "📁") {
+		t.Fatalf("expected folder emoji, got %q", got)
+	}
+}
+
+func TestCompactToolStartMessageLocationsNoLine(t *testing.T) {
+	evt := acp.ToolCallEvent{
+		Kind:  "read",
+		Title: "Reading file",
+		Locations: []acp.ToolCallLocation{
+			{Path: "README.md"},
+		},
+	}
+	got := CompactToolStartMessage("📖", evt)
+	if !strings.Contains(got, "README.md") {
+		t.Fatalf("expected path without line, got %q", got)
+	}
+	if strings.Contains(got, "README.md:") {
+		t.Fatalf("should not have colon when line is nil, got %q", got)
+	}
+}
+
+func TestCompactToolStartMessageNormalizesURLLikeLocations(t *testing.T) {
+	line301 := 301
+	evt := acp.ToolCallEvent{
+		Kind:  "read",
+		Title: "Reading repository metadata",
+		Locations: []acp.ToolCallLocation{
+			{Path: "/Users/chun/Projects/https:/api.github.com/repos/nczz/kiro-discord-bot", Line: &line301},
+			{Path: "/Users/chun/Projects/https:/raw.githubusercontent.com/nczz/kiro-discord-bot/main/README.md"},
+		},
+	}
+	got := CompactToolStartMessage("📖", evt)
+	if strings.Contains(got, "/Users/chun/Projects/https:/") {
+		t.Fatalf("location should not expose fake local URL path, got %q", got)
+	}
+	if !strings.Contains(got, "https://api.github.com/repos/nczz/kiro-discord-bot:301") {
+		t.Fatalf("expected normalized GitHub API URL with line, got %q", got)
+	}
+	if !strings.Contains(got, "https://raw.githubusercontent.com/nczz/kiro-discord-bot/main/README.md") {
+		t.Fatalf("expected normalized raw GitHub URL, got %q", got)
+	}
+}
+
+func TestDisplayToolLocationPathNormalizesHTTPURLLikePath(t *testing.T) {
+	got := displayToolLocationPath("/tmp/http:/example.com/resource")
+	if got != "http://example.com/resource" {
+		t.Fatalf("normalized path = %q, want http URL", got)
+	}
+}
+
+func TestFormatToolLocationsBoundsAndEscapesFullMode(t *testing.T) {
+	line1 := 1
+	got := FormatToolLocations([]acp.ToolCallLocation{
+		{Path: "a`tick.go", Line: &line1},
+		{Path: "b.go", Line: &line1},
+		{Path: "c.go", Line: &line1},
+		{Path: "d.go", Line: &line1},
+	}, true)
+	if !strings.Contains(got, "`a'tick.go:1`") {
+		t.Fatalf("expected inline-code-safe first location, got %q", got)
+	}
+	if strings.Contains(got, "d.go") {
+		t.Fatalf("should not include fourth location, got %q", got)
+	}
+	if !strings.Contains(got, "...") {
+		t.Fatalf("expected truncation marker, got %q", got)
+	}
+}
+
+func TestCompactToolStartMessageLocationsTruncated(t *testing.T) {
+	line1 := 1
+	evt := acp.ToolCallEvent{
+		Kind:  "edit",
+		Title: "Editing many files",
+		Locations: []acp.ToolCallLocation{
+			{Path: "a.go", Line: &line1},
+			{Path: "b.go", Line: &line1},
+			{Path: "c.go", Line: &line1},
+			{Path: "d.go", Line: &line1},
+			{Path: "e.go", Line: &line1},
+		},
+	}
+	got := CompactToolStartMessage("✏️", evt)
+	if !strings.Contains(got, "...") {
+		t.Fatalf("expected ellipsis for >3 locations, got %q", got)
+	}
+	if strings.Contains(got, "d.go") {
+		t.Fatalf("should not show 4th location, got %q", got)
+	}
+}
+
+func TestFormatToolOutputBlockSanitizesFenceAndBoundsOutput(t *testing.T) {
+	got := FormatToolOutputBlock("before\n```\nafter", 20)
+	if strings.Count(got, "```") != 2 {
+		t.Fatalf("output block should only contain wrapper fences, got %q", got)
+	}
+	if strings.Contains(got, "before\n```\nafter") {
+		t.Fatalf("raw fence should be sanitized, got %q", got)
+	}
+	if len(got) > 32 {
+		t.Fatalf("output block unexpectedly long: len=%d got=%q", len(got), got)
+	}
+}
+
+func TestFormatToolFailureMessageSanitizesRawOutput(t *testing.T) {
+	got := FormatToolFailureMessage("Failed **tool**", "bad\n```\nspoof", 100)
+	if strings.Contains(got, "**tool**") {
+		t.Fatalf("title markdown should be escaped, got %q", got)
+	}
+	if strings.Count(got, "```") != 2 {
+		t.Fatalf("failure output should only contain wrapper fences, got %q", got)
+	}
+}
+
+func TestFormatSubagentProgressWithDescription(t *testing.T) {
+	L.Load("en")
+	state := acp.SubagentState{
+		Subagents: []acp.SubagentEntry{
+			{Name: "impl-agent", Status: "running", Description: "implementing auth module"},
+		},
+		PendingStages: []acp.SubagentEntry{},
+	}
+	got := FormatSubagentProgress(state)
+	if !strings.Contains(got, "implementing auth module") {
+		t.Fatalf("expected description in progress, got %q", got)
+	}
+	if !strings.Contains(got, "—") {
+		t.Fatalf("expected em dash separator, got %q", got)
+	}
+}
+
+func TestFormatSubagentProgressWithoutDescription(t *testing.T) {
+	L.Load("en")
+	state := acp.SubagentState{
+		Subagents: []acp.SubagentEntry{
+			{Name: "test-agent", Status: "done"},
+		},
+		PendingStages: []acp.SubagentEntry{},
+	}
+	got := FormatSubagentProgress(state)
+	if strings.Contains(got, "—") {
+		t.Fatalf("should not have em dash when description is empty, got %q", got)
+	}
+}
+
+func TestFormatPlanUpdateEmpty(t *testing.T) {
+	L.Load("en")
+	got := FormatPlanUpdate(acp.PlanState{})
+	if got != "" {
+		t.Fatalf("empty plan should yield empty string, got %q", got)
+	}
+}
+
+func TestFormatPlanUpdateChecklist(t *testing.T) {
+	L.Load("en")
+	state := acp.PlanState{
+		Entries: []acp.PlanEntry{
+			{Text: "Research API docs", Done: true},
+			{Text: "Implement handler", Active: true},
+			{Text: "Write tests"},
+		},
+	}
+	got := FormatPlanUpdate(state)
+	if got == "" {
+		t.Fatal("expected non-empty plan output")
+	}
+	if !strings.Contains(got, "✅ Research API docs") {
+		t.Fatalf("expected done entry with checkmark, got %q", got)
+	}
+	if !strings.Contains(got, "▶️ Implement handler") {
+		t.Fatalf("expected active entry with play icon, got %q", got)
+	}
+	if !strings.Contains(got, "⬜ Write tests") {
+		t.Fatalf("expected pending entry with empty box, got %q", got)
+	}
+	if !strings.Contains(got, "📋") {
+		t.Fatalf("expected plan header, got %q", got)
+	}
+}
+
+func TestFormatPlanUpdateEscapesMarkdown(t *testing.T) {
+	L.Load("en")
+	state := acp.PlanState{
+		Entries: []acp.PlanEntry{
+			{Text: "Fix **bold** issue", Done: false},
+		},
+	}
+	got := FormatPlanUpdate(state)
+	if strings.Contains(got, "**bold**") {
+		t.Fatalf("markdown should be escaped, got %q", got)
+	}
+	if !strings.Contains(got, "\\*\\*bold\\*\\*") {
+		t.Fatalf("expected escaped markdown, got %q", got)
+	}
+}
+
+func TestFormatPlanUpdateBoundsLongPlans(t *testing.T) {
+	L.Load("en")
+	entries := make([]acp.PlanEntry, 0, 60)
+	for i := 0; i < 60; i++ {
+		entries = append(entries, acp.PlanEntry{Text: strings.Repeat("very long step ", 30)})
+	}
+	got := FormatPlanUpdate(acp.PlanState{Entries: entries})
+	if len(got) > 1900+len("\n...") {
+		t.Fatalf("plan update too long: len=%d", len(got))
+	}
+	if !strings.Contains(got, "...") {
+		t.Fatalf("bounded plan should include truncation marker, got %q", got)
 	}
 }

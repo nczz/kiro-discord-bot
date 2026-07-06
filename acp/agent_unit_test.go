@@ -187,3 +187,107 @@ func TestParseSubagentStateMalformed(t *testing.T) {
 		t.Fatal("malformed payload should report no activity")
 	}
 }
+
+func TestParsePlanStateEmpty(t *testing.T) {
+	state := parsePlanState(json.RawMessage(`{}`))
+	if state.HasEntries() {
+		t.Fatalf("empty payload should report no entries: %+v", state)
+	}
+}
+
+func TestParsePlanStateWrapped(t *testing.T) {
+	payload := json.RawMessage(`{
+		"update": {
+			"sessionUpdate": "plan",
+			"entries": [
+				{"text": "Research API", "done": true, "active": false},
+				{"text": "Implement handler", "done": false, "active": true},
+				{"text": "Write tests", "done": false, "active": false}
+			]
+		}
+	}`)
+	state := parsePlanState(payload)
+	if !state.HasEntries() {
+		t.Fatal("populated payload should report entries")
+	}
+	if len(state.Entries) != 3 {
+		t.Fatalf("expected 3 entries, got %d", len(state.Entries))
+	}
+	if state.Entries[0].Text != "Research API" || !state.Entries[0].Done {
+		t.Fatalf("entry 0 not parsed: %+v", state.Entries[0])
+	}
+	if state.Entries[1].Text != "Implement handler" || !state.Entries[1].Active {
+		t.Fatalf("entry 1 not parsed: %+v", state.Entries[1])
+	}
+	if state.Entries[2].Text != "Write tests" || state.Entries[2].Done || state.Entries[2].Active {
+		t.Fatalf("entry 2 not parsed: %+v", state.Entries[2])
+	}
+}
+
+func TestParsePlanStateFlatEntries(t *testing.T) {
+	payload := json.RawMessage(`{
+		"entries": [
+			{"text": "Step A", "done": false, "active": false},
+			{"text": "Step B", "done": true, "active": false}
+		]
+	}`)
+	state := parsePlanState(payload)
+	if !state.HasEntries() {
+		t.Fatal("flat payload should report entries")
+	}
+	if len(state.Entries) != 2 {
+		t.Fatalf("expected 2 entries, got %d", len(state.Entries))
+	}
+}
+
+func TestParsePlanStateMalformed(t *testing.T) {
+	state := parsePlanState(json.RawMessage(`not json`))
+	if state.HasEntries() {
+		t.Fatal("malformed payload should report no entries")
+	}
+}
+
+func TestParsePlanStateSkipsEmptyText(t *testing.T) {
+	payload := json.RawMessage(`{
+		"update": {
+			"entries": [
+				{"text": "Valid step", "done": false, "active": false},
+				{"text": "", "done": false, "active": false}
+			]
+		}
+	}`)
+	state := parsePlanState(payload)
+	if len(state.Entries) != 1 {
+		t.Fatalf("expected 1 non-empty entry, got %d", len(state.Entries))
+	}
+}
+
+func TestParsePlanStateOmpContentStatusFormat(t *testing.T) {
+	// OMP sends {content, status, priority} instead of {text, done, active}
+	payload := json.RawMessage(`{
+		"update": {
+			"sessionUpdate": "plan",
+			"entries": [
+				{"content": "Fix auth token", "status": "completed", "priority": "medium"},
+				{"content": "Add unit tests", "status": "in_progress", "priority": "medium"},
+				{"content": "Update docs", "status": "pending", "priority": "medium"}
+			]
+		}
+	}`)
+	state := parsePlanState(payload)
+	if !state.HasEntries() {
+		t.Fatal("OMP payload should report entries")
+	}
+	if len(state.Entries) != 3 {
+		t.Fatalf("expected 3 entries, got %d", len(state.Entries))
+	}
+	if state.Entries[0].Text != "Fix auth token" || !state.Entries[0].Done {
+		t.Fatalf("entry 0: expected done=true, got %+v", state.Entries[0])
+	}
+	if state.Entries[1].Text != "Add unit tests" || !state.Entries[1].Active {
+		t.Fatalf("entry 1: expected active=true, got %+v", state.Entries[1])
+	}
+	if state.Entries[2].Text != "Update docs" || state.Entries[2].Done || state.Entries[2].Active {
+		t.Fatalf("entry 2: expected pending (done=false, active=false), got %+v", state.Entries[2])
+	}
+}

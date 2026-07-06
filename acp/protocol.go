@@ -12,11 +12,11 @@ const (
 	// omp ACP dialect methods/notifications (omp 16.x).
 	MethodSetConfigOption = "session/set_config_option" // omp model/mode setter
 	NotifUsageUpdate      = "usage_update"              // omp per-session usage (size/used/cost) sessionUpdate
-	NotifUpdate       = "session/update"
-	NotifUpdateKiro   = "_kiro.dev/session/update"
-	NotifMetadata     = "_kiro.dev/metadata"
-	NotifMcpReady     = "_kiro.dev/mcp/server_initialized"
-	NotifSubagent     = "_kiro.dev/subagent/list_update"
+	NotifUpdate           = "session/update"
+	NotifUpdateKiro       = "_kiro.dev/session/update"
+	NotifMetadata         = "_kiro.dev/metadata"
+	NotifMcpReady         = "_kiro.dev/mcp/server_initialized"
+	NotifSubagent         = "_kiro.dev/subagent/list_update"
 
 	// ClientProtocolVersion is the ACP protocol major version.
 	// Per spec, this is a single integer incremented only on breaking changes.
@@ -168,4 +168,24 @@ type SubagentState struct {
 // HasActivity reports whether there is any subagent or pending stage to show.
 func (s SubagentState) HasActivity() bool {
 	return len(s.Subagents) > 0 || len(s.PendingStages) > 0
+}
+
+// NotifPlan is the sessionUpdate value for plan/todo notifications.
+const NotifPlan = "plan"
+
+// PlanEntry represents a single item in an agent plan/todo list.
+type PlanEntry struct {
+	Text   string // plan step description
+	Done   bool   // whether this step is completed
+	Active bool   // whether this step is currently active
+}
+
+// PlanState carries parsed plan/todo notification data.
+type PlanState struct {
+	Entries []PlanEntry
+}
+
+// HasEntries reports whether the plan has any visible entries.
+func (p PlanState) HasEntries() bool {
+	return len(p.Entries) > 0
 }

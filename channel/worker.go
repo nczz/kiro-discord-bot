@@ -594,6 +594,7 @@ func (w *Worker) execute(job *Job) {
 	w.cancelMu.Unlock()
 
 	// Async callbacks — all post to thread
+	lastPlanMessage := ""
 	callbacks := acp.AsyncCallbacks{
 		OnChunk: func(chunk string) {
 			if w.onActivity != nil {
@@ -614,11 +615,7 @@ func (w *Worker) execute(job *Job) {
 				// Full: icon + title + affected files
 				msg := icon + " " + EscapeDiscordMarkdown(title)
 				if len(evt.Locations) > 0 {
-					files := make([]string, 0, len(evt.Locations))
-					for _, loc := range evt.Locations {
-						files = append(files, "`"+loc.Path+"`")
-					}
-					msg += "\n📁 " + strings.Join(files, ", ")
+					msg += "\n📁 " + FormatToolLocations(evt.Locations, true)
 				}
 				SendProcessMessage(ds, threadID, msg)
 			}
@@ -646,27 +643,15 @@ func (w *Worker) execute(job *Job) {
 			if silent {
 				// Compact: only show one-line failure
 				if evt.Status == "failed" {
-					SendProcessMessage(ds, threadID, "❌ "+EscapeDiscordMarkdown(title))
+					SendProcessMessage(ds, threadID, FormatToolFailureMessage(title, evt.RawOutput, 500))
 				}
 				return
 			}
 			// Full: send tool output to thread if meaningful
 			if evt.RawOutput != "" && evt.Status == "completed" {
-				out := evt.RawOutput
-				if len(out) > 1900 {
-					out = truncateUTF8(out, 1900) + L.Get("tool.output_truncated")
-				}
-				SendProcessMessage(ds, threadID, "```\n"+out+"\n```")
+				SendProcessMessage(ds, threadID, FormatToolOutputBlock(evt.RawOutput, 1900))
 			} else if evt.Status == "failed" {
-				msg := "❌ " + EscapeDiscordMarkdown(title)
-				if evt.RawOutput != "" {
-					o := evt.RawOutput
-					if len(o) > 500 {
-						o = truncateUTF8(o, 500) + "..."
-					}
-					msg += "\n```\n" + o + "\n```"
-				}
-				SendProcessMessage(ds, threadID, msg)
+				SendProcessMessage(ds, threadID, FormatToolFailureMessage(title, evt.RawOutput, 500))
 			}
 		},
 		OnThought: func(text string) {
@@ -691,6 +676,21 @@ func (w *Worker) execute(job *Job) {
 				return // Compact: skip subagent progress
 			}
 			if msg := FormatSubagentProgress(state); msg != "" {
+				SendProcessMessage(ds, threadID, msg)
+			}
+		},
+		OnPlan: func(state acp.PlanState) {
+			if w.onActivity != nil {
+				w.onActivity()
+			}
+			if w.isSilent != nil && w.isSilent() {
+				return // Compact: skip plan updates
+			}
+			if msg := FormatPlanUpdate(state); msg != "" {
+				if msg == lastPlanMessage {
+					return
+				}
+				lastPlanMessage = msg
 				SendProcessMessage(ds, threadID, msg)
 			}
 		},
@@ -1067,6 +1067,12 @@ func (w *Worker) executeInline(job *Job) {
 				w.onActivity()
 			}
 			pulse.set("💭")
+		},
+		OnPlan: func(state acp.PlanState) {
+			if w.onActivity != nil {
+				w.onActivity()
+			}
+			pulse.set("📋")
 		},
 		OnComplete: func(response string, askErr error) {
 			if w.onActivity != nil {
@@ -1651,13 +1657,92 @@ func ToolKindIcon(kind string) string {
 
 func CompactToolStartMessage(icon string, evt acp.ToolCallEvent) string {
 	title := toolDisplayTitle(evt)
+	var msg string
 	if evt.Kind == "execute" {
-		return icon + " " + compactExecuteTitle(title)
+		msg = icon + " " + compactExecuteTitle(title)
+	} else {
+		if len(title) > 80 {
+			title = truncateUTF8(title, 77) + "..."
+		}
+		msg = icon + " " + EscapeDiscordMarkdown(title)
 	}
-	if len(title) > 80 {
-		title = truncateUTF8(title, 77) + "..."
+	if len(evt.Locations) > 0 {
+		msg += "\n  📁 " + FormatToolLocations(evt.Locations, false)
 	}
-	return icon + " " + EscapeDiscordMarkdown(title)
+	return msg
+}
+
+// FormatToolLocations renders agent-provided location paths for Discord. ACP
+// backends may report fetched URLs as cwd-prefixed pseudo paths, so normalize
+// them before display and cap the list to keep progress messages bounded.
+func FormatToolLocations(locations []acp.ToolCallLocation, inlineCode bool) string {
+	const maxLocations = 3
+	locs := make([]string, 0, min(len(locations), maxLocations))
+	for i, loc := range locations {
+		if i >= maxLocations {
+			break
+		}
+		entry := displayToolLocationPath(loc.Path)
+		if loc.Line != nil {
+			entry += fmt.Sprintf(":%d", *loc.Line)
+		}
+		if inlineCode {
+			entry = "`" + safeInlineCode(entry) + "`"
+		} else {
+			entry = EscapeDiscordMarkdown(entry)
+		}
+		locs = append(locs, entry)
+	}
+	if len(locations) > maxLocations {
+		locs = append(locs, "...")
+	}
+	return strings.Join(locs, ", ")
+}
+
+func displayToolLocationPath(path string) string {
+	path = strings.TrimSpace(path)
+	for _, marker := range []string{"https:/", "http:/"} {
+		idx := strings.Index(path, marker)
+		if idx < 0 {
+			continue
+		}
+		candidate := path[idx:]
+		if strings.HasPrefix(candidate, "https:/") && !strings.HasPrefix(candidate, "https://") {
+			candidate = "https://" + strings.TrimPrefix(candidate, "https:/")
+		}
+		if strings.HasPrefix(candidate, "http:/") && !strings.HasPrefix(candidate, "http://") {
+			candidate = "http://" + strings.TrimPrefix(candidate, "http:/")
+		}
+		return truncateUTF8(candidate, 160)
+	}
+	return truncateUTF8(path, 160)
+}
+
+func safeInlineCode(s string) string {
+	return strings.ReplaceAll(s, "`", "'")
+}
+
+// FormatToolFailureMessage builds a bounded, markdown-safe process message for
+// tool failures. rawOutput is shown as context but cannot break the code fence.
+func FormatToolFailureMessage(title, rawOutput string, outputLimit int) string {
+	msg := "❌ " + EscapeDiscordMarkdown(title)
+	if rawOutput != "" && outputLimit > 0 {
+		msg += "\n" + FormatToolOutputBlock(rawOutput, outputLimit)
+	}
+	return msg
+}
+
+// FormatToolOutputBlock returns a bounded Discord code block for agent-provided
+// tool output. It prevents raw output from closing the surrounding fence.
+func FormatToolOutputBlock(raw string, maxBytes int) string {
+	if raw == "" {
+		return ""
+	}
+	out := strings.ReplaceAll(raw, "```", "` ` `")
+	if maxBytes > 0 && len(out) > maxBytes {
+		out = truncateUTF8(out, maxBytes) + "..."
+	}
+	return "```\n" + out + "\n```"
 }
 
 func toolDisplayTitle(evt acp.ToolCallEvent) string {
@@ -1851,6 +1936,9 @@ func FormatSubagentProgress(state acp.SubagentState) string {
 			if s.Status != "" {
 				label += " (" + s.Status + ")"
 			}
+			if s.Description != "" {
+				label += " — " + s.Description
+			}
 			names = append(names, EscapeDiscordMarkdown(label))
 		}
 	}
@@ -1858,6 +1946,33 @@ func FormatSubagentProgress(state acp.SubagentState) string {
 		msg += "\n" + strings.Join(names, ", ")
 	}
 	return msg
+}
+
+// FormatPlanUpdate builds a checklist message from agent plan/todo state.
+// Returns empty when there are no entries.
+func FormatPlanUpdate(state acp.PlanState) string {
+	if !state.HasEntries() {
+		return ""
+	}
+	const maxPlanUpdateBytes = 1900
+	lines := make([]string, 0, len(state.Entries)+1)
+	lines = append(lines, L.Get("worker.plan_update"))
+	for _, e := range state.Entries {
+		prefix := "⬜"
+		if e.Done {
+			prefix = "✅"
+		} else if e.Active {
+			prefix = "▶️"
+		}
+		line := prefix + " " + EscapeDiscordMarkdown(truncateUTF8(e.Text, 240))
+		next := strings.Join(append(lines, line), "\n")
+		if len(next) > maxPlanUpdateBytes {
+			lines = append(lines, "...")
+			break
+		}
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n")
 }
 
 // AppendMetricsFooter appends the turn metrics footer to a final user-visible response.

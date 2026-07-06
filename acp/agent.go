@@ -34,6 +34,7 @@ type Agent struct {
 	onToolResult func(ToolCallEvent) // called on tool_call_update notification
 	onThought    func(string)        // called on agent_thought_chunk
 	onSubagent   func(SubagentState) // called on _kiro.dev/subagent/list_update
+	onPlan       func(PlanState)     // called on plan/todo sessionUpdate
 	onExit       func()              // called when child process exits unexpectedly
 	onReadError  func(error)         // called when ReadLoop encounters an error
 
@@ -401,6 +402,64 @@ func firstString(m map[string]interface{}, keys ...string) string {
 	return ""
 }
 
+// parsePlanState parses a plan/todo notification payload into PlanState.
+// Supports two payload shapes:
+//   - OMP: entries[].{content, status("pending"|"in_progress"|"completed"), priority}
+//   - Generic: entries[].{text, done(bool), active(bool)}
+//
+// Both may appear inside an "update" wrapper or at top level.
+func parsePlanState(params json.RawMessage) PlanState {
+	type rawEntry struct {
+		// OMP shape
+		Content  string `json:"content"`
+		Status   string `json:"status"`
+		Priority string `json:"priority"`
+		// Generic shape
+		Text   string `json:"text"`
+		Done   bool   `json:"done"`
+		Active bool   `json:"active"`
+	}
+	convert := func(raw []rawEntry) PlanState {
+		entries := make([]PlanEntry, 0, len(raw))
+		for _, e := range raw {
+			text := e.Text
+			if text == "" {
+				text = e.Content // OMP uses "content" instead of "text"
+			}
+			if text == "" {
+				continue
+			}
+			done := e.Done
+			active := e.Active
+			// OMP uses status string instead of boolean flags
+			if e.Status != "" {
+				done = e.Status == "completed"
+				active = e.Status == "in_progress"
+			}
+			entries = append(entries, PlanEntry{Text: text, Done: done, Active: active})
+		}
+		return PlanState{Entries: entries}
+	}
+
+	// Try wrapped shape: {"update":{"entries":[...]}}
+	var wrapped struct {
+		Update struct {
+			Entries []rawEntry `json:"entries"`
+		} `json:"update"`
+	}
+	if json.Unmarshal(params, &wrapped) == nil && len(wrapped.Update.Entries) > 0 {
+		return convert(wrapped.Update.Entries)
+	}
+	// Fallback: top-level {"entries":[...]}
+	var flat struct {
+		Entries []rawEntry `json:"entries"`
+	}
+	if json.Unmarshal(params, &flat) == nil && len(flat.Entries) > 0 {
+		return convert(flat.Entries)
+	}
+	return PlanState{}
+}
+
 func parsePromptStopReason(raw json.RawMessage) string {
 	if len(raw) == 0 {
 		return ""
@@ -616,6 +675,15 @@ func (a *Agent) handleNotification(method string, params json.RawMessage) {
 		a.mu.Unlock()
 		if cb != nil {
 			cb(false)
+		}
+
+	case NotifPlan:
+		state := parsePlanState(params)
+		a.mu.Lock()
+		cb := a.onPlan
+		a.mu.Unlock()
+		if cb != nil && state.HasEntries() {
+			cb(state)
 		}
 	}
 }
@@ -890,6 +958,7 @@ type AsyncCallbacks struct {
 	OnToolResult     func(ToolCallEvent)
 	OnThought        func(string)
 	OnSubagentUpdate func(SubagentState)
+	OnPlan           func(PlanState)
 	OnComplete       func(response string, err error)
 }
 
@@ -915,6 +984,7 @@ func (a *Agent) AskAsyncMulti(content []PromptContent, cb AsyncCallbacks) {
 	a.onToolResult = cb.OnToolResult
 	a.onThought = cb.OnThought
 	a.onSubagent = cb.OnSubagentUpdate
+	a.onPlan = cb.OnPlan
 	a.mu.Unlock()
 
 	go func() {
@@ -931,6 +1001,7 @@ func (a *Agent) AskAsyncMulti(content []PromptContent, cb AsyncCallbacks) {
 		a.onToolResult = nil
 		a.onThought = nil
 		a.onSubagent = nil
+		a.onPlan = nil
 		a.mu.Unlock()
 
 		if err != nil {

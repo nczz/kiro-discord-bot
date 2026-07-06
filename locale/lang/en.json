@@ -133,6 +133,7 @@
   "worker.stop_refusal": "⚠️ The agent declined to complete this request.",
   "worker.stop_cancelled": "⚠️ The turn was cancelled before it finished.",
   "worker.subagent_progress": "🤖 Subagents: %d running, %d stage(s) pending",
+  "worker.plan_update": "📋 **Plan:**",
   "egress.sensitive_path_notice": "Sensitive path detected; uploaded a sanitized copy.",
   "egress.blocked": "Safe egress blocked: %s",
   "egress.reason.not_text": "file type is not safely redactable as text",
