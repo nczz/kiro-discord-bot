@@ -9,6 +9,10 @@ func (n *botNotifier) Notify(channelID, msg string) {
 	_, _ = sendDiscordText(n.bot.discord, channelID, msg, nil)
 }
 
+func (n *botNotifier) NotifyMention(channelID, msg, userID string) {
+	_, _ = sendDiscordTextWithAllowedMentions(n.bot.discord, channelID, msg, nil, []string{userID})
+}
+
 func (n *botNotifier) IsSilent(channelID string) bool {
 	return n.bot.manager.IsSilent(channelID)
 }

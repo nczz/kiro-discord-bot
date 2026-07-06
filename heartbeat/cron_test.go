@@ -13,21 +13,24 @@ import (
 )
 
 type fakeCronDeps struct {
-	askErr        error
-	channelCWD    string
-	uninitialized bool
-	startCalls    int
-	startCWD      string
-	recordCalls   int
-	recordJobID   string
-	recordThread  string
-	recordStatus  string
-	responseCalls int
-	responseSent  bool
-	askJobID      string
-	askSent       bool
-	askSentSet    bool
-	noThread      bool
+	askErr               error
+	channelCWD           string
+	uninitialized        bool
+	startCalls           int
+	startCWD             string
+	recordCalls          int
+	recordJobID          string
+	recordThread         string
+	recordStatus         string
+	responseCalls        int
+	responseSent         bool
+	notifyMentionChannel string
+	notifyMentionMsg     string
+	notifyMentionUser    string
+	askJobID             string
+	askSent              bool
+	askSentSet           bool
+	noThread             bool
 }
 
 func (f *fakeCronDeps) StartTempAgent(_, cwd, _, _ string) (*acp.Agent, error) {
@@ -78,6 +81,11 @@ func (f *fakeCronDeps) RecordAgentResponse(_ *acp.Agent, _ *CronJob, _, _, _ str
 }
 
 func (f *fakeCronDeps) Notify(string, string) {}
+func (f *fakeCronDeps) NotifyMention(channelID, msg, userID string) {
+	f.notifyMentionChannel = channelID
+	f.notifyMentionMsg = msg
+	f.notifyMentionUser = userID
+}
 
 func TestCronExecuteRecordsAgentUsage(t *testing.T) {
 	store, err := NewCronStore(t.TempDir())
@@ -221,6 +229,45 @@ func TestCronExecuteRecordsUnsentAgentResponse(t *testing.T) {
 	}
 	if deps.recordStatus != "ok" {
 		t.Fatalf("record status = %q, want agent execution status to remain ok", deps.recordStatus)
+	}
+}
+
+func TestCronExecuteOneShotReminderUsesMentionNotification(t *testing.T) {
+	store, err := NewCronStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	deps := &fakeCronDeps{}
+	task := NewCronTask(store, deps, t.TempDir(), "Asia/Taipei", "guild-1")
+	now := time.Date(2026, 7, 6, 14, 30, 0, 0, task.location)
+	job := &CronJob{
+		ID:        "reminder-1",
+		Name:      "Drink water",
+		ChannelID: "thread-1",
+		GuildID:   "guild-1",
+		Prompt:    "drink water",
+		Enabled:   true,
+		OneShot:   true,
+		NextRun:   now.Format(time.RFC3339),
+		MentionID: "user-2",
+	}
+	if err := store.Add(job); err != nil {
+		t.Fatal(err)
+	}
+
+	task.execute(job, now)
+
+	if deps.notifyMentionChannel != "thread-1" {
+		t.Fatalf("NotifyMention channel = %q, want thread-1", deps.notifyMentionChannel)
+	}
+	if deps.notifyMentionUser != "user-2" {
+		t.Fatalf("NotifyMention user = %q, want user-2", deps.notifyMentionUser)
+	}
+	if deps.notifyMentionMsg != "🔔 <@user-2> drink water" {
+		t.Fatalf("NotifyMention msg = %q", deps.notifyMentionMsg)
+	}
+	if _, ok := store.Get("reminder-1"); ok {
+		t.Fatal("one-shot reminder should be removed after firing")
 	}
 }
 
@@ -389,12 +436,13 @@ func TestCronStoreIngestPendingValidatesAndCreatesJobs(t *testing.T) {
 	writePendingAction(t, filepath.Join(pendingDir, "good.json"), PendingAction{
 		Action: "create",
 		Job: &PendingJob{
-			Name:      " good ",
-			Schedule:  "0 9 * * *",
-			Prompt:    " run ",
-			ChannelID: " channel-1 ",
-			GuildID:   " guild-1 ",
-			CreatedBy: " alice ",
+			Name:        " good ",
+			Schedule:    "0 9 * * *",
+			Prompt:      " run ",
+			ChannelID:   " channel-1 ",
+			GuildID:     " guild-1 ",
+			CreatedBy:   " alice ",
+			CreatedByID: " user-1 ",
 		},
 	})
 
@@ -406,11 +454,55 @@ func TestCronStoreIngestPendingValidatesAndCreatesJobs(t *testing.T) {
 	if len(jobs) != 1 {
 		t.Fatalf("jobs = %+v, want one job", jobs)
 	}
-	if jobs[0].Name != "good" || jobs[0].Prompt != "run" || jobs[0].GuildID != "guild-1" || jobs[0].CreatedBy != "alice" {
+	if jobs[0].Name != "good" || jobs[0].Prompt != "run" || jobs[0].GuildID != "guild-1" || jobs[0].CreatedBy != "alice" || jobs[0].CreatedByID != "user-1" {
 		t.Fatalf("job was not normalized: %+v", jobs[0])
 	}
 	if _, err := os.Stat(filepath.Join(pendingDir, "bad.json")); !os.IsNotExist(err) {
 		t.Fatalf("invalid pending file should be removed, stat err=%v", err)
+	}
+}
+
+func TestCronStoreIngestPendingCreatesOneShotReminder(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewCronStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pendingDir := filepath.Join(dir, "cron", "pending")
+	if err := os.MkdirAll(pendingDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	nextRun := time.Date(2026, 7, 6, 14, 30, 0, 0, time.FixedZone("TST", 8*3600)).Format(time.RFC3339)
+	writePendingAction(t, filepath.Join(pendingDir, "reminder.json"), PendingAction{
+		Action: "create_reminder",
+		Job: &PendingJob{
+			Name:          " drink ",
+			ScheduleHuman: " +2m ",
+			Prompt:        " drink water ",
+			ChannelID:     " thread-1 ",
+			GuildID:       " guild-1 ",
+			CreatedBy:     " alice ",
+			CreatedByID:   " user-1 ",
+			NextRun:       nextRun,
+			MentionID:     " user-2 ",
+			OneShot:       true,
+		},
+	})
+
+	created := store.IngestPending()
+	if len(created) != 1 {
+		t.Fatalf("created = %+v, want one reminder", created)
+	}
+	jobs := store.ListByChannel("thread-1")
+	if len(jobs) != 1 {
+		t.Fatalf("jobs = %+v, want one thread reminder", jobs)
+	}
+	got := jobs[0]
+	if !got.OneShot || got.UseAgent || got.Schedule != "" || got.Name != "drink" || got.Prompt != "drink water" || got.GuildID != "guild-1" || got.CreatedBy != "alice" || got.CreatedByID != "user-1" || got.MentionID != "user-2" || got.NextRun != nextRun {
+		t.Fatalf("reminder was not normalized into a one-shot job: %+v", got)
+	}
+	if _, err := os.Stat(filepath.Join(pendingDir, "reminder.json")); !os.IsNotExist(err) {
+		t.Fatalf("pending reminder should be removed after ingest, stat err=%v", err)
 	}
 }
 

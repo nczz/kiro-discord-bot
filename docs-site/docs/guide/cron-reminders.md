@@ -26,6 +26,13 @@ The built-in `bot_create_cron`, `bot_list_cron`, and `bot_delete_cron` tools let
 
 Creates and deletes are written as pending actions and become active through the bot's normal maintenance loop. This keeps MCP tool calls aligned with the same channel-scoped cron store used by slash commands.
 
+The built-in `bot_create_reminder` tool is for one-time delayed reminders. It writes a one-shot reminder into the same scheduler instead of asking the agent engine to sleep, spawn an internal task, or send a delayed message through a separate Discord path. In threads, the reminder is delivered back to the current thread target.
+
+Use the split intentionally:
+
+- `bot_create_reminder`: "in 10 minutes", "tomorrow 09:00", "remind ChunBot once".
+- `bot_create_cron`: "every day at 09:00", "weekly report", "run this periodically".
+
 ## Good Operating Practice
 
 Cron is powerful because it can trigger future agent work without a person present. Keep it tied to a channel owner, review `/cron-list` regularly, and disable write-capable cron MCP tools in channels that should only read data.

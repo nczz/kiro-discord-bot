@@ -92,6 +92,9 @@ func TestDefaultSafeToolNamesExcludeDestructiveTools(t *testing.T) {
 	if !seen[ToolSendFile] {
 		t.Fatalf("file egress tool should be default-enabled for interactive file delivery: %+v", tools)
 	}
+	if !seen[ToolCreateReminder] {
+		t.Fatalf("one-time reminder tool should be default-enabled to avoid agent-side scheduling bypasses: %+v", tools)
+	}
 	if seen[ToolQueryAudit] {
 		t.Fatalf("audit query tool must not be default-enabled outside manager-authorized /audit prompt jobs: %+v", tools)
 	}
@@ -122,7 +125,7 @@ func TestCreateCronToolDocumentsBotTimezone(t *testing.T) {
 
 	tool := writeTool(ToolCreateCron, cronpolicy.CreateToolDescription(cronpolicy.TimezoneName("Asia/Taipei")), false)
 
-	if !strings.Contains(tool.Description, "Asia/Taipei") || !strings.Contains(tool.Description, "Do not convert user-local times to UTC") {
+	if !strings.Contains(tool.Description, "Asia/Taipei") || !strings.Contains(tool.Description, "Do not convert user-local times to UTC") || !strings.Contains(tool.Description, "bot_create_reminder") {
 		t.Fatalf("tool description does not include cron timezone: %q", tool.Description)
 	}
 	schedule, ok := tool.InputSchema.Properties["schedule"].(map[string]any)
@@ -132,6 +135,35 @@ func TestCreateCronToolDocumentsBotTimezone(t *testing.T) {
 	desc, _ := schedule["description"].(string)
 	if !strings.Contains(desc, "Asia/Taipei") || !strings.Contains(desc, "Do not convert to UTC") {
 		t.Fatalf("schedule description should pin bot timezone and forbid UTC conversion: %q", desc)
+	}
+}
+
+func TestCreateReminderToolDocumentsOneTimeTimezone(t *testing.T) {
+	t.Setenv("CRON_TIMEZONE", "Asia/Taipei")
+
+	tool := writeTool(ToolCreateReminder, cronpolicy.ReminderToolDescription(cronpolicy.TimezoneName("Asia/Taipei")), false)
+
+	if !strings.Contains(tool.Description, "one-time") || !strings.Contains(tool.Description, "Asia/Taipei") || !strings.Contains(tool.Description, "bot_create_cron") {
+		t.Fatalf("reminder description should distinguish one-time reminders from recurring cron: %q", tool.Description)
+	}
+	timeProp, ok := tool.InputSchema.Properties["time"].(map[string]any)
+	if !ok {
+		t.Fatalf("time schema missing: %+v", tool.InputSchema.Properties["time"])
+	}
+	desc, _ := timeProp["description"].(string)
+	if !strings.Contains(desc, "Asia/Taipei") || !strings.Contains(desc, "+30m") || !strings.Contains(desc, "tomorrow 09:00") {
+		t.Fatalf("time description should document supported one-time formats: %q", desc)
+	}
+	mention, ok := tool.InputSchema.Properties["mention_user_id"].(map[string]any)
+	if !ok {
+		t.Fatalf("mention_user_id schema missing: %+v", tool.InputSchema.Properties["mention_user_id"])
+	}
+	mentionDesc, _ := mention["description"].(string)
+	if !strings.Contains(mentionDesc, "verified Discord user ID") {
+		t.Fatalf("mention_user_id description should require verified IDs: %q", mentionDesc)
+	}
+	if _, ok := tool.InputSchema.Properties["created_by_id"].(map[string]any); !ok {
+		t.Fatalf("created_by_id schema missing: %+v", tool.InputSchema.Properties["created_by_id"])
 	}
 }
 
@@ -190,6 +222,14 @@ func TestWriteToolAnnotations(t *testing.T) {
 	}
 	if createTool.Annotations.DestructiveHint == nil || *createTool.Annotations.DestructiveHint {
 		t.Fatalf("create destructiveHint = %+v, want false", createTool.Annotations.DestructiveHint)
+	}
+
+	reminderTool := writeTool("bot_create_reminder", "remind", false)
+	if reminderTool.Annotations.ReadOnlyHint == nil || *reminderTool.Annotations.ReadOnlyHint {
+		t.Fatalf("reminder readOnlyHint = %+v, want false", reminderTool.Annotations.ReadOnlyHint)
+	}
+	if reminderTool.Annotations.DestructiveHint == nil || *reminderTool.Annotations.DestructiveHint {
+		t.Fatalf("reminder destructiveHint = %+v, want false", reminderTool.Annotations.DestructiveHint)
 	}
 
 	deleteTool := writeTool("bot_delete_cron", "delete", true)
@@ -259,6 +299,41 @@ func TestBotToolsEgressDisabledReadsDynamicTargetState(t *testing.T) {
 	}
 }
 
+func TestValidateMentionUserIDUsesDynamicTargetAllowlist(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "target.json")
+	if err := os.WriteFile(statePath, []byte(`{"target_channel_id":"thread-1","allowed_mention_user_ids":["user-1"]}`), 0644); err != nil {
+		t.Fatalf("write target state: %v", err)
+	}
+	t.Setenv("BOT_TOOLS_TARGET_STATE_PATH", statePath)
+
+	if err := validateMentionUserID("user-1"); err != nil {
+		t.Fatalf("allowed mention rejected: %v", err)
+	}
+	if err := validateMentionUserID("user-2"); err == nil {
+		t.Fatal("unverified mention_user_id accepted")
+	}
+}
+
+func TestValidateMentionUserIDFailsClosedWithoutAllowlist(t *testing.T) {
+	if err := validateMentionUserID(""); err != nil {
+		t.Fatalf("empty mention should be allowed: %v", err)
+	}
+	if err := validateMentionUserID("user-1"); err == nil {
+		t.Fatal("mention_user_id accepted without target state")
+	}
+
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "target.json")
+	if err := os.WriteFile(statePath, []byte(`{"target_channel_id":"thread-1"}`), 0644); err != nil {
+		t.Fatalf("write target state: %v", err)
+	}
+	t.Setenv("BOT_TOOLS_TARGET_STATE_PATH", statePath)
+	if err := validateMentionUserID("user-1"); err == nil {
+		t.Fatal("mention_user_id accepted without a non-empty allowlist")
+	}
+}
+
 func TestCronOwnerChannelNormalizesDynamicThreadTargetToBoundChannel(t *testing.T) {
 	dir := t.TempDir()
 	statePath := filepath.Join(dir, "target.json")
@@ -304,6 +379,18 @@ func TestWritePendingRejectsInvalidActions(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dir, "cron", "pending")); !os.IsNotExist(err) {
 		t.Fatalf("invalid action should not create pending dir, stat err=%v", err)
+	}
+	if err := writePending(dir, pendingAction{
+		Action: "create_reminder",
+		Job: &pendingJob{
+			Name:      "bad reminder",
+			Prompt:    "drink water",
+			ChannelID: "ch-1",
+			GuildID:   "guild-1",
+			NextRun:   "not-rfc3339",
+		},
+	}); err == nil {
+		t.Fatal("writePending accepted invalid reminder next_run")
 	}
 }
 
@@ -366,11 +453,12 @@ func TestWritePendingCreateCronNormalizesThreadTargetToBoundChannel(t *testing.T
 	if err := writePending(dir, pendingAction{
 		Action: "create",
 		Job: &pendingJob{
-			Name:      "daily-report",
-			Schedule:  "0 9 * * *",
-			Prompt:    "Generate report",
-			ChannelID: ownerChannelID,
-			GuildID:   "g1",
+			Name:        "daily-report",
+			Schedule:    "0 9 * * *",
+			Prompt:      "Generate report",
+			ChannelID:   ownerChannelID,
+			GuildID:     "g1",
+			CreatedByID: "user-1",
 		},
 	}); err != nil {
 		t.Fatalf("writePending: %v", err)
@@ -387,8 +475,54 @@ func TestWritePendingCreateCronNormalizesThreadTargetToBoundChannel(t *testing.T
 	if err != nil {
 		t.Fatalf("read pending: %v", err)
 	}
-	if strings.Contains(string(raw), `"thread-1"`) || !strings.Contains(string(raw), `"channel_id":"channel-1"`) {
+	if strings.Contains(string(raw), `"thread-1"`) || !strings.Contains(string(raw), `"channel_id":"channel-1"`) || !strings.Contains(string(raw), `"created_by_id":"user-1"`) {
 		t.Fatalf("pending create should be parent-scoped, got %s", raw)
+	}
+}
+
+func TestWritePendingCreateReminderTargetsCurrentThread(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "target.json")
+	if err := os.WriteFile(statePath, []byte(`{"target_channel_id":"thread-1"}`), 0644); err != nil {
+		t.Fatalf("write target state: %v", err)
+	}
+	t.Setenv("BOT_TOOLS_CHANNEL_ID", "channel-1")
+	t.Setenv("BOT_TOOLS_TARGET_CHANNEL_ID", "channel-1")
+	t.Setenv("BOT_TOOLS_TARGET_STATE_PATH", statePath)
+
+	if err := validateBoundChannel("thread-1"); err != nil {
+		t.Fatalf("thread target rejected: %v", err)
+	}
+	if err := writePending(dir, pendingAction{
+		Action: "create_reminder",
+		Job: &pendingJob{
+			Name:          "drink-water",
+			ScheduleHuman: "+2m",
+			Prompt:        "drink water",
+			ChannelID:     deliveryChannelID("channel-1"),
+			GuildID:       "g1",
+			CreatedByID:   "user-1",
+			NextRun:       "2026-07-06T14:30:00+08:00",
+			MentionID:     "user-1",
+			OneShot:       true,
+		},
+	}); err != nil {
+		t.Fatalf("writePending reminder: %v", err)
+	}
+
+	entries, err := os.ReadDir(filepath.Join(dir, "cron", "pending"))
+	if err != nil {
+		t.Fatalf("read pending dir: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("pending entries = %d, want 1", len(entries))
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "cron", "pending", entries[0].Name()))
+	if err != nil {
+		t.Fatalf("read pending: %v", err)
+	}
+	if !strings.Contains(string(raw), `"action":"create_reminder"`) || !strings.Contains(string(raw), `"channel_id":"thread-1"`) || !strings.Contains(string(raw), `"mention_id":"user-1"`) || !strings.Contains(string(raw), `"created_by_id":"user-1"`) {
+		t.Fatalf("pending reminder should target the current thread and preserve mention id, got %s", raw)
 	}
 }
 

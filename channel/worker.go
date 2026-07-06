@@ -576,7 +576,7 @@ func (w *Worker) execute(job *Job) {
 	w.cancelMu.Lock()
 	w.currentThreadID = threadID
 	w.cancelMu.Unlock()
-	if err := writeBotToolsTargetState(w.botToolsTargetStatePath, threadID); err != nil {
+	if err := writeBotToolsTargetStateWithRefs(w.botToolsTargetStatePath, threadID, false, job.MentionRefs); err != nil {
 		log.Printf("[worker %s] write bot-tools target state: %v", w.channelID, err)
 	}
 
@@ -1018,7 +1018,7 @@ func (w *Worker) executeInline(job *Job) {
 		})
 	}
 	targetID := job.inlineBotToolsTargetID()
-	if err := writeBotToolsTargetStateOptions(w.botToolsTargetStatePath, targetID, job.DisableBotEgress); err != nil {
+	if err := writeBotToolsTargetStateWithRefs(w.botToolsTargetStatePath, targetID, job.DisableBotEgress, job.MentionRefs); err != nil {
 		log.Printf("[worker %s] write inline bot-tools target state: %v", w.channelID, err)
 	}
 
@@ -1402,7 +1402,7 @@ func (w *Worker) executeFallback(job *Job) {
 		w.cancelMu.Unlock()
 		w.signalIdle()
 	}()
-	if err := writeBotToolsTargetState(w.botToolsTargetStatePath, job.ChannelID); err != nil {
+	if err := writeBotToolsTargetStateWithRefs(w.botToolsTargetStatePath, job.ChannelID, false, job.MentionRefs); err != nil {
 		log.Printf("[worker %s] write fallback bot-tools target state: %v", w.channelID, err)
 	}
 

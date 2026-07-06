@@ -9,10 +9,12 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/nczz/kiro-discord-bot/audit"
+	"github.com/nczz/kiro-discord-bot/heartbeat"
 	"github.com/nczz/kiro-discord-bot/internal/botegress"
 	"github.com/nczz/kiro-discord-bot/internal/channelmeta"
 	"github.com/nczz/kiro-discord-bot/internal/cronpolicy"
@@ -30,6 +32,7 @@ const (
 	ToolSendMessage     = "bot_send_message"
 	ToolSendFile        = "bot_send_file"
 	ToolCreateCron      = "bot_create_cron"
+	ToolCreateReminder  = "bot_create_reminder"
 	ToolListCron        = "bot_list_cron"
 	ToolDeleteCron      = "bot_delete_cron"
 	ToolQueryAudit      = "bot_query_audit"
@@ -44,6 +47,7 @@ func DefaultSafeToolNames() []string {
 		ToolListCron,
 		ToolSendFile,
 		ToolCreateCron,
+		ToolCreateReminder,
 	}
 }
 
@@ -138,15 +142,17 @@ func NewServer() *server.MCPServer {
 			}
 			guildID, _ := req.RequireString("guild_id")
 			createdBy, _ := req.RequireString("created_by")
+			createdByID := strings.TrimSpace(req.GetString("created_by_id", ""))
 			action := pendingAction{
 				Action: "create",
 				Job: &pendingJob{
-					Name:      strings.TrimSpace(name),
-					Schedule:  strings.TrimSpace(schedule),
-					Prompt:    strings.TrimSpace(prompt),
-					ChannelID: ownerChannelID,
-					GuildID:   strings.TrimSpace(guildID),
-					CreatedBy: strings.TrimSpace(createdBy),
+					Name:        strings.TrimSpace(name),
+					Schedule:    strings.TrimSpace(schedule),
+					Prompt:      strings.TrimSpace(prompt),
+					ChannelID:   ownerChannelID,
+					GuildID:     strings.TrimSpace(guildID),
+					CreatedBy:   strings.TrimSpace(createdBy),
+					CreatedByID: createdByID,
 				},
 			}
 			if err := validatePendingAction(action); err != nil {
@@ -156,6 +162,56 @@ func NewServer() *server.MCPServer {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			return mcp.NewToolResultText(fmt.Sprintf("Scheduled task %q created (schedule: %s). It will activate within 60 seconds.", strings.TrimSpace(name), strings.TrimSpace(schedule))), nil
+		},
+	)
+	s.AddTool(
+		writeTool(ToolCreateReminder, cronpolicy.ReminderToolDescription(cronTZ), false),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			name := strings.TrimSpace(req.GetString("name", ""))
+			timeInput, _ := req.RequireString("time")
+			content, _ := req.RequireString("content")
+			channelID, _ := req.RequireString("channel_id")
+			if err := validateBoundChannel(channelID); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			targetChannelID := deliveryChannelID(channelID)
+			guildID, _ := req.RequireString("guild_id")
+			createdBy, _ := req.RequireString("created_by")
+			createdByID := strings.TrimSpace(req.GetString("created_by_id", ""))
+			mentionUserID := strings.TrimSpace(req.GetString("mention_user_id", ""))
+			if err := validateMentionUserID(mentionUserID); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			target, err := parseReminderTime(timeInput, cronTZ)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			content = strings.TrimSpace(content)
+			if name == "" {
+				name = reminderName(content)
+			}
+			action := pendingAction{
+				Action: "create_reminder",
+				Job: &pendingJob{
+					Name:          name,
+					ScheduleHuman: strings.TrimSpace(timeInput),
+					Prompt:        content,
+					ChannelID:     targetChannelID,
+					GuildID:       strings.TrimSpace(guildID),
+					CreatedBy:     strings.TrimSpace(createdBy),
+					CreatedByID:   createdByID,
+					NextRun:       target.Format(time.RFC3339),
+					MentionID:     mentionUserID,
+					OneShot:       true,
+				},
+			}
+			if err := validatePendingAction(action); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			if err := writePending(dataDir(), action); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			return mcp.NewToolResultText(fmt.Sprintf("One-time reminder %q created for %s. It will activate within 60 seconds.", name, target.In(cronLocation(cronTZ)).Format("2006/01/02 15:04"))), nil
 		},
 	)
 	s.AddTool(
@@ -277,6 +333,21 @@ func writeTool(name, description string, destructive bool) mcp.Tool {
 			mcp.WithString("channel_id", mcp.Required(), mcp.Description("Discord channel ID from context; thread IDs are normalized to the owning parent channel when bot-tools is bound to a channel")),
 			mcp.WithString("guild_id", mcp.Required(), mcp.Description("Discord guild ID from context")),
 			mcp.WithString("created_by", mcp.Description("Username of the requester")),
+			mcp.WithString("created_by_id", mcp.Description("Optional Discord user ID of the requester when available in context")),
+		} {
+			opt(&t)
+		}
+	case ToolCreateReminder:
+		cronTZ := cronpolicy.TimezoneName(os.Getenv("CRON_TIMEZONE"))
+		for _, opt := range []mcp.ToolOption{
+			mcp.WithString("name", mcp.Description("Optional short reminder name. Defaults to a reminder prefix plus the content.")),
+			mcp.WithString("time", mcp.Required(), mcp.Description(cronpolicy.ReminderTimeFieldDescription(cronTZ))),
+			mcp.WithString("content", mcp.Required(), mcp.Description("Reminder message content delivered once by the bot scheduler")),
+			mcp.WithString("channel_id", mcp.Required(), mcp.Description("Discord channel or thread ID from context. In a thread, the current bot-tools delivery target is used so the reminder is delivered to that thread.")),
+			mcp.WithString("guild_id", mcp.Required(), mcp.Description("Discord guild ID from context")),
+			mcp.WithString("created_by", mcp.Description("Username of the requester")),
+			mcp.WithString("created_by_id", mcp.Description("Optional Discord user ID of the requester when available in context")),
+			mcp.WithString("mention_user_id", mcp.Description("Optional verified Discord user ID to mention when the reminder fires. Use only a user ID that appears in the Discord mention references or bot peers provided in context.")),
 		} {
 			opt(&t)
 		}
@@ -325,8 +396,9 @@ type channelData struct {
 }
 
 type targetState struct {
-	TargetChannelID string `json:"target_channel_id"`
-	DisableEgress   bool   `json:"disable_egress"`
+	TargetChannelID       string   `json:"target_channel_id"`
+	DisableEgress         bool     `json:"disable_egress"`
+	AllowedMentionUserIDs []string `json:"allowed_mention_user_ids"`
 }
 
 func dataDir() string {
@@ -398,6 +470,23 @@ func currentTargetStateChannelID() string {
 func botToolsEgressDisabled() bool {
 	state, ok := currentTargetState()
 	return ok && state.DisableEgress
+}
+
+func validateMentionUserID(userID string) error {
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return nil
+	}
+	state, ok := currentTargetState()
+	if !ok || len(state.AllowedMentionUserIDs) == 0 {
+		return fmt.Errorf("mention_user_id %s cannot be verified because this bot-tools session has no Discord mention allowlist", userID)
+	}
+	for _, allowed := range state.AllowedMentionUserIDs {
+		if strings.TrimSpace(allowed) == userID {
+			return nil
+		}
+	}
+	return fmt.Errorf("mention_user_id %s is not in the verified Discord mention references for this job", userID)
 }
 
 func currentTargetState() (targetState, bool) {
@@ -485,12 +574,18 @@ func dirExists(path string) bool {
 // --- Cron pending mechanism ---
 
 type pendingJob struct {
-	Name      string `json:"name"`
-	Schedule  string `json:"schedule"`
-	Prompt    string `json:"prompt"`
-	ChannelID string `json:"channel_id"`
-	GuildID   string `json:"guild_id"`
-	CreatedBy string `json:"created_by,omitempty"`
+	Name          string `json:"name"`
+	Schedule      string `json:"schedule"`
+	ScheduleHuman string `json:"schedule_human,omitempty"`
+	Prompt        string `json:"prompt"`
+	ChannelID     string `json:"channel_id"`
+	GuildID       string `json:"guild_id"`
+	CreatedBy     string `json:"created_by,omitempty"`
+	CreatedByID   string `json:"created_by_id,omitempty"`
+	NextRun       string `json:"next_run,omitempty"`
+	MentionID     string `json:"mention_id,omitempty"`
+	OneShot       bool   `json:"one_shot,omitempty"`
+	UseAgent      bool   `json:"use_agent,omitempty"`
 }
 
 type pendingAction struct {
@@ -535,11 +630,32 @@ func validatePendingAction(action pendingAction) error {
 		action.Job.Prompt = strings.TrimSpace(action.Job.Prompt)
 		action.Job.ChannelID = strings.TrimSpace(action.Job.ChannelID)
 		action.Job.GuildID = strings.TrimSpace(action.Job.GuildID)
+		action.Job.CreatedBy = strings.TrimSpace(action.Job.CreatedBy)
+		action.Job.CreatedByID = strings.TrimSpace(action.Job.CreatedByID)
 		if action.Job.Name == "" || action.Job.Schedule == "" || action.Job.Prompt == "" || action.Job.ChannelID == "" || action.Job.GuildID == "" {
 			return fmt.Errorf("create action requires name, schedule, prompt, channel_id, and guild_id")
 		}
 		if _, err := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow).Parse(action.Job.Schedule); err != nil {
 			return fmt.Errorf("invalid schedule: %w", err)
+		}
+	case "create_reminder":
+		if action.Job == nil {
+			return fmt.Errorf("create_reminder action missing job")
+		}
+		action.Job.Name = strings.TrimSpace(action.Job.Name)
+		action.Job.ScheduleHuman = strings.TrimSpace(action.Job.ScheduleHuman)
+		action.Job.Prompt = strings.TrimSpace(action.Job.Prompt)
+		action.Job.ChannelID = strings.TrimSpace(action.Job.ChannelID)
+		action.Job.GuildID = strings.TrimSpace(action.Job.GuildID)
+		action.Job.CreatedBy = strings.TrimSpace(action.Job.CreatedBy)
+		action.Job.CreatedByID = strings.TrimSpace(action.Job.CreatedByID)
+		action.Job.NextRun = strings.TrimSpace(action.Job.NextRun)
+		action.Job.MentionID = strings.TrimSpace(action.Job.MentionID)
+		if action.Job.Name == "" || action.Job.Prompt == "" || action.Job.ChannelID == "" || action.Job.GuildID == "" || action.Job.NextRun == "" {
+			return fmt.Errorf("create_reminder action requires name, time, content, channel_id, and guild_id")
+		}
+		if _, err := time.Parse(time.RFC3339, action.Job.NextRun); err != nil {
+			return fmt.Errorf("invalid reminder next_run: %w", err)
 		}
 	case "delete":
 		if strings.TrimSpace(action.JobID) == "" || strings.TrimSpace(action.ChannelID) == "" {
@@ -549,6 +665,30 @@ func validatePendingAction(action pendingAction) error {
 		return fmt.Errorf("unknown action %q", action.Action)
 	}
 	return nil
+}
+
+func parseReminderTime(input, tz string) (time.Time, error) {
+	return heartbeat.ParseTime(input, cronLocation(tz))
+}
+
+func cronLocation(tz string) *time.Location {
+	if loc, err := time.LoadLocation(cronpolicy.TimezoneName(tz)); err == nil {
+		return loc
+	}
+	return time.Now().Location()
+}
+
+func reminderName(content string) string {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return "Reminder"
+	}
+	const max = 30
+	rs := []rune(content)
+	if len(rs) > max {
+		rs = append(rs[:max], '.', '.', '.')
+	}
+	return "Reminder: " + string(rs)
 }
 
 type cronJobEntry struct {

@@ -413,13 +413,17 @@ func TestManagerBuiltinMCPRequiresExplicitPolicy(t *testing.T) {
 
 	threadOpts := m.agentOptsForTarget("channel-1", "thread-1")
 	var threadEnv map[string]string
+	var threadDiscordEnv map[string]string
 	for _, server := range threadOpts.MCPServers {
-		if server.Name == "bot-tools" {
+		switch server.Name {
+		case "bot-tools":
 			threadEnv = proxyTargetEnv(t, server.Env)
+		case "mcp-discord":
+			threadDiscordEnv = proxyTargetEnv(t, server.Env)
 		}
 	}
-	if threadEnv == nil {
-		t.Fatalf("expected thread bot-tools env, got %+v", threadOpts.MCPServers)
+	if threadEnv == nil || threadDiscordEnv == nil {
+		t.Fatalf("expected thread bot-tools and mcp-discord envs, got %+v", threadOpts.MCPServers)
 	}
 	if threadEnv["BOT_TOOLS_CHANNEL_ID"] != "channel-1" || threadEnv["BOT_TOOLS_TARGET_CHANNEL_ID"] != "thread-1" {
 		t.Fatalf("builtin env missing thread target binding: %+v", threadEnv)
@@ -427,8 +431,11 @@ func TestManagerBuiltinMCPRequiresExplicitPolicy(t *testing.T) {
 	if threadEnv["CRON_TIMEZONE"] != "Asia/Taipei" || threadEnv["USAGE_TIMEZONE"] != "Asia/Taipei" {
 		t.Fatalf("thread builtin env missing timezones: %+v", threadEnv)
 	}
-	if threadEnv["BOT_TOOLS_TARGET_STATE_PATH"] != "" {
-		t.Fatalf("thread agent should use fixed target without dynamic state path: %+v", threadEnv)
+	if threadEnv["BOT_TOOLS_TARGET_STATE_PATH"] != filepath.Join(dir, "bot-tools-targets", "thread-1.json") {
+		t.Fatalf("thread target state path = %q, want target-scoped thread state path", threadEnv["BOT_TOOLS_TARGET_STATE_PATH"])
+	}
+	if threadDiscordEnv["BOT_TOOLS_TARGET_STATE_PATH"] != filepath.Join(dir, "bot-tools-targets", "thread-1.json") {
+		t.Fatalf("thread mcp-discord target state path = %q, want target-scoped thread state path", threadDiscordEnv["BOT_TOOLS_TARGET_STATE_PATH"])
 	}
 
 	if err := m.SetMCPPolicy("channel-1", "user-1", "bot-tools", false, "full"); err != nil {
@@ -458,7 +465,7 @@ func TestManagerEnableDefaultBotToolsUsesSafeAllowlist(t *testing.T) {
 	if !p.Enabled || p.AllowAllTools || p.ReadOnly || p.AllowDestructive {
 		t.Fatalf("default bot-tools policy is not safe-write allowlist: %+v", p)
 	}
-	if tools := strings.Join(p.EffectiveTools(), ","); strings.Contains(tools, "bot_delete_cron") || strings.Contains(tools, "bot_send_message") || strings.Contains(tools, "bot_query_audit") || !strings.Contains(tools, "bot_send_file") || !strings.Contains(tools, "bot_create_cron") {
+	if tools := strings.Join(p.EffectiveTools(), ","); strings.Contains(tools, "bot_delete_cron") || strings.Contains(tools, "bot_send_message") || strings.Contains(tools, "bot_query_audit") || !strings.Contains(tools, "bot_send_file") || !strings.Contains(tools, "bot_create_cron") || !strings.Contains(tools, "bot_create_reminder") {
 		t.Fatalf("unexpected default tools: %q", tools)
 	}
 }
@@ -491,8 +498,8 @@ func TestManagerAuditPromptMCPServersBypassChannelPolicyWithScopedAuditToolOnly(
 	if targetEnv["BOT_TOOLS_CHANNEL_ID"] != "channel-1" || targetEnv["BOT_TOOLS_TARGET_CHANNEL_ID"] != "thread-1" || targetEnv["BOT_TOOLS_GUILD_ID"] != "guild-1" {
 		t.Fatalf("audit prompt target binding = %+v", targetEnv)
 	}
-	if targetEnv["BOT_TOOLS_TARGET_STATE_PATH"] != "" {
-		t.Fatalf("audit prompt should use fixed target without dynamic state path: %+v", targetEnv)
+	if targetEnv["BOT_TOOLS_TARGET_STATE_PATH"] != filepath.Join(dir, "bot-tools-targets", "thread-1.json") {
+		t.Fatalf("audit prompt target state path = %q, want target-scoped thread state path", targetEnv["BOT_TOOLS_TARGET_STATE_PATH"])
 	}
 }
 
@@ -534,8 +541,42 @@ func TestLegacyDefaultBotToolsPolicyDropsEgressTools(t *testing.T) {
 	if strings.Contains(tools, "bot_query_audit") {
 		t.Fatalf("legacy default audit query tool was not removed: %+v", got.EffectiveTools())
 	}
-	if !strings.Contains(tools, "bot_create_cron") || !strings.Contains(tools, "bot_send_file") {
+	if !strings.Contains(tools, "bot_create_cron") || !strings.Contains(tools, "bot_create_reminder") || !strings.Contains(tools, "bot_send_file") {
 		t.Fatalf("legacy normalization removed allowed default tools: %+v", got.EffectiveTools())
+	}
+}
+
+func TestLegacySafeDefaultBotToolsPolicyAddsReminderTool(t *testing.T) {
+	dir := t.TempDir()
+	store, err := OpenMCPPolicyStore(dir)
+	if err != nil {
+		t.Fatalf("open policy store: %v", err)
+	}
+	defer store.Close()
+
+	legacy := defaultMCPPolicy("guild-1", "channel-1", "bot-tools")
+	legacy.Enabled = true
+	legacy.Preset = "safe-write"
+	legacy.ReadOnly = false
+	legacy.AllowAllTools = false
+	legacy.AllowDestructive = false
+	legacy.AllowedTools = []string{
+		"bot_data_summary",
+		"bot_list_channel_data",
+		"bot_list_cron",
+		"bot_send_file",
+		"bot_create_cron",
+	}
+	if err := store.SetPolicy(context.Background(), legacy); err != nil {
+		t.Fatalf("set legacy policy: %v", err)
+	}
+
+	got, err := store.GetPolicy(context.Background(), "guild-1", "channel-1", "bot-tools")
+	if err != nil {
+		t.Fatalf("get policy: %v", err)
+	}
+	if !containsString(got.EffectiveTools(), "bot_create_reminder") {
+		t.Fatalf("legacy safe default policy did not gain reminder tool: %+v", got.EffectiveTools())
 	}
 }
 

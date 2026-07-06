@@ -15,6 +15,7 @@
 | `bot_list_cron` | Read | 列出目前頻道的排程任務。 |
 | `bot_send_file` | Write, non-destructive | 將 sanitized file upload 排入 Discord delivery queue。 |
 | `bot_create_cron` | Write, non-destructive | 排入建立 scheduled task 的請求。 |
+| `bot_create_reminder` | Write, non-destructive | 排入一次性提醒，交由 bot scheduler 到期發送。 |
 
 這些工具存在，但預設不啟用：
 
@@ -30,7 +31,9 @@
 
 `bot-tools` session 會綁定目前 channel 或 thread target。工具呼叫若嘗試操作其他 channel，會回傳 channel-scope error。
 
-Cron 管理在 runtime 中是 channel scope；thread ID 會依需要正規化成 parent channel。
+Recurring cron 管理在 runtime 中是 channel scope；thread ID 會依需要正規化成 parent channel。一次性 reminder 會保留目前 delivery target，因此在 task thread 中建立的提醒會回到該 thread。
+
+「10 分鐘後提醒我」、「明天 09:00 提醒某人」這類一次性提醒應使用 `bot_create_reminder`。每天、每週或週期性自動化才使用 `bot_create_cron`。
 
 ## 安全 Discord Egress
 

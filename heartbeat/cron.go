@@ -38,6 +38,7 @@ type CronDeps interface {
 	RecordAgentUsage(agent *acp.Agent, job *CronJob, threadID, status string)
 	RecordAgentResponse(agent *acp.Agent, job *CronJob, threadID, status, content string, responseSent bool)
 	Notify(channelID, msg string)
+	NotifyMention(channelID, msg, userID string)
 }
 
 // CronTask checks and executes due cron jobs.
@@ -161,7 +162,7 @@ func (c *CronTask) execute(job *CronJob, now time.Time) {
 		if job.MentionID != "" {
 			mention = fmt.Sprintf("<@%s> ", job.MentionID)
 		}
-		c.deps.Notify(job.ChannelID, fmt.Sprintf("🔔 %s%s", mention, job.Prompt))
+		c.deps.NotifyMention(job.ChannelID, fmt.Sprintf("🔔 %s%s", mention, job.Prompt), job.MentionID)
 		c.finishJob(job, now)
 		return
 	}

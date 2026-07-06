@@ -61,10 +61,21 @@ func splitDiscordMessage(content string, limit int) []string {
 }
 
 func sendDiscordText(ds *discordgo.Session, channelID, content string, ref *discordgo.MessageReference) (*discordgo.Message, error) {
+	return sendDiscordTextWithAllowedMentions(ds, channelID, content, ref, nil)
+}
+
+func sendDiscordTextWithAllowedMentions(ds *discordgo.Session, channelID, content string, ref *discordgo.MessageReference, userIDs []string) (*discordgo.Message, error) {
 	content = secrets.RedactEnv(content)
+	allowedMentions := &discordgo.MessageAllowedMentions{}
+	for _, userID := range userIDs {
+		userID = strings.TrimSpace(userID)
+		if userID != "" {
+			allowedMentions.Users = append(allowedMentions.Users, userID)
+		}
+	}
 	return ds.ChannelMessageSendComplex(channelID, &discordgo.MessageSend{
 		Content:         content,
-		AllowedMentions: &discordgo.MessageAllowedMentions{},
+		AllowedMentions: allowedMentions,
 		Flags:           discordgo.MessageFlagsSuppressEmbeds,
 		Reference:       ref,
 	})

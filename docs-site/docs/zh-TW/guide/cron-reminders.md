@@ -26,6 +26,13 @@ Agent-based cron turns 會寫入 usage ledger 與 audit timeline。Cron job 使�
 
 Create/delete 會先寫成 pending action，再透過 bot 正常 maintenance loop 生效。這讓 MCP tool call 與 slash command 使用同一份 channel-scoped cron store。
 
+內建 `bot_create_reminder` tool 用於一次性延後提醒。它會把 one-shot reminder 寫入同一個 scheduler，而不是讓 agent engine 自己 sleep、開內部 task，或透過另一條 Discord path 延後發訊息。在 thread 中建立時，提醒會回到目前 thread target。
+
+請刻意區分：
+
+- `bot_create_reminder`：「10 分鐘後」、「明天 09:00」、「提醒 ChunBot 一次」。
+- `bot_create_cron`：「每天 09:00」、「每週報告」、「週期性執行」。
+
 ## 維運原則
 
 Cron 很強大，因為它可以在沒有人即時觸發時啟動未來 agent work。請綁定明確 channel owner、定期檢查 `/cron-list`，並在只應讀資料的 channel 停用可寫 cron MCP tools。

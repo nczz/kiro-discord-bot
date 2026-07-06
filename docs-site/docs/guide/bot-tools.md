@@ -15,6 +15,7 @@ On first channel setup, these safe tools are enabled by default:
 | `bot_list_cron` | Read | List scheduled jobs for the current channel. |
 | `bot_send_file` | Write, non-destructive | Queue a sanitized file upload for Discord delivery. |
 | `bot_create_cron` | Write, non-destructive | Queue creation of a scheduled task. |
+| `bot_create_reminder` | Write, non-destructive | Queue a one-time reminder delivered by the bot scheduler. |
 
 These tools are available but not enabled by default:
 
@@ -30,7 +31,9 @@ These tools are available but not enabled by default:
 
 `bot-tools` sessions are bound to the current channel or thread target. Calls that try to operate on a different channel fail with a channel-scope error.
 
-Thread IDs are normalized to the parent channel for cron management where the runtime stores scheduled work at channel scope.
+Thread IDs are normalized to the parent channel for recurring cron management where the runtime stores scheduled work at channel scope. One-time reminders keep the current delivery target, so a reminder created from a task thread is delivered back to that thread.
+
+Use `bot_create_reminder` for one-time delayed reminders such as "in 10 minutes" or "tomorrow at 09:00". Use `bot_create_cron` only for recurring jobs such as daily, weekly, or periodic automation.
 
 ## Safe Discord Egress
 

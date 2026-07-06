@@ -914,6 +914,10 @@ func TestWorkerInlineDeliveryWithFinalReplyAvoidsPublicChannelPost(t *testing.T)
 		Prompt:           "slash audit prompt",
 		Session:          ds,
 		DeliveryMode:     DeliveryInline,
+		MentionRefs: []discordmention.Ref{
+			discordmention.UserRef("user-1", "Alice"),
+			discordmention.RoleRef("role-1", "Ops"),
+		},
 		FinalReply: func(content string) {
 			raw, err := os.ReadFile(statePath)
 			if err != nil {
@@ -924,6 +928,9 @@ func TestWorkerInlineDeliveryWithFinalReplyAvoidsPublicChannelPost(t *testing.T)
 			}
 			if !strings.Contains(string(raw), `"disable_egress":true`) {
 				t.Fatalf("target state = %s, want egress disabled", raw)
+			}
+			if !strings.Contains(string(raw), `"allowed_mention_user_ids":["user-1"]`) {
+				t.Fatalf("target state = %s, want verified user mention allowlist", raw)
 			}
 			finalReplies = append(finalReplies, content)
 		},

@@ -427,19 +427,24 @@ func buildPrompt(text string, attachments []string, channelID, guildID, username
 }
 
 func buildPromptThread(text string, attachments []string, channelID, threadID, guildID, username, peerContext string) string {
-	return buildPromptThreadWithMentions(text, attachments, channelID, threadID, guildID, username, peerContext, nil)
+	return buildPromptThreadWithMentions(text, attachments, channelID, threadID, guildID, username, "", peerContext, nil)
 }
 
-func buildPromptThreadWithMentions(text string, attachments []string, channelID, threadID, guildID, username, peerContext string, mentionRefs []discordmention.Ref) string {
+func buildPromptThreadWithMentions(text string, attachments []string, channelID, threadID, guildID, username, userID, peerContext string, mentionRefs []discordmention.Ref) string {
 	var sb strings.Builder
 	sb.WriteString("[Discord bot environment] Your responses are automatically forwarded to a Discord thread. Each message is split at 2000 chars. Tool execution details are also shown.\n")
 	sb.WriteString("Do not call bot_send_message for ordinary replies or final answers; write the reply normally and the bot will redact, split, and deliver it. bot_send_message is not default-enabled; if it is available, use it only when the user explicitly asks you to send a separate extra Discord message, notify another target, or hand off to another bot.\n")
 	sb.WriteString("Do not write raw Discord angle-bracket mention strings or guess Discord IDs. To mention a user, use one of the exact Discord mention reference placeholders listed below; unlisted users cannot be mentioned.\n")
 	sb.WriteString("For cron management tools, use channel_id as the owning parent channel ID; use thread_id only for thread-targeted Discord messages.\n")
+	sb.WriteString("For one-time delayed reminders, use bot_create_reminder; for recurring schedules, use bot_create_cron.\n")
+	userIDPart := ""
+	if strings.TrimSpace(userID) != "" {
+		userIDPart = fmt.Sprintf(" user_id=%s", strings.TrimSpace(userID))
+	}
 	if threadID != "" {
-		sb.WriteString(fmt.Sprintf("[Discord context] channel_id=%s thread_id=%s guild_id=%s user=%s\n\n", channelID, threadID, guildID, username))
+		sb.WriteString(fmt.Sprintf("[Discord context] channel_id=%s thread_id=%s guild_id=%s user=%s%s\n\n", channelID, threadID, guildID, username, userIDPart))
 	} else {
-		sb.WriteString(fmt.Sprintf("[Discord context] channel_id=%s guild_id=%s user=%s\n\n", channelID, guildID, username))
+		sb.WriteString(fmt.Sprintf("[Discord context] channel_id=%s guild_id=%s user=%s%s\n\n", channelID, guildID, username, userIDPart))
 	}
 	if block := discordmention.PromptBlock(mentionRefs); block != "" {
 		sb.WriteString(block)
@@ -721,7 +726,7 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 		}
 
 		mentionRefs := appendMentionRefs(mentionRefsForMessage(m, selfID), b.peerMentionRefs(selfID)...)
-		prompt := buildPromptThreadWithMentions(content, localPaths, m.ChannelID, "", m.GuildID, m.Author.Username, b.peerPromptContext(selfID), mentionRefs)
+		prompt := buildPromptThreadWithMentions(content, localPaths, m.ChannelID, "", m.GuildID, m.Author.Username, m.Author.ID, b.peerPromptContext(selfID), mentionRefs)
 		deliveryMode := channel.DeliveryThread
 		if !b.manager.ThreadModeEnabled(m.ChannelID) {
 			deliveryMode = channel.DeliveryInline
@@ -944,7 +949,7 @@ func (b *Bot) handleThreadMessage(ds *discordgo.Session, m *discordgo.MessageCre
 		selfID = ds.State.User.ID
 	}
 	mentionRefs := appendMentionRefs(mentionRefsForMessage(m, selfID), b.peerMentionRefs(selfID)...)
-	prompt := buildPromptThreadWithMentions(content, localPaths, parentChannelID, threadID, m.GuildID, m.Author.Username, b.peerPromptContext(selfID), mentionRefs)
+	prompt := buildPromptThreadWithMentions(content, localPaths, parentChannelID, threadID, m.GuildID, m.Author.Username, m.Author.ID, b.peerPromptContext(selfID), mentionRefs)
 
 	job := &channel.Job{
 		ChannelID:       threadID,

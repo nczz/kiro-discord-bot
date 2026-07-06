@@ -118,6 +118,39 @@ func newFailingDiscordSession(t *testing.T) *discordgo.Session {
 	return ds
 }
 
+func TestSendDiscordTextWithAllowedMentionsAllowsExplicitUserPing(t *testing.T) {
+	rt := &recordingDiscordTransport{}
+	ds, err := discordgo.New("Bot test")
+	if err != nil {
+		t.Fatalf("new discord session: %v", err)
+	}
+	ds.Client = &http.Client{Transport: rt}
+
+	if _, err := sendDiscordTextWithAllowedMentions(ds, "channel-1", "<@user-1> drink water", nil, []string{" user-1 "}); err != nil {
+		t.Fatalf("send discord text: %v", err)
+	}
+
+	paths, bodies := rt.Snapshot()
+	if len(paths) != 1 || !strings.Contains(paths[0], "/channels/channel-1/messages") {
+		t.Fatalf("unexpected discord calls: paths=%v bodies=%v", paths, bodies)
+	}
+	var payload struct {
+		Content         string `json:"content"`
+		AllowedMentions struct {
+			Users []string `json:"users"`
+		} `json:"allowed_mentions"`
+	}
+	if err := json.Unmarshal([]byte(bodies[0]), &payload); err != nil {
+		t.Fatalf("discord payload json: %v\n%s", err, bodies[0])
+	}
+	if payload.Content != "<@user-1> drink water" {
+		t.Fatalf("content = %q", payload.Content)
+	}
+	if len(payload.AllowedMentions.Users) != 1 || payload.AllowedMentions.Users[0] != "user-1" {
+		t.Fatalf("allowed mention users = %+v, want [user-1]", payload.AllowedMentions.Users)
+	}
+}
+
 func TestSafeEgressDrainChannelFlushesOnlyMatchingPendingActions(t *testing.T) {
 	dir := t.TempDir()
 	rt := &recordingDiscordTransport{}
@@ -1900,13 +1933,23 @@ func TestBuildPromptDocumentsCronOwnerChannelScope(t *testing.T) {
 	if !strings.Contains(got, "For cron management tools, use channel_id as the owning parent channel ID") {
 		t.Fatalf("prompt missing cron owner scope guidance:\n%s", got)
 	}
+	if !strings.Contains(got, "For one-time delayed reminders, use bot_create_reminder; for recurring schedules, use bot_create_cron.") {
+		t.Fatalf("prompt missing reminder tool guidance:\n%s", got)
+	}
 	if !strings.Contains(got, "channel_id=channel-1 thread_id=thread-1") {
 		t.Fatalf("prompt missing channel/thread context:\n%s", got)
 	}
 }
 
+func TestBuildPromptIncludesRequesterDiscordIDWhenAvailable(t *testing.T) {
+	got := buildPromptThreadWithMentions("create reminder", nil, "channel-1", "thread-1", "guild-1", "alice", "user-1", "", nil)
+	if !strings.Contains(got, "user=alice user_id=user-1") {
+		t.Fatalf("prompt missing requester Discord user ID:\n%s", got)
+	}
+}
+
 func TestBuildPromptDocumentsStructuredMentionReferences(t *testing.T) {
-	got := buildPromptThreadWithMentions("please notify Chun", nil, "channel-1", "thread-1", "guild-1", "alice", "", []discordmention.Ref{
+	got := buildPromptThreadWithMentions("please notify Chun", nil, "channel-1", "thread-1", "guild-1", "alice", "", "", []discordmention.Ref{
 		discordmention.UserRef("123", "Chun"),
 	})
 	if !strings.Contains(got, "[[discord:user:123]]") {

@@ -2633,6 +2633,7 @@ func (m *Manager) spawnThreadAgent(threadID, parentChannelID string, modelOverri
 	w.OnBeforeFinalResponseFunc(m.safeEgressDrain)
 	w.SetUsageStore(m.usage)
 	w.SetAuditSink(m.audit)
+	w.SetBotToolsTargetStatePath(botToolsTargetStatePath(m.dataDir, threadID))
 	w.SetHistoryPrefix(historyCtx)
 	w.OnActivityFunc(func() { m.TouchThreadAgent(threadID) })
 	w.OnIdleFunc(func() bool { return m.StopThreadAgentIfCloseWhenIdle(threadID) })

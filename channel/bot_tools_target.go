@@ -5,11 +5,14 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/nczz/kiro-discord-bot/internal/discordmention"
 )
 
 type botToolsTargetState struct {
-	TargetChannelID string `json:"target_channel_id"`
-	DisableEgress   bool   `json:"disable_egress,omitempty"`
+	TargetChannelID       string   `json:"target_channel_id"`
+	DisableEgress         bool     `json:"disable_egress,omitempty"`
+	AllowedMentionUserIDs []string `json:"allowed_mention_user_ids,omitempty"`
 }
 
 func botToolsTargetStatePath(dataDir, channelID string) string {
@@ -22,11 +25,24 @@ func botToolsTargetStatePath(dataDir, channelID string) string {
 	return filepath.Join(dataDir, "bot-tools-targets", channelID+".json")
 }
 
+func botToolsTargetStateID(channelID, targetChannelID string) string {
+	channelID = strings.TrimSpace(channelID)
+	targetChannelID = strings.TrimSpace(targetChannelID)
+	if targetChannelID != "" {
+		return targetChannelID
+	}
+	return channelID
+}
+
 func writeBotToolsTargetState(path, targetChannelID string) error {
 	return writeBotToolsTargetStateOptions(path, targetChannelID, false)
 }
 
 func writeBotToolsTargetStateOptions(path, targetChannelID string, disableEgress bool) error {
+	return writeBotToolsTargetStateWithRefs(path, targetChannelID, disableEgress, nil)
+}
+
+func writeBotToolsTargetStateWithRefs(path, targetChannelID string, disableEgress bool, refs []discordmention.Ref) error {
 	path = strings.TrimSpace(path)
 	targetChannelID = strings.TrimSpace(targetChannelID)
 	if path == "" || targetChannelID == "" {
@@ -35,7 +51,11 @@ func writeBotToolsTargetStateOptions(path, targetChannelID string, disableEgress
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
 	}
-	raw, err := json.Marshal(botToolsTargetState{TargetChannelID: targetChannelID, DisableEgress: disableEgress})
+	raw, err := json.Marshal(botToolsTargetState{
+		TargetChannelID:       targetChannelID,
+		DisableEgress:         disableEgress,
+		AllowedMentionUserIDs: allowedMentionUserIDs(refs),
+	})
 	if err != nil {
 		return err
 	}
@@ -44,6 +64,23 @@ func writeBotToolsTargetStateOptions(path, targetChannelID string, disableEgress
 		return err
 	}
 	return os.Rename(tmp, path)
+}
+
+func allowedMentionUserIDs(refs []discordmention.Ref) []string {
+	seen := make(map[string]bool)
+	out := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		if ref.Kind != "user" {
+			continue
+		}
+		id := strings.TrimSpace(ref.ID)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	return out
 }
 
 func clearBotToolsTargetState(path string) {

@@ -642,6 +642,13 @@ func normalizeLegacyDefaultBotToolsPolicy(p MCPChannelPolicy) MCPChannelPolicy {
 			"bot_list_channel_data",
 			"bot_list_cron",
 			"bot_send_file",
+		},
+		{
+			"bot_create_cron",
+			"bot_data_summary",
+			"bot_list_channel_data",
+			"bot_list_cron",
+			"bot_send_file",
 			"bot_send_message",
 		},
 		{
@@ -730,16 +737,12 @@ func (p MCPChannelPolicy) ToACPServer(entry MCPCatalogEntry, proxyCommand string
 			env["BOT_TOOLS_CHANNEL_ID"] = channelID
 			env["BOT_TOOLS_TARGET_CHANNEL_ID"] = strings.TrimSpace(targetChannelID)
 			env["BOT_TOOLS_GUILD_ID"] = guildID
-			if strings.TrimSpace(targetChannelID) == "" || strings.TrimSpace(targetChannelID) == channelID {
-				if statePath := botToolsTargetStatePath(env["DATA_DIR"], channelID); statePath != "" {
-					env["BOT_TOOLS_TARGET_STATE_PATH"] = statePath
-				}
+			if statePath := botToolsTargetStatePath(env["DATA_DIR"], botToolsTargetStateID(channelID, targetChannelID)); statePath != "" {
+				env["BOT_TOOLS_TARGET_STATE_PATH"] = statePath
 			}
 		} else if entry.Name == "mcp-discord" {
-			if strings.TrimSpace(targetChannelID) == "" || strings.TrimSpace(targetChannelID) == channelID {
-				if statePath := botToolsTargetStatePath(env["DATA_DIR"], channelID); statePath != "" {
-					env["BOT_TOOLS_TARGET_STATE_PATH"] = statePath
-				}
+			if statePath := botToolsTargetStatePath(env["DATA_DIR"], botToolsTargetStateID(channelID, targetChannelID)); statePath != "" {
+				env["BOT_TOOLS_TARGET_STATE_PATH"] = statePath
 			}
 		}
 		envItems = mcpproxy.ConfigEnv(entry.Command, entry.Args, env, allowedTools, p.AllowAllTools)
