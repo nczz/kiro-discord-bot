@@ -83,8 +83,12 @@ func saveBase64(b64, ext string) (string, error) {
 	return saveBytes(data, ext)
 }
 
-func downloadToFile(url, ext string) (string, error) {
-	resp, err := http.Get(url)
+func downloadToFile(ctx context.Context, url, ext string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return "", err
 	}

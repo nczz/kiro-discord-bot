@@ -6,8 +6,8 @@ data/
 kiro-discord-bot
 kiro-discord-bot-local
 data-local/
-mcp-media
-mcp-media-server
+/mcp-media
+/mcp-media-server
 logs/
 dist/
 .tmp/

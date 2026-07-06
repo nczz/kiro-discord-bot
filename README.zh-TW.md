@@ -43,7 +43,7 @@ Kiro CLI 與 OMP 都是外部 agent CLI。這個專案會從 Discord 啟動與�
 | 日常使用 | [指令參考][commands-zh] · [監聽模式][listen-modes-zh] |
 | Agent engines | [Agent Engines][agent-engines-zh] · [環境變數][environment-zh] |
 | Agent 脈絡 | [Steering 檔案][steering-zh] · [核心概念][core-concepts-zh] |
-| 工具權限 | [MCP 權限][mcp-zh] · [Bot Tools][bot-tools-zh] · [Discord MCP Server][mcp-discord-zh] |
+| 工具權限 | [MCP 權限][mcp-zh] · [Bot Tools][bot-tools-zh] · [Discord MCP Server][mcp-discord-zh] · [Media MCP Server][media-mcp-zh] |
 | 維運 | [環境變數][environment-zh] · [部署][deployment-zh] · [Release Runbook][release-zh] |
 | 安全與審查 | [安全模型][security-zh] · [Audit、用量與隱私][audit-usage-zh] |
 | 支援 | [疑難排解][troubleshooting-zh] · [macOS MCP 網路][macos-networking-zh] |
@@ -82,6 +82,7 @@ MIT
 [mcp-zh]: https://nczz.github.io/kiro-discord-bot/zh-TW/guide/mcp.html
 [bot-tools-zh]: https://nczz.github.io/kiro-discord-bot/zh-TW/guide/bot-tools.html
 [mcp-discord-zh]: https://nczz.github.io/kiro-discord-bot/zh-TW/guide/mcp-discord.html
+[media-mcp-zh]: https://nczz.github.io/kiro-discord-bot/zh-TW/guide/media-mcp.html
 [environment-zh]: https://nczz.github.io/kiro-discord-bot/zh-TW/guide/environment.html
 [deployment-zh]: https://nczz.github.io/kiro-discord-bot/zh-TW/guide/deployment.html
 [release-zh]: https://nczz.github.io/kiro-discord-bot/zh-TW/guide/release.html

@@ -199,6 +199,12 @@ These variables configure `mcp-media-server`.
 | `GEMINI_API_KEY` | empty | Enables Gemini image, video, music, and TTS providers. |
 | `OPENAI_API_KEY` | empty | Enables OpenAI image and TTS providers. |
 | `MEDIA_DEFAULT_IMAGE_MODEL` | provider default | Default image model override. |
+| `MEDIA_DEFAULT_VIDEO_MODEL` | provider default | Default video model override. |
+| `MEDIA_DEFAULT_MUSIC_MODEL` | provider default | Default music model override. |
 | `MEDIA_DEFAULT_TTS_MODEL` | provider default | Default TTS model override. |
+| `MEDIA_SYNC_TIMEOUT_SEC` | `600` | Maximum runtime for one synchronous media tool call. Async jobs use `MEDIA_JOB_TIMEOUT_SEC` instead. |
+| `MEDIA_JOB_TIMEOUT_SEC` | `900` | Maximum runtime for an async media job. |
+| `MEDIA_JOB_RETENTION_SEC` | `86400` | How long completed async job metadata remains listable. |
+| `MEDIA_JOB_MAX_ACTIVE` | `4` | Maximum queued or running async media jobs in one `mcp-media-server` process. Set `0` to disable the limit. |
 
 If neither `GEMINI_API_KEY` nor `OPENAI_API_KEY` is set, `mcp-media-server` exits at startup.

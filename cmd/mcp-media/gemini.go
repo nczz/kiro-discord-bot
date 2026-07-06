@@ -47,12 +47,12 @@ func (g *GeminiProvider) VideoModels() []ModelInfo {
 
 func (g *GeminiProvider) MusicModels() []ModelInfo {
 	return []ModelInfo{
-		{ID: "lyria-3-pro", Provider: "gemini", Type: "music", Name: "Lyria 3 Pro",
-			Description: "Full-length songs up to 3 min with verse/chorus/bridge structure, 44.1kHz stereo",
-			CostTier:    "$$"},
 		{ID: "lyria-3-clip", Provider: "gemini", Type: "music", Name: "Lyria 3 Clip",
 			Description: "30-second music clips, loops, and previews. Fast and cost-efficient",
 			CostTier:    "$"},
+		{ID: "lyria-3-pro", Provider: "gemini", Type: "music", Name: "Lyria 3 Pro",
+			Description: "Full-length songs up to 3 min with verse/chorus/bridge structure, 44.1kHz stereo",
+			CostTier:    "$$"},
 	}
 }
 
@@ -185,7 +185,7 @@ func (g *GeminiProvider) pollVideo(ctx context.Context, opName string) (*MediaRe
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
-	for i := 0; i < 120; i++ {
+	for {
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
@@ -225,7 +225,6 @@ func (g *GeminiProvider) pollVideo(ctx context.Context, opName string) (*MediaRe
 
 		return g.parseVideoResponse(ctx, pBody)
 	}
-	return nil, fmt.Errorf("veo timeout after 10 minutes")
 }
 
 // parseVideoResponse extracts the video URI from a completed operation response.

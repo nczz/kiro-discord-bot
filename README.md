@@ -43,7 +43,7 @@ Continue with the [full installation guide][install-doc].
 | Daily use | [Command Reference][commands] · [Listen Modes][listen-modes] |
 | Agent engines | [Agent Engines][agent-engines] · [Environment][environment] |
 | Agent context | [Steering Files][steering] · [Core Concepts][core-concepts] |
-| Tool access | [MCP Policy][mcp] · [Bot Tools][bot-tools] · [Discord MCP Server][mcp-discord] |
+| Tool access | [MCP Policy][mcp] · [Bot Tools][bot-tools] · [Discord MCP Server][mcp-discord] · [Media MCP Server][media-mcp] |
 | Operations | [Environment][environment] · [Deployment][deployment] · [Release Runbook][release] |
 | Security and review | [Security Model][security] · [Audit, Usage, and Privacy][audit-usage] |
 | Support | [Troubleshooting][troubleshooting] · [macOS MCP Networking][macos-networking] |
@@ -82,6 +82,7 @@ MIT
 [mcp]: https://nczz.github.io/kiro-discord-bot/guide/mcp.html
 [bot-tools]: https://nczz.github.io/kiro-discord-bot/guide/bot-tools.html
 [mcp-discord]: https://nczz.github.io/kiro-discord-bot/guide/mcp-discord.html
+[media-mcp]: https://nczz.github.io/kiro-discord-bot/guide/media-mcp.html
 [environment]: https://nczz.github.io/kiro-discord-bot/guide/environment.html
 [deployment]: https://nczz.github.io/kiro-discord-bot/guide/deployment.html
 [release]: https://nczz.github.io/kiro-discord-bot/guide/release.html

@@ -99,7 +99,7 @@ func (o *OpenAIProvider) GenerateImage(ctx context.Context, prompt, model, size,
 		return &MediaResult{Path: path, MimeType: "image/png"}, nil
 	}
 	if d.URL != "" {
-		path, err := downloadToFile(d.URL, "png")
+		path, err := downloadToFile(ctx, d.URL, "png")
 		if err != nil {
 			return nil, err
 		}

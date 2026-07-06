@@ -10,6 +10,8 @@ type Registry struct {
 	ttsProviders   map[string]TTSProvider
 	allModels      []ModelInfo
 	defaultImage   string
+	defaultVideo   string
+	defaultMusic   string
 	defaultTTS     string
 }
 
@@ -36,6 +38,9 @@ func (r *Registry) RegisterVideo(p VideoProvider) {
 	for _, m := range p.VideoModels() {
 		r.videoProviders[m.ID] = p
 		r.allModels = append(r.allModels, m)
+		if r.defaultVideo == "" {
+			r.defaultVideo = m.ID
+		}
 	}
 }
 
@@ -43,6 +48,9 @@ func (r *Registry) RegisterMusic(p MusicProvider) {
 	for _, m := range p.MusicModels() {
 		r.musicProviders[m.ID] = p
 		r.allModels = append(r.allModels, m)
+		if r.defaultMusic == "" {
+			r.defaultMusic = m.ID
+		}
 	}
 }
 
@@ -56,9 +64,15 @@ func (r *Registry) RegisterTTS(p TTSProvider) {
 	}
 }
 
-func (r *Registry) SetDefaults(image, tts string) {
+func (r *Registry) SetDefaults(image, video, music, tts string) {
 	if image != "" {
 		r.defaultImage = image
+	}
+	if video != "" {
+		r.defaultVideo = video
+	}
+	if music != "" {
+		r.defaultMusic = music
 	}
 	if tts != "" {
 		r.defaultTTS = tts
@@ -80,10 +94,7 @@ func (r *Registry) Image(model string) (ImageProvider, string, error) {
 
 func (r *Registry) Video(model string) (VideoProvider, string, error) {
 	if model == "" {
-		for k := range r.videoProviders {
-			model = k
-			break
-		}
+		model = r.defaultVideo
 	}
 	p, ok := r.videoProviders[model]
 	if !ok {
@@ -94,10 +105,7 @@ func (r *Registry) Video(model string) (VideoProvider, string, error) {
 
 func (r *Registry) Music(model string) (MusicProvider, string, error) {
 	if model == "" {
-		for k := range r.musicProviders {
-			model = k
-			break
-		}
+		model = r.defaultMusic
 	}
 	p, ok := r.musicProviders[model]
 	if !ok {
