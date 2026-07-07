@@ -1987,9 +1987,43 @@ func TestCompactToolStartMessageNormalizesURLLikeLocations(t *testing.T) {
 }
 
 func TestDisplayToolLocationPathNormalizesHTTPURLLikePath(t *testing.T) {
-	got := displayToolLocationPath("/tmp/http:/example.com/resource")
+	got := displayToolLocationPath("/tmp/http:/example.com/resource", "/tmp")
 	if got != "http://example.com/resource" {
 		t.Fatalf("normalized path = %q, want http URL", got)
+	}
+}
+
+func TestFormatToolLocationsStripsDisplayCWD(t *testing.T) {
+	line12 := 12
+	got := FormatToolLocations([]acp.ToolCallLocation{
+		{Path: "/Users/chun/Projects/kiro-discord-bot/channel/worker.go", Line: &line12},
+	}, true, "/Users/chun/Projects")
+	if strings.Contains(got, "/Users/chun/Projects") {
+		t.Fatalf("location should strip display cwd, got %q", got)
+	}
+	if !strings.Contains(got, "`kiro-discord-bot/channel/worker.go:12`") {
+		t.Fatalf("location should keep cwd-relative suffix, got %q", got)
+	}
+}
+
+func TestFormatToolLocationsKeepsOutsideCWDPath(t *testing.T) {
+	got := FormatToolLocations([]acp.ToolCallLocation{
+		{Path: "/var/log/system.log"},
+	}, true, "/Users/chun/Projects")
+	if !strings.Contains(got, "`/var/log/system.log`") {
+		t.Fatalf("outside cwd path should remain absolute, got %q", got)
+	}
+}
+
+func TestFormatToolLocationsNormalizesURLBeforeStrippingCWD(t *testing.T) {
+	got := FormatToolLocations([]acp.ToolCallLocation{
+		{Path: "/Users/chun/Projects/https:/api.github.com/repos/nczz/kiro-discord-bot"},
+	}, false, "/Users/chun/Projects")
+	if strings.Contains(got, "/Users/chun/Projects") {
+		t.Fatalf("url-like location should not expose cwd, got %q", got)
+	}
+	if !strings.Contains(got, "https://api.github.com/repos/nczz/kiro-discord-bot") {
+		t.Fatalf("url-like location should normalize to URL, got %q", got)
 	}
 }
 

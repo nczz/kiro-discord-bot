@@ -210,6 +210,7 @@ func (a *cronAdapter) AskAgentInThread(ctx context.Context, agent *acp.Agent, jo
 	done := make(chan result, 1)
 
 	isSilent := func() bool { return a.bot.manager.IsSilent(channelID) }
+	displayCWD := a.bot.manager.CWDPath(channelID)
 
 	updateProgress := func() {
 		if statusMsgID == "" {
@@ -232,15 +233,11 @@ func (a *cronAdapter) AskAgentInThread(ctx context.Context, agent *acp.Agent, jo
 			}
 			icon := channel.ToolKindIcon(evt.Kind)
 			if isSilent() {
-				channel.SendProcessMessage(ds, threadID, channel.CompactToolStartMessage(icon, evt))
+				channel.SendProcessMessage(ds, threadID, channel.CompactToolStartMessage(icon, evt, displayCWD))
 			} else {
 				msg := icon + " " + channel.EscapeDiscordMarkdown(title)
 				if len(evt.Locations) > 0 {
-					files := make([]string, 0, len(evt.Locations))
-					for _, loc := range evt.Locations {
-						files = append(files, "`"+loc.Path+"`")
-					}
-					msg += "\n📁 " + strings.Join(files, ", ")
+					msg += "\n📁 " + channel.FormatToolLocations(evt.Locations, true, displayCWD)
 				}
 				channel.SendProcessMessage(ds, threadID, msg)
 			}
@@ -255,21 +252,9 @@ func (a *cronAdapter) AskAgentInThread(ctx context.Context, agent *acp.Agent, jo
 				return
 			}
 			if evt.RawOutput != "" && evt.Status == "completed" {
-				out := evt.RawOutput
-				if len(out) > 1900 {
-					out = textutil.TruncateUTF8Bytes(out, 1900) + L.Get("tool.output_truncated")
-				}
-				channel.SendProcessMessage(ds, threadID, "```\n"+out+"\n```")
+				channel.SendProcessMessage(ds, threadID, channel.FormatToolOutputBlock(evt.RawOutput, 1900))
 			} else if evt.Status == "failed" {
-				msg := "❌ " + channel.EscapeDiscordMarkdown(evt.Title)
-				if evt.RawOutput != "" {
-					o := evt.RawOutput
-					if len(o) > 500 {
-						o = textutil.TruncateUTF8Bytes(o, 500) + "..."
-					}
-					msg += "\n```\n" + o + "\n```"
-				}
-				channel.SendProcessMessage(ds, threadID, msg)
+				channel.SendProcessMessage(ds, threadID, channel.FormatToolFailureMessage(evt.Title, evt.RawOutput, 500))
 			}
 		},
 		OnThought: func(text string) {

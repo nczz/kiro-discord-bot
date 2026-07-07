@@ -742,6 +742,9 @@ func (m *Manager) Enqueue(ds *discordgo.Session, job *Job) error {
 	}
 
 	job.Session = ds
+	if strings.TrimSpace(job.DisplayCWD) == "" {
+		job.DisplayCWD = m.CWDPath(job.ChannelID)
+	}
 	if err := worker.Enqueue(job); err != nil {
 		return fmt.Errorf("queue full (%d jobs pending)", worker.QueueLen())
 	}
@@ -2511,6 +2514,13 @@ func (m *Manager) EnqueueThread(ds *discordgo.Session, job *Job, parentChannelID
 
 	entry.lastActivity = time.Now()
 	job.Session = ds
+	if strings.TrimSpace(job.DisplayCWD) == "" {
+		if sess, ok := m.getThreadSession(job.ThreadID); ok && strings.TrimSpace(sess.CWD) != "" {
+			job.DisplayCWD = sess.CWD
+		} else {
+			job.DisplayCWD = m.CWDPath(parentChannelID)
+		}
+	}
 	if err := entry.worker.Enqueue(job); err != nil {
 		return fmt.Errorf("thread queue full")
 	}

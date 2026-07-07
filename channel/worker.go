@@ -44,6 +44,7 @@ type Job struct {
 	ThreadMentionOnly bool // listen snapshot for newly created agent threads
 	BotToolsTargetID  string
 	DisableBotEgress  bool
+	DisplayCWD        string // cwd prefix to remove from progress-only location displays
 	FinalReply        func(string)
 	MentionRefs       []discordmention.Ref
 }
@@ -610,12 +611,12 @@ func (w *Worker) execute(job *Job) {
 			silent := w.isSilent != nil && w.isSilent()
 			if silent {
 				// Compact: icon + title only
-				SendProcessMessage(ds, threadID, CompactToolStartMessage(icon, evt))
+				SendProcessMessage(ds, threadID, CompactToolStartMessage(icon, evt, job.DisplayCWD))
 			} else {
 				// Full: icon + title + affected files
 				msg := icon + " " + EscapeDiscordMarkdown(title)
 				if len(evt.Locations) > 0 {
-					msg += "\n📁 " + FormatToolLocations(evt.Locations, true)
+					msg += "\n📁 " + FormatToolLocations(evt.Locations, true, job.DisplayCWD)
 				}
 				SendProcessMessage(ds, threadID, msg)
 			}
@@ -1655,7 +1656,7 @@ func ToolKindIcon(kind string) string {
 	}
 }
 
-func CompactToolStartMessage(icon string, evt acp.ToolCallEvent) string {
+func CompactToolStartMessage(icon string, evt acp.ToolCallEvent, displayCWD ...string) string {
 	title := toolDisplayTitle(evt)
 	var msg string
 	if evt.Kind == "execute" {
@@ -1667,7 +1668,7 @@ func CompactToolStartMessage(icon string, evt acp.ToolCallEvent) string {
 		msg = icon + " " + EscapeDiscordMarkdown(title)
 	}
 	if len(evt.Locations) > 0 {
-		msg += "\n  📁 " + FormatToolLocations(evt.Locations, false)
+		msg += "\n  📁 " + FormatToolLocations(evt.Locations, false, displayCWD...)
 	}
 	return msg
 }
@@ -1675,14 +1676,18 @@ func CompactToolStartMessage(icon string, evt acp.ToolCallEvent) string {
 // FormatToolLocations renders agent-provided location paths for Discord. ACP
 // backends may report fetched URLs as cwd-prefixed pseudo paths, so normalize
 // them before display and cap the list to keep progress messages bounded.
-func FormatToolLocations(locations []acp.ToolCallLocation, inlineCode bool) string {
+func FormatToolLocations(locations []acp.ToolCallLocation, inlineCode bool, displayCWD ...string) string {
 	const maxLocations = 3
 	locs := make([]string, 0, min(len(locations), maxLocations))
+	cwd := ""
+	if len(displayCWD) > 0 {
+		cwd = displayCWD[0]
+	}
 	for i, loc := range locations {
 		if i >= maxLocations {
 			break
 		}
-		entry := displayToolLocationPath(loc.Path)
+		entry := displayToolLocationPath(loc.Path, cwd)
 		if loc.Line != nil {
 			entry += fmt.Sprintf(":%d", *loc.Line)
 		}
@@ -1699,7 +1704,7 @@ func FormatToolLocations(locations []acp.ToolCallLocation, inlineCode bool) stri
 	return strings.Join(locs, ", ")
 }
 
-func displayToolLocationPath(path string) string {
+func displayToolLocationPath(path, displayCWD string) string {
 	path = strings.TrimSpace(path)
 	for _, marker := range []string{"https:/", "http:/"} {
 		idx := strings.Index(path, marker)
@@ -1715,7 +1720,28 @@ func displayToolLocationPath(path string) string {
 		}
 		return truncateUTF8(candidate, 160)
 	}
+	if stripped := stripDisplayCWD(path, displayCWD); stripped != "" {
+		path = stripped
+	}
 	return truncateUTF8(path, 160)
+}
+
+func stripDisplayCWD(path, cwd string) string {
+	path = strings.TrimSpace(path)
+	cwd = strings.TrimSpace(cwd)
+	if path == "" || cwd == "" {
+		return ""
+	}
+	cleanPath := filepath.Clean(path)
+	cleanCWD := filepath.Clean(cwd)
+	if cleanPath == cleanCWD {
+		return "."
+	}
+	prefix := cleanCWD + string(filepath.Separator)
+	if strings.HasPrefix(cleanPath, prefix) {
+		return strings.TrimPrefix(cleanPath, prefix)
+	}
+	return ""
 }
 
 func safeInlineCode(s string) string {
