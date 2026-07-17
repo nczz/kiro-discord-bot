@@ -68,6 +68,9 @@ func TestDoctorRuntimeOverviewDoesNotLeakRawEnvironmentValues(t *testing.T) {
 
 func TestDoctorRuntimeOverviewShowsEffectiveDefaultsWhenEnvUnset(t *testing.T) {
 	L.Load("en")
+	for _, name := range []string{"KIRO_CLI_PATH", "DEFAULT_CWD", "ALLOWED_CWD_ROOTS", "KIRO_MODEL"} {
+		t.Setenv(name, "")
+	}
 	dir := t.TempDir()
 	m := NewManager(ManagerConfig{
 		KiroCLIPath:      "",

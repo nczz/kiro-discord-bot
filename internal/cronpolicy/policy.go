@@ -29,6 +29,11 @@ func CreateToolDescription(tz string) string {
 	return fmt.Sprintf("Create a scheduled recurring task in this Discord channel. Use when the user wants something to run periodically (daily, weekly, etc.). The schedule must be a 5-field cron expression. For one-time delayed reminders such as 'in 10 minutes' or 'tomorrow at 09:00', use bot_create_reminder instead. %s", SchedulePolicy(tz))
 }
 
+// UpdateToolDescription returns the bot_update_cron tool description.
+func UpdateToolDescription(tz string) string {
+	return fmt.Sprintf("Update or disable an existing recurring cron job without deleting it. First call bot_list_cron to obtain the exact job_id and current values. Send only fields the user asked to change; omitted fields remain unchanged. Set enabled=false to disable while preserving the job, or enabled=true to resume it. For deletion use bot_delete_cron, never this tool. One-time reminders cannot be updated; delete and recreate them instead. Changing schedule or resuming computes the next future run and does not backfill missed runs. %s", SchedulePolicy(tz))
+}
+
 // ScheduleFieldDescription returns the JSON schema description for cron fields.
 func ScheduleFieldDescription(tz string) string {
 	tz = TimezoneName(tz)

@@ -1,11 +1,13 @@
 package botmcp
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/nczz/kiro-discord-bot/heartbeat"
 	"github.com/nczz/kiro-discord-bot/internal/channelmeta"
 	"github.com/nczz/kiro-discord-bot/internal/cronpolicy"
 )
@@ -95,6 +97,9 @@ func TestDefaultSafeToolNamesExcludeDestructiveTools(t *testing.T) {
 	if !seen[ToolCreateReminder] {
 		t.Fatalf("one-time reminder tool should be default-enabled to avoid agent-side scheduling bypasses: %+v", tools)
 	}
+	if !seen[ToolUpdateCron] {
+		t.Fatalf("safe non-destructive update tool should be default-enabled: %+v", tools)
+	}
 	if seen[ToolQueryAudit] {
 		t.Fatalf("audit query tool must not be default-enabled outside manager-authorized /audit prompt jobs: %+v", tools)
 	}
@@ -135,6 +140,27 @@ func TestCreateCronToolDocumentsBotTimezone(t *testing.T) {
 	desc, _ := schedule["description"].(string)
 	if !strings.Contains(desc, "Asia/Taipei") || !strings.Contains(desc, "Do not convert to UTC") {
 		t.Fatalf("schedule description should pin bot timezone and forbid UTC conversion: %q", desc)
+	}
+}
+
+func TestUpdateCronToolDocumentsSafePartialUpdateContract(t *testing.T) {
+	t.Setenv("CRON_TIMEZONE", "Asia/Taipei")
+	tool := writeTool(ToolUpdateCron, cronpolicy.UpdateToolDescription("Asia/Taipei"), false)
+	for _, want := range []string{"bot_list_cron", "enabled=false", "bot_delete_cron", "One-time reminders cannot be updated", "Asia/Taipei"} {
+		if !strings.Contains(tool.Description, want) {
+			t.Fatalf("description missing %q: %s", want, tool.Description)
+		}
+	}
+	if tool.Annotations.DestructiveHint == nil || *tool.Annotations.DestructiveHint {
+		t.Fatal("update must not be destructive")
+	}
+	if tool.Annotations.IdempotentHint == nil || !*tool.Annotations.IdempotentHint {
+		t.Fatal("update must be idempotent")
+	}
+	for _, field := range []string{"job_id", "channel_id", "name", "schedule", "prompt", "enabled"} {
+		if _, ok := tool.InputSchema.Properties[field]; !ok {
+			t.Fatalf("missing schema field %s", field)
+		}
 	}
 }
 
@@ -433,6 +459,40 @@ func TestWritePendingCreateAndListCron(t *testing.T) {
 	entries, _ = os.ReadDir(pendingDir)
 	if len(entries) != 2 {
 		t.Fatalf("expected 2 pending files, got %d", len(entries))
+	}
+}
+
+func TestWritePendingUpdateCron(t *testing.T) {
+	dir := t.TempDir()
+	disabled := false
+	newPrompt := "Run safely"
+	if err := writePending(dir, pendingAction{
+		Action:    "update",
+		JobID:     "job-1",
+		ChannelID: "ch-1",
+		Update:    &heartbeat.CronUpdate{Enabled: &disabled, Prompt: &newPrompt},
+	}); err != nil {
+		t.Fatalf("writePending update: %v", err)
+	}
+
+	pendingDir := filepath.Join(dir, "cron", "pending")
+	entries, err := os.ReadDir(pendingDir)
+	if err != nil {
+		t.Fatalf("read pending dir: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 pending file, got %d", len(entries))
+	}
+	raw, err := os.ReadFile(filepath.Join(pendingDir, entries[0].Name()))
+	if err != nil {
+		t.Fatalf("read pending update: %v", err)
+	}
+	var got pendingAction
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("decode pending update: %v", err)
+	}
+	if got.Action != "update" || got.JobID != "job-1" || got.ChannelID != "ch-1" || got.Update == nil || got.Update.Enabled == nil || *got.Update.Enabled || got.Update.Prompt == nil || *got.Update.Prompt != newPrompt {
+		t.Fatalf("unexpected pending update: %+v", got)
 	}
 }
 

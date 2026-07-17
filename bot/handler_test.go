@@ -1936,6 +1936,9 @@ func TestBuildPromptDocumentsCronOwnerChannelScope(t *testing.T) {
 	if !strings.Contains(got, "For one-time delayed reminders, use bot_create_reminder; for recurring schedules, use bot_create_cron.") {
 		t.Fatalf("prompt missing reminder tool guidance:\n%s", got)
 	}
+	if !strings.Contains(got, "first use bot_list_cron, then bot_update_cron") || !strings.Contains(got, "enabled=false") || !strings.Contains(got, "deletion requires bot_delete_cron") {
+		t.Fatalf("prompt missing safe cron update guidance:\n%s", got)
+	}
 	if !strings.Contains(got, "channel_id=channel-1 thread_id=thread-1") {
 		t.Fatalf("prompt missing channel/thread context:\n%s", got)
 	}

@@ -437,6 +437,7 @@ func buildPromptThreadWithMentions(text string, attachments []string, channelID,
 	sb.WriteString("Do not write raw Discord angle-bracket mention strings or guess Discord IDs. To mention a user, use one of the exact Discord mention reference placeholders listed below; unlisted users cannot be mentioned.\n")
 	sb.WriteString("For cron management tools, use channel_id as the owning parent channel ID; use thread_id only for thread-targeted Discord messages.\n")
 	sb.WriteString("For one-time delayed reminders, use bot_create_reminder; for recurring schedules, use bot_create_cron.\n")
+	sb.WriteString("To change, disable, or resume an existing recurring schedule, first use bot_list_cron, then bot_update_cron with only the requested fields. Use enabled=false to disable without deleting; deletion requires bot_delete_cron.\n")
 	userIDPart := ""
 	if strings.TrimSpace(userID) != "" {
 		userIDPart = fmt.Sprintf(" user_id=%s", strings.TrimSpace(userID))

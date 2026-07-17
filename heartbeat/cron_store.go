@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 	"path/filepath"
@@ -35,6 +36,77 @@ type CronJob struct {
 	NextRun       string `json:"next_run,omitempty"`
 	UseAgent      bool   `json:"use_agent,omitempty"`
 	RunOnce       bool   `json:"run_once,omitempty"`
+}
+
+// CronUpdate is a validated partial update for a recurring cron job.
+// Pointer fields distinguish an omitted field from an explicit value.
+type CronUpdate struct {
+	Name     *string `json:"name,omitempty"`
+	Schedule *string `json:"schedule,omitempty"`
+	Prompt   *string `json:"prompt,omitempty"`
+	Enabled  *bool   `json:"enabled,omitempty"`
+}
+
+// ValidateCronUpdate validates the shape and values of a partial cron update.
+func ValidateCronUpdate(update CronUpdate) error {
+	if update.Name == nil && update.Schedule == nil && update.Prompt == nil && update.Enabled == nil {
+		return fmt.Errorf("at least one of name, schedule, prompt, or enabled is required")
+	}
+	if update.Name != nil {
+		if strings.TrimSpace(*update.Name) == "" {
+			return fmt.Errorf("name cannot be empty")
+		}
+	}
+	if update.Schedule != nil {
+		scheduleHuman := strings.TrimSpace(*update.Schedule)
+		if scheduleHuman == "" {
+			return fmt.Errorf("schedule cannot be empty")
+		}
+		if _, err := ParseSchedule(scheduleHuman); err != nil {
+			return fmt.Errorf("invalid schedule: %w", err)
+		}
+	}
+	if update.Prompt != nil {
+		if strings.TrimSpace(*update.Prompt) == "" {
+			return fmt.Errorf("prompt cannot be empty")
+		}
+	}
+	return nil
+}
+
+// ApplyCronUpdate applies a partial update to an existing recurring job.
+// It validates every supplied field before mutating job and reports whether
+// next_run must be recalculated by CronTask.
+func ApplyCronUpdate(job *CronJob, update CronUpdate) (bool, error) {
+	if job == nil {
+		return false, fmt.Errorf("cron job is required")
+	}
+	if job.OneShot {
+		return false, fmt.Errorf("one-time reminders cannot be updated; delete and recreate the reminder")
+	}
+	if err := ValidateCronUpdate(update); err != nil {
+		return false, err
+	}
+
+	wasEnabled := job.Enabled
+	scheduleChanged := false
+	if update.Name != nil {
+		job.Name = strings.TrimSpace(*update.Name)
+	}
+	if update.Schedule != nil {
+		scheduleHuman := strings.TrimSpace(*update.Schedule)
+		cronExpr, _ := ParseSchedule(scheduleHuman)
+		scheduleChanged = cronExpr != job.Schedule
+		job.ScheduleHuman = scheduleHuman
+		job.Schedule = cronExpr
+	}
+	if update.Prompt != nil {
+		job.Prompt = strings.TrimSpace(*update.Prompt)
+	}
+	if update.Enabled != nil {
+		job.Enabled = *update.Enabled
+	}
+	return scheduleChanged || (!wasEnabled && job.Enabled), nil
 }
 
 // CronStore persists cron jobs to a JSON file.
@@ -163,10 +235,11 @@ func randomID() string {
 
 // PendingAction represents a cron action written by the MCP bot-tools server.
 type PendingAction struct {
-	Action    string      `json:"action"` // "create" or "delete"
+	Action    string      `json:"action"` // "create", "create_reminder", "update", or "delete"
 	Job       *PendingJob `json:"job,omitempty"`
 	JobID     string      `json:"job_id,omitempty"`
 	ChannelID string      `json:"channel_id,omitempty"`
+	Update    *CronUpdate `json:"update,omitempty"`
 }
 
 // PendingJob holds fields for creating a new cron job via pending.
@@ -186,14 +259,14 @@ type PendingJob struct {
 }
 
 // IngestPending scans the pending directory, processes actions, and removes files.
-// Returns the IDs of newly created jobs (for RecalcNextRun).
+// Returns job IDs whose next_run must be recalculated by CronTask.
 func (s *CronStore) IngestPending() []string {
 	dir := filepath.Join(filepath.Dir(s.path), "pending")
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil
 	}
-	var created []string
+	var recalcIDs []string
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
 			continue
@@ -251,7 +324,7 @@ func (s *CronStore) IngestPending() []string {
 				log.Printf("[cron-ingest] add job: %v", err)
 				continue
 			}
-			created = append(created, job.ID)
+			recalcIDs = append(recalcIDs, job.ID)
 			log.Printf("[cron-ingest] created job %s (%s)", job.ID, job.Name)
 		case "create_reminder":
 			if action.Job == nil {
@@ -297,7 +370,7 @@ func (s *CronStore) IngestPending() []string {
 				log.Printf("[cron-ingest] add reminder: %v", err)
 				continue
 			}
-			created = append(created, job.ID)
+			recalcIDs = append(recalcIDs, job.ID)
 			log.Printf("[cron-ingest] created reminder %s (%s)", job.ID, job.Name)
 		case "delete":
 			action.JobID = strings.TrimSpace(action.JobID)
@@ -324,10 +397,43 @@ func (s *CronStore) IngestPending() []string {
 			} else {
 				log.Printf("[cron-ingest] deleted job %s", action.JobID)
 			}
+		case "update":
+			action.JobID = strings.TrimSpace(action.JobID)
+			action.ChannelID = strings.TrimSpace(action.ChannelID)
+			if action.JobID == "" || action.ChannelID == "" || action.Update == nil {
+				log.Printf("[cron-ingest] %s: update action missing job_id, channel_id, or update", entry.Name())
+				os.Remove(path)
+				continue
+			}
+			existing, ok := s.Get(action.JobID)
+			if !ok {
+				log.Printf("[cron-ingest] %s: update skipped — job %s not found", entry.Name(), action.JobID)
+				os.Remove(path)
+				continue
+			}
+			if existing.ChannelID != action.ChannelID {
+				log.Printf("[cron-ingest] %s: update blocked — job %s belongs to channel %s, not %s", entry.Name(), action.JobID, existing.ChannelID, action.ChannelID)
+				os.Remove(path)
+				continue
+			}
+			recalc, err := ApplyCronUpdate(existing, *action.Update)
+			if err != nil {
+				log.Printf("[cron-ingest] %s: update job %s: %v", entry.Name(), action.JobID, err)
+				os.Remove(path)
+				continue
+			}
+			if err := s.Update(existing); err != nil {
+				log.Printf("[cron-ingest] update job %s: %v", action.JobID, err)
+				continue
+			}
+			if recalc {
+				recalcIDs = append(recalcIDs, existing.ID)
+			}
+			log.Printf("[cron-ingest] updated job %s", existing.ID)
 		default:
 			log.Printf("[cron-ingest] %s: unknown action %q", entry.Name(), action.Action)
 		}
 		os.Remove(path)
 	}
-	return created
+	return recalcIDs
 }

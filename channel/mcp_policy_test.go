@@ -580,6 +580,29 @@ func TestLegacySafeDefaultBotToolsPolicyAddsReminderTool(t *testing.T) {
 	}
 }
 
+func TestLegacySafeDefaultBotToolsPolicyAddsUpdateTool(t *testing.T) {
+	dir := t.TempDir()
+	store, err := OpenMCPPolicyStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	legacy := defaultMCPPolicy("guild-1", "channel-1", "bot-tools")
+	legacy.Enabled, legacy.Preset, legacy.ReadOnly = true, "safe-write", false
+	legacy.AllowAllTools, legacy.AllowDestructive = false, false
+	legacy.AllowedTools = []string{"bot_data_summary", "bot_list_channel_data", "bot_list_cron", "bot_send_file", "bot_create_cron", "bot_create_reminder"}
+	if err := store.SetPolicy(context.Background(), legacy); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.GetPolicy(context.Background(), "guild-1", "channel-1", "bot-tools")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsString(got.EffectiveTools(), "bot_update_cron") {
+		t.Fatalf("legacy safe default policy did not gain update tool: %+v", got.EffectiveTools())
+	}
+}
+
 func TestCustomBotToolsPolicyKeepsExplicitSensitiveTools(t *testing.T) {
 	p := defaultMCPPolicy("guild-1", "channel-1", "bot-tools")
 	p.Enabled = true

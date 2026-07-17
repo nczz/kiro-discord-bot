@@ -168,16 +168,15 @@ func (b *Bot) handleCronEditSubmit(ds *discordgo.Session, i *discordgo.Interacti
 	}
 
 	scheduleInput := fields["cron_schedule"]
-	cronExpr, err := heartbeat.ParseSchedule(scheduleInput)
+	name := fields["cron_name"]
+	prompt := fields["cron_prompt"]
+	recalc, err := heartbeat.ApplyCronUpdate(job, heartbeat.CronUpdate{
+		Name: &name, Schedule: &scheduleInput, Prompt: &prompt,
+	})
 	if err != nil {
 		respondInteraction(ds, i, L.Getf("error.parse_schedule", err.Error()))
 		return
 	}
-
-	job.Name = fields["cron_name"]
-	job.Schedule = cronExpr
-	job.ScheduleHuman = scheduleInput
-	job.Prompt = fields["cron_prompt"]
 	job.CWD = ""
 	job.Model = fields["cron_model"]
 
@@ -185,10 +184,12 @@ func (b *Bot) handleCronEditSubmit(ds *discordgo.Session, i *discordgo.Interacti
 		respondInteraction(ds, i, L.Getf("error.save_failed", err.Error()))
 		return
 	}
-	b.cronTask.RecalcNextRun(job)
+	if recalc {
+		b.cronTask.RecalcNextRun(job)
+	}
 
 	respondInteraction(ds, i, L.Getf("cron.updated",
-		job.Name, cronExpr, heartbeat.DescribeSchedule(cronExpr), truncate(job.Prompt, 200)))
+		job.Name, job.Schedule, heartbeat.DescribeSchedule(job.Schedule), truncate(job.Prompt, 200)))
 }
 
 // handleCronList responds to /cron-list with a list of jobs and action buttons.

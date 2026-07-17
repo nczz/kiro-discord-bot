@@ -413,6 +413,59 @@ func TestCronTaskRunIngestsPendingWhenNoJobsExist(t *testing.T) {
 	}
 }
 
+func TestCronTaskRunIngestsPendingUpdateAndRecalculatesChangedSchedule(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewCronStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldNext := "2099-01-01T09:00:00+08:00"
+	job := &CronJob{
+		ID:            "job-1",
+		Name:          "Daily",
+		ChannelID:     "channel-1",
+		GuildID:       "guild-1",
+		Schedule:      "0 9 * * *",
+		ScheduleHuman: "0 9 * * *",
+		Prompt:        "Run",
+		Enabled:       true,
+		NextRun:       oldNext,
+	}
+	if err := store.Add(job); err != nil {
+		t.Fatal(err)
+	}
+	pendingDir := filepath.Join(dir, "cron", "pending")
+	if err := os.MkdirAll(pendingDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	newSchedule := "0 10 * * *"
+	writePendingAction(t, filepath.Join(pendingDir, "update.json"), PendingAction{
+		Action:    "update",
+		JobID:     "job-1",
+		ChannelID: "channel-1",
+		Update:    &CronUpdate{Schedule: &newSchedule},
+	})
+	task := NewCronTask(store, &fakeCronDeps{}, dir, "Asia/Taipei", "guild-1")
+
+	if err := task.Run(); err != nil {
+		t.Fatal(err)
+	}
+
+	got, ok := store.Get("job-1")
+	if !ok {
+		t.Fatal("missing updated job")
+	}
+	if got.Schedule != newSchedule || got.ScheduleHuman != newSchedule {
+		t.Fatalf("schedule was not updated: %+v", got)
+	}
+	if got.NextRun == "" || got.NextRun == oldNext {
+		t.Fatalf("next_run was not recalculated after changed schedule: %+v", got)
+	}
+	if _, err := os.Stat(filepath.Join(pendingDir, "update.json")); !os.IsNotExist(err) {
+		t.Fatalf("pending update should be removed after ingest, stat err=%v", err)
+	}
+}
+
 func TestCronStoreIngestPendingValidatesAndCreatesJobs(t *testing.T) {
 	dir := t.TempDir()
 	store, err := NewCronStore(dir)
@@ -546,6 +599,94 @@ func TestCronStoreIngestPendingDeleteRequiresMatchingChannel(t *testing.T) {
 	store.IngestPending()
 	if _, ok := store.Get("job-1"); ok {
 		t.Fatal("job was not deleted from the owning channel")
+	}
+}
+
+func TestApplyCronUpdateValidatesBeforeMutation(t *testing.T) {
+	job := &CronJob{Name: "Daily", Schedule: "0 9 * * *", ScheduleHuman: "0 9 * * *", Prompt: "Run", Enabled: true}
+	empty, badSchedule := "  ", "not a cron"
+	if _, err := ApplyCronUpdate(job, CronUpdate{Name: &empty, Schedule: &badSchedule}); err == nil {
+		t.Fatal("expected invalid update")
+	}
+	if job.Name != "Daily" || job.Schedule != "0 9 * * *" {
+		t.Fatalf("invalid update partially mutated job: %+v", job)
+	}
+	if _, err := ApplyCronUpdate(job, CronUpdate{}); err == nil {
+		t.Fatal("expected empty update rejection")
+	}
+}
+
+func TestApplyCronUpdateDisablesAndResumesWithoutDelete(t *testing.T) {
+	job := &CronJob{ID: "job-1", Name: "Daily", Schedule: "0 9 * * *", ScheduleHuman: "0 9 * * *", Prompt: "Run", Enabled: true, NextRun: "2026-07-18T09:00:00+08:00"}
+	disabled := false
+	recalc, err := ApplyCronUpdate(job, CronUpdate{Enabled: &disabled})
+	if err != nil || recalc || job.Enabled {
+		t.Fatalf("disable result recalc=%v err=%v job=%+v", recalc, err, job)
+	}
+	enabled := true
+	recalc, err = ApplyCronUpdate(job, CronUpdate{Enabled: &enabled})
+	if err != nil || !recalc || !job.Enabled {
+		t.Fatalf("resume result recalc=%v err=%v job=%+v", recalc, err, job)
+	}
+}
+
+func TestApplyCronUpdateSameScheduleDoesNotRecalculate(t *testing.T) {
+	job := &CronJob{ID: "job-1", Name: "Daily", Schedule: "0 9 * * *", ScheduleHuman: "0 9 * * *", Prompt: "Run", Enabled: true}
+	sameSchedule := " 0 9 * * * "
+	recalc, err := ApplyCronUpdate(job, CronUpdate{Schedule: &sameSchedule})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recalc {
+		t.Fatalf("same schedule update requested next_run recalculation: %+v", job)
+	}
+	if job.Schedule != "0 9 * * *" || job.ScheduleHuman != "0 9 * * *" {
+		t.Fatalf("same schedule update was not normalized: %+v", job)
+	}
+
+	newSchedule := "0 10 * * *"
+	recalc, err = ApplyCronUpdate(job, CronUpdate{Schedule: &newSchedule})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !recalc || job.Schedule != newSchedule {
+		t.Fatalf("changed schedule did not request recalculation: recalc=%v job=%+v", recalc, job)
+	}
+}
+
+func TestCronStoreIngestPendingUpdatesOnlyOwningRecurringJob(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewCronStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := &CronJob{ID: "job-1", Name: "Daily", ChannelID: "channel-1", GuildID: "guild-1", Schedule: "0 9 * * *", ScheduleHuman: "0 9 * * *", Prompt: "Run", Enabled: true}
+	if err := store.Add(job); err != nil {
+		t.Fatal(err)
+	}
+	pendingDir := filepath.Join(dir, "cron", "pending")
+	if err := os.MkdirAll(pendingDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	disabled, newPrompt := false, "Run safely"
+	writePendingAction(t, filepath.Join(pendingDir, "wrong.json"), PendingAction{Action: "update", JobID: "job-1", ChannelID: "channel-2", Update: &CronUpdate{Enabled: &disabled}})
+	store.IngestPending()
+	if got, _ := store.Get("job-1"); !got.Enabled {
+		t.Fatal("cross-channel update disabled job")
+	}
+	writePendingAction(t, filepath.Join(pendingDir, "right.json"), PendingAction{Action: "update", JobID: "job-1", ChannelID: "channel-1", Update: &CronUpdate{Enabled: &disabled, Prompt: &newPrompt}})
+	store.IngestPending()
+	got, ok := store.Get("job-1")
+	if !ok || got.Enabled || got.Prompt != newPrompt {
+		t.Fatalf("unexpected updated job: %+v", got)
+	}
+}
+
+func TestApplyCronUpdateRejectsOneShotReminder(t *testing.T) {
+	job := &CronJob{OneShot: true, Name: "Reminder", Prompt: "Drink", Enabled: true}
+	disabled := false
+	if _, err := ApplyCronUpdate(job, CronUpdate{Enabled: &disabled}); err == nil {
+		t.Fatal("expected one-shot update rejection")
 	}
 }
 

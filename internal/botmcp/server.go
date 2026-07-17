@@ -32,6 +32,7 @@ const (
 	ToolSendMessage     = "bot_send_message"
 	ToolSendFile        = "bot_send_file"
 	ToolCreateCron      = "bot_create_cron"
+	ToolUpdateCron      = "bot_update_cron"
 	ToolCreateReminder  = "bot_create_reminder"
 	ToolListCron        = "bot_list_cron"
 	ToolDeleteCron      = "bot_delete_cron"
@@ -47,6 +48,7 @@ func DefaultSafeToolNames() []string {
 		ToolListCron,
 		ToolSendFile,
 		ToolCreateCron,
+		ToolUpdateCron,
 		ToolCreateReminder,
 	}
 }
@@ -215,6 +217,54 @@ func NewServer() *server.MCPServer {
 		},
 	)
 	s.AddTool(
+		writeTool(ToolUpdateCron, cronpolicy.UpdateToolDescription(cronTZ), false),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			jobID, _ := req.RequireString("job_id")
+			channelID, _ := req.RequireString("channel_id")
+			ownerChannelID, err := cronOwnerChannelID(channelID)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			update := &heartbeat.CronUpdate{}
+			if value, ok := req.GetArguments()["name"]; ok {
+				v, ok := value.(string)
+				if !ok {
+					return mcp.NewToolResultError("name must be a string"), nil
+				}
+				update.Name = &v
+			}
+			if value, ok := req.GetArguments()["schedule"]; ok {
+				v, ok := value.(string)
+				if !ok {
+					return mcp.NewToolResultError("schedule must be a string"), nil
+				}
+				update.Schedule = &v
+			}
+			if value, ok := req.GetArguments()["prompt"]; ok {
+				v, ok := value.(string)
+				if !ok {
+					return mcp.NewToolResultError("prompt must be a string"), nil
+				}
+				update.Prompt = &v
+			}
+			if value, ok := req.GetArguments()["enabled"]; ok {
+				v, ok := value.(bool)
+				if !ok {
+					return mcp.NewToolResultError("enabled must be a boolean"), nil
+				}
+				update.Enabled = &v
+			}
+			action := pendingAction{Action: "update", JobID: strings.TrimSpace(jobID), ChannelID: ownerChannelID, Update: update}
+			if err := validatePendingAction(action); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			if err := writePending(dataDir(), action); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			return mcp.NewToolResultText(fmt.Sprintf("Cron job %q queued for update. The update will apply within 60 seconds.", strings.TrimSpace(jobID))), nil
+		},
+	)
+	s.AddTool(
 		mcp.NewTool(ToolListCron,
 			mcp.WithDescription("List scheduled cron jobs for a channel"),
 			mcp.WithString("channel_id", mcp.Required(), mcp.Description("Discord channel ID from context; thread IDs are normalized to the owning parent channel when bot-tools is bound to a channel")),
@@ -308,6 +358,9 @@ func writeTool(name, description string, destructive bool) mcp.Tool {
 		mcp.WithIdempotentHintAnnotation(false),
 		mcp.WithOpenWorldHintAnnotation(false),
 	)
+	if name == ToolUpdateCron {
+		mcp.WithIdempotentHintAnnotation(true)(&t)
+	}
 	switch name {
 	case ToolSendMessage:
 		for _, opt := range []mcp.ToolOption{
@@ -348,6 +401,18 @@ func writeTool(name, description string, destructive bool) mcp.Tool {
 			mcp.WithString("created_by", mcp.Description("Username of the requester")),
 			mcp.WithString("created_by_id", mcp.Description("Optional Discord user ID of the requester when available in context")),
 			mcp.WithString("mention_user_id", mcp.Description("Optional verified Discord user ID to mention when the reminder fires. Use only a user ID that appears in the Discord mention references or bot peers provided in context.")),
+		} {
+			opt(&t)
+		}
+	case ToolUpdateCron:
+		cronTZ := cronpolicy.TimezoneName(os.Getenv("CRON_TIMEZONE"))
+		for _, opt := range []mcp.ToolOption{
+			mcp.WithString("job_id", mcp.Required(), mcp.Description("Existing recurring cron job ID returned by bot_list_cron")),
+			mcp.WithString("channel_id", mcp.Required(), mcp.Description("Owning Discord parent channel ID from context; the job must belong to this channel")),
+			mcp.WithString("name", mcp.Description("Optional non-empty replacement name. Omit to keep the current name.")),
+			mcp.WithString("schedule", mcp.Description(cronpolicy.ScheduleFieldDescription(cronTZ)+" Omit to keep the current schedule.")),
+			mcp.WithString("prompt", mcp.Description("Optional non-empty replacement task prompt. Omit to keep the current prompt.")),
+			mcp.WithBoolean("enabled", mcp.Description("Set false to disable without deleting; set true to resume. Omit to keep the current state.")),
 		} {
 			opt(&t)
 		}
@@ -589,10 +654,11 @@ type pendingJob struct {
 }
 
 type pendingAction struct {
-	Action    string      `json:"action"` // "create" or "delete"
-	Job       *pendingJob `json:"job,omitempty"`
-	JobID     string      `json:"job_id,omitempty"`
-	ChannelID string      `json:"channel_id,omitempty"`
+	Action    string                `json:"action"` // "create", "create_reminder", "update", or "delete"
+	Job       *pendingJob           `json:"job,omitempty"`
+	JobID     string                `json:"job_id,omitempty"`
+	ChannelID string                `json:"channel_id,omitempty"`
+	Update    *heartbeat.CronUpdate `json:"update,omitempty"`
 }
 
 func writePending(root string, action pendingAction) error {
@@ -660,6 +726,16 @@ func validatePendingAction(action pendingAction) error {
 	case "delete":
 		if strings.TrimSpace(action.JobID) == "" || strings.TrimSpace(action.ChannelID) == "" {
 			return fmt.Errorf("delete action requires job_id and channel_id")
+		}
+	case "update":
+		if strings.TrimSpace(action.JobID) == "" || strings.TrimSpace(action.ChannelID) == "" {
+			return fmt.Errorf("update action requires job_id and channel_id")
+		}
+		if action.Update == nil {
+			return fmt.Errorf("update action requires at least one update field")
+		}
+		if err := heartbeat.ValidateCronUpdate(*action.Update); err != nil {
+			return err
 		}
 	default:
 		return fmt.Errorf("unknown action %q", action.Action)
