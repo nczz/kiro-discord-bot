@@ -465,7 +465,7 @@ func TestManagerEnableDefaultBotToolsUsesSafeAllowlist(t *testing.T) {
 	if !p.Enabled || p.AllowAllTools || p.ReadOnly || p.AllowDestructive {
 		t.Fatalf("default bot-tools policy is not safe-write allowlist: %+v", p)
 	}
-	if tools := strings.Join(p.EffectiveTools(), ","); strings.Contains(tools, "bot_delete_cron") || strings.Contains(tools, "bot_send_message") || strings.Contains(tools, "bot_query_audit") || !strings.Contains(tools, "bot_send_file") || !strings.Contains(tools, "bot_create_cron") || !strings.Contains(tools, "bot_create_reminder") {
+	if tools := strings.Join(p.EffectiveTools(), ","); strings.Contains(tools, "bot_delete_cron") || strings.Contains(tools, "bot_send_message") || strings.Contains(tools, "bot_query_audit") || !strings.Contains(tools, "bot_send_file") || !strings.Contains(tools, "bot_create_cron") || !strings.Contains(tools, "bot_update_cron") || !strings.Contains(tools, "bot_create_reminder") {
 		t.Fatalf("unexpected default tools: %q", tools)
 	}
 }
