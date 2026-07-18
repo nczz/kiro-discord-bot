@@ -25,7 +25,7 @@ Keep tokens and provider keys in the service environment, not in repository file
 
 ## Public vs Private Discord Responses
 
-Admin panels and sensitive slash responses use private interaction responses where Discord supports them. Text commands cannot guarantee privacy, so audit rows and audit prompt reports are slash-only.
+Admin panels and sensitive slash responses use private interaction responses where Discord supports them. Text commands cannot guarantee privacy, so audit rows, audit prompt reports, and usage reports/history are slash-only.
 
 Agent final answers are normal Discord responses unless the command path explicitly uses a private response. Do not put secrets into prompts or channel messages.
 

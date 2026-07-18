@@ -428,16 +428,30 @@ func (b *Bot) cmdModels(ctx cmdCtx) {
 
 func (b *Bot) cmdUsage(ctx cmdCtx) {
 	userID := usageUserIDFromArgs(ctx.args, ctx.userID)
-	limit := 10
-	if userID != "" {
-		limit = 0
-	}
-	report, err := b.manager.UsageReport(ctx.guildID, ctx.channelID, userID, limit)
+	report, err := b.manager.UsageReport(ctx.guildID, ctx.channelID, userID, 0)
 	if err != nil {
 		ctx.reply(commandError(err))
 		return
 	}
-	ctx.reply(formatUsageReport(report, userID))
+	replyLongWithMetadata(ctx, formatUsageReport(report, userID), map[string]any{"usage_users": len(report.Rows)})
+}
+
+func (b *Bot) usageReportArgsForRequester(ds *discordgo.Session, requesterID, targetID, requestedUserID string) (string, bool) {
+	requesterID = strings.TrimSpace(requesterID)
+	requestedUserID = strings.TrimSpace(requestedUserID)
+	if requesterID == "" {
+		return "", false
+	}
+	if requestedUserID == "" {
+		if b.userCanManageUsageGuild(ds, requesterID, targetID) {
+			return "", true
+		}
+		return requesterID, true
+	}
+	if requestedUserID == requesterID || b.userCanManageUsageGuild(ds, requesterID, targetID) {
+		return requestedUserID, true
+	}
+	return "", false
 }
 
 func usageUserIDFromArgs(args, selfID string) string {
@@ -509,6 +523,9 @@ func formatUsageReport(report channel.UsageReport, userID string) string {
 		if row.MonthTurns > row.MeteredMonthTurns {
 			sb.WriteString(L.Getf("usage.report.unmetered", row.MonthTurns-row.MeteredMonthTurns) + "\n")
 		}
+	}
+	if userID == "" {
+		sb.WriteString(L.Getf("usage.report.count", len(report.Rows), report.Totals.MonthTurns) + "\n")
 	}
 	return sb.String()
 }

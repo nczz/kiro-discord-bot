@@ -21,7 +21,8 @@ Use this matrix before releasing changes that affect agent engines, Discord comm
 | `/agent` | Lists channel agent modes. | Lists thread agent modes. | Requires active session. | Requires active session. |
 | `/agent <id>` | Switches channel agent mode. | Switches thread agent mode. | Uses ACP `session/set_mode`. | Uses ACP `session/set_mode`. |
 | `/status` | Shows engine, agent version, model, queue, context usage. | Same for thread agent. | Shows active Kiro version/model. | Shows active OMP version/model. |
-| `/usage` | Aggregates by Discord user and includes credits/USD when present. | Thread turns roll up to parent channel scope. | Credits come from Kiro metering metadata. | USD cost comes from OMP `usage_update`. |
+| `/usage` | Private guild-wide report: self by default; Manage Guild/Administrator can aggregate all users or select another member. | Same guild-wide scope and permission rules. | Credits come from Kiro metering metadata. | USD cost comes from OMP `usage_update`. |
+| `/usage-history` | Private guild-wide detailed usage history with user/period/status/source filters; self-only unless requester has Manage Guild/Administrator. | Same guild-wide scope and permission rules. | Reads SQLite usage history. | Reads SQLite usage history. |
 | `/audit prompt` | Uses a short-lived scoped agent and records usage under the Discord caller. | Same, with thread target metadata. | Uses channel engine. | Uses channel engine. |
 
 ## Release Checklist
@@ -29,6 +30,6 @@ Use this matrix before releasing changes that affect agent engines, Discord comm
 - Run normal tests, vet, build, docs verification, and `git diff --check`.
 - Run Kiro ACP smoke when Kiro behavior changed.
 - Run OMP ACP smoke when OMP behavior changed.
-- In Discord, test `/engine`, `/models`, `/model`, `/agent`, `/status`, `/usage`, and `/audit prompt` in both a parent channel and a thread.
-- Verify `/doctor` reports every enabled engine and does not require disabled engines.
+- In Discord, test `/engine`, `/models`, `/model`, `/agent`, `/status`, `/usage`, `/usage-history`, and `/audit prompt` in both a parent channel and a thread.
+- Verify `/doctor` reports every enabled engine, usage SQLite schema/record health, and does not require disabled engines.
 - Verify failed `/engine` switches do not leave partial channel or thread sessions.

@@ -1,6 +1,6 @@
 # Command Reference
 
-Commands are available as slash commands. Most also have `!` text-command equivalents for environments where slash commands are less convenient. Sensitive admin surfaces use private interaction responses where Discord supports ephemeral replies.
+Commands are available as slash commands. Most also have `!` text-command equivalents for environments where slash commands are less convenient. Sensitive admin and account-usage surfaces use private interaction responses where Discord supports ephemeral replies.
 
 ## Channel Setup and State
 
@@ -59,9 +59,10 @@ See [Daily Workflows](daily-workflows.md) for the operational difference between
 | `/mcp enable` / `/mcp disable` | Enable or disable a server at channel scope. |
 | `/mcp manage` | Open the private MCP policy panel, scan tools, and manage tool allowlists. |
 | `/audit [limit]` | Privately inspect recent audit events for the current channel or thread. |
-| `/usage [user]` | Show agent usage for today, week, and month-to-date, including credits or USD cost when the engine reports metering metadata. |
+| `/usage [user]` | Privately show guild-wide agent usage for today, week, and month-to-date, including credits or USD cost when the engine reports metering metadata. Members see their own usage by default; members with Manage Guild or Administrator permission may omit `user` for all users or choose another member. |
+| `/usage-history [user] [period] [status] [source]` | Privately inspect guild-wide detailed usage records. Period choices: `7d`, `30d`, `this-month`, `last-month`; status choices: `all`, `success`, `failed`; source choices: `all`, `message`, `command`, `cron`. Members can inspect their own history; inspecting another member requires Manage Guild or Administrator permission. |
 
-Use slash `/audit` for audit data. Text `!audit` is intentionally not supported for audit rows because Discord cannot make those replies private.
+Use slash `/audit` for audit data and slash `/usage` or `/usage-history` for usage data. Text `!audit` does not return audit rows, and text `!usage` only returns a slash-only notice, because Discord cannot make those replies private.
 
 See [Audit, Usage, and Privacy](audit-usage-privacy.md) for how audit rows, audit prompt investigations, and usage attribution work.
 

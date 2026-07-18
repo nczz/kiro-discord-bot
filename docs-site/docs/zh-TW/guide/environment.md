@@ -75,11 +75,11 @@ DATA_DIR=/var/lib/kiro-discord-bot/marketing
 BOT_PEERS=...
 ```
 
-不要在不同 bot identity 之間共用 `DATA_DIR`。Audit ledgers、usage files、channel settings、MCP policy 與 agent runtime files 都是該 bot 擁有的狀態。
+不要在不同 bot identity 之間共用 `DATA_DIR`。Audit DB、usage SQLite DB 與遷移封存 JSONL、channel settings、MCP policy 與 agent runtime files 都是該 bot 擁有的狀態。
 
 ## 變數關係
 
-- `DATA_DIR` 擁有 bot 的持久狀態：channel metadata、audit DB、usage ledgers、MCP policy、下載 attachments 與 bot-managed engine runtime directories。
+- `DATA_DIR` 擁有 bot 的持久狀態：channel metadata、audit DB、usage SQLite DB 與遷移封存檔、MCP policy、下載 attachments 與 bot-managed engine runtime directories。
 - `DEFAULT_CWD` 是設定時顯示的預設專案根目錄。`ALLOWED_CWD_ROOTS` 會限制可選的 channel working directories。
 - `AGENT_ENGINE` 決定新 scope 的預設 engine。`AGENT_ENGINES_ENABLED` 決定 `/engine` 可以切換到哪些 engine。
 - `OMP_SESSION_DIR` 決定 bot 啟動的 OMP ACP session files 放在哪裡。`OMP_PROFILE` 決定 OMP auth/settings/cache 身份。兩者處理的是不同層次的隔離。
@@ -114,7 +114,7 @@ BOT_PEERS=...
 | `KIRO_API_KEY` | 空 | headless 環境的 Kiro 認證金鑰；互動主機也可用 `kiro-cli login`。 |
 | `DEFAULT_CWD` | `/projects` | `/cwd` 設定面板顯示的專案根目錄。 |
 | `ALLOWED_CWD_ROOTS` | 空 | 可選的逗號分隔工作目錄根目錄 allowlist。 |
-| `DATA_DIR` | `./data` | Bot 持久資料、頻道 metadata、sessions、audit DB、usage ledger、MCP policy 與 bot-managed engine runtime directories。 |
+| `DATA_DIR` | `./data` | Bot 持久資料、頻道 metadata、sessions、audit DB、usage SQLite DB 與遷移封存檔、MCP policy 與 bot-managed engine runtime directories。 |
 | `BOT_LOCALE` | `en` | Bot 回應語系。專案文件支援英文與繁體中文。 |
 
 ## Agent 執行
@@ -149,7 +149,7 @@ BOT_PEERS=...
 | `HEARTBEAT_SEC` | `60` | 背景維護 tick 秒數。 |
 | `CRON_TIMEZONE` | 空 | 排程任務時區。 |
 | `USAGE_TIMEZONE` | `CRON_TIMEZONE`，再退回本機預設 | `/usage` 今日、本週、本月統計時區。 |
-| `USAGE_RETENTION_MONTHS` | `0` | Usage ledger 保留月數。`0` 表示全部保留。 |
+| `USAGE_RETENTION_MONTHS` | `0` | 線上 SQLite usage 保留月數。`0` 表示全部保留；不影響封存的舊 JSONL 遷移備份。 |
 | `ATTACHMENT_RETAIN_DAYS` | `7` | 已下載 Discord attachment 保留天數。 |
 | `ATTACHMENT_MAX_MB` | `25` | Bot 接受的最大 attachment 大小。 |
 | `PREFLIGHT_MODE` | `warn` | ACP 相容性 preflight 模式。`strict` 失敗即退出，`skip` 停用檢查，不明值會退回 warn。 |

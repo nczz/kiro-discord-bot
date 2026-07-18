@@ -139,6 +139,18 @@ func (b *Bot) userCanManageAuditTarget(ds *discordgo.Session, userID, targetID s
 	return false
 }
 
+func (b *Bot) userCanManageUsageGuild(ds *discordgo.Session, userID, targetID string) bool {
+	if ds == nil || userID == "" || targetID == "" {
+		return false
+	}
+	perms, err := ds.UserChannelPermissions(userID, targetID)
+	if err != nil {
+		return false
+	}
+	allowed := int64(discordgo.PermissionAdministrator | discordgo.PermissionManageGuild)
+	return perms&allowed != 0
+}
+
 func (b *Bot) userCanManageTarget(ds *discordgo.Session, userID, targetID string) bool {
 	perms, err := ds.UserChannelPermissions(userID, targetID)
 	if err != nil {

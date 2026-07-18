@@ -18,9 +18,9 @@ For the full trust-boundary model, see [Security Model](security-model.md).
 
 ## Private Responses
 
-Admin panels and sensitive command responses use private interaction responses where Discord supports ephemeral messages. This includes `/cwd`, `/status`, `/usage`, `/doctor`, `/audit`, `/models`, `/memory`, `/flashmemory`, `/mcp manage`, `/steering`, and `/cron-list`.
+Admin panels and sensitive command responses use private interaction responses where Discord supports ephemeral messages. This includes `/cwd`, `/status`, `/usage`, `/usage-history`, `/doctor`, `/audit`, `/models`, `/memory`, `/flashmemory`, `/mcp manage`, `/steering`, and `/cron-list`.
 
-Text commands cannot always provide private Discord responses. For audit data, use slash `/audit`; text `!audit` does not return audit rows or prompt investigation reports.
+Text commands cannot always provide private Discord responses. For audit data, use slash `/audit`; for usage data, use slash `/usage` or `/usage-history`. Text `!audit` does not return audit rows or prompt investigation reports, and text `!usage` only returns a slash-only notice.
 
 ## CWD Boundaries
 

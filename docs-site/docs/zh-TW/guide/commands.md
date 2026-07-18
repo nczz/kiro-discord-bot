@@ -1,6 +1,6 @@
 # 指令參考
 
-指令主要以 slash command 使用，大多也支援 `!` 文字指令。敏感管理介面會在 Discord 支援時使用 ephemeral private response。
+指令主要以 slash command 使用，大多也支援 `!` 文字指令。敏感管理與帳務用量介面會在 Discord 支援時使用 ephemeral private response。
 
 ## 頻道設定與狀態
 
@@ -59,9 +59,10 @@ Memory、flash memory、steering 與 session cleanup 的操作差異見 [日常�
 | `/mcp enable` / `/mcp disable` | 在 channel scope 啟用或停用 server。 |
 | `/mcp manage` | 開啟私密 MCP policy panel，掃描 tools 並管理 allowlist。 |
 | `/audit [limit]` | 私密檢視目前 channel/thread 的 audit events。 |
-| `/usage [user]` | 顯示今日、本周、本月至今的 agent 用量；engine 有回傳 metering metadata 時會包含 credits 或 USD cost。 |
+| `/usage [user]` | 私密顯示全伺服器今日、本周、本月至今的 agent 用量；engine 有回傳 metering metadata 時會包含 credits 或 USD cost。一般成員預設只看自己；具備管理伺服器或系統管理員權限者可留空查看所有使用者或指定其他成員。 |
+| `/usage-history [user] [period] [status] [source]` | 私密查詢全伺服器詳細用量紀錄。`period` 可選 `7d`、`30d`、`this-month`、`last-month`；`status` 可選 `all`、`success`、`failed`；`source` 可選 `all`、`message`、`command`、`cron`。一般成員可查詢自己；查詢其他成員需要管理伺服器或系統管理員權限。 |
 
-Audit data 請使用 slash `/audit`。文字 `!audit` 不回傳 audit rows，因為 Discord 無法讓這類文字回覆變成 private。
+Audit data 請使用 slash `/audit`；usage data 請使用 slash `/usage` 或 `/usage-history`。文字 `!audit` 不回傳 audit rows，文字 `!usage` 只會提示改用 slash，因為 Discord 無法讓這類文字回覆變成 private。
 
 Audit rows、audit prompt investigations 與 usage attribution 的行為見 [Audit、用量與隱私](audit-usage-privacy.md)。
 

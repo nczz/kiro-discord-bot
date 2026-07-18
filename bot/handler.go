@@ -646,8 +646,7 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 	case content == "!status":
 		b.cmdStatus(ctx)
 	case content == "!usage" || strings.HasPrefix(content, "!usage "):
-		ctx.args = strings.TrimSpace(strings.TrimPrefix(content, "!usage"))
-		b.cmdUsage(ctx)
+		ctx.reply(L.Get("usage.slash_only"))
 	case content == "!doctor":
 		b.cmdDoctor(ctx)
 	case content == "!audit" || strings.HasPrefix(content, "!audit "):
@@ -826,8 +825,7 @@ func (b *Bot) handleThreadMessage(ds *discordgo.Session, m *discordgo.MessageCre
 		b.cmdStatus(ctx)
 		return
 	case content == "!usage" || strings.HasPrefix(content, "!usage "):
-		ctx.args = strings.TrimSpace(strings.TrimPrefix(content, "!usage"))
-		b.cmdUsage(ctx)
+		ctx.reply(L.Get("usage.slash_only"))
 		return
 	case content == "!doctor":
 		b.cmdDoctor(ctx)
@@ -983,6 +981,12 @@ func buildSlashCommands() []*discordgo.ApplicationCommand {
 		{Name: "status", Description: L.Get("cmd.status.desc")},
 		{Name: "usage", Description: L.Get("cmd.usage.desc"), Options: []*discordgo.ApplicationCommandOption{
 			{Type: discordgo.ApplicationCommandOptionUser, Name: "user", Description: L.Get("cmd.usage.opt.user"), Required: false},
+		}},
+		{Name: "usage-history", Description: L.Get("cmd.usage_history.desc"), Options: []*discordgo.ApplicationCommandOption{
+			{Type: discordgo.ApplicationCommandOptionUser, Name: "user", Description: L.Get("cmd.usage_history.opt.user"), Required: false},
+			{Type: discordgo.ApplicationCommandOptionString, Name: "period", Description: L.Get("cmd.usage_history.opt.period"), Required: false, Choices: []*discordgo.ApplicationCommandOptionChoice{{Name: "7d", Value: "7d"}, {Name: "30d", Value: "30d"}, {Name: "this-month", Value: "this-month"}, {Name: "last-month", Value: "last-month"}}},
+			{Type: discordgo.ApplicationCommandOptionString, Name: "status", Description: L.Get("cmd.usage_history.opt.status"), Required: false, Choices: []*discordgo.ApplicationCommandOptionChoice{{Name: "all", Value: "all"}, {Name: "success", Value: "success"}, {Name: "failed", Value: "error"}}},
+			{Type: discordgo.ApplicationCommandOptionString, Name: "source", Description: L.Get("cmd.usage_history.opt.source"), Required: false, Choices: []*discordgo.ApplicationCommandOptionChoice{{Name: "all", Value: "all"}, {Name: "message", Value: "message"}, {Name: "command", Value: "command"}, {Name: "cron", Value: "cron"}}},
 		}},
 		{Name: "doctor", Description: L.Get("cmd.doctor.desc")},
 		{Name: "audit", Description: L.Get("cmd.audit.desc"), Options: []*discordgo.ApplicationCommandOption{
@@ -1196,6 +1200,8 @@ func (b *Bot) handleInteraction(ds *discordgo.Session, i *discordgo.InteractionC
 			b.handleSteeringComponent(ds, i)
 		} else if strings.HasPrefix(customID, cwdCustomPrefix+":") {
 			b.handleCWDComponent(ds, i)
+		} else if strings.HasPrefix(customID, usageHistoryCustomPrefix+":") {
+			b.handleUsageHistoryComponent(ds, i)
 		} else if strings.HasPrefix(customID, "cronp_") {
 			b.handleCronPromptButton(ds, i)
 		} else if strings.HasPrefix(customID, "cron_") {
@@ -1311,6 +1317,10 @@ func (b *Bot) handleSlashCommand(ds *discordgo.Session, i *discordgo.Interaction
 		b.handleRemind(ds, i, auditCtx, timeStr, content, useAgent)
 		b.recordCommandCompleted(auditCtx, data.Name, "slash", "completed", "")
 		return
+	case "usage-history":
+		status, errText := b.handleUsageHistory(ds, i, auditCtx)
+		b.recordCommandCompleted(auditCtx, data.Name, "slash", status, errText)
+		return
 	case "cwd":
 		b.handleCWDSlash(ds, i, auditCtx)
 		b.recordCommandCompleted(auditCtx, data.Name, "slash", "completed", "")
@@ -1354,7 +1364,11 @@ func (b *Bot) handleSlashCommand(ds *discordgo.Session, i *discordgo.Interaction
 	ctx := cmdCtx{channelID: channelID, targetID: rawChannelID, inThread: inThread, reply: reply, replyWithMetadata: replyWithMetadata, guildID: i.GuildID, userID: userID, username: username, interactionID: i.ID}
 
 	go func() {
-		defer b.recordCommandCompleted(auditCtx, data.Name, "slash", "completed", "")
+		completionStatus := "completed"
+		completionError := ""
+		defer func() {
+			b.recordCommandCompleted(auditCtx, data.Name, "slash", completionStatus, completionError)
+		}()
 		// Extract args from slash command options
 		switch data.Name {
 		case "start":
@@ -1367,11 +1381,20 @@ func (b *Bot) handleSlashCommand(ds *discordgo.Session, i *discordgo.Interaction
 		case "status":
 			b.cmdStatus(ctx)
 		case "usage":
+			requestedUserID := ""
 			if len(data.Options) > 0 {
 				if u := data.Options[0].UserValue(ds); u != nil {
-					ctx.args = u.ID
+					requestedUserID = u.ID
 				}
 			}
+			args, ok := b.usageReportArgsForRequester(ds, userID, rawChannelID, requestedUserID)
+			if !ok {
+				completionStatus = "rejected"
+				completionError = "usage_report_forbidden"
+				ctx.reply(L.Get("usage.report.forbidden"))
+				return
+			}
+			ctx.args = args
 			b.cmdUsage(ctx)
 		case "doctor":
 			b.cmdDoctor(ctx)

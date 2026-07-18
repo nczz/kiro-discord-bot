@@ -75,11 +75,11 @@ DATA_DIR=/var/lib/kiro-discord-bot/marketing
 BOT_PEERS=...
 ```
 
-Do not share `DATA_DIR` between bot identities. Audit ledgers, usage files, channel settings, MCP policy, and agent runtime files are bot-owned state.
+Do not share `DATA_DIR` between bot identities. Audit DBs, the usage SQLite DB and migrated JSONL archives, channel settings, MCP policy, and agent runtime files are bot-owned state.
 
 ## Variable Relationships
 
-- `DATA_DIR` owns persistent bot state: channel metadata, audit DB, usage ledgers, MCP policy, downloaded attachments, and bot-managed engine runtime directories.
+- `DATA_DIR` owns persistent bot state: channel metadata, audit DB, usage SQLite DB and migration archives, MCP policy, downloaded attachments, and bot-managed engine runtime directories.
 - `DEFAULT_CWD` is the default project root shown during setup. `ALLOWED_CWD_ROOTS` restricts what channel working directories may be selected.
 - `AGENT_ENGINE` selects the default engine for new scopes. `AGENT_ENGINES_ENABLED` controls what `/engine` may switch to.
 - `OMP_SESSION_DIR` controls where bot-started OMP ACP session files live. `OMP_PROFILE` controls OMP auth/settings/cache identity. They solve different isolation problems.
@@ -114,7 +114,7 @@ Do not share `DATA_DIR` between bot identities. Audit ledgers, usage files, chan
 | `KIRO_API_KEY` | empty | Headless Kiro authentication key when `kiro-cli login` is not used. |
 | `DEFAULT_CWD` | `/projects` | Root shown by `/cwd` setup. |
 | `ALLOWED_CWD_ROOTS` | empty | Optional comma-separated root allowlist for channel working directories. |
-| `DATA_DIR` | `./data` | Persistent bot data, channel metadata, sessions, audit DB, usage ledgers, MCP policy, and bot-managed engine runtime directories. |
+| `DATA_DIR` | `./data` | Persistent bot data, channel metadata, sessions, audit DB, usage SQLite DB and migration archives, MCP policy, and bot-managed engine runtime directories. |
 | `BOT_LOCALE` | `en` | Bot response locale. Supported project locales are English and Traditional Chinese. |
 
 ## Agent Execution
@@ -149,7 +149,7 @@ Do not share `DATA_DIR` between bot identities. Audit ledgers, usage files, chan
 | `HEARTBEAT_SEC` | `60` | Background maintenance tick. |
 | `CRON_TIMEZONE` | empty | Time zone for scheduled jobs. |
 | `USAGE_TIMEZONE` | `CRON_TIMEZONE`, then local default | Time zone for `/usage` day, week, and month windows. |
-| `USAGE_RETENTION_MONTHS` | `0` | Usage ledger retention. `0` keeps all monthly files. |
+| `USAGE_RETENTION_MONTHS` | `0` | Online SQLite usage retention in months. `0` keeps all rows; archived legacy JSONL migration backups are unaffected. |
 | `ATTACHMENT_RETAIN_DAYS` | `7` | Retention for downloaded Discord attachments. |
 | `ATTACHMENT_MAX_MB` | `25` | Maximum attachment size accepted by the bot. |
 | `PREFLIGHT_MODE` | `warn` | ACP compatibility preflight mode. `strict` exits on failure, `skip` disables the check, and unknown values fall back to warn. |

@@ -110,6 +110,13 @@ func NewFromConfig(cfg BotConfig) (*Bot, error) {
 
 	cfg.ManagerConfig.Store = store
 	manager := channel.NewManager(cfg.ManagerConfig)
+	if err := manager.UsageInitError(); err != nil {
+		manager.StopAll()
+		if auditRecorder != nil {
+			auditRecorder.Close()
+		}
+		return nil, fmt.Errorf("open usage database: %w", err)
+	}
 	manager.RegisterBuiltinMCP("bot-tools", []string{"mcp-bot"}, map[string]string{
 		"DATA_DIR":       cfg.DataDir,
 		"CRON_TIMEZONE":  cfg.CronTimezone,

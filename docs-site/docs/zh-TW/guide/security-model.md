@@ -25,7 +25,7 @@ Tokens 與 provider keys 應放在 service environment，不要放進 repository
 
 ## 公開與私密 Discord 回覆
 
-Admin panels 與敏感 slash responses 會在 Discord 支援時使用 private interaction responses。Text commands 無法保證私密性，所以 audit rows 與 audit prompt reports 僅支援 slash command。
+Admin panels 與敏感 slash responses 會在 Discord 支援時使用 private interaction responses。Text commands 無法保證私密性，所以 audit rows、audit prompt reports、usage reports/history 僅支援 slash command。
 
 Agent final answers 預設是一般 Discord responses，除非該 command path 明確使用 private response。不要把 secrets 放進 prompts 或 channel messages。
 

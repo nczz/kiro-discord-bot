@@ -39,13 +39,17 @@ Audit 管理需要與敏感 channel controls 相同的 channel/admin 授權。
 
 Usage record 是 agent work 完成後追加寫入的 ledger。若工作來自使用者 command、prompt、mention、audit prompt、compact、clear 或 scheduled command context，會歸屬到觸發的 Discord 使用者。
 
+Runtime usage 資料保存在獨立的 `DATA_DIR/usage/usage.sqlite`。升級後首次啟動會以 transaction 匯入舊的 `DATA_DIR/usage/*.jsonl`，成功後移至 `DATA_DIR/usage/archive/` 作為遷移備份；runtime 不再查詢或寫入這些 JSONL。若舊檔格式損壞，啟動會中止，該檔案不會只匯入一部分。
+
 Cron job 會使用 job owner 或設定的 user context。Kiro usage 會加總 `credit` 或 `credits` metering metadata；OMP usage 會加總 `usage_update` 回傳的 USD cost metadata。
 
 如果 engine 沒有對某個 turn 回傳 metering metadata，`/usage` 仍會計入該 turn，但會顯示缺少 metadata。這代表 turn 有發生，只是 bot 無法從缺失的 ACP metadata 推算 credits 或 cost。
 
 ## 彙總方式
 
-`/usage` 會盡可能依 resolved Discord user ID 分組。若舊紀錄只有 username，只有在能明確對應時才會合併到 user row；有歧義的名稱會保留分開，避免誤歸屬。
+`/usage` 預設以私密回覆列出 requester 自己在全伺服器本月的用量。具備管理伺服器或系統管理員權限的成員可列出本月所有有紀錄的使用者，或指定其他成員；超過 Discord 訊息限制時會自動送出額外的 ephemeral 分段。報表會盡可能依 resolved Discord user ID 分組。若舊紀錄只有 username，只有在能明確對應時才會合併到 user row；有歧義的名稱會保留分開，避免誤歸屬。
+
+`/usage-history` 可依使用者、期間、狀態與來源私密查詢全伺服器詳細紀錄。一般成員可查詢自己；查詢其他成員的詳細歷史需要管理伺服器或系統管理員權限。
 
 報表時間窗：
 
@@ -53,4 +57,4 @@ Cron job 會使用 job owner 或設定的 user context。Kiro usage 會加總 `c
 - 本週：週一本地午夜起算。
 - 本月：每月 1 日本地午夜起算。
 
-用 `USAGE_RETENTION_MONTHS` 控制舊 monthly ledger files 清理。
+用 `USAGE_RETENTION_MONTHS` 清理線上 SQLite 的舊資料列；預設 `0` 表示永久保留。此設定不會刪除封存的舊 JSONL 遷移備份。

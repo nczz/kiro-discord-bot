@@ -1237,6 +1237,49 @@ func TestUserCanManageAuditTargetUsesDiscordChannelPermissions(t *testing.T) {
 	}
 }
 
+func TestUsageReportArgsForRequesterScopesNonManagersToSelf(t *testing.T) {
+	b := &Bot{}
+	ds := testPeerPermissionSession(t, []*discordgo.PermissionOverwrite{
+		userMemberManageOverwrite("channel-manager", discordgo.PermissionManageChannels),
+	})
+	guild, err := ds.State.Guild("guild-1")
+	if err != nil {
+		t.Fatalf("Guild: %v", err)
+	}
+	guild.Roles = append(guild.Roles,
+		&discordgo.Role{ID: "guild-manager-role", Permissions: discordgo.PermissionManageGuild},
+		&discordgo.Role{ID: "administrator-role", Permissions: discordgo.PermissionAdministrator},
+	)
+	for _, member := range []*discordgo.Member{
+		{GuildID: "guild-1", User: &discordgo.User{ID: "channel-manager"}},
+		{GuildID: "guild-1", User: &discordgo.User{ID: "guild-manager"}, Roles: []string{"guild-manager-role"}},
+		{GuildID: "guild-1", User: &discordgo.User{ID: "administrator"}, Roles: []string{"administrator-role"}},
+	} {
+		if err := ds.State.MemberAdd(member); err != nil {
+			t.Fatalf("MemberAdd %s: %v", member.User.ID, err)
+		}
+	}
+
+	if got, ok := b.usageReportArgsForRequester(ds, "viewer", "channel-1", ""); !ok || got != "viewer" {
+		t.Fatalf("viewer default args = %q/%v, want self/true", got, ok)
+	}
+	if _, ok := b.usageReportArgsForRequester(ds, "viewer", "channel-1", "guild-manager"); ok {
+		t.Fatal("viewer should not inspect another user's usage")
+	}
+	if got, ok := b.usageReportArgsForRequester(ds, "channel-manager", "channel-1", ""); !ok || got != "channel-manager" {
+		t.Fatalf("channel manager default args = %q/%v, want self/true", got, ok)
+	}
+	if _, ok := b.usageReportArgsForRequester(ds, "channel-manager", "channel-1", "viewer"); ok {
+		t.Fatal("channel manager should not inspect guild-wide usage")
+	}
+	if got, ok := b.usageReportArgsForRequester(ds, "guild-manager", "channel-1", ""); !ok || got != "" {
+		t.Fatalf("guild manager default args = %q/%v, want all/true", got, ok)
+	}
+	if got, ok := b.usageReportArgsForRequester(ds, "administrator", "thread-1", "viewer"); !ok || got != "viewer" {
+		t.Fatalf("administrator target args = %q/%v, want viewer/true", got, ok)
+	}
+}
+
 func TestUserCanManageAuditTargetFallsBackToThreadParent(t *testing.T) {
 	b := &Bot{}
 	ds := testPeerPermissionSession(t, []*discordgo.PermissionOverwrite{
@@ -2088,22 +2131,47 @@ func TestRecordAgentCommandUsageWritesLedger(t *testing.T) {
 	if len(records.Rows) != 1 {
 		t.Fatalf("filtered usage rows = %d, want 1", len(records.Rows))
 	}
-	files, err := filepath.Glob(filepath.Join(dir, "usage", "*.jsonl"))
+	history, err := manager.UsageHistory(channel.UsageHistoryOptions{GuildID: "guild-1", UserID: "user-1", From: time.Now().Add(-time.Hour), To: time.Now().Add(time.Hour)})
 	if err != nil {
-		t.Fatalf("glob usage files: %v", err)
+		t.Fatalf("usage history: %v", err)
 	}
-	if len(files) != 1 {
-		t.Fatalf("usage files = %v, want one file", files)
+	if len(history.Records) != 1 {
+		t.Fatalf("history records = %d, want 1", len(history.Records))
 	}
-	data, err := os.ReadFile(files[0])
-	if err != nil {
-		t.Fatalf("read usage file: %v", err)
+	got := history.Records[0]
+	if got.MessageID != "" {
+		t.Fatalf("message id = %q, want empty", got.MessageID)
 	}
-	if strings.Contains(string(data), `"message_id":"interaction-1"`) {
-		t.Fatalf("usage record = %s, interaction id should not be stored as message_id", data)
+	if got.InteractionID != "interaction-1" || got.InvocationID != "interaction-1" {
+		t.Fatalf("interaction/invocation = %q/%q", got.InteractionID, got.InvocationID)
 	}
-	if !strings.Contains(string(data), `"interaction_id":"interaction-1"`) || !strings.Contains(string(data), `"invocation_id":"interaction-1"`) {
-		t.Fatalf("usage record = %s, want interaction_id and invocation_id", data)
+}
+
+func TestCmdUsageReturnsEveryUserAcrossDiscordSizedParts(t *testing.T) {
+	manager := channel.NewManager(channel.ManagerConfig{UsageTimezone: "UTC"})
+	defer manager.StopAll()
+	for n := 0; n < 80; n++ {
+		if err := manager.RecordUsage(channel.UsageRecord{Timestamp: time.Now().UTC().Format(time.RFC3339), GuildID: "guild", ChannelID: "channel", UserID: fmt.Sprintf("%018d", n+1), Username: fmt.Sprintf("person-with-a-long-name-%03d", n), MeteringUsage: []acp.MeteringItem{{Value: 1, Unit: "credits"}}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var replies []string
+	b := &Bot{manager: manager}
+	b.cmdUsage(cmdCtx{guildID: "guild", channelID: "channel", userID: "1", reply: func(msg string) { replies = append(replies, msg) }, replyWithMetadata: func(msg string, _ map[string]any) { replies = append(replies, msg) }})
+	if len(replies) < 2 {
+		t.Fatalf("reply parts=%d, want multiple", len(replies))
+	}
+	joined := strings.Join(replies, "\n")
+	for n := 0; n < 80; n++ {
+		id := fmt.Sprintf("%018d", n+1)
+		if !strings.Contains(joined, id) {
+			t.Fatalf("missing user %s", id)
+		}
+	}
+	for i, part := range replies {
+		if len(part) > discordReplyLimit {
+			t.Fatalf("part %d bytes=%d", i, len(part))
+		}
 	}
 }
 
@@ -2430,6 +2498,64 @@ func TestHandleSlashCommandRecordsInitialRejectionDeliveryFailure(t *testing.T) 
 	}
 	if evt.Status != "error" || evt.Metadata["ephemeral"] != true || evt.Metadata["interaction_response_type"] == "" {
 		t.Fatalf("event = %+v, want failed ephemeral initial interaction response metadata", evt)
+	}
+}
+
+func TestUsagePermissionDenialRecordsRejectedCompletion(t *testing.T) {
+	L.Load("en")
+	b, dbPath, cleanup := newAuditTestBot(t)
+	defer cleanup()
+	ds := newFailingDiscordSession(t)
+	ds.State = testPeerPermissionSession(t, nil).State
+
+	b.handleSlashCommand(ds, &discordgo.InteractionCreate{Interaction: &discordgo.Interaction{
+		ID:        "interaction-usage-denied",
+		Type:      discordgo.InteractionApplicationCommand,
+		GuildID:   "guild-1",
+		ChannelID: "channel-1",
+		Token:     "token-1",
+		Member:    &discordgo.Member{User: &discordgo.User{ID: "viewer", Username: "viewer"}},
+		Data: discordgo.ApplicationCommandInteractionData{
+			Name: "usage",
+			Options: []*discordgo.ApplicationCommandInteractionDataOption{{
+				Name: "user", Type: discordgo.ApplicationCommandOptionUser, Value: "bot-2",
+			}},
+			Resolved: &discordgo.ApplicationCommandInteractionDataResolved{
+				Users: map[string]*discordgo.User{"bot-2": {ID: "bot-2"}},
+			},
+		},
+	}})
+
+	evt := waitBotAuditEvent(t, dbPath, "bot_command_completed")
+	if evt.Command != "usage" || evt.InteractionID != "interaction-usage-denied" || evt.Status != "rejected" || evt.Error != "usage_report_forbidden" {
+		t.Fatalf("event = %+v, want rejected usage completion", evt)
+	}
+}
+
+func TestUsageHistoryClassifiesDenialAndDeliveryFailure(t *testing.T) {
+	L.Load("en")
+	b, _, cleanup := newAuditTestBot(t)
+	defer cleanup()
+	ds := newFailingDiscordSession(t)
+	ds.State = testPeerPermissionSession(t, nil).State
+	interaction := func(id string, target string) *discordgo.InteractionCreate {
+		data := discordgo.ApplicationCommandInteractionData{Name: "usage-history"}
+		if target != "" {
+			data.Options = []*discordgo.ApplicationCommandInteractionDataOption{{Name: "user", Type: discordgo.ApplicationCommandOptionUser, Value: target}}
+			data.Resolved = &discordgo.ApplicationCommandInteractionDataResolved{Users: map[string]*discordgo.User{target: {ID: target}}}
+		}
+		return &discordgo.InteractionCreate{Interaction: &discordgo.Interaction{
+			ID: id, Type: discordgo.InteractionApplicationCommand, GuildID: "guild-1", ChannelID: "channel-1", Token: "token-1",
+			Member: &discordgo.Member{User: &discordgo.User{ID: "viewer", Username: "viewer"}}, Data: data,
+		}}
+	}
+	auditCtx := cmdCtx{guildID: "guild-1", channelID: "channel-1", targetID: "channel-1", userID: "viewer"}
+
+	if status, reason := b.handleUsageHistory(ds, interaction("history-denied", "bot-2"), auditCtx); status != "rejected" || reason != "usage_history_forbidden" {
+		t.Fatalf("denied status/reason = %q/%q", status, reason)
+	}
+	if status, reason := b.handleUsageHistory(ds, interaction("history-delivery-failed", ""), auditCtx); status != "error" || reason != "usage_history_deferred_response_failed" {
+		t.Fatalf("delivery status/reason = %q/%q", status, reason)
 	}
 }
 

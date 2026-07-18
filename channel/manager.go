@@ -727,8 +727,44 @@ func (m *Manager) StopAll() {
 	if m.mcpPolicies != nil {
 		_ = m.mcpPolicies.Close()
 	}
+	if m.usage != nil {
+		_ = m.usage.Close()
+	}
 	m.logger.Close()
 	log.Println("[manager] all agents stopped")
+}
+
+// UsageInitError reports whether the dedicated usage database and legacy import initialized successfully.
+func (m *Manager) UsageInitError() error {
+	if m == nil || m.usage == nil {
+		return errors.New("usage store not configured")
+	}
+	return m.usage.InitError()
+}
+
+func (m *Manager) UsageHistory(opts UsageHistoryOptions) (UsageHistoryPage, error) {
+	if m == nil || m.usage == nil {
+		return UsageHistoryPage{}, errors.New("usage store not configured")
+	}
+	return m.usage.QueryHistory(opts)
+}
+
+func (m *Manager) UsageLocation() *time.Location {
+	if m == nil || m.usage == nil {
+		return time.Local
+	}
+	return m.usage.Location()
+}
+
+func (m *Manager) doctorUsage() string {
+	if m == nil || m.usage == nil {
+		return L.Get("doctor.usage.error")
+	}
+	h := m.usage.Health()
+	if !h.Healthy {
+		return L.Getf("doctor.usage.unhealthy", h.Error)
+	}
+	return L.Getf("doctor.usage.ok", h.SchemaVersion, h.Records)
 }
 
 // Enqueue adds a job to the channel's queue, starting the agent/worker if needed.
@@ -1995,6 +2031,7 @@ func (m *Manager) Doctor(ctx context.Context) string {
 	sb.WriteString(L.Get("doctor.header"))
 
 	sb.WriteString(m.doctorEngineDiagnostics(ctx))
+	sb.WriteString(m.doctorUsage())
 
 	if cwd, err := m.ValidateCWD(m.defaultCWD); err != nil {
 		sb.WriteString(L.Getf("doctor.default_cwd.error", err.Error()))

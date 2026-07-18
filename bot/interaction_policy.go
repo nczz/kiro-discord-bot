@@ -32,7 +32,7 @@ func applySlashCommandPolicy(cmd *discordgo.ApplicationCommand) *discordgo.Appli
 
 func commandResponseVisibility(name string, args string) commandVisibility {
 	switch name {
-	case "help", "status", "usage", "doctor", "audit", "mcp", "steering", "cwd", "models", "agent",
+	case "help", "status", "usage", "usage-history", "doctor", "audit", "mcp", "steering", "cwd", "models", "agent",
 		"memory", "flashmemory", "cron-list", "cron-run", "cron-prompt", "remind":
 		return commandVisibilityPrivate
 	default:

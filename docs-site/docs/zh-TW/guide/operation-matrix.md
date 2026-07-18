@@ -21,7 +21,8 @@
 | `/agent` | 列出 channel agent modes。 | 列出 thread agent modes。 | 需要 active session。 | 需要 active session。 |
 | `/agent <id>` | 切換 channel agent mode。 | 切換 thread agent mode。 | 使用 ACP `session/set_mode`。 | 使用 ACP `session/set_mode`。 |
 | `/status` | 顯示 engine、agent version、model、queue、context usage。 | thread agent 也相同。 | 顯示 active Kiro version/model。 | 顯示 active OMP version/model。 |
-| `/usage` | 依 Discord 使用者彙總，並在有資料時顯示 credits/USD。 | Thread turns 彙總到 parent channel scope。 | Credits 來自 Kiro metering metadata。 | USD cost 來自 OMP `usage_update`。 |
+| `/usage` | 全伺服器私密報表：預設查自己；具備管理伺服器／系統管理員權限者可彙總所有使用者或指定其他成員。 | 採相同的全伺服器 scope 與權限規則。 | Credits 來自 Kiro metering metadata。 | USD cost 來自 OMP `usage_update`。 |
+| `/usage-history` | 私密查詢全伺服器詳細 usage history，支援 user/period/status/source filters；只能查自己，除非 requester 具備管理伺服器／系統管理員權限。 | 採相同的全伺服器 scope 與權限規則。 | 讀取 SQLite usage history。 | 讀取 SQLite usage history。 |
 | `/audit prompt` | 使用短生命週期 scoped agent，並把 usage 歸到 Discord caller。 | 相同，並帶 thread target metadata。 | 使用 channel engine。 | 使用 channel engine。 |
 
 ## Release Checklist
@@ -29,6 +30,6 @@
 - 跑一般 tests、vet、build、docs verification 與 `git diff --check`。
 - Kiro 行為有變更時跑 Kiro ACP smoke。
 - OMP 行為有變更時跑 OMP ACP smoke。
-- 在 Discord 的 parent channel 與 thread 內測 `/engine`、`/models`、`/model`、`/agent`、`/status`、`/usage` 與 `/audit prompt`。
-- 確認 `/doctor` 會回報每個 enabled engine，且不要求 disabled engines。
+- 在 Discord 的 parent channel 與 thread 內測 `/engine`、`/models`、`/model`、`/agent`、`/status`、`/usage`、`/usage-history` 與 `/audit prompt`。
+- 確認 `/doctor` 會回報每個 enabled engine、Usage SQLite schema/record health，且不要求 disabled engines。
 - 確認失敗的 `/engine` switch 不會留下 partial channel 或 thread session。
