@@ -1,8 +1,10 @@
 package channel
 
 import (
+	"errors"
 	"testing"
 
+	"github.com/nczz/kiro-discord-bot/acp"
 	"github.com/nczz/kiro-discord-bot/internal/discordmention"
 )
 
@@ -132,5 +134,49 @@ func TestMentionRefsPersistInScopedSessions(t *testing.T) {
 	}
 	if threadSess.ParentChannelID != "channel-1" {
 		t.Fatalf("thread parent channel = %q, want channel-1", threadSess.ParentChannelID)
+	}
+}
+
+func TestResumeWithoutStoredSessionReturnsTypedError(t *testing.T) {
+	m := newSessionKeyTestManager(t)
+	if _, err := m.Resume("channel-missing"); !errors.Is(err, ErrNoSavedSession) {
+		t.Fatalf("Resume missing error = %v, want ErrNoSavedSession", err)
+	}
+	if _, err := m.ResumeThreadAgent("thread-missing", "channel-1"); !errors.Is(err, ErrNoSavedSession) {
+		t.Fatalf("ResumeThreadAgent missing error = %v, want ErrNoSavedSession", err)
+	}
+}
+
+func TestListStoredSessionsFiltersBotScopeAndSortsActiveFirst(t *testing.T) {
+	m := newSessionKeyTestManager(t)
+	m.SetBotID("bot-a")
+	if err := m.setChannelSession("channel-1", &Session{SessionID: "channel-session", CWD: "/project", Model: "model-a", Engine: "omp"}); err != nil {
+		t.Fatalf("set channel session: %v", err)
+	}
+	if err := m.setThreadSession("thread-1", "channel-1", &Session{SessionID: "thread-session", CWD: "/project", Model: "model-b", Engine: "kiro"}); err != nil {
+		t.Fatalf("set thread session: %v", err)
+	}
+	if err := m.store.Set("legacy-channel", &Session{SessionID: "legacy-session", CWD: "/legacy"}); err != nil {
+		t.Fatalf("set legacy session: %v", err)
+	}
+	if err := m.store.Set("g:guild-1:b:bot-b:channel:channel-2", &Session{
+		SessionID: "other-bot-session",
+	}); err != nil {
+		t.Fatalf("set other bot session: %v", err)
+	}
+	m.agents["channel-1"] = &acp.Agent{SessionID: "channel-session"}
+
+	got := m.ListStoredSessions()
+	if len(got) != 3 {
+		t.Fatalf("ListStoredSessions len = %d, want 3: %+v", len(got), got)
+	}
+	if got[0].TargetType != sessionTargetChannel || got[0].TargetID != "channel-1" || !got[0].Active {
+		t.Fatalf("first session should be active channel-1, got %+v", got[0])
+	}
+	if got[1].TargetType != sessionTargetChannel || got[1].TargetID != "legacy-channel" {
+		t.Fatalf("second session should derive legacy channel target from key, got %+v", got[1])
+	}
+	if got[2].TargetType != sessionTargetThread || got[2].TargetID != "thread-1" || got[2].ParentChannelID != "channel-1" {
+		t.Fatalf("third session should be thread-1, got %+v", got[2])
 	}
 }

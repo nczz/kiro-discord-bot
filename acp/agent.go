@@ -48,6 +48,7 @@ type Agent struct {
 	initResult    *InitializeResult
 	sessResult    *SessionNewResult
 	sessionLoaded bool
+	sessionReuse  string         // "", "load", "resume", or "new"
 	dialect       Dialect        // which ACP backend this agent drives
 	profile       dialectProfile // dialect-specific behavior; set in StartAgent
 	stopOnce      sync.Once
@@ -268,7 +269,7 @@ func StartAgent(name, binary, cwd, model string, opts AgentOptions) (*Agent, err
 				}
 				sessionReused = true
 				a.sessionLoaded = true
-				log.Printf("[agent:%s] loaded session=%s", name, sessResp.SessionID)
+				a.sessionReuse = "load"
 			} else {
 				log.Printf("[agent:%s] session/load failed (%v)", name, loadErr)
 			}
@@ -284,7 +285,7 @@ func StartAgent(name, binary, cwd, model string, opts AgentOptions) (*Agent, err
 				}
 				sessionReused = true
 				a.sessionLoaded = true
-				log.Printf("[agent:%s] resumed session=%s", name, sessResp.SessionID)
+				a.sessionReuse = "resume"
 			} else {
 				log.Printf("[agent:%s] session/resume failed (%v)", name, resumeErr)
 			}
@@ -302,6 +303,7 @@ func StartAgent(name, binary, cwd, model string, opts AgentOptions) (*Agent, err
 		if r := prof.parseSession(sessRaw); r != nil {
 			sessResp = *r
 		}
+		a.sessionReuse = "new"
 	}
 	a.SessionID = sessResp.SessionID
 	a.sessResult = &sessResp
@@ -858,6 +860,12 @@ func (a *Agent) CurrentModeID() string {
 		return a.sessResult.Modes.CurrentModeID
 	}
 	return ""
+}
+
+// SessionReuseMethod returns how the current ACP session was established:
+// "load", "resume", "new", or "" for agents constructed directly in tests.
+func (a *Agent) SessionReuseMethod() string {
+	return a.sessionReuse
 }
 
 // SupportsSessionCapability returns true if initialize advertised a named

@@ -69,7 +69,7 @@ func channelOnly(ctx cmdCtx) bool {
 
 func isChannelOnlySlashCommand(name string) bool {
 	switch name {
-	case "start", "cwd", "steering", "agent", "resume", "cron", "cron-list", "cron-run", "cron-prompt", "remind":
+	case "start", "cwd", "steering", "agent", "cron", "cron-list", "cron-run", "cron-prompt", "remind":
 		return true
 	default:
 		return false
@@ -531,17 +531,114 @@ func formatUsageReport(report channel.UsageReport, userID string) string {
 }
 
 func (b *Bot) cmdResume(ctx cmdCtx) {
-	if channelOnly(ctx) {
+	var (
+		result channel.SessionResumeResult
+		err    error
+	)
+	if ctx.inThread {
+		result, err = b.manager.ResumeThreadAgent(ctx.targetID, ctx.channelID)
+	} else {
+		result, err = b.manager.Resume(ctx.channelID)
+	}
+	if err != nil {
+		ctx.reply(sessionCommandError(err))
 		return
 	}
-	sess, ok := b.manager.GetSession(ctx.targetID)
-	if !ok {
-		ctx.reply(L.Get("error.no_active_session"))
-		return
+	ctx.reply(formatSessionResumeResult(result))
+}
+
+func (b *Bot) cmdSession(ctx cmdCtx) {
+	action := strings.TrimSpace(ctx.args)
+	if action == "" {
+		action = "list"
 	}
-	_ = sess
-	// TODO: resume from agent's last text — requires storing last response
-	ctx.reply(L.Get("error.no_response"))
+	fields := strings.Fields(action)
+	switch fields[0] {
+	case "list":
+		replyLongWithMetadata(ctx, formatSessionList(b.manager.ListStoredSessions()), map[string]any{"session_list": true})
+	case "resume":
+		if len(fields) > 1 {
+			ctx.reply(L.Get("session.resume_id_unsupported"))
+			return
+		}
+		b.cmdResume(ctx)
+	default:
+		ctx.reply(L.Get("session.usage"))
+	}
+}
+
+func sessionCommandError(err error) string {
+	switch {
+	case errors.Is(err, channel.ErrNoSavedSession):
+		return L.Get("session.no_saved")
+	case errors.Is(err, channel.ErrSessionBusy):
+		return L.Get("session.busy")
+	default:
+		return commandError(err)
+	}
+}
+
+func formatSessionResumeResult(result channel.SessionResumeResult) string {
+	statusKey := "session.resumed"
+	if result.AlreadyLive {
+		statusKey = "session.already_live"
+	} else if result.ReuseMethod == "new" || result.ReuseMethod == "" {
+		statusKey = "session.resumed_new"
+	}
+	scope := L.Get("session.scope_channel")
+	if result.Thread {
+		scope = L.Get("session.scope_thread")
+	}
+	return L.Getf(statusKey, scope, shortSessionID(result.SessionID), result.Engine, displayOrDefault(result.Model), result.CWD)
+}
+
+func formatSessionList(sessions []channel.SessionView) string {
+	if len(sessions) == 0 {
+		return L.Get("session.list_empty")
+	}
+	var sb strings.Builder
+	sb.WriteString(L.Getf("session.list_header", len(sessions)))
+	for i, sess := range sessions {
+		active := L.Get("session.inactive")
+		if sess.Active {
+			active = L.Get("session.active")
+		}
+		target := formatSessionTarget(sess)
+		sb.WriteString(L.Getf("session.list_row", i+1, active, sess.TargetType, target, shortSessionID(sess.SessionID), sess.Engine, displayOrDefault(sess.Model), sess.CWD))
+	}
+	return sb.String()
+}
+
+func formatSessionTarget(sess channel.SessionView) string {
+	target := formatDiscordTargetMention(sess.TargetID)
+	if sess.TargetType == "thread" && strings.TrimSpace(sess.ParentChannelID) != "" {
+		return target + " ← " + formatDiscordTargetMention(sess.ParentChannelID)
+	}
+	return target
+}
+
+func formatDiscordTargetMention(id string) string {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return L.Get("session.target_unknown")
+	}
+	return "<#" + id + "> (`" + shortSessionID(id) + "`)"
+}
+
+func shortSessionID(id string) string {
+	id = strings.TrimSpace(id)
+	if len(id) <= 8 {
+		return id
+	}
+	return id[:8] + "…"
+}
+
+func displayOrDefault(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "default"
+	}
+	return value
 }
 
 func (b *Bot) cmdDoctor(ctx cmdCtx) {

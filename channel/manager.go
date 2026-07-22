@@ -105,6 +105,35 @@ type ThreadAgentLimitError struct {
 
 var ErrNoThreadAgent = errors.New("no active or saved thread agent")
 
+// ErrNoSavedSession reports that a Discord target has no persisted ACP session id.
+var ErrNoSavedSession = errors.New("no saved session")
+
+// ErrSessionBusy reports that a session cannot be resumed while work is active or queued.
+var ErrSessionBusy = errors.New("session has active or queued work")
+
+// SessionResumeResult describes the result of resuming a stored ACP session.
+type SessionResumeResult struct {
+	SessionID   string
+	CWD         string
+	Model       string
+	Engine      string
+	ReuseMethod string
+	AlreadyLive bool
+	Thread      bool
+}
+
+// SessionView is a safe Discord-facing snapshot of a stored session.
+type SessionView struct {
+	TargetType      string
+	TargetID        string
+	ParentChannelID string
+	SessionID       string
+	CWD             string
+	Model           string
+	Engine          string
+	Active          bool
+}
+
 // AgentCommandResult is the result of a direct command sent to an agent.
 type AgentCommandResult struct {
 	Response string
@@ -392,6 +421,24 @@ func (m *Manager) sessionKey(targetType, targetID string) string {
 		return targetType + ":" + targetID
 	}
 	return strings.Join([]string{"g", m.guildID, "b", m.botID, targetType, targetID}, ":")
+}
+
+func parseSessionKey(key string) (targetType, targetID, guildID, botID string) {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return "", "", "", ""
+	}
+	parts := strings.Split(key, ":")
+	if len(parts) == 1 {
+		return sessionTargetChannel, key, "", ""
+	}
+	if len(parts) == 2 && parts[0] == sessionTargetThread {
+		return sessionTargetThread, parts[1], "", ""
+	}
+	if len(parts) == 6 && parts[0] == "g" && parts[2] == "b" {
+		return parts[4], parts[5], parts[1], parts[3]
+	}
+	return "", "", "", ""
 }
 
 func (m *Manager) getChannelSession(channelID string) (*Session, bool) {
@@ -844,6 +891,162 @@ func (m *Manager) Reset(channelID string) error {
 		}
 	}
 	return nil
+}
+
+// Resume stops any idle current channel agent and starts it from the stored ACP session id.
+func (m *Manager) Resume(channelID string) (SessionResumeResult, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	sess, ok := m.getChannelSession(channelID)
+	if !ok || strings.TrimSpace(sess.SessionID) == "" {
+		return SessionResumeResult{}, ErrNoSavedSession
+	}
+	if w, ok := m.workers[channelID]; ok && (w.IsActive() || w.QueueLen() > 0) {
+		return SessionResumeResult{}, ErrSessionBusy
+	}
+	if agent, ok := m.agents[channelID]; ok && agent.IsAlive() && !agent.IsBusy() {
+		return SessionResumeResult{
+			SessionID:   agent.SessionID,
+			CWD:         sess.CWD,
+			Model:       sess.Model,
+			Engine:      m.resolveEngine(sess.Engine).String(),
+			ReuseMethod: agent.SessionReuseMethod(),
+			AlreadyLive: true,
+		}, nil
+	}
+
+	m.stopChannel(channelID)
+	if _, err := m.startAgentAndWorker(channelID); err != nil {
+		return SessionResumeResult{}, err
+	}
+	agent := m.agents[channelID]
+	sess, _ = m.getChannelSession(channelID)
+	return SessionResumeResult{
+		SessionID:   sess.SessionID,
+		CWD:         sess.CWD,
+		Model:       sess.Model,
+		Engine:      m.resolveEngine(sess.Engine).String(),
+		ReuseMethod: agent.SessionReuseMethod(),
+	}, nil
+}
+
+// ResumeThreadAgent stops any idle current thread agent and starts it from the stored ACP session id.
+func (m *Manager) ResumeThreadAgent(threadID, parentChannelID string) (SessionResumeResult, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	sess, ok := m.getThreadSession(threadID)
+	if !ok || strings.TrimSpace(sess.SessionID) == "" {
+		return SessionResumeResult{}, ErrNoSavedSession
+	}
+	if strings.TrimSpace(parentChannelID) == "" {
+		parentChannelID = strings.TrimSpace(sess.ParentChannelID)
+	}
+	if parentChannelID == "" {
+		return SessionResumeResult{}, ErrNoThreadAgent
+	}
+	if entry, ok := m.threadAgents[threadID]; ok {
+		if entry.worker != nil && (entry.worker.IsActive() || entry.worker.QueueLen() > 0) {
+			return SessionResumeResult{}, ErrSessionBusy
+		}
+		if entry.agent != nil && entry.agent.IsAlive() && !entry.agent.IsBusy() {
+			return SessionResumeResult{
+				SessionID:   entry.agent.SessionID,
+				CWD:         sess.CWD,
+				Model:       sess.Model,
+				Engine:      m.resolveEngine(sess.Engine).String(),
+				ReuseMethod: entry.agent.SessionReuseMethod(),
+				AlreadyLive: true,
+				Thread:      true,
+			}, nil
+		}
+		m.stopThreadAgentLocked(threadID)
+	} else if len(m.threadAgents) >= m.threadAgentMax {
+		return SessionResumeResult{}, m.threadAgentLimitErrorLocked()
+	}
+
+	entry, err := m.spawnThreadAgent(threadID, parentChannelID)
+	if err != nil {
+		return SessionResumeResult{}, err
+	}
+	m.threadAgents[threadID] = entry
+	sess, _ = m.getThreadSession(threadID)
+	return SessionResumeResult{
+		SessionID:   sess.SessionID,
+		CWD:         sess.CWD,
+		Model:       sess.Model,
+		Engine:      m.resolveEngine(sess.Engine).String(),
+		ReuseMethod: entry.agent.SessionReuseMethod(),
+		Thread:      true,
+	}, nil
+}
+
+// ListStoredSessions returns stored ACP sessions known to this bot instance.
+func (m *Manager) ListStoredSessions() []SessionView {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.store == nil {
+		return nil
+	}
+	all := m.store.All()
+	out := make([]SessionView, 0, len(all))
+	for key, sess := range all {
+		if sess == nil || strings.TrimSpace(sess.SessionID) == "" {
+			continue
+		}
+		keyTargetType, keyTargetID, keyGuildID, keyBotID := parseSessionKey(key)
+		if sess.GuildID != "" && m.guildID != "" && sess.GuildID != m.guildID {
+			continue
+		}
+		if sess.GuildID == "" && keyGuildID != "" && m.guildID != "" && keyGuildID != m.guildID {
+			continue
+		}
+		if sess.BotID != "" && m.botID != "" && sess.BotID != m.botID {
+			continue
+		}
+		if sess.BotID == "" && keyBotID != "" && m.botID != "" && keyBotID != m.botID {
+			continue
+		}
+		targetType := strings.TrimSpace(sess.TargetType)
+		if targetType == "" {
+			targetType = keyTargetType
+		}
+		targetID := strings.TrimSpace(sess.TargetID)
+		if targetID == "" {
+			targetID = keyTargetID
+		}
+		if targetType == "" || targetID == "" {
+			continue
+		}
+		view := SessionView{
+			TargetType:      targetType,
+			TargetID:        targetID,
+			ParentChannelID: sess.ParentChannelID,
+			SessionID:       sess.SessionID,
+			CWD:             sess.CWD,
+			Model:           sess.Model,
+			Engine:          m.resolveEngine(sess.Engine).String(),
+		}
+		switch view.TargetType {
+		case sessionTargetThread:
+			_, view.Active = m.threadAgents[view.TargetID]
+		default:
+			view.TargetType = sessionTargetChannel
+			_, view.Active = m.agents[view.TargetID]
+		}
+		out = append(out, view)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Active != out[j].Active {
+			return out[i].Active
+		}
+		if out[i].TargetType != out[j].TargetType {
+			return out[i].TargetType < out[j].TargetType
+		}
+		return out[i].TargetID < out[j].TargetID
+	})
+	return out
 }
 
 // Restart stops the current agent and immediately starts a new one.

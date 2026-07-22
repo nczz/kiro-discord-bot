@@ -2064,15 +2064,43 @@ func collectMCPComponentCustomIDs(components []discordgo.MessageComponent) []str
 }
 
 func TestChannelOnlySlashCommands(t *testing.T) {
-	for _, name := range []string{"start", "cwd", "steering", "agent", "resume", "cron", "cron-list", "cron-run", "cron-prompt", "remind"} {
+	for _, name := range []string{"start", "cwd", "steering", "agent", "cron", "cron-list", "cron-run", "cron-prompt", "remind"} {
 		if !isChannelOnlySlashCommand(name) {
 			t.Fatalf("expected /%s to be channel-only", name)
 		}
 	}
-	for _, name := range []string{"status", "usage", "reset", "cancel", "interrupt", "compact", "clear", "model", "models", "memory", "flashmemory", "close"} {
+	for _, name := range []string{"status", "usage", "reset", "cancel", "interrupt", "compact", "clear", "model", "models", "memory", "flashmemory", "close", "resume", "session"} {
 		if isChannelOnlySlashCommand(name) {
 			t.Fatalf("did not expect /%s to be channel-only", name)
 		}
+	}
+}
+
+func TestSessionSlashResponseIsPrivate(t *testing.T) {
+	if got := commandResponseVisibility("session", "list"); got != commandVisibilityPrivate {
+		t.Fatalf("/session visibility = %v, want private", got)
+	}
+	if got := commandInteractionFlags(commandResponseVisibility("session", "list")); got != discordgo.MessageFlagsEphemeral {
+		t.Fatalf("/session flags = %v, want ephemeral", got)
+	}
+}
+
+func TestFormatSessionListUsesDiscordMentions(t *testing.T) {
+	L.Load("en")
+	got := formatSessionList([]channel.SessionView{{
+		TargetType:      "thread",
+		TargetID:        "150000000000000001",
+		ParentChannelID: "150000000000000002",
+		SessionID:       "019f8779-a3a8-7000-920c-425bf0ddbf91",
+		Engine:          "omp",
+		Model:           "gpt-5",
+		CWD:             "/project",
+	}})
+	if !strings.Contains(got, "<#150000000000000001>") || !strings.Contains(got, "<#150000000000000002>") {
+		t.Fatalf("session list should include Discord mentions, got:\n%s", got)
+	}
+	if strings.Contains(got, "`150000000000000001`") {
+		t.Fatalf("session list should not hide target mention inside code formatting, got:\n%s", got)
 	}
 }
 

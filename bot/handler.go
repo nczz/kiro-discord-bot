@@ -117,7 +117,7 @@ func isKnownBangCommand(name, content string) bool {
 		return false
 	}
 	switch name {
-	case "resume", "pause", "back", "silent", "thread", "reset", "status", "usage", "doctor", "audit", "mcp", "steering", "cancel", "interrupt",
+	case "resume", "session", "pause", "back", "silent", "thread", "reset", "status", "usage", "doctor", "audit", "mcp", "steering", "cancel", "interrupt",
 		"close-thread", "compact", "clear", "cwd", "start", "agent", "engine", "model", "models", "memory", "flashmemory", "cron", "help":
 		return true
 	case "remind":
@@ -633,6 +633,9 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 	switch {
 	case content == "!resume":
 		b.cmdResume(ctx)
+	case content == "!session" || strings.HasPrefix(content, "!session "):
+		ctx.args = strings.TrimSpace(strings.TrimPrefix(content, "!session"))
+		b.cmdSession(ctx)
 	case content == "!pause":
 		b.cmdPause(ctx)
 	case content == "!back":
@@ -918,6 +921,10 @@ func (b *Bot) handleThreadMessage(ds *discordgo.Session, m *discordgo.MessageCre
 	case content == "!resume":
 		b.cmdResume(ctx)
 		return
+	case content == "!session" || strings.HasPrefix(content, "!session "):
+		ctx.args = strings.TrimSpace(strings.TrimPrefix(content, "!session"))
+		b.cmdSession(ctx)
+		return
 	case strings.HasPrefix(content, "!cron") || strings.HasPrefix(content, "!remind "):
 		ctx.reply(L.Get("error.channel_only"))
 		return
@@ -1046,6 +1053,10 @@ func buildSlashCommands() []*discordgo.ApplicationCommand {
 			{Type: discordgo.ApplicationCommandOptionString, Name: "thread_id", Description: L.Get("cmd.close_thread.opt.thread_id"), Required: true},
 		}},
 		{Name: "resume", Description: L.Get("cmd.resume.desc")},
+		{Name: "session", Description: L.Get("cmd.session.desc"), Options: []*discordgo.ApplicationCommandOption{
+			{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "list", Description: L.Get("cmd.session.list.desc")},
+			{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "resume", Description: L.Get("cmd.session.resume.desc")},
+		}},
 		{Name: "cron-run", Description: L.Get("cmd.cron_run.desc"), Options: []*discordgo.ApplicationCommandOption{
 			{Type: discordgo.ApplicationCommandOptionString, Name: "name", Description: L.Get("cmd.cron_run.opt.name"), Required: true, Autocomplete: true},
 		}},
@@ -1496,6 +1507,12 @@ func (b *Bot) handleSlashCommand(ds *discordgo.Session, i *discordgo.Interaction
 			b.cmdCloseThread(ctx)
 		case "resume":
 			b.cmdResume(ctx)
+		case "session":
+			if len(data.Options) > 0 {
+				sub := data.Options[0]
+				ctx.args = sub.Name
+			}
+			b.cmdSession(ctx)
 		}
 	}()
 }
