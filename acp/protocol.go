@@ -2,13 +2,17 @@ package acp
 
 // ACP protocol v1 method names (kiro-cli 2.4.2+)
 const (
-	MethodInitialize  = "initialize"
-	MethodNewSession  = "session/new"
-	MethodLoadSession = "session/load"
-	MethodPrompt      = "session/prompt"
-	MethodCancel      = "session/cancel"
-	MethodSetModel    = "session/set_model"
-	MethodSetMode     = "session/set_mode"
+	MethodInitialize        = "initialize"
+	MethodNewSession        = "session/new"
+	MethodLoadSession       = "session/load"
+	MethodResumeSession     = "session/resume"
+	MethodListSessions      = "session/list"
+	MethodCloseSession      = "session/close"
+	MethodPrompt            = "session/prompt"
+	MethodCancel            = "session/cancel"
+	MethodSetModel          = "session/set_model"
+	MethodSetMode           = "session/set_mode"
+	MethodRequestPermission = "session/request_permission"
 	// omp ACP dialect methods/notifications (omp 16.x).
 	MethodSetConfigOption = "session/set_config_option" // omp model/mode setter
 	NotifUsageUpdate      = "usage_update"              // omp per-session usage (size/used/cost) sessionUpdate
@@ -88,6 +92,19 @@ type SessionNewResult struct {
 	SessionID string      `json:"sessionId"`
 	Modes     *ModeState  `json:"modes,omitempty"`
 	Models    *ModelState `json:"models,omitempty"`
+}
+
+// SessionInfo describes a resumable/listed ACP session.
+type SessionInfo struct {
+	SessionID string `json:"sessionId"`
+	CWD       string `json:"cwd,omitempty"`
+	Title     string `json:"title,omitempty"`
+}
+
+// ListSessionsResult holds the response from session/list.
+type ListSessionsResult struct {
+	Sessions   []SessionInfo `json:"sessions"`
+	NextCursor string        `json:"nextCursor,omitempty"`
 }
 
 // ModeState holds available agent modes from session/new response.

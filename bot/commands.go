@@ -421,9 +421,9 @@ func (b *Bot) cmdModels(ctx cmdCtx) {
 	}
 	if err != nil {
 		ctx.reply(commandError(err))
-	} else {
-		ctx.reply(msg)
+		return
 	}
+	replyLongWithMetadata(ctx, msg, map[string]any{"model_count_response": true})
 }
 
 func (b *Bot) cmdUsage(ctx cmdCtx) {

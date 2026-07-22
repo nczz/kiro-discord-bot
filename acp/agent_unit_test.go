@@ -35,6 +35,25 @@ func TestAgentModelAndModeHelpers(t *testing.T) {
 	}
 }
 
+func TestAgentSessionCapabilityHelpersAcceptObjectShape(t *testing.T) {
+	a := &Agent{initResult: &InitializeResult{AgentCapabilities: &AgentCapabilities{
+		SessionCapabilities: map[string]interface{}{
+			"resume": map[string]interface{}{},
+			"close":  true,
+			"list":   nil,
+		},
+	}}}
+	if !a.SupportsResumeSession() {
+		t.Fatal("resume object capability should be supported")
+	}
+	if !a.SupportsCloseSession() {
+		t.Fatal("close boolean capability should be supported")
+	}
+	if a.SupportsListSessions() {
+		t.Fatal("nil list capability should not be supported")
+	}
+}
+
 func TestSessionParamsIncludesMCPServers(t *testing.T) {
 	params := sessionParams("/tmp/project", "session-1", []MCPServerConfig{{
 		Name:    "generic-tools",

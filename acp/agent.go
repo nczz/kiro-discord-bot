@@ -173,12 +173,16 @@ func StartAgent(name, binary, cwd, model string, opts AgentOptions) (*Agent, err
 
 	a.transport.OnNotification = a.handleNotification
 	a.transport.OnRequest = func(method string, params json.RawMessage) interface{} {
+		if method != MethodRequestPermission {
+			log.Printf("[agent:%s] rejecting unsupported client request method=%s", name, method)
+			return map[string]interface{}{}
+		}
 		if opts.TrustAllTools || opts.TrustTools != "" {
 			log.Printf("[agent:%s] approving server request method=%s", name, method)
-			return ApproveRequestResult()
+			return ApproveRequestResult(params)
 		}
 		log.Printf("[agent:%s] denying server request method=%s (TRUST_ALL_TOOLS=false)", name, method)
-		return DenyRequestResult()
+		return DenyRequestResult(params)
 	}
 
 	go func() {
@@ -216,8 +220,8 @@ func StartAgent(name, binary, cwd, model string, opts AgentOptions) (*Agent, err
 	initParams := map[string]interface{}{
 		"protocolVersion": ClientProtocolVersion,
 		"clientCapabilities": map[string]interface{}{
-			"fs":       map[string]interface{}{"readTextFile": true, "writeTextFile": true},
-			"terminal": true,
+			"fs":       map[string]interface{}{"readTextFile": false, "writeTextFile": false},
+			"terminal": false,
 		},
 	}
 	if opts.BotName != "" || opts.BotVersion != "" {
@@ -249,29 +253,47 @@ func StartAgent(name, binary, cwd, model string, opts AgentOptions) (*Agent, err
 	}
 	log.Printf("[agent:%s] pid=%d protocol=%v agent=%s version=%s", name, cmd.Process.Pid, initResp.ProtocolVersion, a.Dialect(), version)
 
-	// Handshake: session setup — try session/load if requested, fallback to session/new.
+	// Handshake: session setup — try reuse if requested, fallback to session/new.
 	var sessResp SessionNewResult
-	if opts.LoadSessionID != "" && a.SupportsLoadSession() {
-		loadRaw, loadErr := a.transport.Send(MethodLoadSession, sessionParams(cwd, opts.LoadSessionID, opts.MCPServers))
-		if loadErr == nil {
-			if r := prof.parseSession(loadRaw); r != nil {
-				sessResp = *r
+	sessionReused := false
+	if opts.LoadSessionID != "" {
+		if a.SupportsLoadSession() {
+			loadRaw, loadErr := a.transport.Send(MethodLoadSession, sessionParams(cwd, opts.LoadSessionID, opts.MCPServers))
+			if loadErr == nil {
+				if r := prof.parseSession(loadRaw); r != nil {
+					sessResp = *r
+				}
+				if sessResp.SessionID == "" {
+					sessResp.SessionID = opts.LoadSessionID
+				}
+				sessionReused = true
+				a.sessionLoaded = true
+				log.Printf("[agent:%s] loaded session=%s", name, sessResp.SessionID)
+			} else {
+				log.Printf("[agent:%s] session/load failed (%v)", name, loadErr)
 			}
-			if sessResp.SessionID == "" {
-				sessResp.SessionID = opts.LoadSessionID
+		}
+		if !sessionReused && a.SupportsResumeSession() {
+			resumeRaw, resumeErr := a.transport.Send(MethodResumeSession, sessionParams(cwd, opts.LoadSessionID, opts.MCPServers))
+			if resumeErr == nil {
+				if r := prof.parseSession(resumeRaw); r != nil {
+					sessResp = *r
+				}
+				if sessResp.SessionID == "" {
+					sessResp.SessionID = opts.LoadSessionID
+				}
+				sessionReused = true
+				a.sessionLoaded = true
+				log.Printf("[agent:%s] resumed session=%s", name, sessResp.SessionID)
+			} else {
+				log.Printf("[agent:%s] session/resume failed (%v)", name, resumeErr)
 			}
-			a.sessionLoaded = true
-			log.Printf("[agent:%s] loaded session=%s", name, sessResp.SessionID)
-		} else {
-			log.Printf("[agent:%s] session/load failed (%v), falling back to session/new", name, loadErr)
-			opts.LoadSessionID = "" // clear to signal fallback happened
+		}
+		if !sessionReused {
+			log.Printf("[agent:%s] session reuse requested but unavailable, falling back to session/new", name)
 		}
 	}
-	if opts.LoadSessionID != "" && !a.SupportsLoadSession() {
-		log.Printf("[agent:%s] session/load requested but unsupported, falling back to session/new", name)
-		opts.LoadSessionID = ""
-	}
-	if opts.LoadSessionID == "" {
+	if opts.LoadSessionID == "" || !sessionReused {
 		sessRaw, sessErr := a.transport.Send(MethodNewSession, sessionParams(cwd, "", opts.MCPServers))
 		if sessErr != nil {
 			a.Kill()
@@ -838,6 +860,38 @@ func (a *Agent) CurrentModeID() string {
 	return ""
 }
 
+// SupportsSessionCapability returns true if initialize advertised a named
+// session lifecycle capability such as "resume", "close", or "list".
+func (a *Agent) SupportsSessionCapability(name string) bool {
+	if a.initResult == nil || a.initResult.AgentCapabilities == nil {
+		return false
+	}
+	v, ok := a.initResult.AgentCapabilities.SessionCapabilities[name]
+	if !ok || v == nil {
+		return false
+	}
+	if b, ok := v.(bool); ok {
+		return b
+	}
+	_, ok = v.(map[string]interface{})
+	return ok
+}
+
+// SupportsResumeSession returns true if session/resume is advertised.
+func (a *Agent) SupportsResumeSession() bool {
+	return a.SupportsSessionCapability("resume")
+}
+
+// SupportsCloseSession returns true if session/close is advertised.
+func (a *Agent) SupportsCloseSession() bool {
+	return a.SupportsSessionCapability("close")
+}
+
+// SupportsListSessions returns true if session/list is advertised.
+func (a *Agent) SupportsListSessions() bool {
+	return a.SupportsSessionCapability("list")
+}
+
 // MCPReadyServers returns MCP servers reported as initialized by the agent.
 func (a *Agent) MCPReadyServers() []string {
 	a.mu.Lock()
@@ -1027,6 +1081,32 @@ func (a *Agent) IsBusy() bool {
 	return a.state == "working"
 }
 
+// CloseSession asks the agent to close the current ACP session when supported.
+func (a *Agent) CloseSession() error {
+	if a.SessionID == "" {
+		return nil
+	}
+	_, err := a.transport.Send(MethodCloseSession, map[string]string{"sessionId": a.SessionID})
+	return err
+}
+
+// ListSessions returns sessions known to the current ACP agent when supported.
+func (a *Agent) ListSessions(cursor string) ([]SessionInfo, string, error) {
+	params := map[string]string{}
+	if cursor != "" {
+		params["cursor"] = cursor
+	}
+	raw, err := a.transport.Send(MethodListSessions, params)
+	if err != nil {
+		return nil, "", err
+	}
+	var out ListSessionsResult
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, "", err
+	}
+	return out.Sessions, out.NextCursor, nil
+}
+
 // activeProfile returns this agent's dialect profile, falling back to the kiro
 // profile for zero-value agents constructed directly in tests.
 func (a *Agent) activeProfile() dialectProfile {
@@ -1036,8 +1116,8 @@ func (a *Agent) activeProfile() dialectProfile {
 	return a.profile
 }
 
-// CancelPrompt requests cancellation of the in-flight prompt (dialect-specific:
-// kiro sends a request, omp sends a notification). Non-blocking.
+// CancelPrompt sends a spec-compliant notification to cancel the in-flight
+// prompt. Non-blocking.
 func (a *Agent) CancelPrompt() {
 	a.activeProfile().cancel(a)
 }
@@ -1115,6 +1195,19 @@ func (a *Agent) Stop() {
 
 		pid := a.cmd.Process.Pid
 		log.Printf("[agent:%s] stopping pid=%d", a.Name, pid)
+
+		if a.SupportsCloseSession() {
+			closeDone := make(chan error, 1)
+			go func() { closeDone <- a.CloseSession() }()
+			select {
+			case err := <-closeDone:
+				if err != nil {
+					log.Printf("[agent:%s] session/close failed: %v", a.Name, err)
+				}
+			case <-time.After(500 * time.Millisecond):
+				log.Printf("[agent:%s] session/close timed out", a.Name)
+			}
+		}
 
 		_ = syscall.Kill(-pid, syscall.SIGTERM)
 

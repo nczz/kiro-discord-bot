@@ -50,7 +50,7 @@ func profileFor(d Dialect) dialectProfile {
 	}
 }
 
-// kiroProfile reproduces the exact behavior used before dialects existed.
+// kiroProfile drives Kiro's ACP dialect.
 func kiroProfile() dialectProfile {
 	return dialectProfile{
 		launchArgs: func(model string, opts AgentOptions) []string {
@@ -76,7 +76,7 @@ func kiroProfile() dialectProfile {
 			return err
 		},
 		cancel: func(a *Agent) {
-			go a.transport.Send(MethodCancel, map[string]string{"sessionId": a.SessionID})
+			go func() { _ = a.transport.SendNotification(MethodCancel, map[string]string{"sessionId": a.SessionID}) }()
 		},
 		parseSession: func(raw json.RawMessage) *SessionNewResult {
 			var s SessionNewResult
@@ -87,16 +87,51 @@ func kiroProfile() dialectProfile {
 }
 
 // ompConfigOption mirrors one entry of omp's session/new `configOptions` array.
-// Verified shape (omp 16.1.23): {id, name, category, type:"select", currentValue, options:[{value,name,description}]}.
+// ACP allows select options to be either flat values or grouped option lists.
 type ompConfigOption struct {
-	ID           string `json:"id"`
-	Category     string `json:"category"`
-	CurrentValue string `json:"currentValue"`
-	Options      []struct {
-		Value       string `json:"value"`
-		Name        string `json:"name"`
-		Description string `json:"description"`
-	} `json:"options"`
+	ID           string          `json:"id"`
+	Category     string          `json:"category"`
+	CurrentValue string          `json:"currentValue"`
+	Options      json.RawMessage `json:"options"`
+}
+
+type ompConfigValue struct {
+	Value       string `json:"value"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+func (o ompConfigOption) Values() []ompConfigValue {
+	if len(o.Options) == 0 {
+		return nil
+	}
+	var flat []ompConfigValue
+	if json.Unmarshal(o.Options, &flat) == nil {
+		out := make([]ompConfigValue, 0, len(flat))
+		for _, v := range flat {
+			if v.Value != "" {
+				out = append(out, v)
+			}
+		}
+		if len(out) > 0 {
+			return out
+		}
+	}
+	var groups []struct {
+		Options []ompConfigValue `json:"options"`
+	}
+	if json.Unmarshal(o.Options, &groups) != nil {
+		return nil
+	}
+	var out []ompConfigValue
+	for _, group := range groups {
+		for _, v := range group.Options {
+			if v.Value != "" {
+				out = append(out, v)
+			}
+		}
+	}
+	return out
 }
 
 // ompProfile drives the `omp acp` ACP dialect (omp 16.x). Differences from kiro:
@@ -147,7 +182,7 @@ func parseOmpSession(raw json.RawMessage) *SessionNewResult {
 		switch opt.Category {
 		case "model":
 			ms := &ModelState{CurrentModelID: opt.CurrentValue}
-			for _, o := range opt.Options {
+			for _, o := range opt.Values() {
 				ms.AvailableModels = append(ms.AvailableModels, ModelEntry{
 					ModelID: o.Value, Name: o.Name, Description: o.Description,
 				})
@@ -155,7 +190,7 @@ func parseOmpSession(raw json.RawMessage) *SessionNewResult {
 			out.Models = ms
 		case "mode":
 			md := &ModeState{CurrentModeID: opt.CurrentValue}
-			for _, o := range opt.Options {
+			for _, o := range opt.Values() {
 				md.AvailableModes = append(md.AvailableModes, ModeEntry{
 					ID: o.Value, Name: o.Name, Description: o.Description,
 				})

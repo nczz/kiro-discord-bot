@@ -1,8 +1,11 @@
 package acp
 
 import (
+	"bytes"
 	"encoding/json"
+	"strings"
 	"testing"
+	"time"
 )
 
 func TestKiroProfileLaunchArgsIncludesFlags(t *testing.T) {
@@ -15,6 +18,26 @@ func TestKiroProfileLaunchArgsIncludesFlags(t *testing.T) {
 	}
 	if args[0] != "acp" {
 		t.Fatalf("first arg must be acp, got %q (%s)", args[0], joined)
+	}
+}
+
+func TestKiroCancelUsesNotification(t *testing.T) {
+	var out bytes.Buffer
+	tr := NewTransport(strings.NewReader(""), &out, 0)
+	a := &Agent{SessionID: "sid-1", transport: tr, profile: kiroProfile()}
+
+	a.activeProfile().cancel(a)
+
+	deadline := time.Now().Add(time.Second)
+	for !strings.Contains(out.String(), `"method":"session/cancel"`) && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	got := out.String()
+	if !strings.Contains(got, `"method":"session/cancel"`) {
+		t.Fatalf("cancel notification not written: %s", got)
+	}
+	if strings.Contains(got, `"id"`) {
+		t.Fatalf("cancel must be a notification without id: %s", got)
 	}
 }
 
@@ -70,6 +93,26 @@ func TestParseOmpSessionMapsConfigOptions(t *testing.T) {
 	}
 	if r.Modes.AvailableModes[1].ID != "plan" {
 		t.Fatalf("mode entry not mapped: %+v", r.Modes.AvailableModes[1])
+	}
+}
+
+func TestParseOmpSessionMapsGroupedConfigOptions(t *testing.T) {
+	raw := json.RawMessage(`{
+		"sessionId":"sid-2",
+		"configOptions":[
+			{"id":"model","category":"model","type":"select","currentValue":"openai-codex/gpt-5.5",
+			 "options":[
+				{"name":"OpenAI","options":[{"value":"openai-codex/gpt-5","name":"GPT-5","description":"g5"}]},
+				{"name":"Hugging Face","options":[{"value":"huggingface/deepseek-ai/DeepSeek-R1","name":"DeepSeek-R1","description":"ds"}]}
+			 ]}
+		]
+	}`)
+	r := parseOmpSession(raw)
+	if r.Models == nil || len(r.Models.AvailableModels) != 2 {
+		t.Fatalf("grouped models not mapped: %+v", r.Models)
+	}
+	if r.Models.AvailableModels[1].ModelID != "huggingface/deepseek-ai/DeepSeek-R1" {
+		t.Fatalf("grouped model entry not mapped: %+v", r.Models.AvailableModels[1])
 	}
 }
 

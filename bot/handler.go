@@ -585,15 +585,19 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 	auditCtx := ctxForAudit(m.ChannelID, m.ChannelID, false, m.GuildID, m.Author.ID, m.Author.Username)
 	auditCtx.messageID = m.ID
 	reply := func(msg string) {
-		sent, err := sendDiscordText(ds, m.ChannelID, msg, &discordgo.MessageReference{MessageID: m.ID, ChannelID: m.ChannelID})
-		if isKnownCommand {
-			b.recordCommandResponseDelivery(auditCtx, bangCommand, "message", "sent", msg, nil, sent, err)
+		for _, payload := range splitOversizedReply(secrets.RedactEnv(msg), nil) {
+			sent, err := sendDiscordText(ds, m.ChannelID, payload.content, &discordgo.MessageReference{MessageID: m.ID, ChannelID: m.ChannelID})
+			if isKnownCommand {
+				b.recordCommandResponseDelivery(auditCtx, bangCommand, "message", "sent", payload.content, payload.metadata, sent, err)
+			}
 		}
 	}
 	replyWithMetadata := func(msg string, metadata map[string]any) {
-		sent, err := sendDiscordText(ds, m.ChannelID, msg, &discordgo.MessageReference{MessageID: m.ID, ChannelID: m.ChannelID})
-		if isKnownCommand {
-			b.recordCommandResponseDelivery(auditCtx, bangCommand, "message", "sent", msg, metadata, sent, err)
+		for _, payload := range splitOversizedReply(secrets.RedactEnv(msg), metadata) {
+			sent, err := sendDiscordText(ds, m.ChannelID, payload.content, &discordgo.MessageReference{MessageID: m.ID, ChannelID: m.ChannelID})
+			if isKnownCommand {
+				b.recordCommandResponseDelivery(auditCtx, bangCommand, "message", "sent", payload.content, payload.metadata, sent, err)
+			}
 		}
 	}
 	ctx := cmdCtx{
@@ -778,15 +782,19 @@ func (b *Bot) handleThreadMessage(ds *discordgo.Session, m *discordgo.MessageCre
 	auditCtx := ctxForAudit(parentChannelID, threadID, true, m.GuildID, m.Author.ID, m.Author.Username)
 	auditCtx.messageID = m.ID
 	reply := func(msg string) {
-		sent, err := sendDiscordText(ds, threadID, msg, nil)
-		if isKnownCommand {
-			b.recordCommandResponseDelivery(auditCtx, bangCommand, "thread_message", "sent", msg, nil, sent, err)
+		for _, payload := range splitOversizedReply(secrets.RedactEnv(msg), nil) {
+			sent, err := sendDiscordText(ds, threadID, payload.content, nil)
+			if isKnownCommand {
+				b.recordCommandResponseDelivery(auditCtx, bangCommand, "thread_message", "sent", payload.content, payload.metadata, sent, err)
+			}
 		}
 	}
 	replyWithMetadata := func(msg string, metadata map[string]any) {
-		sent, err := sendDiscordText(ds, threadID, msg, nil)
-		if isKnownCommand {
-			b.recordCommandResponseDelivery(auditCtx, bangCommand, "thread_message", "sent", msg, metadata, sent, err)
+		for _, payload := range splitOversizedReply(secrets.RedactEnv(msg), metadata) {
+			sent, err := sendDiscordText(ds, threadID, payload.content, nil)
+			if isKnownCommand {
+				b.recordCommandResponseDelivery(auditCtx, bangCommand, "thread_message", "sent", payload.content, payload.metadata, sent, err)
+			}
 		}
 	}
 	ctx := cmdCtx{
@@ -1352,14 +1360,17 @@ func (b *Bot) handleSlashCommand(ds *discordgo.Session, i *discordgo.Interaction
 	b.recordInteractionResponseDelivery(auditCtx, data.Name, "deferred", "", discordgo.InteractionResponseDeferredChannelMessageWithSource, visibilityMetadata, err)
 	responder := newDeferredSlashResponder(ds, i.Interaction, commandInteractionFlags(visibility))
 	reply := func(msg string) {
-		msg = secrets.RedactEnv(msg)
-		sent, err := responder.Send(msg)
-		b.recordCommandResponseDelivery(auditCtx, data.Name, "slash", "sent", msg, visibilityMetadata, sent, err)
+		for _, payload := range splitOversizedReply(secrets.RedactEnv(msg), visibilityMetadata) {
+			sent, err := responder.Send(payload.content)
+			b.recordCommandResponseDelivery(auditCtx, data.Name, "slash", "sent", payload.content, payload.metadata, sent, err)
+		}
 	}
 	replyWithMetadata := func(msg string, metadata map[string]any) {
-		msg = secrets.RedactEnv(msg)
-		sent, err := responder.Send(msg)
-		b.recordCommandResponseDelivery(auditCtx, data.Name, "slash", "sent", msg, mergeMetadata(metadata, visibilityMetadata), sent, err)
+		metadata = mergeMetadata(metadata, visibilityMetadata)
+		for _, payload := range splitOversizedReply(secrets.RedactEnv(msg), metadata) {
+			sent, err := responder.Send(payload.content)
+			b.recordCommandResponseDelivery(auditCtx, data.Name, "slash", "sent", payload.content, payload.metadata, sent, err)
+		}
 	}
 	ctx := cmdCtx{channelID: channelID, targetID: rawChannelID, inThread: inThread, reply: reply, replyWithMetadata: replyWithMetadata, guildID: i.GuildID, userID: userID, username: username, interactionID: i.ID}
 

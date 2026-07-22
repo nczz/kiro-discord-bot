@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"sync/atomic"
 )
@@ -130,7 +131,7 @@ func (t *Transport) Send(method string, params interface{}) (json.RawMessage, er
 }
 
 // SendNotification sends a JSON-RPC 2.0 notification (no id, no response awaited).
-// Used for spec-compliant fire-and-forget methods such as omp's session/cancel.
+// Used for spec-compliant fire-and-forget methods such as session/cancel.
 func (t *Transport) SendNotification(method string, params interface{}) error {
 	select {
 	case <-t.done:
@@ -211,9 +212,7 @@ func (t *Transport) ReadLoop() error {
 			if json.Unmarshal(line, &req) != nil {
 				continue
 			}
-			result := interface{}(map[string]interface{}{
-				"outcome": map[string]string{"outcome": "denied"},
-			})
+			result := defaultRequestResult(req.Method, req.Params)
 			if t.OnRequest != nil {
 				result = t.OnRequest(req.Method, req.Params)
 			}
@@ -228,20 +227,71 @@ func (t *Transport) ReadLoop() error {
 	return err
 }
 
-// ApproveRequestResult is the ACP result used when a server-initiated request
-// is allowed by local policy.
-func ApproveRequestResult() interface{} {
+func defaultRequestResult(method string, params json.RawMessage) interface{} {
+	if method == MethodRequestPermission {
+		return DenyRequestResult(params)
+	}
+	return map[string]interface{}{}
+}
+
+// ApproveRequestResult is the ACP permission result used when a server-initiated
+// permission request is allowed by local policy.
+func ApproveRequestResult(params ...json.RawMessage) interface{} {
+	return permissionResult(true, params...)
+}
+
+// DenyRequestResult is the ACP permission result used when a server-initiated
+// permission request is blocked by local policy.
+func DenyRequestResult(params ...json.RawMessage) interface{} {
+	return permissionResult(false, params...)
+}
+
+func permissionResult(allow bool, params ...json.RawMessage) interface{} {
+	if len(params) > 0 {
+		if optionID := selectPermissionOption(params[0], allow); optionID != "" {
+			return map[string]interface{}{
+				"outcome": map[string]string{"outcome": "selected", "optionId": optionID},
+			}
+		}
+	}
 	return map[string]interface{}{
-		"outcome": map[string]string{"outcome": "approved"},
+		"outcome": map[string]string{"outcome": "cancelled"},
 	}
 }
 
-// DenyRequestResult is the ACP result used when a server-initiated request is
-// blocked by local policy.
-func DenyRequestResult() interface{} {
-	return map[string]interface{}{
-		"outcome": map[string]string{"outcome": "denied"},
+func selectPermissionOption(params json.RawMessage, allow bool) string {
+	var req struct {
+		Options []struct {
+			OptionID string `json:"optionId"`
+			Kind     string `json:"kind"`
+		} `json:"options"`
 	}
+	if json.Unmarshal(params, &req) != nil {
+		return ""
+	}
+	preferred := []string{"reject_once", "reject_always", "deny_once", "deny_always"}
+	if allow {
+		preferred = []string{"allow_once", "allow_always"}
+	}
+	for _, want := range preferred {
+		for _, opt := range req.Options {
+			if opt.OptionID == want || opt.Kind == want {
+				return opt.OptionID
+			}
+		}
+	}
+	for _, opt := range req.Options {
+		if allow && strings.HasPrefix(opt.Kind, "allow") {
+			return opt.OptionID
+		}
+		if !allow && (strings.HasPrefix(opt.Kind, "reject") || strings.HasPrefix(opt.Kind, "deny")) {
+			return opt.OptionID
+		}
+	}
+	if len(req.Options) > 0 && allow {
+		return req.Options[0].OptionID
+	}
+	return ""
 }
 
 // failAllPending unblocks all pending Send() calls with an error.

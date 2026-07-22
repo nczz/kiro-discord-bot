@@ -21,6 +21,30 @@ func replyLong(reply func(string), content string) {
 	}
 }
 
+type replyPayload struct {
+	content  string
+	metadata map[string]any
+}
+
+func splitOversizedReply(content string, metadata map[string]any) []replyPayload {
+	if len(content) <= discordReplyLimit {
+		return []replyPayload{{content: content, metadata: metadata}}
+	}
+	const prefixReserve = 16
+	parts := splitDiscordMessage(content, discordReplyLimit-prefixReserve)
+	if len(parts) == 0 {
+		return []replyPayload{{content: "", metadata: replyPartMetadata(metadata, 1, 1)}}
+	}
+	out := make([]replyPayload, 0, len(parts))
+	for i, part := range parts {
+		if len(parts) > 1 {
+			part = formatReplyPart(i, len(parts), part)
+		}
+		out = append(out, replyPayload{content: part, metadata: replyPartMetadata(metadata, i+1, len(parts))})
+	}
+	return out
+}
+
 func replyLongWithMetadata(ctx cmdCtx, content string, metadata map[string]any) {
 	const prefixReserve = 16
 	parts := splitDiscordMessage(content, discordReplyLimit-prefixReserve)
