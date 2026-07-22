@@ -963,15 +963,15 @@ func (job *Job) inlineBotToolsTargetID() string {
 	return job.ChannelID
 }
 
-func (job *Job) sendInlineFinalReply(ds *discordgo.Session, content string) {
+func (job *Job) sendInlineFinalReply(ds *discordgo.Session, content string) error {
 	if job == nil {
-		return
+		return nil
 	}
 	if job.FinalReply != nil {
 		job.FinalReply(content)
-		return
+		return nil
 	}
-	SendLongReplyWithMentions(ds, job.ChannelID, job.MessageID, content, job.MentionRefs)
+	return SendLongReplyWithMentions(ds, job.ChannelID, job.MessageID, content, job.MentionRefs)
 }
 
 func (w *Worker) executeInline(job *Job) {
@@ -1130,7 +1130,10 @@ func (w *Worker) executeInline(job *Job) {
 					finishJob("✅")
 					return
 				}
-				job.sendInlineFinalReply(ds, AppendMetricsFooter(errorContent, MetricsWithElapsed(w.agent.TurnMetrics(), startTime)))
+				if sendErr := job.sendInlineFinalReply(ds, AppendMetricsFooter(errorContent, MetricsWithElapsed(w.agent.TurnMetrics(), startTime))); sendErr != nil {
+					log.Printf("[worker %s] inline error reply failed | user=%s msg=%s err=%v",
+						w.channelID, job.Username, job.MessageID, sendErr)
+				}
 				if w.logger != nil {
 					w.logger.Log(w.channelID, ChatEntry{Role: "assistant", Content: errorContent, Model: w.currentModel()})
 				}
@@ -1155,7 +1158,20 @@ func (w *Worker) executeInline(job *Job) {
 			if !job.DisableBotEgress {
 				w.drainBeforeFinal(targetID)
 			}
-			job.sendInlineFinalReply(ds, responseWithMetrics)
+			if sendErr := job.sendInlineFinalReply(ds, responseWithMetrics); sendErr != nil {
+				log.Printf("[worker %s] inline final reply failed | user=%s msg=%s err=%v",
+					w.channelID, job.Username, job.MessageID, sendErr)
+				w.auditJobEvent("agent_job_failed", job, "", "error", map[string]any{
+					"delivery_mode":  DeliveryInline.String(),
+					"delivery_error": sendErr.Error(),
+					"elapsed_ms":     time.Since(startTime).Milliseconds(),
+					"response_len":   len(response),
+				})
+				w.auditResponseEvent(job, "", "error", response)
+				w.recordUsage(job, "", "error", startTime)
+				finishJob("❌")
+				return
+			}
 			w.auditResponseEvent(job, "", "success", response)
 			if w.logger != nil {
 				w.logger.Log(w.channelID, ChatEntry{Role: "assistant", Content: response, Model: w.currentModel()})
@@ -1194,7 +1210,10 @@ func (w *Worker) executeInline(job *Job) {
 		if !job.DisableBotEgress {
 			w.drainBeforeFinal(targetID)
 		}
-		job.sendInlineFinalReply(ds, errMsg)
+		if sendErr := job.sendInlineFinalReply(ds, errMsg); sendErr != nil {
+			log.Printf("[worker %s] inline read-error reply failed | user=%s msg=%s err=%v",
+				w.channelID, job.Username, job.MessageID, sendErr)
+		}
 		if w.logger != nil {
 			w.logger.Log(w.channelID, ChatEntry{Role: "assistant", Content: errMsg, Model: w.currentModel()})
 		}
@@ -1571,7 +1590,10 @@ func (w *Worker) executeFallback(job *Job) {
 			w.recordUsage(job, "", "success", startTime)
 			logContent = ""
 		} else {
-			sendLongWithMentions(ds, job.ChannelID, replyMsg.ID, AppendMetricsFooter(logContent, MetricsWithElapsed(w.agent.TurnMetrics(), startTime)), job.MentionRefs)
+			if sendErr := sendLongWithMentions(ds, job.ChannelID, replyMsg.ID, AppendMetricsFooter(logContent, MetricsWithElapsed(w.agent.TurnMetrics(), startTime)), job.MentionRefs); sendErr != nil {
+				log.Printf("[worker %s] fallback error reply failed | user=%s msg=%s err=%v",
+					w.channelID, job.Username, job.MessageID, sendErr)
+			}
 			swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "❌")
 			w.auditResponseEvent(job, "", "error", logContent)
 			w.recordUsage(job, "", "error", startTime)
@@ -1582,10 +1604,17 @@ func (w *Worker) executeFallback(job *Job) {
 		}
 		response = AppendStopReasonNotice(response, w.agent.StopReason())
 		logContent = response
-		swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "✅")
 		responseWithMetrics := AppendMetricsFooter(response, MetricsWithElapsed(w.agent.TurnMetrics(), startTime))
 		w.drainBeforeFinal(job.ChannelID)
-		sendLongWithMentions(ds, job.ChannelID, replyMsg.ID, responseWithMetrics, job.MentionRefs)
+		if sendErr := sendLongWithMentions(ds, job.ChannelID, replyMsg.ID, responseWithMetrics, job.MentionRefs); sendErr != nil {
+			log.Printf("[worker %s] fallback final reply failed | user=%s msg=%s err=%v",
+				w.channelID, job.Username, job.MessageID, sendErr)
+			swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "❌")
+			w.auditResponseEvent(job, "", "error", response)
+			w.recordUsage(job, "", "error", startTime)
+			return
+		}
+		swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "✅")
 		w.auditResponseEvent(job, "", "success", response)
 		w.recordUsage(job, "", "success", startTime)
 	}
@@ -1595,47 +1624,58 @@ func (w *Worker) executeFallback(job *Job) {
 	}
 }
 
-func editMessage(ds *discordgo.Session, channelID, msgID, content string) {
-	editMessageWithMentions(ds, channelID, msgID, content, nil)
+func editMessage(ds *discordgo.Session, channelID, msgID, content string) error {
+	return editMessageWithMentions(ds, channelID, msgID, content, nil)
 }
 
-func editMessageWithMentions(ds *discordgo.Session, channelID, msgID, content string, refs []discordmention.Ref) {
+func editMessageWithMentions(ds *discordgo.Session, channelID, msgID, content string, refs []discordmention.Ref) error {
 	content, allowedMentions := renderDiscordMentions(content, refs)
 	if len(content) > 2000 {
 		content = truncateUTF8(content, 1997) + "..."
 		allowedMentions = &discordgo.MessageAllowedMentions{}
 	}
-	_, _ = ds.ChannelMessageEditComplex(&discordgo.MessageEdit{
+	_, err := ds.ChannelMessageEditComplex(&discordgo.MessageEdit{
 		ID:              msgID,
 		Channel:         channelID,
 		Content:         &content,
 		AllowedMentions: allowedMentions,
 		Flags:           discordgo.MessageFlagsSuppressEmbeds,
 	})
+	return err
 }
 
-func sendLong(ds *discordgo.Session, channelID, placeholderID, content string) {
-	sendLongWithMentions(ds, channelID, placeholderID, content, nil)
+func sendLong(ds *discordgo.Session, channelID, placeholderID, content string) error {
+	return sendLongWithMentions(ds, channelID, placeholderID, content, nil)
 }
 
-func sendLongWithMentions(ds *discordgo.Session, channelID, placeholderID, content string, refs []discordmention.Ref) {
+func sendLongWithMentions(ds *discordgo.Session, channelID, placeholderID, content string, refs []discordmention.Ref) error {
 	const limit = 1980
 	content, _ = renderDiscordMentions(content, refs)
 	parts := splitMessage(content, limit)
 	if len(parts) == 0 {
-		editMessageWithMentions(ds, channelID, placeholderID, L.Get("worker.empty_response"), refs)
-		return
+		return editMessageWithMentions(ds, channelID, placeholderID, L.Get("worker.empty_response"), refs)
 	}
 
 	prefix := ""
 	if len(parts) > 1 {
 		prefix = fmt.Sprintf("(1/%d) ", len(parts))
 	}
-	editRenderedMessageWithMentions(ds, channelID, placeholderID, prefix+parts[0], refs)
-
-	for i := 1; i < len(parts); i++ {
-		_, _ = sendRenderedDiscordTextWithMentions(ds, channelID, discordfmt.WithPartPrefix(parts[i], i, len(parts)), nil, refs)
+	if err := editRenderedMessageWithMentions(ds, channelID, placeholderID, prefix+parts[0], refs); err != nil {
+		log.Printf("[send] edit channel %s message %s failed: %v (len=%d)", channelID, placeholderID, err, len(parts[0]))
+		return err
 	}
+
+	var firstErr error
+	for i := 1; i < len(parts); i++ {
+		part := discordfmt.WithPartPrefix(parts[i], i, len(parts))
+		if _, err := sendRenderedDiscordTextWithMentions(ds, channelID, part, nil, refs); err != nil {
+			log.Printf("[send] channel %s failed: %v (len=%d)", channelID, err, len(part))
+			if firstErr == nil {
+				firstErr = err
+			}
+		}
+	}
+	return firstErr
 }
 
 // SendLongThread sends a long message to a thread, auto-splitting at Discord's limit.
@@ -1663,18 +1703,19 @@ func SendLongThreadWithMentions(ds *discordgo.Session, threadID, content string,
 	return sentCount, firstErr
 }
 
-func SendLongReply(ds *discordgo.Session, channelID, messageID, content string) {
-	SendLongReplyWithMentions(ds, channelID, messageID, content, nil)
+func SendLongReply(ds *discordgo.Session, channelID, messageID, content string) error {
+	return SendLongReplyWithMentions(ds, channelID, messageID, content, nil)
 }
 
 // SendLongReplyWithMentions sends a reply and renders only verified mention refs.
-func SendLongReplyWithMentions(ds *discordgo.Session, channelID, messageID, content string, refs []discordmention.Ref) {
+func SendLongReplyWithMentions(ds *discordgo.Session, channelID, messageID, content string, refs []discordmention.Ref) error {
 	const limit = 1980
 	content, _ = renderDiscordMentions(content, refs)
 	parts := splitMessage(content, limit)
 	if len(parts) == 0 {
 		parts = []string{L.Get("worker.empty_response")}
 	}
+	var firstErr error
 	for i, p := range parts {
 		if len(parts) > 1 {
 			p = discordfmt.WithPartPrefix(p, i, len(parts))
@@ -1685,8 +1726,12 @@ func SendLongReplyWithMentions(ds *discordgo.Session, channelID, messageID, cont
 		}
 		if _, err := sendRenderedDiscordTextWithMentions(ds, channelID, p, ref, refs); err != nil {
 			log.Printf("[send] reply channel %s failed: %v (len=%d)", channelID, err, len(p))
+			if firstErr == nil {
+				firstErr = err
+			}
 		}
 	}
+	return firstErr
 }
 
 func sendDiscordText(ds *discordgo.Session, channelID, content string, ref *discordgo.MessageReference) (*discordgo.Message, error) {
@@ -1717,19 +1762,20 @@ func renderDiscordMentions(content string, refs []discordmention.Ref) (string, *
 	return discordmention.Render(content, refs)
 }
 
-func editRenderedMessageWithMentions(ds *discordgo.Session, channelID, msgID, content string, refs []discordmention.Ref) {
+func editRenderedMessageWithMentions(ds *discordgo.Session, channelID, msgID, content string, refs []discordmention.Ref) error {
 	allowedMentions := discordmention.AllowedMentionsForRendered(content, refs)
 	if len(content) > 2000 {
 		content = truncateUTF8(content, 1997) + "..."
 		allowedMentions = &discordgo.MessageAllowedMentions{}
 	}
-	_, _ = ds.ChannelMessageEditComplex(&discordgo.MessageEdit{
+	_, err := ds.ChannelMessageEditComplex(&discordgo.MessageEdit{
 		ID:              msgID,
 		Channel:         channelID,
 		Content:         &content,
 		AllowedMentions: allowedMentions,
 		Flags:           discordgo.MessageFlagsSuppressEmbeds,
 	})
+	return err
 }
 
 func splitMessage(s string, limit int) []string {

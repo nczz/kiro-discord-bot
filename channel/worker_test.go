@@ -367,6 +367,10 @@ func (rt *recordingRoundTripper) RoundTrip(req *http.Request) (*http.Response, e
 		status = http.StatusOK
 		respBody = `{"id":"reply-1","channel_id":"ch1","content":"ok"}`
 	}
+	if req.Method == http.MethodPatch && strings.Contains(req.URL.Path, "/messages/") {
+		status = http.StatusOK
+		respBody = `{"id":"reply-1","channel_id":"ch1","content":"ok"}`
+	}
 	return &http.Response{
 		StatusCode: status,
 		Status:     http.StatusText(status),
@@ -417,6 +421,18 @@ func TestSendLongThreadReportsDeliveryResult(t *testing.T) {
 	}
 	if sentCount != 0 {
 		t.Fatalf("sent count = %d, want 0 on failure", sentCount)
+	}
+}
+
+func TestSendLongReplyReportsDeliveryError(t *testing.T) {
+	err := SendLongReply(testDiscordSession(&recordingRoundTripper{}), "ch1", "m1", "hello")
+	if err != nil {
+		t.Fatalf("SendLongReply success err = %v", err)
+	}
+
+	err = SendLongReply(testDiscordSession(failingRoundTripper{}), "ch1", "m1", "hello")
+	if err == nil {
+		t.Fatal("SendLongReply failure err = nil, want error")
 	}
 }
 
@@ -1673,6 +1689,41 @@ func TestWorkerInlineAuditStoresPureResponseWithoutMetricsFooter(t *testing.T) {
 		}
 	}
 	t.Fatal("expected agent_response_sent audit event")
+}
+
+func TestWorkerInlineSendFailureAuditsError(t *testing.T) {
+	L.Load("en")
+	ds := testDiscordSession(failingRoundTripper{})
+	agent := &fakeWorkerAgent{}
+	sink := &recordingAuditSink{}
+	w := newWorker("ch1", agent, 1, 30, 1, 1440, nil, "model-1")
+	w.SetAuditSink(sink)
+
+	w.executeInline(&Job{
+		ChannelID:    "ch1",
+		MessageID:    "m1",
+		Prompt:       "hello",
+		Session:      ds,
+		DeliveryMode: DeliveryInline,
+	})
+	cb := agent.Callbacks()
+	cb.OnComplete("final response", nil)
+
+	var failed bool
+	for _, evt := range sink.Snapshot() {
+		if evt.Type == "agent_response_sent" && evt.Status == "success" {
+			t.Fatalf("unexpected success audit for failed Discord send: %+v", evt)
+		}
+		if evt.Type == "agent_job_failed" && evt.Status == "error" {
+			if evt.Metadata["delivery_error"] == "" {
+				t.Fatalf("delivery error metadata missing: %+v", evt.Metadata)
+			}
+			failed = true
+		}
+	}
+	if !failed {
+		t.Fatal("expected agent_job_failed audit event")
+	}
 }
 
 func TestWorkerAuditJobEventUsesThreadAsTargetWhenPresent(t *testing.T) {
