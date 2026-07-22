@@ -227,6 +227,9 @@ type fakeWorkerAgent struct {
 	askErr         error
 	stopReason     string
 	currentModel   string
+	contextUsage   float64
+	sessionReuse   string
+	askPrompts     []string
 }
 
 type recordingAuditSink struct {
@@ -246,7 +249,10 @@ func (s *recordingAuditSink) Snapshot() []audit.BotEvent {
 	return append([]audit.BotEvent(nil), s.events...)
 }
 
-func (f *fakeWorkerAgent) Ask(context.Context, string, func(string)) (string, error) {
+func (f *fakeWorkerAgent) Ask(_ context.Context, prompt string, _ func(string)) (string, error) {
+	f.mu.Lock()
+	f.askPrompts = append(f.askPrompts, prompt)
+	f.mu.Unlock()
 	return f.askResponse, f.askErr
 }
 
@@ -279,11 +285,13 @@ func (f *fakeWorkerAgent) Stop() {
 	f.mu.Unlock()
 }
 
-func (f *fakeWorkerAgent) ContextUsage() float64 { return 0 }
+func (f *fakeWorkerAgent) ContextUsage() float64 { return f.contextUsage }
 
 func (f *fakeWorkerAgent) TurnMetrics() acp.TurnMetrics { return f.metrics }
 
 func (f *fakeWorkerAgent) CurrentModelID() string { return f.currentModel }
+
+func (f *fakeWorkerAgent) SessionReuseMethod() string { return f.sessionReuse }
 
 func (f *fakeWorkerAgent) StopReason() string {
 	f.mu.Lock()
@@ -1404,6 +1412,128 @@ func TestFormatMetricsFooterIncludesContextOnly(t *testing.T) {
 	got := FormatMetricsFooter(acp.TurnMetrics{ContextUsage: 11})
 	if !strings.Contains(got, "⚡ ctx 11%") {
 		t.Fatalf("footer = %q, want context-only footer", got)
+	}
+}
+
+func TestAutoCompactRunsBeforeHighContextTask(t *testing.T) {
+	L.Load("en")
+	agent := &fakeWorkerAgent{
+		contextUsage: 98,
+		metrics:      acp.TurnMetrics{ContextUsage: 42},
+	}
+	w := newWorker("ch1", agent, 1, 30, 1, 1440, nil, "")
+	var notices []string
+	compacted, err := w.autoCompactIfNeeded(context.Background(), &Job{MessageID: "msg-1"}, "", func(msg string) {
+		notices = append(notices, msg)
+	})
+	if err != nil {
+		t.Fatalf("auto compact error: %v", err)
+	}
+	if !compacted {
+		t.Fatal("expected auto compact to run")
+	}
+	agent.mu.Lock()
+	prompts := append([]string(nil), agent.askPrompts...)
+	agent.mu.Unlock()
+	if len(prompts) != 1 || prompts[0] != "/compact" {
+		t.Fatalf("Ask prompts = %#v, want /compact", prompts)
+	}
+	joined := strings.Join(notices, "\n")
+	if !strings.Contains(joined, "98%") || !strings.Contains(joined, "42%") {
+		t.Fatalf("auto compact notices = %#v, want before/after usage", notices)
+	}
+}
+
+func TestAutoCompactSkipsBelowThreshold(t *testing.T) {
+	agent := &fakeWorkerAgent{contextUsage: 89}
+	w := newWorker("ch1", agent, 1, 30, 1, 1440, nil, "")
+	compacted, err := w.autoCompactIfNeeded(context.Background(), &Job{MessageID: "msg-1"}, "", nil)
+	if err != nil {
+		t.Fatalf("auto compact error: %v", err)
+	}
+	if compacted {
+		t.Fatal("did not expect auto compact below threshold")
+	}
+	agent.mu.Lock()
+	defer agent.mu.Unlock()
+	if len(agent.askPrompts) != 0 {
+		t.Fatalf("Ask prompts = %#v, want none", agent.askPrompts)
+	}
+}
+
+func TestAutoCompactRunsOnceForRestoredUnknownContext(t *testing.T) {
+	L.Load("en")
+	agent := &fakeWorkerAgent{
+		sessionReuse: "load",
+		metrics:      acp.TurnMetrics{ContextUsage: 40},
+	}
+	w := newWorker("ch1", agent, 1, 30, 1, 1440, nil, "")
+	var notices []string
+	compacted, err := w.autoCompactIfNeeded(context.Background(), &Job{MessageID: "msg-1"}, "", func(msg string) {
+		notices = append(notices, msg)
+	})
+	if err != nil {
+		t.Fatalf("auto compact error: %v", err)
+	}
+	if !compacted {
+		t.Fatal("expected auto compact for restored session with unknown context")
+	}
+	compacted, err = w.autoCompactIfNeeded(context.Background(), &Job{MessageID: "msg-2"}, "", nil)
+	if err != nil {
+		t.Fatalf("second auto compact error: %v", err)
+	}
+	if compacted {
+		t.Fatal("did not expect restored unknown-context compact to repeat without usage signal")
+	}
+	agent.mu.Lock()
+	prompts := append([]string(nil), agent.askPrompts...)
+	agent.mu.Unlock()
+	if len(prompts) != 1 || prompts[0] != "/compact" {
+		t.Fatalf("Ask prompts = %#v, want one /compact", prompts)
+	}
+	joined := strings.Join(notices, "\n")
+	if !strings.Contains(joined, "Restored ACP session") || !strings.Contains(joined, "40%") {
+		t.Fatalf("auto compact notices = %#v, want restored-session notice and after usage", notices)
+	}
+}
+
+func TestAutoCompactRecordsUsage(t *testing.T) {
+	L.Load("en")
+	store := NewUsageStore(t.TempDir(), "Asia/Taipei", 0)
+	agent := &fakeWorkerAgent{
+		contextUsage: 98,
+		metrics: acp.TurnMetrics{
+			TurnDurationMs: 1234,
+			ContextUsage:   42,
+		},
+	}
+	w := newWorkerWithEngine("ch1", agent, 1, 30, 1, 1440, nil, "default", acp.DialectOmp.String())
+	w.SetUsageStore(store)
+	compacted, err := w.autoCompactIfNeeded(context.Background(), &Job{
+		GuildID:   "g1",
+		ChannelID: "ch1",
+		UserID:    "u1",
+		Username:  "user",
+		MessageID: "msg-1",
+	}, "thread-1", nil)
+	if err != nil {
+		t.Fatalf("auto compact error: %v", err)
+	}
+	if !compacted {
+		t.Fatal("expected auto compact to run")
+	}
+	records, err := store.readRange(time.Now().Add(-time.Hour), time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatalf("read usage: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("records = %d, want 1", len(records))
+	}
+	if records[0].Source != "command:auto-compact" || records[0].Status != "success" {
+		t.Fatalf("usage source/status = %q/%q, want command:auto-compact/success", records[0].Source, records[0].Status)
+	}
+	if records[0].ThreadID != "thread-1" || records[0].ContextUsage != 42 || records[0].DurationMs != 1234 {
+		t.Fatalf("usage record = %+v, want thread, context, and duration from compact turn", records[0])
 	}
 }
 

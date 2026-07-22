@@ -25,6 +25,8 @@ import (
 
 var reMention = regexp.MustCompile(`<@!?\d+>`)
 
+const autoCompactContextThreshold = 90.0
+
 // Job represents a single user message to be processed.
 type Job struct {
 	ChannelID         string
@@ -77,23 +79,24 @@ type AuditSink interface {
 
 // Worker manages a per-channel job queue and executes jobs sequentially.
 type Worker struct {
-	channelID       string
-	agent           workerAgent
-	queue           chan *Job
-	askTimeoutSec   int
-	streamUpdateSec int
-	threadArchive   int // auto-archive duration in minutes
-	escalationGrace time.Duration
-	stopGrace       time.Duration
-	stopCh          chan struct{}
-	idleCh          chan struct{} // signaled when agent finishes a task
-	stopped         sync.Once
-	started         sync.Once
-	logger          *ChatLogger
-	usage           *UsageStore
-	audit           AuditSink
-	model           string
-	engine          string
+	channelID         string
+	agent             workerAgent
+	queue             chan *Job
+	askTimeoutSec     int
+	streamUpdateSec   int
+	threadArchive     int // auto-archive duration in minutes
+	escalationGrace   time.Duration
+	stopGrace         time.Duration
+	stopCh            chan struct{}
+	idleCh            chan struct{} // signaled when agent finishes a task
+	stopped           sync.Once
+	started           sync.Once
+	logger            *ChatLogger
+	usage             *UsageStore
+	audit             AuditSink
+	model             string
+	engine            string
+	autoCompactPrimed bool
 
 	cancelMu sync.Mutex
 	cancelFn context.CancelFunc
@@ -134,6 +137,7 @@ type workerAgent interface {
 	TurnMetrics() acp.TurnMetrics
 	CurrentModelID() string
 	StopReason() string
+	SessionReuseMethod() string
 	OnReadErrorFunc(func(error))
 	RecentStderr() string
 	SupportsImagePrompt() bool
@@ -815,6 +819,14 @@ func (w *Worker) execute(job *Job) {
 		finishJob()
 	})
 
+	w.autoCompactIfNeeded(ctx, job, threadID, func(msg string) {
+		SendProcessMessage(ds, threadID, msg)
+	})
+	if ctx.Err() != nil {
+		finishJob()
+		return
+	}
+
 	// Inject thread ID into prompt so agent can post directly to thread via MCP
 	prompt := strings.Replace(job.Prompt, "channel_id="+job.ChannelID, "channel_id="+job.ChannelID+" thread_id="+threadID, 1)
 
@@ -1197,6 +1209,16 @@ func (w *Worker) executeInline(job *Job) {
 		finishJob("⚠️")
 	})
 
+	w.autoCompactIfNeeded(ctx, job, "", func(msg string) {
+		if !job.DisableBotEgress {
+			SendProcessMessage(ds, targetID, msg)
+		}
+	})
+	if ctx.Err() != nil {
+		finishJob("⚠️")
+		return
+	}
+
 	prompt := job.Prompt
 	if w.historyPrefix != "" {
 		prompt = w.historyPrefix + prompt
@@ -1209,6 +1231,77 @@ func (w *Worker) executeInline(job *Job) {
 	}
 	promptContent := buildPromptContent(prompt, job.Attachments, w.agent.SupportsImagePrompt())
 	w.agent.AskAsyncMulti(promptContent, callbacks)
+}
+
+func (w *Worker) autoCompactIfNeeded(parentCtx context.Context, job *Job, threadID string, notify func(string)) (bool, error) {
+	if w == nil || w.agent == nil {
+		return false, nil
+	}
+	usage := w.agent.ContextUsage()
+	unknownLoadedSession := usage == 0 && !w.autoCompactPrimed && w.agent.SessionReuseMethod() != "" && w.agent.SessionReuseMethod() != "new"
+	if usage < autoCompactContextThreshold && !unknownLoadedSession {
+		return false, nil
+	}
+	w.autoCompactPrimed = true
+	if notify != nil {
+		if unknownLoadedSession {
+			notify("🧹 " + L.Get("context.auto_compact_start_unknown"))
+		} else {
+			notify("🧹 " + L.Getf("context.auto_compact_start", usage))
+		}
+	}
+	msgID := ""
+	if job != nil {
+		msgID = job.MessageID
+	}
+	log.Printf("[worker %s] auto compact start | msg=%s ctx=%.0f%% unknown_loaded=%t", w.channelID, msgID, usage, unknownLoadedSession)
+	timeout := 30 * time.Second
+	if w.askTimeoutSec > 0 {
+		if configured := time.Duration(w.askTimeoutSec) * time.Second; configured < timeout {
+			timeout = configured
+		}
+	}
+	compactCtx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	if parentCtx != nil {
+		stop := context.AfterFunc(parentCtx, cancel)
+		defer stop()
+	}
+	startedAt := time.Now()
+	_, err := w.agent.Ask(compactCtx, "/compact", nil)
+	metrics := MetricsWithElapsed(w.agent.TurnMetrics(), startedAt)
+	after := metrics.ContextUsage
+	if after == 0 {
+		after = w.agent.ContextUsage()
+	}
+	if err != nil {
+		log.Printf("[worker %s] auto compact failed | msg=%s ctx=%.0f%% err=%v", w.channelID, msgID, usage, err)
+		w.recordUsageMetrics(job, threadID, "command:auto-compact", "error", metrics)
+		if notify != nil {
+			notify("⚠️ " + L.Getf("context.auto_compact_failed", usage, err))
+		}
+		metadata := MetricsMetadata(metrics)
+		metadata["context_usage"] = usage
+		metadata["error"] = err.Error()
+		metadata["unknown_loaded_session"] = unknownLoadedSession
+		w.auditJobEvent("agent_auto_compact_failed", job, threadID, "error", metadata)
+		return true, err
+	}
+	log.Printf("[worker %s] auto compact done | msg=%s ctx_before=%.0f%% ctx_after=%.0f%%", w.channelID, msgID, usage, after)
+	w.recordUsageMetrics(job, threadID, "command:auto-compact", "success", metrics)
+	if notify != nil {
+		if unknownLoadedSession {
+			notify("✅ " + L.Getf("context.auto_compact_done_unknown", after))
+		} else {
+			notify("✅ " + L.Getf("context.auto_compact_done", usage, after))
+		}
+	}
+	metadata := MetricsMetadata(metrics)
+	metadata["context_usage_before"] = usage
+	metadata["context_usage_after"] = after
+	metadata["unknown_loaded_session"] = unknownLoadedSession
+	w.auditJobEvent("agent_auto_compact_completed", job, threadID, "success", metadata)
+	return true, nil
 }
 
 func (w *Worker) auditJobEvent(eventType string, job *Job, threadID, status string, metadata map[string]any) {
@@ -1280,15 +1373,20 @@ func (w *Worker) auditResponseEvent(job *Job, threadID, status, content string) 
 }
 
 func (w *Worker) recordUsage(job *Job, threadID, status string, startTime time.Time) {
+	w.recordUsageMetrics(job, threadID, "", status, MetricsWithElapsed(w.agent.TurnMetrics(), startTime))
+}
+
+func (w *Worker) recordUsageMetrics(job *Job, threadID, source, status string, metrics acp.TurnMetrics) {
 	if w.usage == nil || job == nil {
 		return
 	}
-	metrics := MetricsWithElapsed(w.agent.TurnMetrics(), startTime)
 	channelID := job.ChannelID
 	if job.ParentChannelID != "" {
 		channelID = job.ParentChannelID
 	}
-	source := job.Source
+	if source == "" {
+		source = job.Source
+	}
 	if source == "" {
 		if job.ThreadID != "" {
 			source = "thread"
@@ -1311,7 +1409,7 @@ func (w *Worker) recordUsage(job *Job, threadID, status string, startTime time.T
 		DurationMs:    metrics.TurnDurationMs,
 		ContextUsage:  metrics.ContextUsage,
 	}); err != nil {
-		log.Printf("[usage] append failed | user=%s msg=%s err=%v", job.UserID, job.MessageID, err)
+		log.Printf("[usage] append failed | user=%s msg=%s source=%s err=%v", job.UserID, job.MessageID, source, err)
 	}
 }
 
@@ -1439,6 +1537,14 @@ func (w *Worker) executeFallback(job *Job) {
 		w.agent.CancelPrompt()
 		w.scheduleInterruptEscalation(currentJobSeq, w.escalationGrace, "fallback timeout cancel ineffective")
 	}()
+
+	w.autoCompactIfNeeded(ctx, job, "", func(msg string) {
+		SendProcessMessage(ds, job.ChannelID, msg)
+	})
+	if ctx.Err() != nil {
+		swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "⚠️")
+		return
+	}
 
 	startTime := time.Now()
 	response, askErr := w.agent.Ask(ctx, job.Prompt, func(chunk string) {
