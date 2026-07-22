@@ -1024,6 +1024,41 @@ func TestWorkerThreadDeliveryAppendsMetricsToFinalResponse(t *testing.T) {
 	}
 }
 
+func TestWorkerThreadSendFailureAuditsError(t *testing.T) {
+	L.Load("en")
+	ds := testDiscordSession(failingRoundTripper{})
+	agent := &fakeWorkerAgent{}
+	sink := &recordingAuditSink{}
+	w := newWorker("ch1", agent, 1, 30, 1, 1440, nil, "model-1")
+	w.SetAuditSink(sink)
+
+	w.execute(&Job{
+		ChannelID: "ch1",
+		ThreadID:  "thread-1",
+		MessageID: "m1",
+		Prompt:    "hello",
+		Session:   ds,
+	})
+	cb := agent.Callbacks()
+	cb.OnComplete("final response", nil)
+
+	var failed bool
+	for _, evt := range sink.Snapshot() {
+		if evt.Type == "agent_response_sent" && evt.Status == "success" {
+			t.Fatalf("unexpected success audit for failed thread send: %+v", evt)
+		}
+		if evt.Type == "agent_job_failed" && evt.Status == "error" {
+			if evt.Metadata["delivery_error"] == "" {
+				t.Fatalf("delivery error metadata missing: %+v", evt.Metadata)
+			}
+			failed = true
+		}
+	}
+	if !failed {
+		t.Fatal("expected agent_job_failed audit event")
+	}
+}
+
 func TestWorkerThreadPlanUpdateSendsOnceAndDeduplicates(t *testing.T) {
 	L.Load("en")
 	rt := &recordingRoundTripper{}

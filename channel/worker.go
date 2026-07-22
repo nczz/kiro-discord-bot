@@ -738,7 +738,10 @@ func (w *Worker) execute(job *Job) {
 					finishJob()
 					return
 				}
-				SendLongThreadWithMentions(ds, threadID, AppendMetricsFooter(errorContent, MetricsWithElapsed(w.agent.TurnMetrics(), startTime)), job.MentionRefs)
+				if _, sendErr := SendLongThreadWithMentions(ds, threadID, AppendMetricsFooter(errorContent, MetricsWithElapsed(w.agent.TurnMetrics(), startTime)), job.MentionRefs); sendErr != nil {
+					log.Printf("[worker %s] thread error reply failed | user=%s msg=%s thread=%s err=%v",
+						w.channelID, job.Username, job.MessageID, threadID, sendErr)
+				}
 				swapReaction(ds, job.ChannelID, job.MessageID, "🔄", emoji)
 				swapReaction(ds, job.ChannelID, job.MessageID, "⚙️", emoji)
 				if w.logger != nil {
@@ -759,13 +762,30 @@ func (w *Worker) execute(job *Job) {
 				response = L.Get("worker.empty_response")
 			}
 
-			swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "✅")
-			swapReaction(ds, job.ChannelID, job.MessageID, "⚙️", "✅")
-			// Mark the origin done before final text so tagged peer bots see a completed source.
+			// Drain pending tool-egress messages before final text.
 			w.drainBeforeFinal(threadID)
 			stopReason := w.agent.StopReason()
 			response = AppendStopReasonNotice(response, stopReason)
-			SendLongThreadWithMentions(ds, threadID, AppendMetricsFooter(response, MetricsWithElapsed(w.agent.TurnMetrics(), startTime)), job.MentionRefs)
+			if sentCount, sendErr := SendLongThreadWithMentions(ds, threadID, AppendMetricsFooter(response, MetricsWithElapsed(w.agent.TurnMetrics(), startTime)), job.MentionRefs); sendErr != nil || sentCount == 0 {
+				if sendErr == nil {
+					sendErr = fmt.Errorf("no Discord messages delivered")
+				}
+				log.Printf("[worker %s] thread final reply failed | user=%s msg=%s thread=%s err=%v",
+					w.channelID, job.Username, job.MessageID, threadID, sendErr)
+				swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "❌")
+				swapReaction(ds, job.ChannelID, job.MessageID, "⚙️", "❌")
+				w.auditJobEvent("agent_job_failed", job, threadID, "error", map[string]any{
+					"delivery_error": sendErr.Error(),
+					"elapsed_ms":     time.Since(startTime).Milliseconds(),
+					"response_len":   len(response),
+				})
+				w.auditResponseEvent(job, threadID, "error", response)
+				w.recordUsage(job, threadID, "error", startTime)
+				finishJob()
+				return
+			}
+			swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "✅")
+			swapReaction(ds, job.ChannelID, job.MessageID, "⚙️", "✅")
 			w.auditResponseEvent(job, threadID, "success", response)
 
 			log.Printf("[worker %s] job done | user=%s msg=%s elapsed=%s len=%d",
