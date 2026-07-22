@@ -14,6 +14,7 @@ import (
 //
 // Exercises the real ompProfile through StartAgent: handshake (configOptions
 // parsing), a prompt turn (streaming + stopReason), and per-turn USD usage.
+// Set OMP_SMOKE_MODEL to also exercise a known-safe model override.
 func TestOmpSmoke(t *testing.T) {
 	if !isTruthyEnv(os.Getenv("RUN_OMP_SMOKE")) {
 		t.Skip("set RUN_OMP_SMOKE=1 (and OMP_PATH) to run")
@@ -42,21 +43,23 @@ func TestOmpSmoke(t *testing.T) {
 	}
 	t.Logf("omp version=%s currentModel=%s modes=%d models=%d",
 		agent.AgentVersion(), agent.CurrentModelID(), len(agent.AvailableModes()), len(agent.AvailableModels()))
-	if models := agent.AvailableModels(); len(models) > 1 {
-		wanted := models[0].ModelID
+	if wanted := strings.TrimSpace(os.Getenv("OMP_SMOKE_MODEL")); wanted != "" {
 		if wanted == agent.CurrentModelID() {
-			wanted = models[1].ModelID
+			t.Logf("omp model override skipped; currentModel already %s", wanted)
+		} else {
+			agent.Stop()
+			agent, err = StartAgent("omp-smoke", omp, os.TempDir(), wanted, opts)
+			if err != nil {
+				t.Fatalf("StartAgent(omp, model=%s): %v", wanted, err)
+			}
+			defer agent.Stop()
+			if got := agent.CurrentModelID(); got != wanted {
+				t.Fatalf("omp current model after StartAgent model override = %q, want %q", got, wanted)
+			}
+			t.Logf("omp model override currentModel=%s", agent.CurrentModelID())
 		}
-		agent.Stop()
-		agent, err = StartAgent("omp-smoke", omp, os.TempDir(), wanted, opts)
-		if err != nil {
-			t.Fatalf("StartAgent(omp, model=%s): %v", wanted, err)
-		}
-		defer agent.Stop()
-		if got := agent.CurrentModelID(); got != wanted {
-			t.Fatalf("omp current model after StartAgent model override = %q, want %q", got, wanted)
-		}
-		t.Logf("omp model override currentModel=%s", agent.CurrentModelID())
+	} else {
+		t.Log("omp model override skipped; set OMP_SMOKE_MODEL to a known-safe model id")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
