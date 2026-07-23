@@ -3,9 +3,11 @@ package channel
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"log"
 	"mime"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -770,14 +772,16 @@ func (w *Worker) execute(job *Job) {
 				if sendErr == nil {
 					sendErr = fmt.Errorf("no Discord messages delivered")
 				}
-				log.Printf("[worker %s] thread final reply failed | user=%s msg=%s thread=%s err=%v",
-					w.channelID, job.Username, job.MessageID, threadID, sendErr)
-				swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "❌")
-				swapReaction(ds, job.ChannelID, job.MessageID, "⚙️", "❌")
+				reaction := deliveryFailureReaction(sendErr)
+				log.Printf("[worker %s] thread final reply failed | user=%s msg=%s thread=%s reaction=%s err=%v",
+					w.channelID, job.Username, job.MessageID, threadID, reaction, sendErr)
+				swapReaction(ds, job.ChannelID, job.MessageID, "🔄", reaction)
+				swapReaction(ds, job.ChannelID, job.MessageID, "⚙️", reaction)
 				w.auditJobEvent("agent_job_failed", job, threadID, "error", map[string]any{
-					"delivery_error": sendErr.Error(),
-					"elapsed_ms":     time.Since(startTime).Milliseconds(),
-					"response_len":   len(response),
+					"delivery_error":    sendErr.Error(),
+					"delivery_reaction": reaction,
+					"elapsed_ms":        time.Since(startTime).Milliseconds(),
+					"response_len":      len(response),
 				})
 				w.auditResponseEvent(job, threadID, "error", response)
 				w.recordUsage(job, threadID, "error", startTime)
@@ -1179,17 +1183,19 @@ func (w *Worker) executeInline(job *Job) {
 				w.drainBeforeFinal(targetID)
 			}
 			if sendErr := job.sendInlineFinalReply(ds, responseWithMetrics); sendErr != nil {
-				log.Printf("[worker %s] inline final reply failed | user=%s msg=%s err=%v",
-					w.channelID, job.Username, job.MessageID, sendErr)
+				reaction := deliveryFailureReaction(sendErr)
+				log.Printf("[worker %s] inline final reply failed | user=%s msg=%s reaction=%s err=%v",
+					w.channelID, job.Username, job.MessageID, reaction, sendErr)
 				w.auditJobEvent("agent_job_failed", job, "", "error", map[string]any{
-					"delivery_mode":  DeliveryInline.String(),
-					"delivery_error": sendErr.Error(),
-					"elapsed_ms":     time.Since(startTime).Milliseconds(),
-					"response_len":   len(response),
+					"delivery_mode":     DeliveryInline.String(),
+					"delivery_error":    sendErr.Error(),
+					"delivery_reaction": reaction,
+					"elapsed_ms":        time.Since(startTime).Milliseconds(),
+					"response_len":      len(response),
 				})
 				w.auditResponseEvent(job, "", "error", response)
 				w.recordUsage(job, "", "error", startTime)
-				finishJob("❌")
+				finishJob(reaction)
 				return
 			}
 			w.auditResponseEvent(job, "", "success", response)
@@ -1530,6 +1536,39 @@ func isThreadAlreadyCreated(err error) bool {
 	return ok && restErr.Message != nil && restErr.Message.Code == discordgo.ErrCodeThreadAlreadyCreatedForThisMessage
 }
 
+func deliveryFailureReaction(err error) string {
+	if err == nil {
+		return "❌"
+	}
+	var restErr *discordgo.RESTError
+	if errors.As(err, &restErr) {
+		status := 0
+		if restErr.Response != nil {
+			status = restErr.Response.StatusCode
+		}
+		code := 0
+		if restErr.Message != nil {
+			code = restErr.Message.Code
+		}
+		switch {
+		case status == http.StatusUnauthorized:
+			return "🔑"
+		case status == http.StatusForbidden:
+			return "🔒"
+		case status == http.StatusNotFound:
+			return "❓"
+		case status == http.StatusTooManyRequests:
+			return "⏱️"
+		case status == http.StatusBadRequest || code == discordgo.ErrCodeInvalidFormBody:
+			return "📏"
+		case status >= http.StatusInternalServerError:
+			return "🌐"
+		}
+		return "❌"
+	}
+	return "🌐"
+}
+
 // executeFallback is the old synchronous path used when thread creation fails.
 func (w *Worker) executeFallback(job *Job) {
 	ds := job.Session
@@ -1627,9 +1666,10 @@ func (w *Worker) executeFallback(job *Job) {
 		responseWithMetrics := AppendMetricsFooter(response, MetricsWithElapsed(w.agent.TurnMetrics(), startTime))
 		w.drainBeforeFinal(job.ChannelID)
 		if sendErr := sendLongWithMentions(ds, job.ChannelID, replyMsg.ID, responseWithMetrics, job.MentionRefs); sendErr != nil {
-			log.Printf("[worker %s] fallback final reply failed | user=%s msg=%s err=%v",
-				w.channelID, job.Username, job.MessageID, sendErr)
-			swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "❌")
+			reaction := deliveryFailureReaction(sendErr)
+			log.Printf("[worker %s] fallback final reply failed | user=%s msg=%s reaction=%s err=%v",
+				w.channelID, job.Username, job.MessageID, reaction, sendErr)
+			swapReaction(ds, job.ChannelID, job.MessageID, "🔄", reaction)
 			w.auditResponseEvent(job, "", "error", response)
 			w.recordUsage(job, "", "error", startTime)
 			return

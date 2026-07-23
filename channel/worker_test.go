@@ -590,6 +590,58 @@ func TestIsThreadAlreadyCreated(t *testing.T) {
 	}
 }
 
+func TestDeliveryFailureReactionClassifiesDiscordErrors(t *testing.T) {
+	cases := []struct {
+		name     string
+		err      error
+		reaction string
+	}{
+		{
+			name:     "missing permissions",
+			err:      &discordgo.RESTError{Response: &http.Response{StatusCode: http.StatusForbidden}, Message: &discordgo.APIErrorMessage{Code: discordgo.ErrCodeMissingPermissions}},
+			reaction: "🔒",
+		},
+		{
+			name:     "unauthorized",
+			err:      &discordgo.RESTError{Response: &http.Response{StatusCode: http.StatusUnauthorized}},
+			reaction: "🔑",
+		},
+		{
+			name:     "not found",
+			err:      &discordgo.RESTError{Response: &http.Response{StatusCode: http.StatusNotFound}},
+			reaction: "❓",
+		},
+		{
+			name:     "rate limited",
+			err:      &discordgo.RESTError{Response: &http.Response{StatusCode: http.StatusTooManyRequests}},
+			reaction: "⏱️",
+		},
+		{
+			name:     "invalid form",
+			err:      &discordgo.RESTError{Response: &http.Response{StatusCode: http.StatusBadRequest}, Message: &discordgo.APIErrorMessage{Code: discordgo.ErrCodeInvalidFormBody}},
+			reaction: "📏",
+		},
+		{
+			name:     "discord unavailable",
+			err:      &discordgo.RESTError{Response: &http.Response{StatusCode: http.StatusInternalServerError}},
+			reaction: "🌐",
+		},
+		{
+			name:     "transport error",
+			err:      errors.New("dial tcp: i/o timeout"),
+			reaction: "🌐",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := deliveryFailureReaction(tc.err); got != tc.reaction {
+				t.Fatalf("deliveryFailureReaction() = %q, want %q", got, tc.reaction)
+			}
+		})
+	}
+}
+
 func TestWorkerCancelCurrentNoActiveJob(t *testing.T) {
 	agent := &fakeWorkerAgent{}
 	w := newWorker("ch1", agent, 1, 30, 1, 1440, nil, "")
