@@ -772,11 +772,9 @@ func (w *Worker) execute(job *Job) {
 				if sendErr == nil {
 					sendErr = fmt.Errorf("no Discord messages delivered")
 				}
-				reaction := deliveryFailureReaction(sendErr)
+				reaction := markDeliveryFailureReactions(ds, job.ChannelID, job.MessageID, sendErr, "🔄", "⚙️")
 				log.Printf("[worker %s] thread final reply failed | user=%s msg=%s thread=%s reaction=%s err=%v",
 					w.channelID, job.Username, job.MessageID, threadID, reaction, sendErr)
-				swapReaction(ds, job.ChannelID, job.MessageID, "🔄", reaction)
-				swapReaction(ds, job.ChannelID, job.MessageID, "⚙️", reaction)
 				w.auditJobEvent("agent_job_failed", job, threadID, "error", map[string]any{
 					"delivery_error":    sendErr.Error(),
 					"delivery_reaction": reaction,
@@ -1195,7 +1193,8 @@ func (w *Worker) executeInline(job *Job) {
 				})
 				w.auditResponseEvent(job, "", "error", response)
 				w.recordUsage(job, "", "error", startTime)
-				finishJob(reaction)
+				finishJob("❌")
+				addDeliveryFailureHintReaction(ds, job.ChannelID, job.MessageID, sendErr)
 				return
 			}
 			w.auditResponseEvent(job, "", "success", response)
@@ -1537,8 +1536,16 @@ func isThreadAlreadyCreated(err error) bool {
 }
 
 func deliveryFailureReaction(err error) string {
-	if err == nil {
+	hint := deliveryFailureHintReaction(err)
+	if hint == "" {
 		return "❌"
+	}
+	return "❌" + hint
+}
+
+func deliveryFailureHintReaction(err error) string {
+	if err == nil {
+		return ""
 	}
 	var restErr *discordgo.RESTError
 	if errors.As(err, &restErr) {
@@ -1564,9 +1571,29 @@ func deliveryFailureReaction(err error) string {
 		case status >= http.StatusInternalServerError:
 			return "🌐"
 		}
-		return "❌"
+		return "⚠️"
 	}
 	return "🌐"
+}
+
+func addDeliveryFailureHintReaction(ds *discordgo.Session, channelID, messageID string, err error) string {
+	hint := deliveryFailureHintReaction(err)
+	if ds != nil && channelID != "" && messageID != "" && hint != "" {
+		_ = ds.MessageReactionAdd(channelID, messageID, hint)
+	}
+	return deliveryFailureReaction(err)
+}
+
+func markDeliveryFailureReactions(ds *discordgo.Session, channelID, messageID string, err error, oldEmojis ...string) string {
+	if ds != nil && channelID != "" && messageID != "" {
+		for _, oldEmoji := range oldEmojis {
+			if oldEmoji != "" && oldEmoji != "❌" {
+				_ = ds.MessageReactionRemove(channelID, messageID, oldEmoji, "@me")
+			}
+		}
+		_ = ds.MessageReactionAdd(channelID, messageID, "❌")
+	}
+	return addDeliveryFailureHintReaction(ds, channelID, messageID, err)
 }
 
 // executeFallback is the old synchronous path used when thread creation fails.
@@ -1666,10 +1693,9 @@ func (w *Worker) executeFallback(job *Job) {
 		responseWithMetrics := AppendMetricsFooter(response, MetricsWithElapsed(w.agent.TurnMetrics(), startTime))
 		w.drainBeforeFinal(job.ChannelID)
 		if sendErr := sendLongWithMentions(ds, job.ChannelID, replyMsg.ID, responseWithMetrics, job.MentionRefs); sendErr != nil {
-			reaction := deliveryFailureReaction(sendErr)
+			reaction := markDeliveryFailureReactions(ds, job.ChannelID, job.MessageID, sendErr, "🔄")
 			log.Printf("[worker %s] fallback final reply failed | user=%s msg=%s reaction=%s err=%v",
 				w.channelID, job.Username, job.MessageID, reaction, sendErr)
-			swapReaction(ds, job.ChannelID, job.MessageID, "🔄", reaction)
 			w.auditResponseEvent(job, "", "error", response)
 			w.recordUsage(job, "", "error", startTime)
 			return

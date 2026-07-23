@@ -599,37 +599,37 @@ func TestDeliveryFailureReactionClassifiesDiscordErrors(t *testing.T) {
 		{
 			name:     "missing permissions",
 			err:      &discordgo.RESTError{Response: &http.Response{StatusCode: http.StatusForbidden}, Message: &discordgo.APIErrorMessage{Code: discordgo.ErrCodeMissingPermissions}},
-			reaction: "🔒",
+			reaction: "❌🔒",
 		},
 		{
 			name:     "unauthorized",
 			err:      &discordgo.RESTError{Response: &http.Response{StatusCode: http.StatusUnauthorized}},
-			reaction: "🔑",
+			reaction: "❌🔑",
 		},
 		{
 			name:     "not found",
 			err:      &discordgo.RESTError{Response: &http.Response{StatusCode: http.StatusNotFound}},
-			reaction: "❓",
+			reaction: "❌❓",
 		},
 		{
 			name:     "rate limited",
 			err:      &discordgo.RESTError{Response: &http.Response{StatusCode: http.StatusTooManyRequests}},
-			reaction: "⏱️",
+			reaction: "❌⏱️",
 		},
 		{
 			name:     "invalid form",
 			err:      &discordgo.RESTError{Response: &http.Response{StatusCode: http.StatusBadRequest}, Message: &discordgo.APIErrorMessage{Code: discordgo.ErrCodeInvalidFormBody}},
-			reaction: "📏",
+			reaction: "❌📏",
 		},
 		{
 			name:     "discord unavailable",
 			err:      &discordgo.RESTError{Response: &http.Response{StatusCode: http.StatusInternalServerError}},
-			reaction: "🌐",
+			reaction: "❌🌐",
 		},
 		{
 			name:     "transport error",
 			err:      errors.New("dial tcp: i/o timeout"),
-			reaction: "🌐",
+			reaction: "❌🌐",
 		},
 	}
 
