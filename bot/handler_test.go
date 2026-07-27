@@ -2038,6 +2038,16 @@ func TestBuildPromptDocumentsCronOwnerChannelScope(t *testing.T) {
 	}
 }
 
+func TestBuildPromptMapsCurrentChannelLanguageToDiscordContext(t *testing.T) {
+	got := buildPromptThread("search 本頻道 history", nil, "channel-1", "thread-1", "guild-1", "alice", "")
+	if !strings.Contains(got, "When users say 本頻道") || !strings.Contains(got, "bot_query_channel_history") {
+		t.Fatalf("prompt missing current channel history guidance:\n%s", got)
+	}
+	if !strings.Contains(got, "channel_id and includes child threads") || !strings.Contains(got, "本討論串/this thread means thread_id") || !strings.Contains(got, "offset=next_offset until has_more=false") {
+		t.Fatalf("prompt missing channel/thread history scope guidance:\n%s", got)
+	}
+}
+
 func TestBuildPromptIncludesRequesterDiscordIDWhenAvailable(t *testing.T) {
 	got := buildPromptThreadWithMentions("create reminder", nil, "channel-1", "thread-1", "guild-1", "alice", "user-1", "", nil)
 	if !strings.Contains(got, "user=alice user_id=user-1") {

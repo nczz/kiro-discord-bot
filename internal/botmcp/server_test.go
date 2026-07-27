@@ -7,10 +7,20 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nczz/kiro-discord-bot/audit"
 	"github.com/nczz/kiro-discord-bot/heartbeat"
 	"github.com/nczz/kiro-discord-bot/internal/channelmeta"
 	"github.com/nczz/kiro-discord-bot/internal/cronpolicy"
 )
+
+func containsString(items []string, want string) bool {
+	for _, item := range items {
+		if item == want {
+			return true
+		}
+	}
+	return false
+}
 
 func TestDataSummaryAndChannelListAreMetadataOnly(t *testing.T) {
 	dir := t.TempDir()
@@ -96,6 +106,9 @@ func TestDefaultSafeToolNamesExcludeDestructiveTools(t *testing.T) {
 	}
 	if !seen[ToolSendImageBase64] {
 		t.Fatalf("base64 image egress tool should be default-enabled for MCP image delivery: %+v", tools)
+	}
+	if !seen[ToolQueryChannelHistory] {
+		t.Fatalf("channel history query tool should be default-enabled for scoped discussion lookup: %+v", tools)
 	}
 	if !seen[ToolCreateReminder] {
 		t.Fatalf("one-time reminder tool should be default-enabled to avoid agent-side scheduling bypasses: %+v", tools)
@@ -246,6 +259,84 @@ func TestSendImageBase64ToolDocumentsMCPImageMapping(t *testing.T) {
 	mimeDesc, _ := tool.InputSchema.Properties["mime_type"].(map[string]any)["description"].(string)
 	if !strings.Contains(mimeDesc, "image/jpeg") || !strings.Contains(mimeDesc, "image/png") {
 		t.Fatalf("mime_type description should constrain formats: %q", mimeDesc)
+	}
+}
+
+func TestQueryChannelHistoryToolDocumentsCurrentContext(t *testing.T) {
+	tool := queryChannelHistoryTool()
+	if tool.Annotations.ReadOnlyHint == nil || !*tool.Annotations.ReadOnlyHint {
+		t.Fatalf("channel history readOnlyHint = %+v, want true", tool.Annotations.ReadOnlyHint)
+	}
+	if tool.Annotations.DestructiveHint == nil || *tool.Annotations.DestructiveHint {
+		t.Fatalf("channel history destructiveHint = %+v, want false", tool.Annotations.DestructiveHint)
+	}
+	if !strings.Contains(tool.Description, "current bot-tools channel/thread context") || !strings.Contains(tool.Description, "including child threads") || !strings.Contains(tool.Description, "Query is optional") || !strings.Contains(tool.Description, "continue until has_more is false") {
+		t.Fatalf("history tool description should document current context and thread inclusion: %q", tool.Description)
+	}
+	for _, field := range []string{"query", "target_id", "limit", "offset"} {
+		if _, ok := tool.InputSchema.Properties[field].(map[string]any); !ok {
+			t.Fatalf("%s schema missing: %+v", field, tool.InputSchema.Properties[field])
+		}
+	}
+	if containsString(tool.InputSchema.Required, "query") {
+		t.Fatalf("query should be optional for broad history review: %+v", tool.InputSchema.Required)
+	}
+	targetDesc, _ := tool.InputSchema.Properties["target_id"].(map[string]any)["description"].(string)
+	if !strings.Contains(targetDesc, "Use channel_id to include child threads") || !strings.Contains(targetDesc, "thread_id") {
+		t.Fatalf("target_id description should explain channel/thread search scope: %q", targetDesc)
+	}
+	offsetDesc, _ := tool.InputSchema.Properties["offset"].(map[string]any)["description"].(string)
+	if !strings.Contains(offsetDesc, "next_offset") || !strings.Contains(offsetDesc, "has_more is false") {
+		t.Fatalf("offset description should explain pagination loop: %q", offsetDesc)
+	}
+}
+
+func TestChannelHistoryResultsReturnCompactContentSnippet(t *testing.T) {
+	rows := []audit.TimelineEvent{{
+		Kind:       "discord",
+		Type:       "message_create",
+		ChannelID:  "channel-1",
+		ThreadID:   "thread-1",
+		MessageID:  "msg-1",
+		UserID:     "user-1",
+		Content:    strings.Repeat("keyword ", 100),
+		RecordedAt: "2026-01-01T00:00:00Z",
+	}}
+	got := channelHistoryResults(rows)
+	if len(got) != 1 {
+		t.Fatalf("results = %d, want 1", len(got))
+	}
+	if got[0].ThreadID != "thread-1" || got[0].MessageID != "msg-1" {
+		t.Fatalf("result metadata not preserved: %+v", got[0])
+	}
+	if !strings.Contains(got[0].ContentSnippet, "keyword") || len([]rune(got[0].ContentSnippet)) > 500 {
+		t.Fatalf("snippet not compacted as expected: %q", got[0].ContentSnippet)
+	}
+}
+
+func TestChannelHistoryPageReportsNextOffset(t *testing.T) {
+	rows := []audit.TimelineEvent{{
+		Kind:       "discord",
+		Type:       "message_create",
+		ChannelID:  "channel-1",
+		MessageID:  "msg-1",
+		Content:    "keyword",
+		RecordedAt: "2026-01-01T00:00:00Z",
+	}}
+	got := channelHistoryPage("keyword", "channel-1", 1, 2, true, rows)
+	if !got.HasMore || got.NextOffset != 3 || got.Returned != 1 {
+		t.Fatalf("page metadata = %+v, want has_more next_offset=3 returned=1", got)
+	}
+}
+
+func TestChannelHistoryPageCanReturnEmptyTerminalPage(t *testing.T) {
+	got := channelHistoryPage("", "channel-1", 20, 40, false, nil)
+	got.Message = "No stored channel history results."
+	if got.HasMore || got.NextOffset != 0 || got.Returned != 0 || len(got.Results) != 0 {
+		t.Fatalf("empty page metadata = %+v", got)
+	}
+	if got.Message == "" {
+		t.Fatal("empty page should carry an explanatory message")
 	}
 }
 

@@ -14,8 +14,10 @@ On first channel setup, these safe tools are enabled by default:
 | `bot_list_channel_data` | Read | List known channel data folders and metadata presence without message content. |
 | `bot_list_cron` | Read | List scheduled jobs for the current channel. |
 | `bot_send_file` | Write, non-destructive | Queue a sanitized file upload for Discord delivery. |
+| `bot_send_image_base64` | Write, non-destructive | Queue a JPEG/PNG image from an MCP image result for Discord delivery. |
 | `bot_create_cron` | Write, non-destructive | Queue creation of a scheduled task. |
 | `bot_create_reminder` | Write, non-destructive | Queue a one-time reminder delivered by the bot scheduler. |
+| `bot_query_channel_history` | Read | Search or page through stored history for the current channel or thread context. |
 
 These tools are available but not enabled by default:
 
@@ -42,9 +44,16 @@ Use `bot_create_reminder` for one-time delayed reminders such as "in 10 minutes"
 File egress is intentionally conservative:
 
 - Plain text is redacted before upload.
+- JPEG and PNG images are validated and uploaded as copied temporary files; image results returned as base64 by another MCP tool should use `bot_send_image_base64`.
 - PDF, DOCX, and XLSX files are converted to sanitized text before upload.
 - Original binary documents are not uploaded back to Discord by `bot_send_file`.
 - Private audit jobs disable message and file egress completely.
+
+## Channel History Tool
+
+`bot_query_channel_history` is read-only and scoped to the current bot-tools channel or thread context. Use `target_id` only for the current channel/thread IDs from context: a parent channel ID includes child threads, and a thread ID narrows results to that thread.
+
+`query` is optional. Omit it for broad/exhaustive review of retained history, or provide a keyword/phrase to filter stored message and bot response content plus timeline metadata. Results are paginated JSON pages with `limit`, `offset`, `returned`, `has_more`, `next_offset`, and compact `results`; continue with `offset=next_offset` until `has_more=false` before summarizing full history.
 
 ## Audit Query Tool
 

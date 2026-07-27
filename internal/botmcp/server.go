@@ -28,17 +28,18 @@ func Run() error {
 }
 
 const (
-	ToolDataSummary     = "bot_data_summary"
-	ToolListChannelData = "bot_list_channel_data"
-	ToolSendMessage     = "bot_send_message"
-	ToolSendFile        = "bot_send_file"
-	ToolSendImageBase64 = "bot_send_image_base64"
-	ToolCreateCron      = "bot_create_cron"
-	ToolUpdateCron      = "bot_update_cron"
-	ToolCreateReminder  = "bot_create_reminder"
-	ToolListCron        = "bot_list_cron"
-	ToolDeleteCron      = "bot_delete_cron"
-	ToolQueryAudit      = "bot_query_audit"
+	ToolDataSummary         = "bot_data_summary"
+	ToolListChannelData     = "bot_list_channel_data"
+	ToolSendMessage         = "bot_send_message"
+	ToolSendFile            = "bot_send_file"
+	ToolSendImageBase64     = "bot_send_image_base64"
+	ToolQueryChannelHistory = "bot_query_channel_history"
+	ToolCreateCron          = "bot_create_cron"
+	ToolUpdateCron          = "bot_update_cron"
+	ToolCreateReminder      = "bot_create_reminder"
+	ToolListCron            = "bot_list_cron"
+	ToolDeleteCron          = "bot_delete_cron"
+	ToolQueryAudit          = "bot_query_audit"
 )
 
 // DefaultSafeToolNames returns the bot-tools allowlist enabled during first channel setup.
@@ -50,6 +51,7 @@ func DefaultSafeToolNames() []string {
 		ToolListCron,
 		ToolSendFile,
 		ToolSendImageBase64,
+		ToolQueryChannelHistory,
 		ToolCreateCron,
 		ToolUpdateCron,
 		ToolCreateReminder,
@@ -164,6 +166,49 @@ func NewServer() *server.MCPServer {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			return mcp.NewToolResultText(fmt.Sprintf("Image queued for safe Discord delivery (%s).", id)), nil
+		},
+	)
+	s.AddTool(
+		queryChannelHistoryTool(),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			query := strings.TrimSpace(req.GetString("query", ""))
+			targetID, err := auditToolTargetID(req.GetString("target_id", ""))
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			limit := req.GetInt("limit", 20)
+			if limit <= 0 {
+				limit = 20
+			}
+			if limit > 50 {
+				limit = 50
+			}
+			offset := req.GetInt("offset", 0)
+			if offset < 0 {
+				offset = 0
+			}
+			rows, err := audit.QueryTimelineReadOnly(audit.AuditDBPath(dataDir()), audit.TimelineQueryOptions{
+				GuildID:        strings.TrimSpace(os.Getenv("BOT_TOOLS_GUILD_ID")),
+				TargetID:       targetID,
+				Limit:          limit + 1,
+				Offset:         offset,
+				Contains:       query,
+				IncludeContent: true,
+				SearchContent:  true,
+			})
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			hasMore := len(rows) > limit
+			if hasMore {
+				rows = rows[:limit]
+			}
+			page := channelHistoryPage(query, targetID, limit, offset, hasMore, rows)
+			if len(rows) == 0 {
+				page.Message = "No stored channel history results. Content search requires audit content retention to be enabled."
+			}
+			raw, _ := json.MarshalIndent(page, "", "  ")
+			return mcp.NewToolResultText(string(raw)), nil
 		},
 	)
 	s.AddTool(
@@ -482,6 +527,20 @@ func readOnlyTool(name, description string) mcp.Tool {
 	)
 }
 
+func queryChannelHistoryTool() mcp.Tool {
+	return mcp.NewTool(ToolQueryChannelHistory,
+		mcp.WithDescription("Search stored Discord conversation history for the current bot-tools channel/thread context. Use this when users ask about prior discussion in this channel, this thread, here, or the current session. By default target_id is the current Discord target; pass the parent channel_id to search that channel including child threads, or pass thread_id to search only one thread. Query is optional: omit it for broad/exhaustive history review, or provide a keyword/phrase to filter stored message/bot response content and timeline metadata. Results are scoped to the bound channel/thread, read-only, and return compact content snippets only when audit content retention is enabled. Responses are paginated: if has_more is true, call this tool again with offset=next_offset and the same query/target_id/limit; for requests to review all matching history, continue until has_more is false before summarizing."),
+		mcp.WithString("query", mcp.Description("Optional keyword or phrase to search in stored message/bot response content and timeline metadata. Omit for broad/exhaustive scoped history review.")),
+		mcp.WithString("target_id", mcp.Description("Optional channel or thread ID from the current Discord context. Defaults to the current bot-tools target. Use channel_id to include child threads; use thread_id to narrow to one thread.")),
+		mcp.WithNumber("limit", mcp.Description("Maximum rows to return, 1-50. Defaults to 20.")),
+		mcp.WithNumber("offset", mcp.Description("Zero-based row offset for pagination. Use next_offset from the previous response to fetch the next page; keep the same query, target_id, and limit until has_more is false.")),
+		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(true),
+		mcp.WithOpenWorldHintAnnotation(false),
+	)
+}
+
 type summary struct {
 	DataDir                string `json:"data_dir"`
 	SessionsFile           bool   `json:"sessions_file"`
@@ -503,6 +562,96 @@ type channelData struct {
 	ParentName      string `json:"parent_name,omitempty"`
 	ChatLog         bool   `json:"chat_log"`
 	MemoryFile      bool   `json:"memory_file"`
+}
+
+type channelHistoryPageResult struct {
+	Query      string                 `json:"query"`
+	TargetID   string                 `json:"target_id"`
+	Limit      int                    `json:"limit"`
+	Offset     int                    `json:"offset"`
+	Returned   int                    `json:"returned"`
+	HasMore    bool                   `json:"has_more"`
+	NextOffset int                    `json:"next_offset,omitempty"`
+	Message    string                 `json:"message,omitempty"`
+	Results    []channelHistoryResult `json:"results"`
+}
+
+func channelHistoryPage(query, targetID string, limit, offset int, hasMore bool, rows []audit.TimelineEvent) channelHistoryPageResult {
+	results := channelHistoryResults(rows)
+	page := channelHistoryPageResult{
+		Query:    query,
+		TargetID: targetID,
+		Limit:    limit,
+		Offset:   offset,
+		Returned: len(results),
+		HasMore:  hasMore,
+		Results:  results,
+	}
+	if hasMore {
+		page.NextOffset = offset + len(results)
+	}
+	return page
+}
+
+type channelHistoryResult struct {
+	Kind                   string `json:"kind"`
+	Type                   string `json:"type"`
+	ChannelID              string `json:"channel_id,omitempty"`
+	TargetID               string `json:"target_id,omitempty"`
+	ThreadID               string `json:"thread_id,omitempty"`
+	MessageID              string `json:"message_id,omitempty"`
+	UserID                 string `json:"user_id,omitempty"`
+	Command                string `json:"command,omitempty"`
+	Status                 string `json:"status,omitempty"`
+	RecordedAt             string `json:"recorded_at"`
+	ContentSnippet         string `json:"content_snippet,omitempty"`
+	OriginalAuthorID       string `json:"original_author_id,omitempty"`
+	OriginalAuthorUsername string `json:"original_author_username,omitempty"`
+	DeletionNote           string `json:"deletion_note,omitempty"`
+	DeletedMessageCount    int    `json:"deleted_message_count,omitempty"`
+}
+
+func channelHistoryResults(rows []audit.TimelineEvent) []channelHistoryResult {
+	out := make([]channelHistoryResult, 0, len(rows))
+	for _, row := range rows {
+		snippet := strings.TrimSpace(row.Content)
+		if snippet == "" {
+			snippet = row.ContentSnippet
+		}
+		out = append(out, channelHistoryResult{
+			Kind:                   row.Kind,
+			Type:                   row.Type,
+			ChannelID:              row.ChannelID,
+			TargetID:               row.TargetID,
+			ThreadID:               row.ThreadID,
+			MessageID:              row.MessageID,
+			UserID:                 row.UserID,
+			Command:                row.Command,
+			Status:                 row.Status,
+			RecordedAt:             row.RecordedAt,
+			ContentSnippet:         compactHistorySnippet(snippet, 500),
+			OriginalAuthorID:       row.OriginalAuthorID,
+			OriginalAuthorUsername: row.OriginalAuthorUsername,
+			DeletionNote:           row.DeletionNote,
+			DeletedMessageCount:    row.DeletedMessageCount,
+		})
+	}
+	return out
+}
+
+func compactHistorySnippet(s string, maxRunes int) string {
+	s = strings.Join(strings.Fields(strings.TrimSpace(s)), " ")
+	if s == "" || maxRunes <= 0 {
+		return s
+	}
+	runes := []rune(s)
+	if len(runes) <= maxRunes {
+		return s
+	}
+	if maxRunes == 1 {
+		return string(runes[:1])
+	}
+	return string(runes[:maxRunes-1]) + "…"
 }
 
 type targetState struct {

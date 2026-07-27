@@ -864,9 +864,11 @@ type TimelineQueryOptions struct {
 	GuildID        string
 	TargetID       string
 	Limit          int
+	Offset         int
 	Contains       string
 	EventType      string
 	IncludeContent bool
+	SearchContent  bool
 }
 
 // QueryTimelineReadOnly opens a separate read-only connection and returns
@@ -877,6 +879,9 @@ func QueryTimelineReadOnly(dbPath string, opts TimelineQueryOptions) ([]Timeline
 	}
 	if opts.Limit <= 0 || opts.Limit > 100 {
 		opts.Limit = 50
+	}
+	if opts.Offset < 0 {
+		opts.Offset = 0
 	}
 	db, err := sql.Open("sqlite", dbPath+"?mode=ro")
 	if err != nil {
@@ -913,21 +918,31 @@ func QueryTimelineReadOnly(dbPath string, opts TimelineQueryOptions) ([]Timeline
 		botArgs = append(botArgs, opts.EventType)
 	}
 	if strings.TrimSpace(opts.Contains) != "" {
-		needle := "%" + opts.Contains + "%"
-		discordFilter += " AND (de.event_type LIKE ? OR de.channel_id LIKE ? OR de.thread_id LIKE ? OR de.message_id LIKE ? OR de.user_id LIKE ? OR de.author_id LIKE ? OR de.author_username LIKE ? OR dm.author_id LIKE ? OR dm.author_username LIKE ?)"
-		botFilter += " AND (event_type LIKE ? OR channel_id LIKE ? OR target_id LIKE ? OR thread_id LIKE ? OR message_id LIKE ? OR user_id LIKE ? OR username LIKE ? OR command LIKE ? OR status LIKE ? OR error LIKE ?)"
+		needle := "%" + escapeLike(opts.Contains) + "%"
+		discordFilter += ` AND (de.event_type LIKE ? ESCAPE '\' OR de.channel_id LIKE ? ESCAPE '\' OR de.thread_id LIKE ? ESCAPE '\' OR de.message_id LIKE ? ESCAPE '\' OR de.user_id LIKE ? ESCAPE '\' OR de.author_id LIKE ? ESCAPE '\' OR de.author_username LIKE ? ESCAPE '\' OR dm.author_id LIKE ? ESCAPE '\' OR dm.author_username LIKE ? ESCAPE '\'`
 		for range 9 {
 			discordArgs = append(discordArgs, needle)
 		}
+		if opts.SearchContent {
+			discordFilter += ` OR de.content LIKE ? ESCAPE '\' OR dm.content LIKE ? ESCAPE '\'`
+			discordArgs = append(discordArgs, needle, needle)
+		}
+		discordFilter += ")"
+		botFilter += ` AND (event_type LIKE ? ESCAPE '\' OR channel_id LIKE ? ESCAPE '\' OR target_id LIKE ? ESCAPE '\' OR thread_id LIKE ? ESCAPE '\' OR message_id LIKE ? ESCAPE '\' OR user_id LIKE ? ESCAPE '\' OR username LIKE ? ESCAPE '\' OR command LIKE ? ESCAPE '\' OR status LIKE ? ESCAPE '\' OR error LIKE ? ESCAPE '\'`
 		for range 10 {
 			botArgs = append(botArgs, needle)
 		}
+		if opts.SearchContent {
+			botFilter += ` OR content LIKE ? ESCAPE '\'`
+			botArgs = append(botArgs, needle)
+		}
+		botFilter += ")"
 	}
 	args := []any{opts.TargetID, opts.TargetID, opts.TargetID}
 	args = append(args, discordArgs...)
 	args = append(args, opts.TargetID, opts.TargetID, opts.TargetID, opts.TargetID)
 	args = append(args, botArgs...)
-	args = append(args, opts.Limit)
+	args = append(args, opts.Limit, opts.Offset)
 
 	rows, err := db.QueryContext(ctx, fmt.Sprintf(`SELECT kind, event_type, channel_id, target_id, thread_id, message_id, user_id, command, status, content, recorded_at,
 	original_author_id, original_author_username, content_snippet, deletion_actor_id, deletion_actor_source, deletion_note, raw_json
@@ -956,7 +971,7 @@ FROM (
 	WHERE (target_id = ? OR channel_id = ? OR thread_id = ? OR parent_channel_id = ?)%s
 )
 ORDER BY recorded_at DESC
-LIMIT ?`, contentExpr, discordDeleteSnippetExpr, discordFilter, botContentExpr, botFilter), args...)
+LIMIT ? OFFSET ?`, contentExpr, discordDeleteSnippetExpr, discordFilter, botContentExpr, botFilter), args...)
 	if err != nil {
 		return nil, fmt.Errorf("query: %w", err)
 	}
@@ -975,6 +990,17 @@ LIMIT ?`, contentExpr, discordDeleteSnippetExpr, discordFilter, botContentExpr, 
 		return nil, err
 	}
 	return out, nil
+}
+
+func escapeLike(s string) string {
+	var b strings.Builder
+	for _, r := range strings.TrimSpace(s) {
+		if r == '%' || r == '_' || r == '\\' {
+			b.WriteRune('\\')
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }
 
 func normalizeTimelineEvent(e *TimelineEvent) {
