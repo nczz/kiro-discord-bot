@@ -470,6 +470,99 @@ func TestManagerEnableDefaultBotToolsUsesSafeAllowlist(t *testing.T) {
 	}
 }
 
+func TestManagerEnableDefaultBotToolsEnablesMCPDiscordMentionResolver(t *testing.T) {
+	dir := t.TempDir()
+	m := NewManager(ManagerConfig{DataDir: dir, GuildID: "guild-1"})
+	defer m.StopAll()
+
+	m.RegisterBuiltinMCP("bot-tools", []string{"mcp-bot"}, map[string]string{"DATA_DIR": dir})
+	m.RegisterBuiltinMCP(mcpDiscordServerName, []string{"mcp-discord"}, map[string]string{"DATA_DIR": dir})
+	if err := m.EnableDefaultBotTools("channel-1", "user-1"); err != nil {
+		t.Fatalf("enable default bot tools: %v", err)
+	}
+	p, err := m.mcpPolicies.GetPolicy(context.Background(), "guild-1", "channel-1", mcpDiscordServerName)
+	if err != nil {
+		t.Fatalf("get mcp-discord policy: %v", err)
+	}
+	if !p.Enabled || p.AllowAllTools || p.ReadOnly || p.AllowDestructive || p.Preset != "safe-write" {
+		t.Fatalf("mcp-discord mention policy is not safe-write allowlist: %+v", p)
+	}
+	if tools := p.EffectiveTools(); len(tools) != 1 || tools[0] != mcpDiscordResolveMentionsTool {
+		t.Fatalf("mcp-discord default tools = %+v, want only %s", tools, mcpDiscordResolveMentionsTool)
+	}
+}
+
+func TestManagerDefaultMCPDiscordResolverInjectsTargetStateWithoutCatalogDataDir(t *testing.T) {
+	dir := t.TempDir()
+	m := NewManager(ManagerConfig{DataDir: dir, GuildID: "guild-1"})
+	defer m.StopAll()
+
+	m.RegisterBuiltinMCP("bot-tools", []string{"mcp-bot"}, map[string]string{"DATA_DIR": dir})
+	m.RegisterBuiltinMCP(mcpDiscordServerName, []string{"mcp-discord"}, map[string]string{})
+	if err := m.EnableDefaultBotTools("channel-1", "user-1"); err != nil {
+		t.Fatalf("enable default bot tools: %v", err)
+	}
+	opts := m.agentOptsForChannel("channel-1")
+	var discordEnv map[string]string
+	for _, server := range opts.MCPServers {
+		if server.Name == mcpDiscordServerName {
+			discordEnv = proxyTargetEnv(t, server.Env)
+			break
+		}
+	}
+	if discordEnv == nil {
+		t.Fatalf("mcp-discord resolver was not injected: %+v", opts.MCPServers)
+	}
+	want := filepath.Join(dir, "bot-tools-targets", "channel-1.json")
+	if discordEnv["BOT_TOOLS_TARGET_STATE_PATH"] != want {
+		t.Fatalf("mcp-discord target state path = %q, want %q; env=%+v", discordEnv["BOT_TOOLS_TARGET_STATE_PATH"], want, discordEnv)
+	}
+}
+
+func TestManagerEnableDefaultBotToolsPreservesExistingMCPDiscordTools(t *testing.T) {
+	dir := t.TempDir()
+	m := NewManager(ManagerConfig{DataDir: dir, GuildID: "guild-1"})
+	defer m.StopAll()
+
+	m.RegisterBuiltinMCP("bot-tools", []string{"mcp-bot"}, map[string]string{"DATA_DIR": dir})
+	m.RegisterBuiltinMCP(mcpDiscordServerName, []string{"mcp-discord"}, map[string]string{"DATA_DIR": dir})
+	if err := m.SetMCPTool("channel-1", "user-1", mcpDiscordServerName, "discord_read_messages", true); err != nil {
+		t.Fatalf("enable existing mcp-discord tool: %v", err)
+	}
+	if err := m.EnableDefaultBotTools("channel-1", "user-2"); err != nil {
+		t.Fatalf("enable default bot tools: %v", err)
+	}
+	p, err := m.mcpPolicies.GetPolicy(context.Background(), "guild-1", "channel-1", mcpDiscordServerName)
+	if err != nil {
+		t.Fatalf("get mcp-discord policy: %v", err)
+	}
+	if !containsString(p.EffectiveTools(), "discord_read_messages") || !containsString(p.EffectiveTools(), mcpDiscordResolveMentionsTool) {
+		t.Fatalf("mcp-discord default enable did not preserve existing tools and add resolver: %+v", p.EffectiveTools())
+	}
+}
+
+func TestManagerEnableDefaultBotToolsPreservesFullMCPDiscordPolicy(t *testing.T) {
+	dir := t.TempDir()
+	m := NewManager(ManagerConfig{DataDir: dir, GuildID: "guild-1"})
+	defer m.StopAll()
+
+	m.RegisterBuiltinMCP("bot-tools", []string{"mcp-bot"}, map[string]string{"DATA_DIR": dir})
+	m.RegisterBuiltinMCP(mcpDiscordServerName, []string{"mcp-discord"}, map[string]string{"DATA_DIR": dir})
+	if err := m.SetMCPPolicy("channel-1", "user-1", mcpDiscordServerName, true, "full"); err != nil {
+		t.Fatalf("enable full mcp-discord policy: %v", err)
+	}
+	if err := m.EnableDefaultBotTools("channel-1", "user-2"); err != nil {
+		t.Fatalf("enable default bot tools: %v", err)
+	}
+	p, err := m.mcpPolicies.GetPolicy(context.Background(), "guild-1", "channel-1", mcpDiscordServerName)
+	if err != nil {
+		t.Fatalf("get mcp-discord policy: %v", err)
+	}
+	if !p.Enabled || !p.AllowAllTools || p.ReadOnly || !p.AllowDestructive || p.Preset != "full" {
+		t.Fatalf("full mcp-discord policy was not preserved: %+v", p)
+	}
+}
+
 func TestManagerAuditPromptMCPServersBypassChannelPolicyWithScopedAuditToolOnly(t *testing.T) {
 	dir := t.TempDir()
 	m := NewManager(ManagerConfig{DataDir: dir, GuildID: "guild-1"})

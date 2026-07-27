@@ -55,20 +55,23 @@ MCP_DISCORD_ALLOWED_GUILDS=123456789012345678
 MCP_DISCORD_ALLOWED_CHANNELS=234567890123456789,345678901234567890
 MCP_DISCORD_DOWNLOAD_DIR=/tmp/kiro-discord-mcp
 MCP_DISCORD_READ_ONLY=false
-MCP_DISCORD_ALLOWED_WRITE_TOOLS=discord_send_message,discord_reply_message
+MCP_DISCORD_ALLOWED_WRITE_TOOLS=discord_send_message,discord_reply_message,discord_resolve_mentions
 MCP_DISCORD_ALLOW_DESTRUCTIVE=false
+MCP_DISCORD_MEMBER_SCAN_LIMIT=5000
 ```
 
 空 allowlist 會保留舊版 unrestricted 行為。正式環境若 bot 有廣泛 Discord 權限，建議明確設定 guild/channel allowlist。
 
 ## 依頻道啟用
 
-註冊只會把 server 加進 catalog。在 Discord 中：
+註冊會把 server 加進 catalog。當這個 catalog entry 存在時，bot 的 default bot-tools setup 會自動只替 `mcp-discord` 開啟 `discord_resolve_mentions`，行為對齊預設開啟的 `bot_send_image_base64`，但其他 Discord REST tools 仍維持關閉。
+
+若要額外啟用其他 tools，請在 Discord 中：
 
 1. 執行 `/mcp status` 確認 `mcp-discord` 出現。
 2. 執行 `/mcp manage`。
 3. 掃描 server。
-4. 只啟用該頻道需要的 tools。
+4. 只啟用該頻道需要的額外 tools。
 5. 讓 bot 重啟 active agents，使新 policy 在下一個 session 注入。
 
 ## 常見工具群組
@@ -76,9 +79,12 @@ MCP_DISCORD_ALLOW_DESTRUCTIVE=false
 | 群組 | 範例 | 風險 |
 | --- | --- | --- |
 | Read | `discord_read_messages`, `discord_search_messages`, `discord_channel_info` | 會讓 agent 看見 channel content |
+| Mention resolver | `discord_resolve_mentions` | 用 fresh Discord member lookup 解析使用者要求的名字，只把 exact/unique match 授權給目前 bot task，並回傳安全的 `[[discord:user:...]]` placeholder |
 | Write | `discord_send_message`, `discord_reply_message`, `discord_send_embed` | 會送出可見 Discord 訊息 |
 | Thread | `discord_create_thread`, `discord_list_threads` | 建立或檢視 conversation surfaces |
 | Management | `discord_edit_message`, `discord_pin_message`, `discord_edit_channel_topic` | 維運風險較高 |
 | Attachment | `discord_download_attachment` | 需要 download directory 控制 |
 
 建議先開 read-only，再只對工作流程需要的地方加入 non-destructive write tools。
+
+當使用者要求 tag 或通知某個名字，但該人沒有出現在目前 prompt 的 mention references 時，優先使用 `discord_resolve_mentions`，不要用 `discord_list_members` 後自行猜 ID。它會先做 fresh REST member search，再做 bounded scan / cache fallback，並把解析出的 refs 寫入目前 bot target state，回傳 agent 可在 final answer 使用的 placeholders。Ambiguous 或 missing names 必須請使用者確認，不可猜。只有在 guild 很大且 exact name 常被預設 scan limit 漏掉時，才調高 `MCP_DISCORD_MEMBER_SCAN_LIMIT`。

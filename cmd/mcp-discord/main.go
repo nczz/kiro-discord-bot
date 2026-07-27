@@ -610,6 +610,8 @@ func main() {
 		},
 	)
 
+	registerResolveMentionsTool(s)
+
 	// 7. Search messages
 	s.AddTool(
 		mcp.NewTool("discord_search_messages",

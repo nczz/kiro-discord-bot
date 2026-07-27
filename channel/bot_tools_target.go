@@ -10,9 +10,10 @@ import (
 )
 
 type botToolsTargetState struct {
-	TargetChannelID       string   `json:"target_channel_id"`
-	DisableEgress         bool     `json:"disable_egress,omitempty"`
-	AllowedMentionUserIDs []string `json:"allowed_mention_user_ids,omitempty"`
+	TargetChannelID       string               `json:"target_channel_id"`
+	DisableEgress         bool                 `json:"disable_egress,omitempty"`
+	AllowedMentionUserIDs []string             `json:"allowed_mention_user_ids,omitempty"`
+	MentionRefs           []discordmention.Ref `json:"mention_refs,omitempty"`
 }
 
 func botToolsTargetStatePath(dataDir, channelID string) string {
@@ -55,6 +56,7 @@ func writeBotToolsTargetStateWithRefs(path, targetChannelID string, disableEgres
 		TargetChannelID:       targetChannelID,
 		DisableEgress:         disableEgress,
 		AllowedMentionUserIDs: allowedMentionUserIDs(refs),
+		MentionRefs:           cleanMentionRefs(refs),
 	})
 	if err != nil {
 		return err
@@ -81,6 +83,46 @@ func allowedMentionUserIDs(refs []discordmention.Ref) []string {
 		out = append(out, id)
 	}
 	return out
+}
+
+func cleanMentionRefs(refs []discordmention.Ref) []discordmention.Ref {
+	seen := make(map[string]bool)
+	out := make([]discordmention.Ref, 0, len(refs))
+	for _, ref := range refs {
+		kind := strings.TrimSpace(ref.Kind)
+		id := strings.TrimSpace(ref.ID)
+		if kind == "" || id == "" {
+			continue
+		}
+		key := kind + ":" + id
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		switch kind {
+		case "user":
+			out = append(out, discordmention.UserRef(id, ref.DisplayName))
+		case "role":
+			out = append(out, discordmention.RoleRef(id, ref.DisplayName))
+		}
+	}
+	return out
+}
+
+func readBotToolsTargetMentionRefs(path string) ([]discordmention.Ref, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return nil, nil
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var state botToolsTargetState
+	if err := json.Unmarshal(raw, &state); err != nil {
+		return nil, err
+	}
+	return cleanMentionRefs(state.MentionRefs), nil
 }
 
 func clearBotToolsTargetState(path string) {

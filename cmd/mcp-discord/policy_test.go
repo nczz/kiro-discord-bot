@@ -13,7 +13,17 @@ import (
 	"unicode/utf8"
 
 	"github.com/bwmarrin/discordgo"
+	"github.com/nczz/kiro-discord-bot/internal/discordmention"
 )
+
+func containsString(items []string, want string) bool {
+	for _, item := range items {
+		if item == want {
+			return true
+		}
+	}
+	return false
+}
 
 type recordingDiscordTransport struct {
 	mu      sync.Mutex
@@ -122,6 +132,11 @@ func TestDiscordPolicyAllowedWriteTools(t *testing.T) {
 	}
 	if err := p.writeAllowed("discord_reply_message", false); err == nil {
 		t.Fatal("unlisted write should be denied")
+	}
+
+	p.allowedWriteTools = parseIDSet("discord_resolve_mentions")
+	if err := p.writeAllowed("discord_resolve_mentions", false); err != nil {
+		t.Fatalf("mention resolver write grant denied: %v", err)
 	}
 }
 
@@ -345,5 +360,97 @@ func TestSendDiscordEmbedPartsSplitsLongDescription(t *testing.T) {
 		if payload.AllowedMentions == nil {
 			t.Fatalf("embed payload %d missing allowed_mentions suppression: %s", i, body)
 		}
+	}
+}
+
+func TestSplitMentionNamesHandlesNaturalSeparators(t *testing.T) {
+	got := splitMentionNames("Wendy、Cheisy 跟 Wendy\nAlice")
+	want := []string{"Wendy", "Cheisy", "Alice"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("names = %#v, want %#v", got, want)
+	}
+}
+
+func TestValidateMentionResolveNamesRejectsRawIDs(t *testing.T) {
+	for _, names := range [][]string{
+		{"123456789012345678"},
+		{"<@123456789012345678>"},
+		{"<@!123456789012345678>"},
+	} {
+		if err := validateMentionResolveNames(names); err == nil {
+			t.Fatalf("validateMentionResolveNames(%+v) accepted raw mention ID", names)
+		}
+	}
+}
+
+func TestValidateMentionResolveNamesAcceptsDisplayNames(t *testing.T) {
+	if err := validateMentionResolveNames([]string{"Wendy Chen", "Cheisy"}); err != nil {
+		t.Fatalf("validate display names: %v", err)
+	}
+}
+
+func TestResolveMentionNameAllowsUniqueFreshPrefix(t *testing.T) {
+	member := &discordgo.Member{Nick: "Wendy Chen", User: &discordgo.User{ID: "123", Username: "wendy", GlobalName: "Wendy Chen"}}
+	got, ambiguous, ok := resolveMentionName("Wendy", "fresh_search_unique", []*discordgo.Member{member})
+	if !ok {
+		t.Fatalf("resolve failed ambiguous=%+v", ambiguous)
+	}
+	if got.UserID != "123" || got.Placeholder != "[[discord:user:123]]" {
+		t.Fatalf("resolved = %+v", got)
+	}
+}
+
+func TestResolveMentionNameReportsAmbiguousMatches(t *testing.T) {
+	members := []*discordgo.Member{
+		{Nick: "Wendy Chen", User: &discordgo.User{ID: "123", Username: "wendychen"}},
+		{Nick: "Wendy Lin", User: &discordgo.User{ID: "456", Username: "wendylin"}},
+	}
+	_, ambiguous, ok := resolveMentionName("Wendy", "fresh_lookup", members)
+	if ok {
+		t.Fatal("ambiguous Wendy resolved unexpectedly")
+	}
+	if ambiguous.Query != "Wendy" || len(ambiguous.Candidates) != 2 {
+		t.Fatalf("ambiguous = %+v", ambiguous)
+	}
+}
+
+func TestAmbiguousMentionCandidatesDoNotExposeReusableUserIDs(t *testing.T) {
+	members := []*discordgo.Member{
+		{Nick: "Wendy Chen", User: &discordgo.User{ID: "123", Username: "wendychen"}},
+		{Nick: "Wendy Lin", User: &discordgo.User{ID: "456", Username: "wendylin"}},
+	}
+	ambiguous := ambiguousForMembers("Wendy", members)
+	raw, err := json.Marshal(ambiguous)
+	if err != nil {
+		t.Fatalf("marshal ambiguous candidates: %v", err)
+	}
+	if strings.Contains(string(raw), "user_id") || strings.Contains(string(raw), "123") || strings.Contains(string(raw), "456") {
+		t.Fatalf("ambiguous candidates leaked reusable user IDs: %s", raw)
+	}
+}
+
+func TestGrantMentionRefsForCurrentJobUpdatesTargetState(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "target.json")
+	if err := os.WriteFile(statePath, []byte(`{"target_channel_id":"thread-1","allowed_mention_user_ids":["old"],"mention_refs":[{"kind":"user","id":"old","display_name":"Old","placeholder":"[[discord:user:old]]"}]}`+"\n"), 0644); err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+	t.Setenv("BOT_TOOLS_TARGET_STATE_PATH", statePath)
+
+	if err := grantMentionRefsForCurrentJob([]discordmention.Ref{discordmention.UserRef("123", "Wendy")}); err != nil {
+		t.Fatalf("grant mention refs: %v", err)
+	}
+	raw, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("read state: %v", err)
+	}
+	var state mentionTargetState
+	if err := json.Unmarshal(raw, &state); err != nil {
+		t.Fatalf("state json: %v\n%s", err, raw)
+	}
+	if !containsString(state.AllowedMentionUserIDs, "old") || !containsString(state.AllowedMentionUserIDs, "123") {
+		t.Fatalf("allowed mention IDs = %+v", state.AllowedMentionUserIDs)
+	}
+	if len(state.MentionRefs) != 2 {
+		t.Fatalf("mention refs = %+v", state.MentionRefs)
 	}
 }

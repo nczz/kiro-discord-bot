@@ -49,6 +49,10 @@ File egress is intentionally conservative:
 - Original binary documents are not uploaded back to Discord by `bot_send_file`.
 - Private audit jobs disable message and file egress completely.
 
+## Mention Resolution
+
+When the `mcp-discord` catalog entry is present, default bot-tools setup also enables `discord_resolve_mentions` for that server. The resolver can turn names such as "Wendy" or "Cheisy" into verified `[[discord:user:...]]` placeholders for the active bot task. It refreshes from Discord before falling back to cache, updates the task's dynamic mention refs, and keeps final delivery under the bot's `AllowedMentions` guard. Ambiguous or missing names require user clarification.
+
 ## Channel History Tool
 
 `bot_query_channel_history` is read-only and scoped to the current bot-tools channel or thread context. Use `target_id` only for the current channel/thread IDs from context: a parent channel ID includes child threads, and a thread ID narrows results to that thread.

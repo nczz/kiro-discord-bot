@@ -2068,6 +2068,12 @@ func TestBuildPromptDocumentsStructuredMentionReferences(t *testing.T) {
 	if !strings.Contains(got, "Do not write raw Discord angle-bracket mention strings") {
 		t.Fatalf("prompt missing raw mention guidance:\n%s", got)
 	}
+	if !strings.Contains(got, "discord_resolve_mentions") {
+		t.Fatalf("prompt missing dynamic mention resolver guidance:\n%s", got)
+	}
+	if !strings.Contains(got, "Do not use discord_list_members") {
+		t.Fatalf("prompt missing mention lookup bypass guidance:\n%s", got)
+	}
 }
 
 func TestMentionRefsForMessageUsesStructuredDiscordMentions(t *testing.T) {

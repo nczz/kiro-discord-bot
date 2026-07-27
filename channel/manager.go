@@ -316,10 +316,12 @@ func (m *Manager) RegisterBuiltinMCP(name string, args []string, env map[string]
 }
 
 const (
-	sessionTargetChannel = "channel"
-	sessionTargetThread  = "thread"
-	interruptGrace       = 5 * time.Second
-	mcpLegacyMigrationV1 = "legacy_catalog_full_enable_v1"
+	sessionTargetChannel          = "channel"
+	sessionTargetThread           = "thread"
+	interruptGrace                = 5 * time.Second
+	mcpLegacyMigrationV1          = "legacy_catalog_full_enable_v1"
+	mcpDiscordServerName          = "mcp-discord"
+	mcpDiscordResolveMentionsTool = "discord_resolve_mentions"
 )
 
 func (m *Manager) applyLegacyMCPMigration() error {
@@ -712,9 +714,25 @@ func (m *Manager) mcpServersForTarget(channelID, targetChannelID string) []acp.M
 			log.Printf("[mcp-policy] server %s enabled for channel=%s but not found in catalog", policy.ServerName, channelID)
 			continue
 		}
+		entry = m.withRuntimeMCPEnv(entry)
 		servers = append(servers, policy.ToACPServer(entry, m.mcpProxyCommand, m.guildID, channelID, targetChannelID))
 	}
 	return servers
+}
+
+func (m *Manager) withRuntimeMCPEnv(entry MCPCatalogEntry) MCPCatalogEntry {
+	if entry.Name != mcpDiscordServerName {
+		return entry
+	}
+	env := make(map[string]string, len(entry.Env)+1)
+	for k, v := range entry.Env {
+		env[k] = v
+	}
+	if strings.TrimSpace(env["DATA_DIR"]) == "" {
+		env["DATA_DIR"] = m.dataDir
+	}
+	entry.Env = env
+	return entry
 }
 
 func (m *Manager) auditPromptMCPServers(channelID, targetChannelID string) ([]acp.MCPServerConfig, error) {
@@ -1457,7 +1475,38 @@ func (m *Manager) EnableDefaultBotTools(channelID, userID string) error {
 	if err := m.mcpPolicies.SetPolicy(ctx, p); err != nil {
 		return err
 	}
+	if err := m.enableDefaultMCPDiscordMentions(ctx, channelID, userID); err != nil {
+		return err
+	}
 	m.recordMCPPolicyEvent(channelID, userID, "policy", "updated", p, map[string]any{"action": "default_bot_tools"})
+	return nil
+}
+
+func (m *Manager) enableDefaultMCPDiscordMentions(ctx context.Context, channelID, userID string) error {
+	if _, ok := m.mcpPolicies.CatalogEntry(mcpDiscordServerName); !ok {
+		return nil
+	}
+	p, err := m.mcpPolicies.GetPolicy(ctx, m.guildID, channelID, mcpDiscordServerName)
+	if err != nil {
+		return err
+	}
+	if p.Enabled && p.AllowAllTools && !p.ReadOnly {
+		return nil
+	}
+	p.Enabled = true
+	p.Preset = "safe-write"
+	p.ReadOnly = false
+	p.AllowAllTools = false
+	p.AllowDestructive = false
+	p.AllowedTools = normalizeStrings(append(p.AllowedTools, mcpDiscordResolveMentionsTool))
+	p.UpdatedBy = userID
+	if err := validateMCPPolicyExposesTools(p); err != nil {
+		return err
+	}
+	if err := m.mcpPolicies.SetPolicy(ctx, p); err != nil {
+		return err
+	}
+	m.recordMCPPolicyEvent(channelID, userID, "policy", "updated", p, map[string]any{"action": "default_mcp_discord_mentions"})
 	return nil
 }
 

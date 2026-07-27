@@ -49,6 +49,10 @@ File egress 採保守設計：
 - `bot_send_file` 不會把原始 binary 文件傳回 Discord。
 - Private audit job 會完全停用 message 與 file egress。
 
+## Mention Resolution
+
+當 `mcp-discord` catalog entry 存在時，default bot-tools setup 也會替該 server 開啟 `discord_resolve_mentions`。這個 resolver 可以把「Wendy」、「Cheisy」這類名字解析成目前 bot task 可用的 verified `[[discord:user:...]]` placeholders。它會先向 Discord refresh，再 fallback 到 cache，並更新本次任務的 dynamic mention refs；final delivery 仍由 bot 的 `AllowedMentions` guard 控制。Ambiguous 或 missing names 必須請使用者確認。
+
 ## Channel History Tool
 
 `bot_query_channel_history` 是 read-only，且限制在目前 bot-tools channel 或 thread context。`target_id` 只能使用 context 中目前的 channel/thread ID：parent channel ID 會包含 child threads，thread ID 則只查該 thread。

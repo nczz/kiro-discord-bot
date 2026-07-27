@@ -459,6 +459,23 @@ func (w *Worker) SetMentionRefs(refs []discordmention.Ref) {
 	w.mentionMu.Unlock()
 }
 
+func (w *Worker) mentionRefsForDelivery(refs []discordmention.Ref) []discordmention.Ref {
+	if w == nil {
+		return refs
+	}
+	dynamic, err := readBotToolsTargetMentionRefs(w.botToolsTargetStatePath)
+	if err != nil && !os.IsNotExist(err) {
+		log.Printf("[mention] read dynamic refs channel=%s: %v", w.channelID, err)
+	}
+	if len(dynamic) == 0 {
+		return w.rememberMentionRefs(refs)
+	}
+	merged := make([]discordmention.Ref, 0, len(refs)+len(dynamic))
+	merged = append(merged, refs...)
+	merged = append(merged, dynamic...)
+	return w.rememberMentionRefs(merged)
+}
+
 func sameMentionRefs(a, b []discordmention.Ref) bool {
 	if len(a) != len(b) {
 		return false
@@ -708,6 +725,8 @@ func (w *Worker) execute(job *Job) {
 			// Capture ctx state BEFORE cancel() — cancel() sets ctx.Err() to Canceled
 			ctxErr := ctx.Err()
 			cancel() // release timeout context
+
+			job.MentionRefs = w.mentionRefsForDelivery(job.MentionRefs)
 
 			if askErr != nil {
 				errMsg := askErr.Error()
@@ -1118,6 +1137,7 @@ func (w *Worker) executeInline(job *Job) {
 			if !beginFinish() {
 				return
 			}
+			job.MentionRefs = w.mentionRefsForDelivery(job.MentionRefs)
 
 			if askErr != nil {
 				errMsg := askErr.Error()
@@ -1659,6 +1679,8 @@ func (w *Worker) executeFallback(job *Job) {
 	})
 
 	logContent := response
+	job.MentionRefs = w.mentionRefsForDelivery(job.MentionRefs)
+
 	if askErr != nil {
 		errMsg := askErr.Error()
 		if ctx.Err() == context.DeadlineExceeded {

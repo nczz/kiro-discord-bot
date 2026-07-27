@@ -551,6 +551,25 @@ func TestWorkerRemembersMentionRefsAcrossJobs(t *testing.T) {
 	}
 }
 
+func TestWorkerLoadsDynamicMentionRefsForDelivery(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "target.json")
+	raw := `{"target_channel_id":"thread-1","mention_refs":[{"kind":"user","id":"123","display_name":"Wendy","placeholder":"[[discord:user:123]]"}]}` + "\n"
+	if err := os.WriteFile(statePath, []byte(raw), 0644); err != nil {
+		t.Fatalf("write target state: %v", err)
+	}
+	w := newWorker("channel-1", &fakeWorkerAgent{}, 1, 1, 1, 60, nil, "")
+	w.SetBotToolsTargetStatePath(statePath)
+
+	refs := w.mentionRefsForDelivery(nil)
+	rendered, allowed := renderDiscordMentions("notify [[discord:user:123]]", refs)
+	if !strings.Contains(rendered, "<@123>") {
+		t.Fatalf("dynamic ref did not render: %q", rendered)
+	}
+	if allowed == nil || len(allowed.Users) != 1 || allowed.Users[0] != "123" {
+		t.Fatalf("allowed mentions = %+v, want user 123", allowed)
+	}
+}
+
 func TestWorkerCancelCurrentCancelsWithoutSignalingIdle(t *testing.T) {
 	agent := &fakeWorkerAgent{}
 	w := newWorker("ch1", agent, 1, 30, 1, 1440, nil, "")
