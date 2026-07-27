@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"net/http"
@@ -212,6 +213,34 @@ func TestBuildPromptContentSkipsImagesWhenUnsupported(t *testing.T) {
 	}
 	if content[0].Type != "text" || content[0].Text != "hello" {
 		t.Fatalf("text block = %+v", content[0])
+	}
+}
+
+func TestBuildPromptContentSkipsACPImagesOverCountLimit(t *testing.T) {
+	dir := t.TempDir()
+	var paths []string
+	for i := 0; i < maxACPImagePromptFiles+1; i++ {
+		path := filepath.Join(dir, fmt.Sprintf("sample-%d.png", i))
+		if err := os.WriteFile(path, []byte{0x89, 'P', 'N', 'G', byte(i)}, 0644); err != nil {
+			t.Fatalf("write image: %v", err)
+		}
+		paths = append(paths, path)
+	}
+	content := buildPromptContent("hello", paths, true)
+	if len(content) != 1 {
+		t.Fatalf("content len = %d, want text-only when image count exceeds limit", len(content))
+	}
+}
+
+func TestBuildPromptContentSkipsACPImagesOverByteLimit(t *testing.T) {
+	dir := t.TempDir()
+	imagePath := filepath.Join(dir, "large.png")
+	if err := os.WriteFile(imagePath, make([]byte, maxACPImagePromptBytes+1), 0644); err != nil {
+		t.Fatalf("write image: %v", err)
+	}
+	content := buildPromptContent("hello", []string{imagePath}, true)
+	if len(content) != 1 {
+		t.Fatalf("content len = %d, want text-only when image bytes exceed limit", len(content))
 	}
 }
 

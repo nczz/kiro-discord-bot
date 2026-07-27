@@ -5,6 +5,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"image"
+	"image/color"
+	"image/png"
 	"io"
 	"math"
 	"net/http"
@@ -2052,6 +2055,63 @@ func TestBuildPromptIncludesRequesterDiscordIDWhenAvailable(t *testing.T) {
 	got := buildPromptThreadWithMentions("create reminder", nil, "channel-1", "thread-1", "guild-1", "alice", "user-1", "", nil)
 	if !strings.Contains(got, "user=alice user_id=user-1") {
 		t.Fatalf("prompt missing requester Discord user ID:\n%s", got)
+	}
+}
+
+func TestBuildPromptIncludesAttachmentManifestMetadata(t *testing.T) {
+	dir := t.TempDir()
+	imagePath := filepath.Join(dir, "sample.png")
+	img := image.NewRGBA(image.Rect(0, 0, 2, 1))
+	img.Set(0, 0, color.White)
+	f, err := os.Create(imagePath)
+	if err != nil {
+		t.Fatalf("create image: %v", err)
+	}
+	if err := png.Encode(f, img); err != nil {
+		f.Close()
+		t.Fatalf("encode image: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close image: %v", err)
+	}
+
+	got := buildPromptThread("process attachments", []string{imagePath}, "channel-1", "thread-1", "guild-1", "alice", "")
+	for _, want := range []string{
+		"[Attached files manifest]",
+		`"id":"att-1"`,
+		`"path":"` + imagePath + `"`,
+		`"filename":"sample.png"`,
+		`"mime":"image/png"`,
+		`"width":2`,
+		`"height":1`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("prompt missing %s:\n%s", want, got)
+		}
+	}
+	lines := strings.Split(got, "\n")
+	var manifestLine string
+	for _, line := range lines {
+		if strings.Contains(line, `"id":"att-1"`) {
+			manifestLine = line
+			break
+		}
+	}
+	if manifestLine == "" {
+		t.Fatalf("manifest JSON line not found:\n%s", got)
+	}
+	if strings.HasPrefix(manifestLine, "- ") {
+		t.Fatalf("manifest line should be raw JSONL, got %q", manifestLine)
+	}
+	var entry attachmentManifestEntry
+	if err := json.Unmarshal([]byte(manifestLine), &entry); err != nil {
+		t.Fatalf("manifest line is not JSON: %v\n%s", err, manifestLine)
+	}
+	if entry.Path != imagePath || entry.Width != 2 || entry.Height != 1 {
+		t.Fatalf("manifest entry = %+v", entry)
+	}
+	if !strings.Contains(got, "Do not infer image contents from filenames or metadata alone") {
+		t.Fatalf("prompt missing attachment manifest handling guidance:\n%s", got)
 	}
 }
 

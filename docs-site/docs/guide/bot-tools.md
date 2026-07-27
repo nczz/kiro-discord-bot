@@ -49,6 +49,10 @@ File egress is intentionally conservative:
 - Original binary documents are not uploaded back to Discord by `bot_send_file`.
 - Private audit jobs disable message and file egress completely.
 
+## Incoming Discord Attachments
+
+Incoming attachment paths are always listed in the agent prompt as a JSON-lines manifest with filename, MIME type, size, and image dimensions when available. To avoid context-window failures, the bot only sends ACP image blocks for small visual batches: at most 3 image files and at most 1 MiB total image bytes. Larger image batches stay path-only in the prompt so the agent can inspect or process files on demand.
+
 ## Mention Resolution
 
 When the `mcp-discord` catalog entry is present, default bot-tools setup also enables `discord_resolve_mentions` for that server. The resolver can turn names such as "Wendy" or "Cheisy" into verified `[[discord:user:...]]` placeholders for the active bot task. It refreshes from Discord before falling back to cache, updates the task's dynamic mention refs, and keeps final delivery under the bot's `AllowedMentions` guard. Ambiguous or missing names require user clarification.

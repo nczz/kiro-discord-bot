@@ -1,7 +1,12 @@
 package bot
 
 import (
+	"encoding/json"
 	"fmt"
+	"image"
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
 	"io"
 	"log"
 	"mime"
@@ -421,6 +426,62 @@ func safeAttachmentFilename(name string) string {
 	return name
 }
 
+type attachmentManifestEntry struct {
+	ID        string `json:"id"`
+	Path      string `json:"path"`
+	Filename  string `json:"filename"`
+	MIME      string `json:"mime,omitempty"`
+	SizeBytes int64  `json:"size_bytes,omitempty"`
+	Width     int    `json:"width,omitempty"`
+	Height    int    `json:"height,omitempty"`
+}
+
+func attachmentManifest(attachments []string) string {
+	if len(attachments) == 0 {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("[Attached files manifest]\n")
+	for i, path := range attachments {
+		entry := attachmentManifestEntry{
+			ID:       fmt.Sprintf("att-%d", i+1),
+			Path:     path,
+			Filename: filepath.Base(path),
+			MIME:     mime.TypeByExtension(strings.ToLower(filepath.Ext(path))),
+		}
+		if info, err := os.Stat(path); err == nil {
+			entry.SizeBytes = info.Size()
+		}
+		if strings.HasPrefix(entry.MIME, "image/") {
+			if width, height := imageDimensions(path); width > 0 && height > 0 {
+				entry.Width = width
+				entry.Height = height
+			}
+		}
+		raw, err := json.Marshal(entry)
+		if err != nil {
+			continue
+		}
+		sb.Write(raw)
+		sb.WriteString("\n")
+	}
+	sb.WriteString("\n")
+	return sb.String()
+}
+
+func imageDimensions(path string) (int, int) {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0, 0
+	}
+	defer f.Close()
+	cfg, _, err := image.DecodeConfig(f)
+	if err != nil {
+		return 0, 0
+	}
+	return cfg.Width, cfg.Height
+}
+
 // buildPrompt combines user text with attachment paths into an effective prompt.
 func buildPrompt(text string, attachments []string, channelID, guildID, username, peerContext string) string {
 	return buildPromptThread(text, attachments, channelID, "", guildID, username, peerContext)
@@ -439,6 +500,7 @@ func buildPromptThreadWithMentions(text string, attachments []string, channelID,
 	sb.WriteString("When users say 本頻道, 這個頻道, 目前頻道, this channel, here, or current session, interpret that as the current Discord target from this context. In a thread, 本討論串/this thread means thread_id; parent channel or whole-channel history means channel_id and includes child threads. If users ask about prior discussion, use bot_query_channel_history when available instead of claiming Discord history is inaccessible. For broad or exhaustive history requests, keep paginating bot_query_channel_history with offset=next_offset until has_more=false before synthesizing the answer.\n")
 	sb.WriteString("For one-time delayed reminders, use bot_create_reminder; for recurring schedules, use bot_create_cron.\n")
 	sb.WriteString("To change, disable, or resume an existing recurring schedule, first use bot_list_cron, then bot_update_cron with only the requested fields. Use enabled=false to disable without deleting; deletion requires bot_delete_cron.\n")
+	sb.WriteString("Attached Discord files are listed as a manifest with local paths and metadata. Do not infer image contents from filenames or metadata alone; inspect the relevant path before visual claims. For bulk image operations, process file paths in batches instead of asking for all images as prompt content.\n")
 	userIDPart := ""
 	if strings.TrimSpace(userID) != "" {
 		userIDPart = fmt.Sprintf(" user_id=%s", strings.TrimSpace(userID))
@@ -456,12 +518,8 @@ func buildPromptThreadWithMentions(text string, attachments []string, channelID,
 		sb.WriteString(peerContext)
 		sb.WriteString("\n")
 	}
-	if len(attachments) > 0 {
-		sb.WriteString("[Attached files]\n")
-		for _, p := range attachments {
-			sb.WriteString(fmt.Sprintf("- %s\n", p))
-		}
-		sb.WriteString("\n")
+	if manifest := attachmentManifest(attachments); manifest != "" {
+		sb.WriteString(manifest)
 	}
 	if text != "" {
 		sb.WriteString(text)
