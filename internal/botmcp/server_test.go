@@ -94,6 +94,9 @@ func TestDefaultSafeToolNamesExcludeDestructiveTools(t *testing.T) {
 	if !seen[ToolSendFile] {
 		t.Fatalf("file egress tool should be default-enabled for interactive file delivery: %+v", tools)
 	}
+	if !seen[ToolSendImageBase64] {
+		t.Fatalf("base64 image egress tool should be default-enabled for MCP image delivery: %+v", tools)
+	}
 	if !seen[ToolCreateReminder] {
 		t.Fatalf("one-time reminder tool should be default-enabled to avoid agent-side scheduling bypasses: %+v", tools)
 	}
@@ -209,19 +212,40 @@ func TestReadOnlyToolAnnotations(t *testing.T) {
 	}
 }
 
-func TestSendFileToolDocumentsExtractedTextOutput(t *testing.T) {
-	tool := writeTool(ToolSendFile, "Send a local file through the bot-controlled safe egress queue. Text files are redacted and uploaded as sanitized copies. Documents with extractable readable text (PDF, DOCX, XLSX) are converted to text, redacted, and uploaded as sanitized .txt copies; original binary documents are never uploaded back.", false)
+func TestSendFileToolDocumentsLocalPathBoundary(t *testing.T) {
+	tool := writeTool(ToolSendFile, "Send a bot-local file through the bot-controlled safe egress queue. The file_path must be readable by the kiro-discord-bot process on this host/VM; do not pass paths from another MCP server, Docker container, browser profile namespace, or remote host unless they are explicitly mounted into the bot filesystem. Text files are redacted and uploaded as sanitized copies. JPEG/PNG images are validated and uploaded as copied temp files without OCR redaction or metadata stripping. Documents with extractable readable text (PDF, DOCX, XLSX) are converted to text, redacted, and uploaded as sanitized .txt copies; original binary documents are never uploaded back.", false)
 
-	if !strings.Contains(tool.Description, "sanitized .txt copies") || !strings.Contains(tool.Description, "never uploaded back") {
-		t.Fatalf("send file description should document extracted .txt output and no original binary upload: %q", tool.Description)
+	if !strings.Contains(tool.Description, "bot-local file") || !strings.Contains(tool.Description, "Docker container") || !strings.Contains(tool.Description, "JPEG/PNG") {
+		t.Fatalf("send file description should document local path boundary and image support: %q", tool.Description)
 	}
 	filePath, ok := tool.InputSchema.Properties["file_path"].(map[string]any)
 	if !ok {
 		t.Fatalf("file_path schema missing: %+v", tool.InputSchema.Properties["file_path"])
 	}
 	desc, _ := filePath["description"].(string)
-	if !strings.Contains(desc, "extractable readable text") || !strings.Contains(desc, "redacted .txt") {
-		t.Fatalf("file_path description should document redacted .txt output: %q", desc)
+	if !strings.Contains(desc, "readable by the kiro-discord-bot process") || !strings.Contains(desc, "another MCP server") || !strings.Contains(desc, "JPEG/PNG") {
+		t.Fatalf("file_path description should document bot-local path boundary and image support: %q", desc)
+	}
+}
+
+func TestSendImageBase64ToolDocumentsMCPImageMapping(t *testing.T) {
+	tool := writeTool(ToolSendImageBase64, "Send an inline base64 JPEG/PNG image through the bot-controlled safe egress queue. Use this for MCP image results such as BrowseForge screenshot content blocks: pass image data to data_base64, mimeType to mime_type, and provide a display filename. The bot validates MIME, decoded size, and image dimensions, then uploads a temporary copy without OCR redaction or metadata stripping.", false)
+
+	for _, field := range []string{"data_base64", "mime_type", "filename"} {
+		if _, ok := tool.InputSchema.Properties[field].(map[string]any); !ok {
+			t.Fatalf("%s schema missing: %+v", field, tool.InputSchema.Properties[field])
+		}
+	}
+	if !strings.Contains(tool.Description, "MCP image results") || !strings.Contains(tool.Description, "BrowseForge screenshot") {
+		t.Fatalf("send image base64 description should document MCP image mapping: %q", tool.Description)
+	}
+	dataDesc, _ := tool.InputSchema.Properties["data_base64"].(map[string]any)["description"].(string)
+	if !strings.Contains(dataDesc, "MCP image result") {
+		t.Fatalf("data_base64 description should point agents at MCP image data: %q", dataDesc)
+	}
+	mimeDesc, _ := tool.InputSchema.Properties["mime_type"].(map[string]any)["description"].(string)
+	if !strings.Contains(mimeDesc, "image/jpeg") || !strings.Contains(mimeDesc, "image/png") {
+		t.Fatalf("mime_type description should constrain formats: %q", mimeDesc)
 	}
 }
 

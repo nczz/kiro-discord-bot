@@ -18,6 +18,7 @@ import (
 	"github.com/nczz/kiro-discord-bot/internal/botegress"
 	"github.com/nczz/kiro-discord-bot/internal/channelmeta"
 	"github.com/nczz/kiro-discord-bot/internal/cronpolicy"
+	"github.com/nczz/kiro-discord-bot/internal/secrets"
 	"github.com/robfig/cron/v3"
 )
 
@@ -31,6 +32,7 @@ const (
 	ToolListChannelData = "bot_list_channel_data"
 	ToolSendMessage     = "bot_send_message"
 	ToolSendFile        = "bot_send_file"
+	ToolSendImageBase64 = "bot_send_image_base64"
 	ToolCreateCron      = "bot_create_cron"
 	ToolUpdateCron      = "bot_update_cron"
 	ToolCreateReminder  = "bot_create_reminder"
@@ -47,6 +49,7 @@ func DefaultSafeToolNames() []string {
 		ToolListChannelData,
 		ToolListCron,
 		ToolSendFile,
+		ToolSendImageBase64,
 		ToolCreateCron,
 		ToolUpdateCron,
 		ToolCreateReminder,
@@ -108,7 +111,7 @@ func NewServer() *server.MCPServer {
 		},
 	)
 	s.AddTool(
-		writeTool(ToolSendFile, "Send a local file through the bot-controlled safe egress queue. Text files are redacted and uploaded as sanitized copies. Documents with extractable readable text (PDF, DOCX, XLSX) are converted to text, redacted, and uploaded as sanitized .txt copies; original binary documents are never uploaded back.", false),
+		writeTool(ToolSendFile, "Send a bot-local file through the bot-controlled safe egress queue. The file_path must be readable by the kiro-discord-bot process on this host/VM; do not pass paths from another MCP server, Docker container, browser profile namespace, or remote host unless they are explicitly mounted into the bot filesystem. Text files are redacted and uploaded as sanitized copies. JPEG/PNG images are validated and uploaded as copied temp files without OCR redaction or metadata stripping. Documents with extractable readable text (PDF, DOCX, XLSX) are converted to text, redacted, and uploaded as sanitized .txt copies; original binary documents are never uploaded back.", false),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			if botToolsEgressDisabled() {
 				return mcp.NewToolResultError("File egress is disabled for this private audit job."), nil
@@ -129,6 +132,38 @@ func NewServer() *server.MCPServer {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			return mcp.NewToolResultText(fmt.Sprintf("File queued for safe Discord delivery (%s).", id)), nil
+		},
+	)
+	s.AddTool(
+		writeTool(ToolSendImageBase64, "Send an inline base64 JPEG/PNG image through the bot-controlled safe egress queue. Use this for MCP image results such as BrowseForge screenshot content blocks: pass image data to data_base64, mimeType to mime_type, and provide a display filename. The bot validates MIME, decoded size, and image dimensions, then uploads a temporary copy without OCR redaction or metadata stripping.", false),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			if botToolsEgressDisabled() {
+				return mcp.NewToolResultError("Image egress is disabled for this private audit job."), nil
+			}
+			channelID, _ := req.RequireString("channel_id")
+			if err := validateBoundChannel(channelID); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			dataBase64, _ := req.RequireString("data_base64")
+			mimeType, _ := req.RequireString("mime_type")
+			filename, _ := req.RequireString("filename")
+			filePath, err := botegress.WriteValidatedImageBase64(dataBase64, mimeType, filename, filepath.Join(dataDir(), "egress", "incoming"), secrets.FromEnv())
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			id, err := botegress.WritePending(dataDir(), botegress.Action{
+				Action:              botegress.ActionSendFile,
+				ChannelID:           deliveryChannelID(channelID),
+				FilePath:            filePath,
+				Content:             req.GetString("content", ""),
+				RemoveFileAfterSend: true,
+			})
+			if err != nil {
+				_ = os.Remove(filePath)
+				_ = os.Remove(filepath.Dir(filePath))
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			return mcp.NewToolResultText(fmt.Sprintf("Image queued for safe Discord delivery (%s).", id)), nil
 		},
 	)
 	s.AddTool(
@@ -372,8 +407,18 @@ func writeTool(name, description string, destructive bool) mcp.Tool {
 	case ToolSendFile:
 		for _, opt := range []mcp.ToolOption{
 			mcp.WithString("channel_id", mcp.Required(), mcp.Description("Discord channel ID from context")),
-			mcp.WithString("file_path", mcp.Required(), mcp.Description("Local file path to sanitize and upload. Text files stay text; PDF, DOCX, and XLSX with extractable readable text are extracted to redacted .txt copies.")),
+			mcp.WithString("file_path", mcp.Required(), mcp.Description("Path to a file readable by the kiro-discord-bot process on this host/VM. Do not pass paths from another MCP server, Docker container, browser profile namespace, or remote host unless explicitly mounted into the bot filesystem. Text files stay text; JPEG/PNG images are validated and uploaded as copied temp files; PDF, DOCX, and XLSX with extractable readable text are extracted to redacted .txt copies.")),
 			mcp.WithString("content", mcp.Description("Optional message content to send with the sanitized file")),
+		} {
+			opt(&t)
+		}
+	case ToolSendImageBase64:
+		for _, opt := range []mcp.ToolOption{
+			mcp.WithString("channel_id", mcp.Required(), mcp.Description("Discord channel ID from context")),
+			mcp.WithString("data_base64", mcp.Required(), mcp.Description("Base64 image bytes from an MCP image result. Data URLs are accepted, but plain base64 is preferred.")),
+			mcp.WithString("mime_type", mcp.Required(), mcp.Description("Image MIME type from the MCP result, currently image/jpeg or image/png.")),
+			mcp.WithString("filename", mcp.Required(), mcp.Description("Display filename for the Discord attachment, for example screenshot.jpg.")),
+			mcp.WithString("content", mcp.Description("Optional message content to send with the image")),
 		} {
 			opt(&t)
 		}

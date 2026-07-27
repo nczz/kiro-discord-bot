@@ -294,6 +294,47 @@ func TestSafeEgressSendFileSplitsLongContentBeforeUpload(t *testing.T) {
 	}
 }
 
+func TestSafeEgressRemovesTransientSourceAfterSend(t *testing.T) {
+	dir := t.TempDir()
+	sourceDir := filepath.Join(dir, "egress", "incoming", "source")
+	if err := os.MkdirAll(sourceDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	filePath := filepath.Join(sourceDir, "report.txt")
+	if err := os.WriteFile(filePath, []byte("report body"), 0600); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	rt := &recordingDiscordTransport{}
+	ds, err := discordgo.New("Bot test")
+	if err != nil {
+		t.Fatalf("new discord session: %v", err)
+	}
+	ds.Client = &http.Client{Transport: rt}
+	b := &Bot{discord: ds, dataDir: dir}
+	task := newSafeEgressTask(b)
+
+	if _, err := botegress.WritePending(dir, botegress.Action{
+		ID:                  "transient-file",
+		Action:              botegress.ActionSendFile,
+		ChannelID:           "channel-1",
+		FilePath:            filePath,
+		RemoveFileAfterSend: true,
+		CreatedAt:           "2026-01-01T00:00:00Z",
+	}); err != nil {
+		t.Fatalf("write pending: %v", err)
+	}
+
+	if delivered := task.DrainChannel("channel-1"); delivered != 1 {
+		t.Fatalf("DrainChannel delivered = %d, want 1", delivered)
+	}
+	if _, err := os.Stat(filePath); !os.IsNotExist(err) {
+		t.Fatalf("transient source should be removed after send, err=%v", err)
+	}
+	if _, err := os.Stat(sourceDir); !os.IsNotExist(err) {
+		t.Fatalf("empty transient source dir should be removed after send, err=%v", err)
+	}
+}
+
 func TestSafeEgressDrainChannelCountsOnlySuccessfulDeliveries(t *testing.T) {
 	dir := t.TempDir()
 	ds := newFailingDiscordSession(t)
@@ -396,6 +437,16 @@ func TestEgressReasonMessageLocalizesKnownSafeFailures(t *testing.T) {
 			name: "unsupported extractable format",
 			raw:  "unsupported extractable format",
 			want: "file format is not supported for safe text extraction",
+		},
+		{
+			name: "image too large",
+			raw:  "image exceeds upload size limit (26214400 bytes)",
+			want: "image exceeds upload size or dimension limits",
+		},
+		{
+			name: "invalid image",
+			raw:  "invalid image file: invalid JPEG format",
+			want: "image format validation failed",
 		},
 		{
 			name: "unknown fallback",

@@ -19,12 +19,13 @@ const (
 
 // Action is a pending Discord egress request written by bot-tools and ingested by the main bot.
 type Action struct {
-	ID        string `json:"id"`
-	Action    string `json:"action"`
-	ChannelID string `json:"channel_id"`
-	Content   string `json:"content,omitempty"`
-	FilePath  string `json:"file_path,omitempty"`
-	CreatedAt string `json:"created_at"`
+	ID                  string `json:"id"`
+	Action              string `json:"action"`
+	ChannelID           string `json:"channel_id"`
+	Content             string `json:"content,omitempty"`
+	FilePath            string `json:"file_path,omitempty"`
+	RemoveFileAfterSend bool   `json:"remove_file_after_send,omitempty"`
+	CreatedAt           string `json:"created_at"`
 }
 
 func PendingDir(dataDir string) string {

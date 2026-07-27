@@ -173,6 +173,8 @@
   "egress.reason.path_required": "file_path is required",
   "egress.reason.extract_failed": "failed to extract readable text from this file",
   "egress.reason.unsupported_format": "file format is not supported for safe text extraction",
+  "egress.reason.image_too_large": "image exceeds upload size or dimension limits",
+  "egress.reason.invalid_image": "image format validation failed",
   "health.restart_failed": "⚠️ Agent error, restart failed: %s",
   "health.restarted": "⚠️ Agent error, auto-restarted.",
   "cmd.start.desc": "Bind project directory and start agent",

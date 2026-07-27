@@ -2,7 +2,12 @@ package botegress
 
 import (
 	"bytes"
+	"encoding/base64"
 	"fmt"
+	"image"
+	_ "image/jpeg"
+	_ "image/png"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -12,7 +17,11 @@ import (
 	"github.com/nczz/kiro-discord-bot/internal/secrets"
 )
 
-const MaxSanitizableFileBytes int64 = 5 * 1024 * 1024
+const (
+	MaxSanitizableFileBytes int64 = 5 * 1024 * 1024
+	MaxValidatedImageBytes  int64 = 25 * 1024 * 1024
+	MaxValidatedImagePixels       = 40_000_000
+)
 
 // extractableBinaryExt lists document extensions that should be converted to
 // redacted text output instead of treated as raw text.
@@ -69,6 +78,9 @@ func PrepareSanitizedFile(path string, redactor *secrets.Redactor, tempRoot stri
 	if info.IsDir() {
 		return SanitizedFile{}, fmt.Errorf("directories cannot be sent as files")
 	}
+	if prepared, ok, err := prepareValidatedImage(abs, redactor, tempRoot); ok || err != nil {
+		return prepared, err
+	}
 	if info.Size() > MaxSanitizableFileBytes {
 		return SanitizedFile{}, fmt.Errorf("file exceeds sanitizable size limit (%d bytes)", MaxSanitizableFileBytes)
 	}
@@ -89,12 +101,9 @@ func PrepareSanitizedFile(path string, redactor *secrets.Redactor, tempRoot stri
 	if int64(len(redacted)) > MaxSanitizableFileBytes {
 		return SanitizedFile{}, fmt.Errorf("redacted file exceeds sanitizable size limit (%d bytes)", MaxSanitizableFileBytes)
 	}
-	if err := os.MkdirAll(tempRoot, 0700); err != nil {
-		return SanitizedFile{}, fmt.Errorf("create sanitized temp dir: %w", err)
-	}
 	displayName := safeDisplayName(filepath.Base(abs), redactor)
-	outPath := filepath.Join(tempRoot, displayName)
-	if err := os.WriteFile(outPath, []byte(redacted), 0600); err != nil {
+	outPath, err := writeSanitizedTempFile(tempRoot, "sanitized-file", displayName, []byte(redacted))
+	if err != nil {
 		return SanitizedFile{}, fmt.Errorf("write sanitized file: %w", err)
 	}
 	return SanitizedFile{
@@ -103,6 +112,218 @@ func PrepareSanitizedFile(path string, redactor *secrets.Redactor, tempRoot stri
 		RedactionCount: strings.Count(redacted, "[REDACTED"),
 		SensitivePath:  isSensitivePath(abs),
 	}, nil
+}
+
+func prepareValidatedImage(abs string, redactor *secrets.Redactor, tempRoot string) (SanitizedFile, bool, error) {
+	f, err := os.Open(abs)
+	if err != nil {
+		return SanitizedFile{}, false, nil
+	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil || info.IsDir() {
+		return SanitizedFile{}, false, nil
+	}
+	header := make([]byte, 512)
+	n, err := f.Read(header)
+	if err != nil && err != io.EOF {
+		return SanitizedFile{}, false, nil
+	}
+	wantFormat, ok := validatedImageContentTypes[http.DetectContentType(header[:n])]
+	if !ok {
+		return SanitizedFile{}, false, nil
+	}
+	if info.Size() > MaxValidatedImageBytes {
+		return SanitizedFile{}, true, fmt.Errorf("image exceeds upload size limit (%d bytes)", MaxValidatedImageBytes)
+	}
+	if _, err := f.Seek(0, 0); err != nil {
+		return SanitizedFile{}, true, fmt.Errorf("rewind image file: %w", err)
+	}
+	cfg, format, err := image.DecodeConfig(f)
+	if err != nil {
+		return SanitizedFile{}, true, fmt.Errorf("invalid image file: %w", err)
+	}
+	if format != wantFormat || cfg.Width <= 0 || cfg.Height <= 0 {
+		return SanitizedFile{}, true, fmt.Errorf("invalid image file")
+	}
+	if int64(cfg.Width) > MaxValidatedImagePixels/int64(cfg.Height) {
+		return SanitizedFile{}, true, fmt.Errorf("image dimensions exceed upload limit (%d pixels)", MaxValidatedImagePixels)
+	}
+	if _, err := f.Seek(0, 0); err != nil {
+		return SanitizedFile{}, true, fmt.Errorf("rewind image file: %w", err)
+	}
+	displayName := validatedImageDisplayName(filepath.Base(abs), wantFormat, redactor)
+	out, err := createSanitizedTempFile(tempRoot, "validated-image", displayName)
+	if err != nil {
+		return SanitizedFile{}, true, fmt.Errorf("write validated image: %w", err)
+	}
+	outPath := out.Name()
+	written, copyErr := io.Copy(out, io.LimitReader(f, MaxValidatedImageBytes+1))
+	closeErr := out.Close()
+	if copyErr != nil {
+		_ = os.Remove(outPath)
+		return SanitizedFile{}, true, fmt.Errorf("write validated image: %w", copyErr)
+	}
+	if written > MaxValidatedImageBytes {
+		_ = os.Remove(outPath)
+		return SanitizedFile{}, true, fmt.Errorf("image exceeds upload size limit (%d bytes)", MaxValidatedImageBytes)
+	}
+	if closeErr != nil {
+		_ = os.Remove(outPath)
+		return SanitizedFile{}, true, fmt.Errorf("write validated image: %w", closeErr)
+	}
+	return SanitizedFile{
+		Path:          outPath,
+		DisplayName:   displayName,
+		SensitivePath: isSensitivePath(abs),
+	}, true, nil
+}
+
+var validatedImageContentTypes = map[string]string{
+	"image/jpeg": "jpeg",
+	"image/png":  "png",
+}
+
+// WriteValidatedImageBase64 decodes a JPEG/PNG MCP image payload into a
+// bot-controlled temporary source file. The safe egress task validates the file
+// again before Discord upload; this early validation gives immediate tool
+// feedback and avoids queueing oversized or malformed payloads.
+func WriteValidatedImageBase64(dataBase64, mimeType, filename, tempRoot string, redactor *secrets.Redactor) (string, error) {
+	if redactor == nil {
+		redactor = &secrets.Redactor{}
+	}
+	raw, detectedMime, err := normalizeImageBase64(dataBase64)
+	if err != nil {
+		return "", err
+	}
+	mimeType = strings.TrimSpace(strings.ToLower(mimeType))
+	if mimeType == "" {
+		mimeType = detectedMime
+	}
+	if mimeType == "" {
+		return "", fmt.Errorf("mime_type is required")
+	}
+	compact := strings.Join(strings.Fields(raw), "")
+	if compact == "" {
+		return "", fmt.Errorf("data_base64 is required")
+	}
+	if int64(base64.StdEncoding.DecodedLen(len(compact))) > MaxValidatedImageBytes {
+		return "", fmt.Errorf("image exceeds upload size limit (%d bytes)", MaxValidatedImageBytes)
+	}
+	data, err := base64.StdEncoding.DecodeString(compact)
+	if err != nil {
+		return "", fmt.Errorf("decode base64 image: %w", err)
+	}
+	format, err := validateImageBytes(data, mimeType)
+	if err != nil {
+		return "", err
+	}
+	displayName := validatedImageDisplayName(filename, format, redactor)
+	dir := filepath.Join(tempRoot, randomID())
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return "", fmt.Errorf("create image staging dir: %w", err)
+	}
+	path := filepath.Join(dir, displayName)
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		_ = os.RemoveAll(dir)
+		return "", fmt.Errorf("write staged image: %w", err)
+	}
+	return path, nil
+}
+
+func normalizeImageBase64(dataBase64 string) (data, mimeType string, err error) {
+	raw := strings.TrimSpace(dataBase64)
+	if raw == "" {
+		return "", "", fmt.Errorf("data_base64 is required")
+	}
+	if !strings.HasPrefix(strings.ToLower(raw), "data:") {
+		return raw, "", nil
+	}
+	metadata, payload, ok := strings.Cut(raw, ",")
+	if !ok {
+		return "", "", fmt.Errorf("invalid data URL image payload")
+	}
+	metadata = metadata[len("data:"):]
+	parts := strings.Split(metadata, ";")
+	if len(parts) == 0 || strings.TrimSpace(parts[0]) == "" {
+		return "", "", fmt.Errorf("data URL image mime type is required")
+	}
+	if !strings.EqualFold(parts[len(parts)-1], "base64") {
+		return "", "", fmt.Errorf("data URL image payload must be base64")
+	}
+	return payload, strings.ToLower(strings.TrimSpace(parts[0])), nil
+}
+
+func validateImageBytes(data []byte, claimedMime string) (string, error) {
+	if len(data) == 0 {
+		return "", fmt.Errorf("data_base64 is required")
+	}
+	if int64(len(data)) > MaxValidatedImageBytes {
+		return "", fmt.Errorf("image exceeds upload size limit (%d bytes)", MaxValidatedImageBytes)
+	}
+	sample := data
+	if len(sample) > 512 {
+		sample = sample[:512]
+	}
+	actualMime := strings.ToLower(http.DetectContentType(sample))
+	actualFormat, ok := validatedImageContentTypes[actualMime]
+	if !ok {
+		return "", fmt.Errorf("invalid image file: unsupported mime type %s", actualMime)
+	}
+	claimedFormat, ok := validatedImageContentTypes[normalizeImageMimeType(claimedMime)]
+	if !ok {
+		return "", fmt.Errorf("invalid image file: unsupported mime_type %s", claimedMime)
+	}
+	if claimedFormat != actualFormat {
+		return "", fmt.Errorf("invalid image file: mime_type %s does not match detected %s", claimedMime, actualMime)
+	}
+	cfg, format, err := image.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return "", fmt.Errorf("invalid image file: %w", err)
+	}
+	if format != actualFormat || cfg.Width <= 0 || cfg.Height <= 0 {
+		return "", fmt.Errorf("invalid image file")
+	}
+	if int64(cfg.Width) > MaxValidatedImagePixels/int64(cfg.Height) {
+		return "", fmt.Errorf("image dimensions exceed upload limit (%d pixels)", MaxValidatedImagePixels)
+	}
+	return actualFormat, nil
+}
+
+func normalizeImageMimeType(mimeType string) string {
+	mimeType = strings.ToLower(strings.TrimSpace(strings.Split(mimeType, ";")[0]))
+	if mimeType == "image/jpg" {
+		return "image/jpeg"
+	}
+	return mimeType
+}
+
+func writeSanitizedTempFile(tempRoot, prefix, displayName string, data []byte) (string, error) {
+	out, err := createSanitizedTempFile(tempRoot, prefix, displayName)
+	if err != nil {
+		return "", err
+	}
+	outPath := out.Name()
+	_, writeErr := out.Write(data)
+	closeErr := out.Close()
+	if writeErr != nil {
+		_ = os.Remove(outPath)
+		return "", writeErr
+	}
+	if closeErr != nil {
+		_ = os.Remove(outPath)
+		return "", closeErr
+	}
+	return outPath, nil
+}
+
+func createSanitizedTempFile(tempRoot, prefix, displayName string) (*os.File, error) {
+	if err := os.MkdirAll(tempRoot, 0700); err != nil {
+		return nil, fmt.Errorf("create sanitized temp dir: %w", err)
+	}
+	ext := filepath.Ext(displayName)
+	return os.CreateTemp(tempRoot, prefix+"-*"+ext)
 }
 
 // prepareExtractedFile extracts readable text from a supported document format
@@ -119,12 +340,9 @@ func prepareExtractedFile(abs string, redactor *secrets.Redactor, tempRoot strin
 	if int64(len(redacted)) > MaxSanitizableFileBytes {
 		return SanitizedFile{}, fmt.Errorf("redacted extracted file exceeds sanitizable size limit (%d bytes)", MaxSanitizableFileBytes)
 	}
-	if err := os.MkdirAll(tempRoot, 0700); err != nil {
-		return SanitizedFile{}, fmt.Errorf("create sanitized temp dir: %w", err)
-	}
 	displayName := extractedDisplayName(filepath.Base(abs), redactor)
-	outPath := filepath.Join(tempRoot, displayName)
-	if err := os.WriteFile(outPath, []byte(redacted), 0600); err != nil {
+	outPath, err := writeSanitizedTempFile(tempRoot, "extracted-file", displayName, []byte(redacted))
+	if err != nil {
 		return SanitizedFile{}, fmt.Errorf("write extracted sanitized file: %w", err)
 	}
 
@@ -147,6 +365,23 @@ func extractedDisplayName(name string, redactor *secrets.Redactor) string {
 		base = "document"
 	}
 	return base + ".redacted.txt"
+}
+
+func validatedImageDisplayName(name, format string, redactor *secrets.Redactor) string {
+	safe := safeDisplayName(name, redactor)
+	ext := ".png"
+	if format == "jpeg" {
+		ext = ".jpg"
+	}
+	currentExt := strings.ToLower(filepath.Ext(safe))
+	if (format == "jpeg" && (currentExt == ".jpg" || currentExt == ".jpeg")) || (format == "png" && currentExt == ".png") {
+		return safe
+	}
+	base := strings.TrimSuffix(safe, filepath.Ext(safe))
+	if strings.TrimSpace(base) == "" || safe == "redacted-file.txt" {
+		base = "validated-image"
+	}
+	return base + ext
 }
 
 func isTextFile(path string, raw []byte) bool {

@@ -68,6 +68,7 @@ func (t *safeEgressTask) DrainChannel(channelID string) int {
 }
 
 func (t *safeEgressTask) processAndRemove(action botegress.Action) bool {
+	defer t.removeTransientFile(action)
 	delivered := true
 	if err := t.process(action); err != nil {
 		delivered = false
@@ -78,6 +79,34 @@ func (t *safeEgressTask) processAndRemove(action botegress.Action) bool {
 		log.Printf("[safe-egress] remove action %s: %v", action.ID, err)
 	}
 	return delivered
+}
+
+func (t *safeEgressTask) removeTransientFile(action botegress.Action) {
+	if !action.RemoveFileAfterSend || strings.TrimSpace(action.FilePath) == "" || t == nil || t.bot == nil {
+		return
+	}
+	root := filepath.Join(t.bot.dataDir, "egress", "incoming")
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		log.Printf("[safe-egress] resolve transient root: %v", err)
+		return
+	}
+	absPath, err := filepath.Abs(action.FilePath)
+	if err != nil {
+		log.Printf("[safe-egress] resolve transient file %s: %v", action.FilePath, err)
+		return
+	}
+	rel, err := filepath.Rel(absRoot, absPath)
+	if err != nil || rel == "." || strings.HasPrefix(rel, "..") || filepath.IsAbs(rel) {
+		log.Printf("[safe-egress] refusing transient cleanup outside incoming dir: %s", action.FilePath)
+		return
+	}
+	if err := os.Remove(absPath); err != nil && !os.IsNotExist(err) {
+		log.Printf("[safe-egress] remove transient file %s: %v", action.FilePath, err)
+	}
+	if dir := filepath.Dir(absPath); dir != absRoot {
+		_ = os.Remove(dir)
+	}
 }
 
 func (t *safeEgressTask) process(action botegress.Action) error {
@@ -166,6 +195,9 @@ var egressReasonKeys = []struct {
 }{
 	{"file type is not safely redactable as text", "egress.reason.not_text"},
 	{"exceeds sanitizable size limit", "egress.reason.too_large"},
+	{"image exceeds upload size limit", "egress.reason.image_too_large"},
+	{"image dimensions exceed upload limit", "egress.reason.image_too_large"},
+	{"invalid image file", "egress.reason.invalid_image"},
 	{"directories cannot be sent as files", "egress.reason.is_directory"},
 	{"file_path is required", "egress.reason.path_required"},
 	{"extract readable text", "egress.reason.extract_failed"},

@@ -669,14 +669,20 @@ func normalizeLegacyDefaultBotToolsPolicy(p MCPChannelPolicy) MCPChannelPolicy {
 			"bot_send_message",
 		},
 	}
-	// The immediately previous safe default included one-time reminders. Treat
-	// those policies as managed defaults too, so newly added safe tools become
-	// available without changing custom allowlists.
+	// Previous safe defaults gained one-time reminders and update_cron over
+	// time. Treat those policies as managed defaults too, so newly added safe
+	// tools become available without changing custom allowlists.
 	baseCount := len(legacyDefaults)
-	for i := 0; i < baseCount; i++ {
-		withReminder := append([]string(nil), legacyDefaults[i]...)
-		withReminder = append(withReminder, "bot_create_reminder")
-		legacyDefaults = append(legacyDefaults, withReminder)
+	for i := range baseCount {
+		for _, extras := range [][]string{
+			{"bot_create_reminder"},
+			{"bot_update_cron"},
+			{"bot_create_reminder", "bot_update_cron"},
+		} {
+			legacy := append([]string(nil), legacyDefaults[i]...)
+			legacy = append(legacy, extras...)
+			legacyDefaults = append(legacyDefaults, legacy)
+		}
 	}
 	for _, legacy := range legacyDefaults {
 		if sameStringSet(tools, legacy) {

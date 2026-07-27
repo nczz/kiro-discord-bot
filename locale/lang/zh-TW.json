@@ -167,6 +167,8 @@
   "egress.reason.path_required": "未指定檔案路徑",
   "egress.reason.extract_failed": "無法從此檔案安全提取可讀文字",
   "egress.reason.unsupported_format": "檔案格式不支援安全文字提取",
+  "egress.reason.image_too_large": "圖片超過可上傳的大小或尺寸上限",
+  "egress.reason.invalid_image": "圖片格式驗證失敗",
   "health.restart_failed": "⚠️ Agent 異常且重啟失敗：%s",
   "health.restarted": "⚠️ Agent 異常，已自動重啟。",
   "cmd.start.desc": "綁定專案目錄並啟動 agent",

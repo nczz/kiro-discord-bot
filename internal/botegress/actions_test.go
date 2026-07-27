@@ -4,6 +4,10 @@ import (
 	"archive/zip"
 	"bytes"
 	"compress/zlib"
+	"encoding/base64"
+	"image"
+	"image/color"
+	"image/jpeg"
 	"os"
 	"path/filepath"
 	"strings"
@@ -88,6 +92,136 @@ func TestPrepareSanitizedFileRejectsBinary(t *testing.T) {
 	}
 	if _, err := PrepareSanitizedFile(source, &secrets.Redactor{}, filepath.Join(dir, "sanitized")); err == nil {
 		t.Fatal("PrepareSanitizedFile accepted binary file")
+	}
+}
+
+func TestPrepareSanitizedFileAllowsValidatedJPEGCopy(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(dir, "secret-name.txt")
+	pixel := image.NewRGBA(image.Rect(0, 0, 1, 1))
+	pixel.Set(0, 0, color.RGBA{R: 0x30, G: 0x80, B: 0xd0, A: 0xff})
+	var img bytes.Buffer
+	if err := jpeg.Encode(&img, pixel, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(source, img.Bytes(), 0644); err != nil {
+		t.Fatal(err)
+	}
+	redactor := &secrets.Redactor{}
+	redactor.Add("SECRET_NAME", "secret-name")
+
+	prepared, err := PrepareSanitizedFile(source, redactor, filepath.Join(dir, "sanitized"))
+	if err != nil {
+		t.Fatalf("PrepareSanitizedFile JPEG: %v", err)
+	}
+	if prepared.Path == source {
+		t.Fatalf("validated image should be copied before upload, got original path %q", prepared.Path)
+	}
+	if prepared.DisplayName != "validated-image.jpg" {
+		t.Fatalf("DisplayName = %q, want validated-image.jpg", prepared.DisplayName)
+	}
+	copied, err := os.ReadFile(prepared.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(copied, img.Bytes()) {
+		t.Fatal("validated image copy changed original bytes")
+	}
+	if _, err := os.Stat(source); err != nil {
+		t.Fatalf("source image should remain in place: %v", err)
+	}
+}
+
+func TestPrepareSanitizedFileCopiesImageWhenSourceIsTempRoot(t *testing.T) {
+	dir := t.TempDir()
+	tempRoot := filepath.Join(dir, "sanitized")
+	if err := os.MkdirAll(tempRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(tempRoot, "same.jpg")
+	pixel := image.NewRGBA(image.Rect(0, 0, 1, 1))
+	pixel.Set(0, 0, color.RGBA{R: 0xaa, G: 0x20, B: 0x40, A: 0xff})
+	var img bytes.Buffer
+	if err := jpeg.Encode(&img, pixel, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(source, img.Bytes(), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	prepared, err := PrepareSanitizedFile(source, &secrets.Redactor{}, tempRoot)
+	if err != nil {
+		t.Fatalf("PrepareSanitizedFile temp-root JPEG: %v", err)
+	}
+	if prepared.Path == source {
+		t.Fatalf("validated image temp copy reused source path %q", source)
+	}
+	sourceAfter, err := os.ReadFile(source)
+	if err != nil {
+		t.Fatalf("source image should remain readable: %v", err)
+	}
+	if !bytes.Equal(sourceAfter, img.Bytes()) {
+		t.Fatal("source image changed while preparing validated copy")
+	}
+}
+
+func TestPrepareSanitizedFileRejectsInvalidImageBytes(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(dir, "broken.jpg")
+	if err := os.WriteFile(source, []byte{0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 'J', 'F', 'I', 'F'}, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := PrepareSanitizedFile(source, &secrets.Redactor{}, filepath.Join(dir, "sanitized"))
+	if err == nil || !strings.Contains(err.Error(), "invalid image file") {
+		t.Fatalf("PrepareSanitizedFile should reject invalid image bytes, got %v", err)
+	}
+}
+
+func TestWriteValidatedImageBase64StagesReadableJPEG(t *testing.T) {
+	dir := t.TempDir()
+	pixel := image.NewRGBA(image.Rect(0, 0, 1, 1))
+	pixel.Set(0, 0, color.RGBA{R: 0x10, G: 0x20, B: 0x30, A: 0xff})
+	var img bytes.Buffer
+	if err := jpeg.Encode(&img, pixel, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	path, err := WriteValidatedImageBase64(base64.StdEncoding.EncodeToString(img.Bytes()), "image/jpeg", "screenshot.txt", filepath.Join(dir, "incoming"), &secrets.Redactor{})
+	if err != nil {
+		t.Fatalf("WriteValidatedImageBase64: %v", err)
+	}
+	if filepath.Base(path) != "screenshot.jpg" {
+		t.Fatalf("staged basename = %q, want screenshot.jpg", filepath.Base(path))
+	}
+	staged, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(staged, img.Bytes()) {
+		t.Fatal("staged base64 image bytes changed")
+	}
+	prepared, err := PrepareSanitizedFile(path, &secrets.Redactor{}, filepath.Join(dir, "sanitized"))
+	if err != nil {
+		t.Fatalf("PrepareSanitizedFile staged image: %v", err)
+	}
+	if prepared.DisplayName != "screenshot.jpg" {
+		t.Fatalf("prepared DisplayName = %q, want screenshot.jpg", prepared.DisplayName)
+	}
+}
+
+func TestWriteValidatedImageBase64RejectsMimeMismatch(t *testing.T) {
+	dir := t.TempDir()
+	pixel := image.NewRGBA(image.Rect(0, 0, 1, 1))
+	pixel.Set(0, 0, color.RGBA{R: 0x90, G: 0x10, B: 0x10, A: 0xff})
+	var img bytes.Buffer
+	if err := jpeg.Encode(&img, pixel, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := WriteValidatedImageBase64(base64.StdEncoding.EncodeToString(img.Bytes()), "image/png", "bad.png", filepath.Join(dir, "incoming"), &secrets.Redactor{})
+	if err == nil || !strings.Contains(err.Error(), "does not match detected") {
+		t.Fatalf("expected mime mismatch, got %v", err)
 	}
 }
 
