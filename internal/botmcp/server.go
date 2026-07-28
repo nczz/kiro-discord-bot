@@ -115,7 +115,7 @@ func NewServer() *server.MCPServer {
 		},
 	)
 	s.AddTool(
-		writeTool(ToolSendFile, "Send a bot-local file through the bot-controlled safe egress queue. The file_path must be readable by the kiro-discord-bot process on this host/VM; do not pass paths from another MCP server, Docker container, browser profile namespace, or remote host unless they are explicitly mounted into the bot filesystem. Text files are redacted and uploaded as sanitized copies. JPEG/PNG images are validated and uploaded as copied temp files without OCR redaction or metadata stripping. Documents with extractable readable text (PDF, DOCX, XLSX) are converted to text, redacted, and uploaded as sanitized .txt copies; original binary documents are never uploaded back.", false),
+		writeTool(ToolSendFile, "Send a bot-local file through the bot-controlled safe egress queue. The file_path must be readable by the kiro-discord-bot process on this host/VM; do not pass paths from another MCP server, Docker container, browser profile namespace, or remote host unless they are explicitly mounted into the bot filesystem. Do not use this for BrowseForge screenshot saved_path/artifact_path values; pass the screenshot_url to bot_send_image_url instead. Text files are redacted and uploaded as sanitized copies. JPEG/PNG images are validated and uploaded as copied temp files without OCR redaction or metadata stripping. Documents with extractable readable text (PDF, DOCX, XLSX) are converted to text, redacted, and uploaded as sanitized .txt copies; original binary documents are never uploaded back.", false),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			if botToolsEgressDisabled() {
 				return mcp.NewToolResultError("File egress is disabled for this private audit job."), nil
@@ -125,6 +125,9 @@ func NewServer() *server.MCPServer {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			filePath, _ := req.RequireString("file_path")
+			if err := validateBotSendFilePath(filePath); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
 			content, _ := req.RequireString("content")
 			id, err := botegress.WritePending(dataDir(), botegress.Action{
 				Action:    botegress.ActionSendFile,
@@ -453,7 +456,7 @@ func writeTool(name, description string, destructive bool) mcp.Tool {
 	case ToolSendFile:
 		for _, opt := range []mcp.ToolOption{
 			mcp.WithString("channel_id", mcp.Required(), mcp.Description("Discord channel ID from context")),
-			mcp.WithString("file_path", mcp.Required(), mcp.Description("Path to a file readable by the kiro-discord-bot process on this host/VM. Do not pass paths from another MCP server, Docker container, browser profile namespace, or remote host unless explicitly mounted into the bot filesystem. Text files stay text; JPEG/PNG images are validated and uploaded as copied temp files; PDF, DOCX, and XLSX with extractable readable text are extracted to redacted .txt copies.")),
+			mcp.WithString("file_path", mcp.Required(), mcp.Description("Path to a file readable by the kiro-discord-bot process on this host/VM. Do not pass paths from another MCP server, Docker container, browser profile namespace, or remote host unless explicitly mounted into the bot filesystem. Do not use BrowseForge screenshot saved_path/artifact_path values here; pass screenshot_url to bot_send_image_url instead. Text files stay text; JPEG/PNG images are validated and uploaded as copied temp files; PDF, DOCX, and XLSX with extractable readable text are extracted to redacted .txt copies.")),
 			mcp.WithString("content", mcp.Description("Optional message content to send with the sanitized file")),
 		} {
 			opt(&t)
@@ -730,6 +733,29 @@ func currentTargetStateChannelID() string {
 func botToolsEgressDisabled() bool {
 	state, ok := currentTargetState()
 	return ok && state.DisableEgress
+}
+
+func validateBotSendFilePath(filePath string) error {
+	filePath = strings.TrimSpace(filePath)
+	if filePath == "" {
+		return fmt.Errorf("file_path is required")
+	}
+	info, err := os.Stat(filePath)
+	if err != nil {
+		return fmt.Errorf("file_path is not readable by the bot process: %w%s", err, browseForgeScreenshotPathHint(filePath))
+	}
+	if info.IsDir() {
+		return fmt.Errorf("file_path must be a file, not a directory%s", browseForgeScreenshotPathHint(filePath))
+	}
+	return nil
+}
+
+func browseForgeScreenshotPathHint(filePath string) string {
+	clean := filepath.ToSlash(strings.TrimSpace(filePath))
+	if strings.Contains(clean, "/profiles/") && strings.Contains(clean, "/artifacts/") {
+		return "; BrowseForge screenshot artifact paths are not bot-local files. Use bot_send_image_url with the screenshot_url returned by the BrowseForge screenshot tool instead of saved_path or artifact_path."
+	}
+	return ""
 }
 
 func fetchValidatedImageURL(ctx context.Context, rawURL, filename string) (string, error) {

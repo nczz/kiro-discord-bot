@@ -248,6 +248,19 @@ func TestSendFileToolDocumentsLocalPathBoundary(t *testing.T) {
 	}
 }
 
+func TestValidateBotSendFilePathRejectsBrowseForgeArtifactPath(t *testing.T) {
+	err := validateBotSendFilePath("/data/profiles/prof_123/artifacts/screenshot.jpg")
+	if err == nil {
+		t.Fatal("validateBotSendFilePath accepted missing BrowseForge artifact path")
+	}
+	got := err.Error()
+	for _, want := range []string{"not readable", "bot_send_image_url", "screenshot_url", "saved_path", "artifact_path"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("error missing %q: %s", want, got)
+		}
+	}
+}
+
 func TestSendImageURLToolDocumentsURLBoundary(t *testing.T) {
 	tool := writeTool(ToolSendImageURL, "Send a JPEG/PNG image from a non-secret HTTP(S) URL through the bot-controlled safe egress queue. Use this whenever another tool returns an image URL; do not download, transcribe, or base64-encode the image in the agent. The bot fetches the URL server-side, rejects URL credentials, validates the fetched bytes, and does not require the URL path to include an image filename.", false)
 
