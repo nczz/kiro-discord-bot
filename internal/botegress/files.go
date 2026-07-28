@@ -2,7 +2,6 @@ package botegress
 
 import (
 	"bytes"
-	"encoding/base64"
 	"fmt"
 	"image"
 	_ "image/jpeg"
@@ -185,35 +184,20 @@ var validatedImageContentTypes = map[string]string{
 	"image/png":  "png",
 }
 
-// WriteValidatedImageBase64 decodes a JPEG/PNG MCP image payload into a
-// bot-controlled temporary source file. The safe egress task validates the file
-// again before Discord upload; this early validation gives immediate tool
-// feedback and avoids queueing oversized or malformed payloads.
-func WriteValidatedImageBase64(dataBase64, mimeType, filename, tempRoot string, redactor *secrets.Redactor) (string, error) {
+// WriteValidatedImageBytes stages JPEG/PNG image bytes into a bot-controlled
+// temporary source file. The safe egress task validates the file again before
+// Discord upload; this early validation gives immediate tool feedback and avoids
+// queueing oversized or malformed payloads.
+func WriteValidatedImageBytes(data []byte, mimeType, filename, tempRoot string, redactor *secrets.Redactor) (string, error) {
 	if redactor == nil {
 		redactor = &secrets.Redactor{}
 	}
-	raw, detectedMime, err := normalizeImageBase64(dataBase64)
-	if err != nil {
-		return "", err
+	if len(data) == 0 {
+		return "", fmt.Errorf("image data is required")
 	}
 	mimeType = strings.TrimSpace(strings.ToLower(mimeType))
 	if mimeType == "" {
-		mimeType = detectedMime
-	}
-	if mimeType == "" {
-		return "", fmt.Errorf("mime_type is required")
-	}
-	compact := strings.Join(strings.Fields(raw), "")
-	if compact == "" {
-		return "", fmt.Errorf("data_base64 is required")
-	}
-	if int64(base64.StdEncoding.DecodedLen(len(compact))) > MaxValidatedImageBytes {
-		return "", fmt.Errorf("image exceeds upload size limit (%d bytes)", MaxValidatedImageBytes)
-	}
-	data, err := base64.StdEncoding.DecodeString(compact)
-	if err != nil {
-		return "", fmt.Errorf("decode base64 image: %w", err)
+		mimeType = detectedImageMimeType(data)
 	}
 	format, err := validateImageBytes(data, mimeType)
 	if err != nil {
@@ -232,32 +216,16 @@ func WriteValidatedImageBase64(dataBase64, mimeType, filename, tempRoot string, 
 	return path, nil
 }
 
-func normalizeImageBase64(dataBase64 string) (data, mimeType string, err error) {
-	raw := strings.TrimSpace(dataBase64)
-	if raw == "" {
-		return "", "", fmt.Errorf("data_base64 is required")
+func detectedImageMimeType(data []byte) string {
+	sample := data
+	if len(sample) > 512 {
+		sample = sample[:512]
 	}
-	if !strings.HasPrefix(strings.ToLower(raw), "data:") {
-		return raw, "", nil
-	}
-	metadata, payload, ok := strings.Cut(raw, ",")
-	if !ok {
-		return "", "", fmt.Errorf("invalid data URL image payload")
-	}
-	metadata = metadata[len("data:"):]
-	parts := strings.Split(metadata, ";")
-	if len(parts) == 0 || strings.TrimSpace(parts[0]) == "" {
-		return "", "", fmt.Errorf("data URL image mime type is required")
-	}
-	if !strings.EqualFold(parts[len(parts)-1], "base64") {
-		return "", "", fmt.Errorf("data URL image payload must be base64")
-	}
-	return payload, strings.ToLower(strings.TrimSpace(parts[0])), nil
+	return strings.ToLower(http.DetectContentType(sample))
 }
-
 func validateImageBytes(data []byte, claimedMime string) (string, error) {
 	if len(data) == 0 {
-		return "", fmt.Errorf("data_base64 is required")
+		return "", fmt.Errorf("image data is required")
 	}
 	if int64(len(data)) > MaxValidatedImageBytes {
 		return "", fmt.Errorf("image exceeds upload size limit (%d bytes)", MaxValidatedImageBytes)

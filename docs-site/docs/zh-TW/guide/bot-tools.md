@@ -14,7 +14,7 @@
 | `bot_list_channel_data` | Read | 列出已知 channel data folders 與 metadata 是否存在，不包含訊息內容。 |
 | `bot_list_cron` | Read | 列出目前頻道的排程任務。 |
 | `bot_send_file` | Write, non-destructive | 將 sanitized file upload 排入 Discord delivery queue。 |
-| `bot_send_image_base64` | Write, non-destructive | 將 MCP image result 內的 JPEG/PNG 圖片排入 Discord delivery queue。 |
+| `bot_send_image_url` | Write, non-destructive | 從允許的 non-secret URL 抓取 JPEG/PNG 圖片並排入 Discord delivery queue。 |
 | `bot_create_cron` | Write, non-destructive | 排入建立 scheduled task 的請求。 |
 | `bot_create_reminder` | Write, non-destructive | 排入一次性提醒，交由 bot scheduler 到期發送。 |
 | `bot_query_channel_history` | Read | 搜尋或分頁讀取目前 channel/thread context 的已儲存歷史。 |
@@ -44,7 +44,8 @@ Recurring cron 管理在 runtime 中是 channel scope；thread ID 會依需要�
 File egress 採保守設計：
 
 - Plain text 會先 redaction 再上傳。
-- JPEG 與 PNG 圖片會先驗證，再用 copied temporary file 上傳；若圖片是其他 MCP tool 回傳的 base64 image result，應使用 `bot_send_image_base64`。
+- JPEG 與 PNG 圖片會先驗證，再用 copied temporary file 上傳；其他工具回傳的 image URL 應直接交給 `bot_send_image_url`，不要讓 agent 複製 base64。
+- `bot_send_image_url` 會由 bot server-side 抓取 non-secret HTTP(S) 圖片 URL，不做 host 或 path allowlist。URL path 不需要包含圖片檔名；Discord 顯示名稱由 `filename` 參數決定。bot 仍會拒絕 URL credentials，並在 queue delivery 前驗證抓回來的 bytes。
 - PDF、DOCX、XLSX 會轉成 sanitized text 再上傳。
 - `bot_send_file` 不會把原始 binary 文件傳回 Discord。
 - Private audit job 會完全停用 message 與 file egress。

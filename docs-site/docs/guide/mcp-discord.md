@@ -64,7 +64,7 @@ Empty allowlists preserve legacy unrestricted behavior. Production deployments s
 
 ## Enable Per Channel
 
-Registration adds the server to the catalog. The bot's default bot-tools setup automatically enables only `discord_resolve_mentions` for `mcp-discord` when this catalog entry is present, matching the default-on `bot_send_image_base64` behavior while keeping broader Discord REST tools closed.
+Registration adds the server to the catalog. The bot's default bot-tools setup automatically enables only `discord_resolve_mentions` for `mcp-discord` when this catalog entry is present, matching the default-on bot-native image URL egress behavior while keeping broader Discord REST tools closed.
 
 For additional tools in Discord:
 

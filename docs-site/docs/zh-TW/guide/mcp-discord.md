@@ -64,7 +64,7 @@ MCP_DISCORD_MEMBER_SCAN_LIMIT=5000
 
 ## 依頻道啟用
 
-註冊會把 server 加進 catalog。當這個 catalog entry 存在時，bot 的 default bot-tools setup 會自動只替 `mcp-discord` 開啟 `discord_resolve_mentions`，行為對齊預設開啟的 `bot_send_image_base64`，但其他 Discord REST tools 仍維持關閉。
+註冊會把 server 加進 catalog。當這個 catalog entry 存在時，bot 的 default bot-tools setup 會自動只替 `mcp-discord` 開啟 `discord_resolve_mentions`，行為對齊預設開啟的 bot-native image URL egress，但其他 Discord REST tools 仍維持關閉。
 
 若要額外啟用其他 tools，請在 Discord 中：
 

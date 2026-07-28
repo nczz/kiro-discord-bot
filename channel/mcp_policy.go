@@ -669,15 +669,16 @@ func normalizeLegacyDefaultBotToolsPolicy(p MCPChannelPolicy) MCPChannelPolicy {
 			"bot_send_message",
 		},
 	}
-	// Previous safe defaults gained one-time reminders, update_cron, and base64
-	// image egress over time. Treat only actual historical default sets as
-	// managed defaults, so custom partial allowlists are not broadened into
-	// channel-history content access.
+	// Previous safe defaults gained one-time reminders, update_cron, and the
+	// short-lived base64 image egress tool over time. Treat only actual
+	// historical default sets as managed defaults, so custom partial allowlists
+	// are not broadened into channel-history content access.
 	for i := range len(legacyDefaults) {
 		for _, extras := range [][]string{
 			{"bot_create_reminder"},
 			{"bot_create_reminder", "bot_update_cron"},
 			{"bot_create_reminder", "bot_update_cron", "bot_send_image_base64"},
+			{"bot_create_reminder", "bot_update_cron", "bot_send_image_base64", "bot_query_channel_history"},
 		} {
 			legacy := append([]string(nil), legacyDefaults[i]...)
 			legacy = append(legacy, extras...)

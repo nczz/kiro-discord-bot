@@ -4,13 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
-	"os"
-	"path/filepath"
-	"sort"
-	"strings"
-	"time"
-
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/nczz/kiro-discord-bot/audit"
@@ -20,6 +13,15 @@ import (
 	"github.com/nczz/kiro-discord-bot/internal/cronpolicy"
 	"github.com/nczz/kiro-discord-bot/internal/secrets"
 	"github.com/robfig/cron/v3"
+	"io"
+	"log"
+	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"time"
 )
 
 // Run starts the built-in bot tools MCP server over stdio.
@@ -32,7 +34,7 @@ const (
 	ToolListChannelData     = "bot_list_channel_data"
 	ToolSendMessage         = "bot_send_message"
 	ToolSendFile            = "bot_send_file"
-	ToolSendImageBase64     = "bot_send_image_base64"
+	ToolSendImageURL        = "bot_send_image_url"
 	ToolQueryChannelHistory = "bot_query_channel_history"
 	ToolCreateCron          = "bot_create_cron"
 	ToolUpdateCron          = "bot_update_cron"
@@ -50,7 +52,7 @@ func DefaultSafeToolNames() []string {
 		ToolListChannelData,
 		ToolListCron,
 		ToolSendFile,
-		ToolSendImageBase64,
+		ToolSendImageURL,
 		ToolQueryChannelHistory,
 		ToolCreateCron,
 		ToolUpdateCron,
@@ -137,19 +139,18 @@ func NewServer() *server.MCPServer {
 		},
 	)
 	s.AddTool(
-		writeTool(ToolSendImageBase64, "Send an inline base64 JPEG/PNG image through the bot-controlled safe egress queue. Use this for MCP image results such as BrowseForge screenshot content blocks: pass image data to data_base64, mimeType to mime_type, and provide a display filename. The bot validates MIME, decoded size, and image dimensions, then uploads a temporary copy without OCR redaction or metadata stripping.", false),
+		writeTool(ToolSendImageURL, "Send a JPEG/PNG image from a non-secret HTTP(S) URL through the bot-controlled safe egress queue. Use this whenever another tool returns an image URL; do not download, transcribe, or base64-encode the image in the agent. The bot fetches the URL server-side, rejects URL credentials, validates the fetched bytes, and does not require the URL path to include an image filename.", false),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			if botToolsEgressDisabled() {
-				return mcp.NewToolResultError("Image egress is disabled for this private audit job."), nil
+				return mcp.NewToolResultError("Image URL egress is disabled for this private audit job."), nil
 			}
 			channelID, _ := req.RequireString("channel_id")
 			if err := validateBoundChannel(channelID); err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
-			dataBase64, _ := req.RequireString("data_base64")
-			mimeType, _ := req.RequireString("mime_type")
+			imageURL, _ := req.RequireString("url")
 			filename, _ := req.RequireString("filename")
-			filePath, err := botegress.WriteValidatedImageBase64(dataBase64, mimeType, filename, filepath.Join(dataDir(), "egress", "incoming"), secrets.FromEnv())
+			filePath, err := fetchValidatedImageURL(ctx, imageURL, filename)
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
@@ -457,13 +458,13 @@ func writeTool(name, description string, destructive bool) mcp.Tool {
 		} {
 			opt(&t)
 		}
-	case ToolSendImageBase64:
+	case ToolSendImageURL:
 		for _, opt := range []mcp.ToolOption{
 			mcp.WithString("channel_id", mcp.Required(), mcp.Description("Discord channel ID from context")),
-			mcp.WithString("data_base64", mcp.Required(), mcp.Description("Base64 image bytes from an MCP image result. Data URLs are accepted, but plain base64 is preferred.")),
-			mcp.WithString("mime_type", mcp.Required(), mcp.Description("Image MIME type from the MCP result, currently image/jpeg or image/png.")),
+			mcp.WithString("url", mcp.Required(), mcp.Description("Non-secret HTTP(S) image URL to fetch server-side. Pass image URLs directly; do not copy base64 image data into this field. The path does not need to contain an image filename; use filename for the Discord display name.")),
 			mcp.WithString("filename", mcp.Required(), mcp.Description("Display filename for the Discord attachment, for example screenshot.jpg.")),
 			mcp.WithString("content", mcp.Description("Optional message content to send with the image")),
+			mcp.WithOpenWorldHintAnnotation(true),
 		} {
 			opt(&t)
 		}
@@ -729,6 +730,71 @@ func currentTargetStateChannelID() string {
 func botToolsEgressDisabled() bool {
 	state, ok := currentTargetState()
 	return ok && state.DisableEgress
+}
+
+func fetchValidatedImageURL(ctx context.Context, rawURL, filename string) (string, error) {
+	u, err := validateBotImageURL(rawURL)
+	if err != nil {
+		return "", err
+	}
+	client := &http.Client{
+		Timeout: 15 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 3 {
+				return fmt.Errorf("too many image URL redirects")
+			}
+			if _, err := validateBotImageURL(req.URL.String()); err != nil {
+				return fmt.Errorf("image URL redirect blocked: %w", err)
+			}
+			return nil
+		},
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return "", fmt.Errorf("create image URL request: %w", err)
+	}
+	req.Header.Set("Accept", "image/jpeg,image/png")
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("fetch image URL: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("fetch image URL: unexpected HTTP status %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(resp.Body, botegress.MaxValidatedImageBytes+1))
+	if err != nil {
+		return "", fmt.Errorf("read image URL response: %w", err)
+	}
+	if int64(len(body)) > botegress.MaxValidatedImageBytes {
+		return "", fmt.Errorf("image exceeds upload size limit (%d bytes)", botegress.MaxValidatedImageBytes)
+	}
+	contentType := strings.ToLower(strings.TrimSpace(strings.Split(resp.Header.Get("Content-Type"), ";")[0]))
+	if contentType != "image/jpeg" && contentType != "image/png" {
+		contentType = ""
+	}
+	return botegress.WriteValidatedImageBytes(body, contentType, filename, filepath.Join(dataDir(), "egress", "incoming"), secrets.FromEnv())
+}
+
+func validateBotImageURL(rawURL string) (*url.URL, error) {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		return nil, fmt.Errorf("url is required")
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return nil, fmt.Errorf("parse image URL: %w", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return nil, fmt.Errorf("image URL scheme must be http or https")
+	}
+	if u.User != nil {
+		return nil, fmt.Errorf("image URL must not include credentials")
+	}
+	if strings.TrimSpace(u.Hostname()) == "" {
+		return nil, fmt.Errorf("image URL host is required")
+	}
+	return u, nil
 }
 
 func validateMentionUserID(userID string) error {

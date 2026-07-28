@@ -465,7 +465,7 @@ func TestManagerEnableDefaultBotToolsUsesSafeAllowlist(t *testing.T) {
 	if !p.Enabled || p.AllowAllTools || p.ReadOnly || p.AllowDestructive {
 		t.Fatalf("default bot-tools policy is not safe-write allowlist: %+v", p)
 	}
-	if tools := strings.Join(p.EffectiveTools(), ","); strings.Contains(tools, "bot_delete_cron") || strings.Contains(tools, "bot_send_message") || strings.Contains(tools, "bot_query_audit") || !strings.Contains(tools, "bot_send_file") || !strings.Contains(tools, "bot_send_image_base64") || !strings.Contains(tools, "bot_query_channel_history") || !strings.Contains(tools, "bot_create_cron") || !strings.Contains(tools, "bot_update_cron") || !strings.Contains(tools, "bot_create_reminder") {
+	if tools := strings.Join(p.EffectiveTools(), ","); strings.Contains(tools, "bot_delete_cron") || strings.Contains(tools, "bot_send_message") || strings.Contains(tools, "bot_query_audit") || strings.Contains(tools, "bot_send_image_base64") || !strings.Contains(tools, "bot_send_file") || !strings.Contains(tools, "bot_send_image_url") || !strings.Contains(tools, "bot_query_channel_history") || !strings.Contains(tools, "bot_create_cron") || !strings.Contains(tools, "bot_update_cron") || !strings.Contains(tools, "bot_create_reminder") {
 		t.Fatalf("unexpected default tools: %q", tools)
 	}
 }
@@ -634,7 +634,7 @@ func TestLegacyDefaultBotToolsPolicyDropsEgressTools(t *testing.T) {
 	if strings.Contains(tools, "bot_query_audit") {
 		t.Fatalf("legacy default audit query tool was not removed: %+v", got.EffectiveTools())
 	}
-	if !strings.Contains(tools, "bot_create_cron") || !strings.Contains(tools, "bot_create_reminder") || !strings.Contains(tools, "bot_send_file") || !strings.Contains(tools, "bot_send_image_base64") || !strings.Contains(tools, "bot_query_channel_history") {
+	if !strings.Contains(tools, "bot_create_cron") || !strings.Contains(tools, "bot_create_reminder") || !strings.Contains(tools, "bot_send_file") || !strings.Contains(tools, "bot_send_image_url") || !strings.Contains(tools, "bot_query_channel_history") || strings.Contains(tools, "bot_send_image_base64") {
 		t.Fatalf("legacy normalization removed allowed default tools: %+v", got.EffectiveTools())
 	}
 }
@@ -694,8 +694,8 @@ func TestLegacySafeDefaultBotToolsPolicyAddsUpdateTool(t *testing.T) {
 	if !containsString(got.EffectiveTools(), "bot_update_cron") {
 		t.Fatalf("legacy safe default policy did not gain update tool: %+v", got.EffectiveTools())
 	}
-	if !containsString(got.EffectiveTools(), "bot_send_image_base64") {
-		t.Fatalf("legacy safe default policy did not gain base64 image egress tool: %+v", got.EffectiveTools())
+	if !containsString(got.EffectiveTools(), "bot_send_image_url") {
+		t.Fatalf("legacy safe default policy did not gain URL image egress tool: %+v", got.EffectiveTools())
 	}
 	if !containsString(got.EffectiveTools(), "bot_query_channel_history") {
 		t.Fatalf("legacy safe default policy did not gain channel history query tool: %+v", got.EffectiveTools())
@@ -720,8 +720,41 @@ func TestPreviousSafeDefaultBotToolsPolicyAddsNewHistoryTool(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !containsString(got.EffectiveTools(), "bot_send_image_base64") || !containsString(got.EffectiveTools(), "bot_query_channel_history") {
+	if !containsString(got.EffectiveTools(), "bot_send_image_url") || !containsString(got.EffectiveTools(), "bot_query_channel_history") || containsString(got.EffectiveTools(), "bot_send_image_base64") {
 		t.Fatalf("previous safe default policy did not gain current safe tools: %+v", got.EffectiveTools())
+	}
+}
+
+func TestImmediatePreviousSafeDefaultBotToolsPolicyReplacesBase64ImageTool(t *testing.T) {
+	dir := t.TempDir()
+	store, err := OpenMCPPolicyStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	previous := defaultMCPPolicy("guild-1", "channel-1", "bot-tools")
+	previous.Enabled, previous.Preset, previous.ReadOnly = true, "safe-write", false
+	previous.AllowAllTools, previous.AllowDestructive = false, false
+	previous.AllowedTools = []string{
+		"bot_data_summary",
+		"bot_list_channel_data",
+		"bot_list_cron",
+		"bot_send_file",
+		"bot_create_cron",
+		"bot_create_reminder",
+		"bot_update_cron",
+		"bot_send_image_base64",
+		"bot_query_channel_history",
+	}
+	if err := store.SetPolicy(context.Background(), previous); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.GetPolicy(context.Background(), "guild-1", "channel-1", "bot-tools")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsString(got.EffectiveTools(), "bot_send_image_url") || containsString(got.EffectiveTools(), "bot_send_image_base64") {
+		t.Fatalf("immediate previous safe default policy did not replace base64 image egress: %+v", got.EffectiveTools())
 	}
 }
 
@@ -738,7 +771,7 @@ func TestCustomPartialBotToolsPolicyWithImageDoesNotGainHistoryTool(t *testing.T
 	if containsString(got.EffectiveTools(), "bot_query_channel_history") {
 		t.Fatalf("custom partial allowlist gained channel history query tool: %+v", got.EffectiveTools())
 	}
-	if containsString(got.EffectiveTools(), "bot_update_cron") || containsString(got.EffectiveTools(), "bot_create_reminder") {
+	if containsString(got.EffectiveTools(), "bot_update_cron") || containsString(got.EffectiveTools(), "bot_create_reminder") || containsString(got.EffectiveTools(), "bot_send_image_url") {
 		t.Fatalf("custom partial allowlist gained unrelated default tools: %+v", got.EffectiveTools())
 	}
 }

@@ -14,7 +14,7 @@ On first channel setup, these safe tools are enabled by default:
 | `bot_list_channel_data` | Read | List known channel data folders and metadata presence without message content. |
 | `bot_list_cron` | Read | List scheduled jobs for the current channel. |
 | `bot_send_file` | Write, non-destructive | Queue a sanitized file upload for Discord delivery. |
-| `bot_send_image_base64` | Write, non-destructive | Queue a JPEG/PNG image from an MCP image result for Discord delivery. |
+| `bot_send_image_url` | Write, non-destructive | Queue a JPEG/PNG image fetched from an allowed non-secret URL for Discord delivery. |
 | `bot_create_cron` | Write, non-destructive | Queue creation of a scheduled task. |
 | `bot_create_reminder` | Write, non-destructive | Queue a one-time reminder delivered by the bot scheduler. |
 | `bot_query_channel_history` | Read | Search or page through stored history for the current channel or thread context. |
@@ -44,7 +44,8 @@ Use `bot_create_reminder` for one-time delayed reminders such as "in 10 minutes"
 File egress is intentionally conservative:
 
 - Plain text is redacted before upload.
-- JPEG and PNG images are validated and uploaded as copied temporary files; image results returned as base64 by another MCP tool should use `bot_send_image_base64`.
+- JPEG and PNG images are validated and uploaded as copied temporary files; image URLs returned by other tools should be passed directly to `bot_send_image_url` instead of copying base64 through the agent.
+- `bot_send_image_url` fetches non-secret HTTP(S) image URLs server-side without host or path allowlisting. The URL path does not need to contain an image filename; the `filename` argument controls the Discord display name. The bot still rejects URL credentials and validates the fetched bytes before queueing delivery.
 - PDF, DOCX, and XLSX files are converted to sanitized text before upload.
 - Original binary documents are not uploaded back to Discord by `bot_send_file`.
 - Private audit jobs disable message and file egress completely.

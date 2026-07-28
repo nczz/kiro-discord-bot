@@ -4,7 +4,6 @@ import (
 	"archive/zip"
 	"bytes"
 	"compress/zlib"
-	"encoding/base64"
 	"image"
 	"image/color"
 	"image/jpeg"
@@ -178,7 +177,7 @@ func TestPrepareSanitizedFileRejectsInvalidImageBytes(t *testing.T) {
 	}
 }
 
-func TestWriteValidatedImageBase64StagesReadableJPEG(t *testing.T) {
+func TestWriteValidatedImageBytesStagesReadableJPEG(t *testing.T) {
 	dir := t.TempDir()
 	pixel := image.NewRGBA(image.Rect(0, 0, 1, 1))
 	pixel.Set(0, 0, color.RGBA{R: 0x10, G: 0x20, B: 0x30, A: 0xff})
@@ -187,9 +186,9 @@ func TestWriteValidatedImageBase64StagesReadableJPEG(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	path, err := WriteValidatedImageBase64(base64.StdEncoding.EncodeToString(img.Bytes()), "image/jpeg", "screenshot.txt", filepath.Join(dir, "incoming"), &secrets.Redactor{})
+	path, err := WriteValidatedImageBytes(img.Bytes(), "image/jpeg", "screenshot.txt", filepath.Join(dir, "incoming"), &secrets.Redactor{})
 	if err != nil {
-		t.Fatalf("WriteValidatedImageBase64: %v", err)
+		t.Fatalf("WriteValidatedImageBytes: %v", err)
 	}
 	if filepath.Base(path) != "screenshot.jpg" {
 		t.Fatalf("staged basename = %q, want screenshot.jpg", filepath.Base(path))
@@ -199,7 +198,7 @@ func TestWriteValidatedImageBase64StagesReadableJPEG(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(staged, img.Bytes()) {
-		t.Fatal("staged base64 image bytes changed")
+		t.Fatal("staged image bytes changed")
 	}
 	prepared, err := PrepareSanitizedFile(path, &secrets.Redactor{}, filepath.Join(dir, "sanitized"))
 	if err != nil {
@@ -210,7 +209,7 @@ func TestWriteValidatedImageBase64StagesReadableJPEG(t *testing.T) {
 	}
 }
 
-func TestWriteValidatedImageBase64RejectsMimeMismatch(t *testing.T) {
+func TestWriteValidatedImageBytesRejectsMimeMismatch(t *testing.T) {
 	dir := t.TempDir()
 	pixel := image.NewRGBA(image.Rect(0, 0, 1, 1))
 	pixel.Set(0, 0, color.RGBA{R: 0x90, G: 0x10, B: 0x10, A: 0xff})
@@ -219,7 +218,7 @@ func TestWriteValidatedImageBase64RejectsMimeMismatch(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := WriteValidatedImageBase64(base64.StdEncoding.EncodeToString(img.Bytes()), "image/png", "bad.png", filepath.Join(dir, "incoming"), &secrets.Redactor{})
+	_, err := WriteValidatedImageBytes(img.Bytes(), "image/png", "bad.png", filepath.Join(dir, "incoming"), &secrets.Redactor{})
 	if err == nil || !strings.Contains(err.Error(), "does not match detected") {
 		t.Fatalf("expected mime mismatch, got %v", err)
 	}
