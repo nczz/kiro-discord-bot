@@ -233,28 +233,28 @@ func TestReadOnlyToolAnnotations(t *testing.T) {
 }
 
 func TestSendFileToolDocumentsLocalPathBoundary(t *testing.T) {
-	tool := writeTool(ToolSendFile, "Send a bot-local file through the bot-controlled safe egress queue. The file_path must be readable by the kiro-discord-bot process on this host/VM; do not pass paths from another MCP server, Docker container, browser profile namespace, or remote host unless they are explicitly mounted into the bot filesystem. Text files are redacted and uploaded as sanitized copies. JPEG/PNG images are validated and uploaded as copied temp files without OCR redaction or metadata stripping. Documents with extractable readable text (PDF, DOCX, XLSX) are converted to text, redacted, and uploaded as sanitized .txt copies; original binary documents are never uploaded back.", false)
+	tool := writeTool(ToolSendFile, "Send a bot-local file through the bot-controlled safe egress queue. The file_path must be readable by the kiro-discord-bot process on this host/VM; do not pass paths from another MCP server, Docker container, browser profile namespace, remote host, or any tool-returned artifact namespace unless they are explicitly mounted into the bot filesystem. If another tool returns an HTTP(S) image URL, pass that URL directly to bot_send_image_url instead of saving, downloading, transcribing, base64-encoding, or converting it into a local artifact path. Text files are redacted and uploaded as sanitized copies. JPEG/PNG images are validated and uploaded as copied temp files without OCR redaction or metadata stripping. Documents with extractable readable text (PDF, DOCX, XLSX) are converted to text, redacted, and uploaded as sanitized .txt copies; original binary documents are never uploaded back.", false)
 
-	if !strings.Contains(tool.Description, "bot-local file") || !strings.Contains(tool.Description, "Docker container") || !strings.Contains(tool.Description, "JPEG/PNG") {
-		t.Fatalf("send file description should document local path boundary and image support: %q", tool.Description)
+	if !strings.Contains(tool.Description, "bot-local file") || !strings.Contains(tool.Description, "Docker container") || !strings.Contains(tool.Description, "HTTP(S) image URL") {
+		t.Fatalf("send file description should document local path boundary and image URL handoff: %q", tool.Description)
 	}
 	filePath, ok := tool.InputSchema.Properties["file_path"].(map[string]any)
 	if !ok {
-		t.Fatalf("file_path schema missing: %+v", tool.InputSchema.Properties["file_path"])
+		t.Fatalf("file_path schema missing: %+v", tool.InputSchema.Properties)
 	}
 	desc, _ := filePath["description"].(string)
-	if !strings.Contains(desc, "readable by the kiro-discord-bot process") || !strings.Contains(desc, "another MCP server") || !strings.Contains(desc, "JPEG/PNG") {
-		t.Fatalf("file_path description should document bot-local path boundary and image support: %q", desc)
+	if !strings.Contains(desc, "readable by the kiro-discord-bot process") || !strings.Contains(desc, "tool-returned artifact") || !strings.Contains(desc, "bot_send_image_url") {
+		t.Fatalf("file_path description should document bot-local path boundary and image URL handoff: %q", desc)
 	}
 }
 
-func TestValidateBotSendFilePathRejectsBrowseForgeArtifactPath(t *testing.T) {
-	err := validateBotSendFilePath("/data/profiles/prof_123/artifacts/screenshot.jpg")
+func TestValidateBotSendFilePathRejectsNonLocalImageResourcePath(t *testing.T) {
+	err := validateBotSendFilePath("/remote/tool/artifacts/screenshot.jpg")
 	if err == nil {
-		t.Fatal("validateBotSendFilePath accepted missing BrowseForge artifact path")
+		t.Fatal("validateBotSendFilePath accepted missing non-local artifact path")
 	}
 	got := err.Error()
-	for _, want := range []string{"not readable", "bot_send_image_url", "screenshot_url", "saved_path", "artifact_path"} {
+	for _, want := range []string{"not readable", "HTTP(S) image URL", "bot_send_image_url", "tool-artifact path"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("error missing %q: %s", want, got)
 		}
