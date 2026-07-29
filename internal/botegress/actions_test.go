@@ -36,6 +36,9 @@ func TestWriteReadRemovePending(t *testing.T) {
 	if err := RemovePending(dir, id); err != nil {
 		t.Fatalf("RemovePending: %v", err)
 	}
+	if _, err := os.Stat(filepath.Join(PendingDir(dir), id+".json.tmp")); !os.IsNotExist(err) {
+		t.Fatalf("temporary pending file should not remain after publish, stat err=%v", err)
+	}
 	actions, err = ReadPending(dir)
 	if err != nil {
 		t.Fatalf("ReadPending after remove: %v", err)
@@ -51,6 +54,46 @@ func TestWritePendingValidatesActions(t *testing.T) {
 	}
 	if _, err := WritePending(t.TempDir(), Action{Action: ActionSendFile, ChannelID: "ch"}); err == nil {
 		t.Fatal("WritePending accepted file without file_path")
+	}
+	if _, err := WritePending(t.TempDir(), Action{
+		Action:      ActionMemoryAdd,
+		ChannelID:   "ch",
+		MemoryEntry: "remember this",
+		Reason:      "explicit user request",
+	}); err == nil {
+		t.Fatal("WritePending accepted memory action without requested_by")
+	}
+	if _, err := WritePending(t.TempDir(), Action{
+		Action:      ActionMemoryAdd,
+		ChannelID:   "ch",
+		MemoryEntry: "remember this",
+		RequestedBy: "alice",
+	}); err == nil {
+		t.Fatal("WritePending accepted memory action without reason")
+	}
+	if _, err := WritePending(t.TempDir(), Action{
+		Action:      ActionMemoryAdd,
+		ChannelID:   "ch",
+		RequestedBy: "alice",
+		Reason:      "explicit user request",
+	}); err == nil {
+		t.Fatal("WritePending accepted memory add without memory_entry")
+	}
+	if _, err := WritePending(t.TempDir(), Action{
+		Action:      ActionMemoryRemove,
+		ChannelID:   "ch",
+		RequestedBy: "alice",
+		Reason:      "explicit user request",
+	}); err == nil {
+		t.Fatal("WritePending accepted memory remove without positive memory_index")
+	}
+	if _, err := WritePending(t.TempDir(), Action{
+		Action:      ActionMemoryClear,
+		ChannelID:   "ch",
+		RequestedBy: "alice",
+		Reason:      "explicit user request",
+	}); err != nil {
+		t.Fatalf("WritePending rejected memory clear: %v", err)
 	}
 }
 

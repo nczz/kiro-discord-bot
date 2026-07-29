@@ -20,6 +20,8 @@
 | `bot_create_cron` | Write, non-destructive | 排入建立 scheduled task 的請求。 |
 | `bot_create_reminder` | Write, non-destructive | 排入一次性提醒，交由 bot scheduler 到期發送。 |
 | `bot_query_channel_history` | Read | 搜尋或分頁讀取目前 channel/thread context 的已儲存歷史。 |
+| `bot_memory_list` | Read | 列出目前 parent channel 的 persistent memory rules。 |
+| `bot_memory_add` | Write, non-destructive | 排入使用者明確要求、且已 audit-recorded 的 channel memory rule。 |
 
 這些工具存在，但預設不啟用：
 
@@ -28,6 +30,8 @@
 | `bot_send_message` | Write, non-destructive | 排入額外 Discord message。 |
 | `bot_delete_cron` | Write, destructive | 排入刪除 scheduled task 的請求。 |
 | `bot_query_audit` | Read, sensitive | 查詢 scoped audit timeline rows。 |
+| `bot_memory_remove` | Write, destructive | 排入移除一筆已列出的 persistent memory rule。 |
+| `bot_memory_clear` | Write, destructive | 排入清空目前 channel 所有 persistent memory rules。 |
 
 `/audit <prompt>` 會暫時只授權 `bot_query_audit` 給私密 audit investigation agent。該 agent 不能使用一般 Discord egress tools。
 
@@ -36,6 +40,8 @@
 `bot-tools` session 會綁定目前 channel 或 thread target。工具呼叫若嘗試操作其他 channel，會回傳 channel-scope error。
 
 Recurring cron 管理在 runtime 中是 channel scope；thread ID 會依需要正規化成 parent channel。一次性 reminder 會保留目前 delivery target，因此在 task thread 中建立的提醒會回到該 thread。
+
+Persistent memory 是 parent-channel scope。`bot_memory_add` 只在使用者明確說「記住」時預設可用，會拒絕看似 secret 的文字，透過 pending bot-side queue 寫入，並在 main bot 套用前先記錄 audit event。`bot_memory_remove` 與 `bot_memory_clear` 預設不啟用。
 
 「10 分鐘後提醒我」、「明天 09:00 提醒某人」這類一次性提醒應使用 `bot_create_reminder`。每天、每週或週期性自動化才使用 `bot_create_cron`。
 

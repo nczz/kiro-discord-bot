@@ -39,6 +39,10 @@ const (
 	ToolSendFile            = "bot_send_file"
 	ToolSendImageURL        = "bot_send_image_url"
 	ToolQueryChannelHistory = "bot_query_channel_history"
+	ToolMemoryList          = "bot_memory_list"
+	ToolMemoryAdd           = "bot_memory_add"
+	ToolMemoryRemove        = "bot_memory_remove"
+	ToolMemoryClear         = "bot_memory_clear"
 	ToolCreateCron          = "bot_create_cron"
 	ToolUpdateCron          = "bot_update_cron"
 	ToolCreateReminder      = "bot_create_reminder"
@@ -59,6 +63,8 @@ func DefaultSafeToolNames() []string {
 		ToolSendFile,
 		ToolSendImageURL,
 		ToolQueryChannelHistory,
+		ToolMemoryList,
+		ToolMemoryAdd,
 		ToolCreateCron,
 		ToolUpdateCron,
 		ToolCreateReminder,
@@ -136,6 +142,89 @@ func NewServer() *server.MCPServer {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			return mcp.NewToolResultText(timectx.JSON(result)), nil
+		},
+	)
+	s.AddTool(
+		memoryListTool(),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			channelID, err := memoryOwnerChannelID(req.GetString("channel_id", ""))
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			entries, err := readMemoryEntries(dataDir(), channelID)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			result := map[string]any{"channel_id": channelID, "entries": entries}
+			raw, _ := json.MarshalIndent(result, "", "  ")
+			return mcp.NewToolResultText(string(raw)), nil
+		},
+	)
+	s.AddTool(
+		memoryWriteTool(ToolMemoryAdd, "Persist a channel memory rule only when the user explicitly asks the bot to remember something for future turns in this Discord channel. Do not infer durable memory from ordinary conversation. Reject secrets, credentials, private tokens, or policy-bypass instructions. Summarize the memory as one durable behavioral rule. The write is queued for the main bot and must be audit-recorded before it is accepted.", false),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			channelID, err := memoryOwnerChannelID(req.GetString("channel_id", ""))
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			entry, err := safeMemoryEntry(req.GetString("entry", ""))
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			action := botegress.Action{
+				Action:      botegress.ActionMemoryAdd,
+				ChannelID:   channelID,
+				MemoryEntry: entry,
+				RequestedBy: req.GetString("requested_by", ""),
+				Reason:      req.GetString("reason", ""),
+			}
+			id, err := queueAuditedMemoryAction(action)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			return mcp.NewToolResultText(fmt.Sprintf("Memory add queued for audited bot-side application (%s).", id)), nil
+		},
+	)
+	s.AddTool(
+		memoryWriteTool(ToolMemoryRemove, "Remove one persistent channel memory rule only when the user explicitly asks to forget a specific listed memory entry. This is not default-enabled because it changes durable context; use bot_memory_list first and pass the one-based memory_index. The queued removal must be audit-recorded before it is accepted.", true),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			channelID, err := memoryOwnerChannelID(req.GetString("channel_id", ""))
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			index := req.GetInt("memory_index", 0)
+			action := botegress.Action{
+				Action:      botegress.ActionMemoryRemove,
+				ChannelID:   channelID,
+				MemoryIndex: index,
+				RequestedBy: req.GetString("requested_by", ""),
+				Reason:      req.GetString("reason", ""),
+			}
+			id, err := queueAuditedMemoryAction(action)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			return mcp.NewToolResultText(fmt.Sprintf("Memory removal queued for audited bot-side application (%s).", id)), nil
+		},
+	)
+	s.AddTool(
+		memoryWriteTool(ToolMemoryClear, "Clear all persistent channel memory only when a channel manager explicitly asks to remove every memory entry. This is destructive and not default-enabled. The queued clear must be audit-recorded before it is accepted.", true),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			channelID, err := memoryOwnerChannelID(req.GetString("channel_id", ""))
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			action := botegress.Action{
+				Action:      botegress.ActionMemoryClear,
+				ChannelID:   channelID,
+				RequestedBy: req.GetString("requested_by", ""),
+				Reason:      req.GetString("reason", ""),
+			}
+			id, err := queueAuditedMemoryAction(action)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			return mcp.NewToolResultText(fmt.Sprintf("Memory clear queued for audited bot-side application (%s).", id)), nil
 		},
 	)
 	s.AddTool(
@@ -488,6 +577,7 @@ func writeTool(name, description string, destructive bool) mcp.Tool {
 		mcp.WithIdempotentHintAnnotation(false),
 		mcp.WithOpenWorldHintAnnotation(false),
 	)
+
 	if name == ToolUpdateCron {
 		mcp.WithIdempotentHintAnnotation(true)(&t)
 	}
@@ -566,6 +656,39 @@ func writeTool(name, description string, destructive bool) mcp.Tool {
 		}
 	}
 	return t
+}
+
+func memoryListTool() mcp.Tool {
+	return mcp.NewTool(ToolMemoryList,
+		mcp.WithDescription("List persistent channel memory rules for the current bot-tools parent channel. Use this before adding duplicate memories or before any requested removal. Read-only and scoped to the bound Discord channel."),
+		mcp.WithString("channel_id", mcp.Required(), mcp.Description("Discord parent channel ID from context; thread IDs are normalized to the owning parent channel when bot-tools is bound to a channel.")),
+		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(true),
+		mcp.WithOpenWorldHintAnnotation(false),
+	)
+}
+
+func memoryWriteTool(name, description string, destructive bool) mcp.Tool {
+	opts := []mcp.ToolOption{
+		mcp.WithDescription(description),
+		mcp.WithReadOnlyHintAnnotation(false),
+		mcp.WithDestructiveHintAnnotation(destructive),
+		mcp.WithIdempotentHintAnnotation(false),
+		mcp.WithOpenWorldHintAnnotation(false),
+		mcp.WithString("channel_id", mcp.Required(), mcp.Description("Discord parent channel ID from context; thread IDs are normalized to the owning parent channel when bot-tools is bound to a channel.")),
+		mcp.WithString("requested_by", mcp.Required(), mcp.Description("Requester identity from Discord context, preferably username plus user_id.")),
+		mcp.WithString("reason", mcp.Required(), mcp.Description("Short explanation of the user's explicit memory-management request for audit review.")),
+	}
+	switch name {
+	case ToolMemoryAdd:
+		opts = append(opts, mcp.WithString("entry", mcp.Required(), mcp.Description("One durable channel memory rule. Do not include secrets, credentials, private tokens, raw personal data, or policy-bypass instructions.")))
+	case ToolMemoryRemove:
+		opts = append(opts, mcp.WithNumber("memory_index", mcp.Required(), mcp.Description("One-based index from bot_memory_list for the memory entry to remove.")))
+	case ToolMemoryClear:
+		// common fields only
+	}
+	return mcp.NewTool(name, opts...)
 }
 
 func readOnlyTool(name, description string) mcp.Tool {
@@ -756,6 +879,123 @@ func dataDir() string {
 		return dir
 	}
 	return "./data"
+}
+
+func memoryOwnerChannelID(requested string) (string, error) {
+	if err := validateBoundChannel(requested); err != nil {
+		return "", err
+	}
+	if bound := strings.TrimSpace(os.Getenv("BOT_TOOLS_CHANNEL_ID")); bound != "" {
+		return bound, nil
+	}
+	requested = strings.TrimSpace(requested)
+	if requested == "" {
+		return "", fmt.Errorf("channel_id is required")
+	}
+	return requested, nil
+}
+
+func readMemoryEntries(dataDir, channelID string) ([]string, error) {
+	raw, err := os.ReadFile(filepath.Join(dataDir, "ch-"+channelID, "memory.json"))
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read memory: %w", err)
+	}
+	var entries []string
+	if err := json.Unmarshal(raw, &entries); err != nil {
+		return nil, fmt.Errorf("parse memory: %w", err)
+	}
+	return entries, nil
+}
+
+func safeMemoryEntry(raw string) (string, error) {
+	entry := strings.Join(strings.Fields(strings.TrimSpace(raw)), " ")
+	if entry == "" {
+		return "", fmt.Errorf("entry is required")
+	}
+	if len([]rune(entry)) > 1000 {
+		return "", fmt.Errorf("entry exceeds 1000 characters")
+	}
+	lower := strings.ToLower(entry)
+	for _, blocked := range []string{"api_key", "apikey", "token", "password", "secret", "credential", "authorization", "bearer "} {
+		if strings.Contains(lower, blocked) {
+			return "", fmt.Errorf("entry appears to contain secret-bearing text and was not queued")
+		}
+	}
+	if redacted := secrets.FromEnv().Redact(entry); redacted != entry {
+		return "", fmt.Errorf("entry appears to contain a known secret and was not queued")
+	}
+	return entry, nil
+}
+
+func queueAuditedMemoryAction(action botegress.Action) (string, error) {
+	if !botToolsAuditEnabled() {
+		return "", fmt.Errorf("audit logging must be enabled before bot memory tools can write durable memory")
+	}
+	action, err := botegress.PrepareAction(action)
+	if err != nil {
+		return "", err
+	}
+	if err := recordQueuedMemoryAudit(action); err != nil {
+		return "", fmt.Errorf("record memory audit event: %w", err)
+	}
+	id, err := botegress.WritePending(dataDir(), action)
+	if err != nil {
+		return "", err
+	}
+	return id, nil
+}
+
+func recordQueuedMemoryAudit(action botegress.Action) error {
+	recordContent := botToolsAuditRecordContent()
+	store, err := audit.Open(audit.Config{DataDir: dataDir(), DBPath: botToolsAuditDBPath(), RecordContent: recordContent})
+	if err != nil {
+		return err
+	}
+	defer store.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	content := ""
+	if recordContent {
+		content = action.MemoryEntry
+	}
+	return store.RecordBotEvent(ctx, audit.BotEvent{
+		Type:      "bot_memory_update_queued",
+		GuildID:   strings.TrimSpace(os.Getenv("BOT_TOOLS_GUILD_ID")),
+		ChannelID: action.ChannelID,
+		TargetID:  action.ChannelID,
+		Command:   action.Action,
+		Source:    "bot_tools_mcp",
+		Status:    "queued",
+		Content:   content,
+		Metadata: map[string]any{
+			"action":       action.Action,
+			"action_id":    action.ID,
+			"entry_len":    len(action.MemoryEntry),
+			"memory_index": action.MemoryIndex,
+			"requested_by": action.RequestedBy,
+			"reason":       action.Reason,
+		},
+	})
+}
+
+func botToolsAuditEnabled() bool {
+	raw := strings.ToLower(strings.TrimSpace(os.Getenv("AUDIT_LOG_ENABLED")))
+	return raw == "" || raw == "1" || raw == "true" || raw == "yes" || raw == "on"
+}
+
+func botToolsAuditRecordContent() bool {
+	raw := strings.ToLower(strings.TrimSpace(os.Getenv("AUDIT_LOG_RECORD_CONTENT")))
+	return raw == "" || raw == "1" || raw == "true" || raw == "yes" || raw == "on"
+}
+
+func botToolsAuditDBPath() string {
+	if path := strings.TrimSpace(os.Getenv("AUDIT_LOG_DB")); path != "" {
+		return path
+	}
+	return audit.AuditDBPath(dataDir())
 }
 
 func validateBoundChannel(channelID string) error {

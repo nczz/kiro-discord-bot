@@ -20,6 +20,8 @@ On first channel setup, these safe tools are enabled by default:
 | `bot_create_cron` | Write, non-destructive | Queue creation of a scheduled task. |
 | `bot_create_reminder` | Write, non-destructive | Queue a one-time reminder delivered by the bot scheduler. |
 | `bot_query_channel_history` | Read | Search or page through stored history for the current channel or thread context. |
+| `bot_memory_list` | Read | List persistent memory rules for the current parent channel. |
+| `bot_memory_add` | Write, non-destructive | Queue an explicitly requested, audit-recorded channel memory rule. |
 
 These tools are available but not enabled by default:
 
@@ -28,6 +30,8 @@ These tools are available but not enabled by default:
 | `bot_send_message` | Write, non-destructive | Queue an additional Discord message. |
 | `bot_delete_cron` | Write, destructive | Queue deletion of a scheduled task. |
 | `bot_query_audit` | Read, sensitive | Query scoped audit timeline rows. |
+| `bot_memory_remove` | Write, destructive | Queue removal of one listed persistent memory rule. |
+| `bot_memory_clear` | Write, destructive | Queue removal of all persistent memory rules for the current channel. |
 
 `/audit <prompt>` temporarily grants only `bot_query_audit` to the private audit investigation agent. That agent cannot use normal Discord egress tools.
 
@@ -36,6 +40,8 @@ These tools are available but not enabled by default:
 `bot-tools` sessions are bound to the current channel or thread target. Calls that try to operate on a different channel fail with a channel-scope error.
 
 Thread IDs are normalized to the parent channel for recurring cron management where the runtime stores scheduled work at channel scope. One-time reminders keep the current delivery target, so a reminder created from a task thread is delivered back to that thread.
+
+Persistent memory is parent-channel scoped. `bot_memory_add` is default-enabled only for explicit "remember this" requests, rejects secret-like text, writes through the pending bot-side queue, and records an audit event before the main bot applies it. `bot_memory_remove` and `bot_memory_clear` are not default-enabled.
 
 Use `bot_create_reminder` for one-time delayed reminders such as "in 10 minutes" or "tomorrow at 09:00". Use `bot_create_cron` only for recurring jobs such as daily, weekly, or periodic automation.
 

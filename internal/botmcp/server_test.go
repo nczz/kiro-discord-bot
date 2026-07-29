@@ -16,6 +16,7 @@ import (
 
 	"github.com/nczz/kiro-discord-bot/audit"
 	"github.com/nczz/kiro-discord-bot/heartbeat"
+	"github.com/nczz/kiro-discord-bot/internal/botegress"
 	"github.com/nczz/kiro-discord-bot/internal/channelmeta"
 	"github.com/nczz/kiro-discord-bot/internal/cronpolicy"
 )
@@ -129,9 +130,192 @@ func TestDefaultSafeToolNamesExcludeDestructiveTools(t *testing.T) {
 	if seen[ToolQueryAudit] {
 		t.Fatalf("audit query tool must not be default-enabled outside manager-authorized /audit prompt jobs: %+v", tools)
 	}
+	if !seen[ToolMemoryList] || !seen[ToolMemoryAdd] {
+		t.Fatalf("memory list/add tools should be default-enabled for explicit channel memory requests: %+v", tools)
+	}
+	if seen[ToolMemoryRemove] || seen[ToolMemoryClear] {
+		t.Fatalf("destructive memory tools must not be default-enabled: %+v", tools)
+	}
 	auditTools := AuditPromptToolNames()
 	if len(auditTools) != 1 || auditTools[0] != ToolQueryAudit {
 		t.Fatalf("audit prompt tools = %+v, want only %s", auditTools, ToolQueryAudit)
+	}
+}
+
+func TestMemoryOwnerChannelIDUsesBoundParentForThreadTarget(t *testing.T) {
+	t.Setenv("BOT_TOOLS_CHANNEL_ID", "channel-1")
+	t.Setenv("BOT_TOOLS_TARGET_CHANNEL_ID", "thread-1")
+
+	got, err := memoryOwnerChannelID("thread-1")
+	if err != nil {
+		t.Fatalf("memoryOwnerChannelID: %v", err)
+	}
+	if got != "channel-1" {
+		t.Fatalf("memory owner = %s, want channel-1", got)
+	}
+}
+
+func TestSafeMemoryEntryRejectsSecretLikeText(t *testing.T) {
+	t.Setenv("KIRO_API_KEY", "known-secret-value")
+	if _, err := safeMemoryEntry("Always use token abc in replies"); err == nil {
+		t.Fatal("safeMemoryEntry accepted token-bearing memory")
+	}
+	if _, err := safeMemoryEntry("Remember known-secret-value for the next login"); err == nil {
+		t.Fatal("safeMemoryEntry accepted known secret value")
+	}
+	got, err := safeMemoryEntry("  Always reply in Traditional Chinese.  ")
+	if err != nil {
+		t.Fatalf("safeMemoryEntry rejected safe text: %v", err)
+	}
+	if got != "Always reply in Traditional Chinese." {
+		t.Fatalf("normalized memory = %q", got)
+	}
+}
+
+func TestQueueAuditedMemoryActionWritesPendingAndAudit(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "audit", "discord.sqlite")
+	t.Setenv("DATA_DIR", dir)
+	t.Setenv("AUDIT_LOG_ENABLED", "true")
+	t.Setenv("AUDIT_LOG_DB", dbPath)
+	t.Setenv("BOT_TOOLS_GUILD_ID", "guild-1")
+
+	id, err := queueAuditedMemoryAction(botegress.Action{
+		Action:      botegress.ActionMemoryAdd,
+		ChannelID:   "channel-1",
+		MemoryEntry: "Always reply in Traditional Chinese.",
+		RequestedBy: "alice user_id=user-1",
+		Reason:      "user explicitly asked the bot to remember language preference",
+	})
+	if err != nil {
+		t.Fatalf("queueAuditedMemoryAction: %v", err)
+	}
+	actions, err := botegress.ReadPending(dir)
+	if err != nil {
+		t.Fatalf("ReadPending: %v", err)
+	}
+	if len(actions) != 1 || actions[0].ID != id || actions[0].Action != botegress.ActionMemoryAdd || actions[0].MemoryEntry == "" {
+		t.Fatalf("unexpected pending actions: %+v", actions)
+	}
+	events, err := audit.QueryTimelineReadOnly(dbPath, audit.TimelineQueryOptions{
+		GuildID:        "guild-1",
+		TargetID:       "channel-1",
+		EventType:      "bot_memory_update_queued",
+		IncludeContent: true,
+		Limit:          10,
+	})
+	if err != nil {
+		t.Fatalf("query memory audit: %v", err)
+	}
+	if len(events) != 1 || events[0].Command != botegress.ActionMemoryAdd || events[0].Content != "Always reply in Traditional Chinese." {
+		t.Fatalf("unexpected memory audit events: %+v", events)
+	}
+}
+
+func TestQueueAuditedMemoryActionHonorsAuditContentRetention(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "audit", "discord.sqlite")
+	t.Setenv("DATA_DIR", dir)
+	t.Setenv("AUDIT_LOG_ENABLED", "true")
+	t.Setenv("AUDIT_LOG_RECORD_CONTENT", "false")
+	t.Setenv("AUDIT_LOG_DB", dbPath)
+	t.Setenv("BOT_TOOLS_GUILD_ID", "guild-1")
+
+	if _, err := queueAuditedMemoryAction(botegress.Action{
+		Action:      botegress.ActionMemoryAdd,
+		ChannelID:   "channel-1",
+		MemoryEntry: "Do not persist this audit content.",
+		RequestedBy: "alice user_id=user-1",
+		Reason:      "user explicitly asked for a memory",
+	}); err != nil {
+		t.Fatalf("queueAuditedMemoryAction: %v", err)
+	}
+	events, err := audit.QueryTimelineReadOnly(dbPath, audit.TimelineQueryOptions{
+		GuildID:        "guild-1",
+		TargetID:       "channel-1",
+		EventType:      "bot_memory_update_queued",
+		IncludeContent: true,
+		Limit:          10,
+	})
+	if err != nil {
+		t.Fatalf("query memory audit: %v", err)
+	}
+	if len(events) != 1 || events[0].Content != "" {
+		t.Fatalf("audit content = %+v, want one event with empty content", events)
+	}
+}
+
+func TestQueueAuditedMemoryActionDoesNotPublishPendingWhenAuditFails(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("DATA_DIR", dir)
+	t.Setenv("AUDIT_LOG_ENABLED", "true")
+	t.Setenv("AUDIT_LOG_DB", dir)
+
+	if _, err := queueAuditedMemoryAction(botegress.Action{
+		Action:      botegress.ActionMemoryAdd,
+		ChannelID:   "channel-1",
+		MemoryEntry: "Always reply in Traditional Chinese.",
+		RequestedBy: "alice user_id=user-1",
+		Reason:      "user explicitly asked for a memory",
+	}); err == nil {
+		t.Fatal("queueAuditedMemoryAction accepted memory write when audit open failed")
+	}
+	actions, err := botegress.ReadPending(dir)
+	if err != nil {
+		t.Fatalf("ReadPending: %v", err)
+	}
+	if len(actions) != 0 {
+		t.Fatalf("pending action should not be published when audit fails: %+v", actions)
+	}
+}
+
+func TestQueueAuditedMemoryActionValidatesBeforeAudit(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "audit", "discord.sqlite")
+	t.Setenv("DATA_DIR", dir)
+	t.Setenv("AUDIT_LOG_ENABLED", "true")
+	t.Setenv("AUDIT_LOG_DB", dbPath)
+
+	if _, err := queueAuditedMemoryAction(botegress.Action{
+		Action:      botegress.ActionMemoryAdd,
+		ChannelID:   "channel-1",
+		MemoryEntry: "Always reply in Traditional Chinese.",
+		RequestedBy: "   ",
+		Reason:      "user explicitly asked for a memory",
+	}); err == nil {
+		t.Fatal("queueAuditedMemoryAction accepted whitespace requested_by")
+	}
+	actions, err := botegress.ReadPending(dir)
+	if err != nil {
+		t.Fatalf("ReadPending: %v", err)
+	}
+	if len(actions) != 0 {
+		t.Fatalf("pending action should not be published when validation fails: %+v", actions)
+	}
+	if _, err := os.Stat(dbPath); !os.IsNotExist(err) {
+		t.Fatalf("audit DB should not be created before validation succeeds, stat err=%v", err)
+	}
+}
+
+func TestQueueAuditedMemoryActionRequiresAuditEnabled(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("DATA_DIR", dir)
+	t.Setenv("AUDIT_LOG_ENABLED", "false")
+	if _, err := queueAuditedMemoryAction(botegress.Action{
+		Action:      botegress.ActionMemoryAdd,
+		ChannelID:   "channel-1",
+		MemoryEntry: "Always reply in Traditional Chinese.",
+		RequestedBy: "alice user_id=user-1",
+		Reason:      "user explicitly asked for a memory",
+	}); err == nil {
+		t.Fatal("queueAuditedMemoryAction accepted memory write without audit logging")
+	}
+	actions, err := botegress.ReadPending(dir)
+	if err != nil {
+		t.Fatalf("ReadPending: %v", err)
+	}
+	if len(actions) != 0 {
+		t.Fatalf("pending action should not be written when audit is disabled: %+v", actions)
 	}
 }
 

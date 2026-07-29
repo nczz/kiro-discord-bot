@@ -11,6 +11,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/bwmarrin/discordgo"
+	"github.com/nczz/kiro-discord-bot/audit"
 	"github.com/nczz/kiro-discord-bot/internal/botegress"
 	"github.com/nczz/kiro-discord-bot/internal/secrets"
 	L "github.com/nczz/kiro-discord-bot/locale"
@@ -60,7 +61,7 @@ func (t *safeEgressTask) DrainChannel(channelID string) int {
 		if strings.TrimSpace(action.ChannelID) != channelID {
 			continue
 		}
-		if t.processAndRemove(action) {
+		if t.processAndRemove(action) && isDiscordEgressAction(action.Action) {
 			delivered++
 		}
 	}
@@ -73,7 +74,9 @@ func (t *safeEgressTask) processAndRemove(action botegress.Action) bool {
 	if err := t.process(action); err != nil {
 		delivered = false
 		log.Printf("[safe-egress] action %s failed: %v", action.ID, err)
-		t.sendSafeFailure(action, err)
+		if isDiscordEgressAction(action.Action) {
+			t.sendSafeFailure(action, err)
+		}
 	}
 	if err := botegress.RemovePending(t.bot.dataDir, action.ID); err != nil {
 		log.Printf("[safe-egress] remove action %s: %v", action.ID, err)
@@ -120,9 +123,91 @@ func (t *safeEgressTask) process(action botegress.Action) error {
 		return err
 	case botegress.ActionSendFile:
 		return t.sendFile(action)
+	case botegress.ActionMemoryAdd, botegress.ActionMemoryRemove, botegress.ActionMemoryClear:
+		return t.processMemory(action)
 	default:
-		return fmt.Errorf("unknown egress action %q", action.Action)
+		return fmt.Errorf("unknown bot action %q", action.Action)
 	}
+}
+
+func isDiscordEgressAction(action string) bool {
+	return action == botegress.ActionSendMessage || action == botegress.ActionSendFile
+}
+
+func (t *safeEgressTask) processMemory(action botegress.Action) error {
+	if t == nil || t.bot == nil || t.bot.manager == nil {
+		err := fmt.Errorf("memory manager is unavailable")
+		t.recordMemoryAction(action, "error", err)
+		return err
+	}
+	switch action.Action {
+	case botegress.ActionMemoryAdd:
+		entry := strings.TrimSpace(action.MemoryEntry)
+		if entry == "" {
+			err := fmt.Errorf("memory_entry is required")
+			t.recordMemoryAction(action, "error", err)
+			return err
+		}
+		if redacted := t.redactor.Redact(entry); redacted != entry {
+			err := fmt.Errorf("memory_entry appears to contain a secret and was not stored")
+			t.recordMemoryAction(action, "error", err)
+			return err
+		}
+		if err := t.bot.manager.MemoryAdd(action.ChannelID, entry); err != nil {
+			t.recordMemoryAction(action, "error", err)
+			return err
+		}
+	case botegress.ActionMemoryRemove:
+		if err := t.bot.manager.MemoryRemove(action.ChannelID, action.MemoryIndex-1); err != nil {
+			t.recordMemoryAction(action, "error", err)
+			return err
+		}
+	case botegress.ActionMemoryClear:
+		if err := t.bot.manager.MemoryClear(action.ChannelID); err != nil {
+			t.recordMemoryAction(action, "error", err)
+			return err
+		}
+	default:
+		err := fmt.Errorf("unknown memory action %q", action.Action)
+		t.recordMemoryAction(action, "error", err)
+		return err
+	}
+	t.recordMemoryAction(action, "applied", nil)
+	return nil
+}
+
+func (t *safeEgressTask) recordMemoryAction(action botegress.Action, status string, actionErr error) {
+	if t == nil || t.bot == nil {
+		return
+	}
+	metadata := map[string]any{
+		"action":       action.Action,
+		"action_id":    action.ID,
+		"entry_len":    len(action.MemoryEntry),
+		"memory_index": action.MemoryIndex,
+		"requested_by": action.RequestedBy,
+		"reason":       action.Reason,
+	}
+	errText := ""
+	if actionErr != nil {
+		errText = actionErr.Error()
+	}
+	content := ""
+	if action.Action == botegress.ActionMemoryAdd {
+		content = strings.TrimSpace(t.redactor.Redact(action.MemoryEntry))
+	}
+	t.bot.recordBotAuditEvent(audit.BotEvent{
+		Type:      "bot_memory_updated",
+		GuildID:   t.bot.guildID,
+		ChannelID: action.ChannelID,
+		TargetID:  action.ChannelID,
+		Command:   action.Action,
+		Source:    "bot_tools_mcp",
+		Status:    status,
+		Content:   content,
+		Error:     errText,
+		Metadata:  metadata,
+	})
 }
 
 func (t *safeEgressTask) sendFile(action botegress.Action) error {

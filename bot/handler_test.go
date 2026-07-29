@@ -154,6 +154,115 @@ func TestSendDiscordTextWithAllowedMentionsAllowsExplicitUserPing(t *testing.T) 
 	}
 }
 
+func TestSafeEgressAppliesMemoryActionsWithoutDiscordFailureMessage(t *testing.T) {
+	dir := t.TempDir()
+	manager := channel.NewManager(channel.ManagerConfig{DataDir: dir})
+	b := &Bot{dataDir: dir, manager: manager}
+	task := newSafeEgressTask(b)
+
+	if err := task.process(botegress.Action{
+		Action:      botegress.ActionMemoryAdd,
+		ChannelID:   "channel-1",
+		MemoryEntry: "Always reply in Traditional Chinese.",
+	}); err != nil {
+		t.Fatalf("process memory add: %v", err)
+	}
+	entries := manager.MemoryList("channel-1")
+	if len(entries) != 1 || entries[0] != "Always reply in Traditional Chinese." {
+		t.Fatalf("memory after add = %+v", entries)
+	}
+	if err := task.process(botegress.Action{
+		Action:      botegress.ActionMemoryRemove,
+		ChannelID:   "channel-1",
+		MemoryIndex: 1,
+	}); err != nil {
+		t.Fatalf("process memory remove: %v", err)
+	}
+	if entries := manager.MemoryList("channel-1"); len(entries) != 0 {
+		t.Fatalf("memory after remove = %+v", entries)
+	}
+	if err := task.process(botegress.Action{
+		Action:      botegress.ActionMemoryAdd,
+		ChannelID:   "channel-1",
+		MemoryEntry: "Use concise answers.",
+	}); err != nil {
+		t.Fatalf("process second memory add: %v", err)
+	}
+	if err := task.process(botegress.Action{
+		Action:    botegress.ActionMemoryClear,
+		ChannelID: "channel-1",
+	}); err != nil {
+		t.Fatalf("process memory clear: %v", err)
+	}
+	if entries := manager.MemoryList("channel-1"); len(entries) != 0 {
+		t.Fatalf("memory after clear = %+v", entries)
+	}
+}
+
+func TestSafeEgressDrainChannelDoesNotCountMemoryAsDiscordDelivery(t *testing.T) {
+	dir := t.TempDir()
+	manager := channel.NewManager(channel.ManagerConfig{DataDir: dir})
+	b := &Bot{dataDir: dir, manager: manager}
+	task := newSafeEgressTask(b)
+
+	if _, err := botegress.WritePending(dir, botegress.Action{
+		Action:      botegress.ActionMemoryAdd,
+		ChannelID:   "channel-1",
+		MemoryEntry: "Always reply in Traditional Chinese.",
+		RequestedBy: "alice user_id=user-1",
+		Reason:      "user explicitly asked for a memory",
+	}); err != nil {
+		t.Fatalf("WritePending: %v", err)
+	}
+	if delivered := task.DrainChannel("channel-1"); delivered != 0 {
+		t.Fatalf("DrainChannel delivered = %d, want 0 for memory-only action", delivered)
+	}
+	if entries := manager.MemoryList("channel-1"); len(entries) != 1 || entries[0] != "Always reply in Traditional Chinese." {
+		t.Fatalf("memory after drain = %+v", entries)
+	}
+}
+
+func TestSafeEgressMemoryApplicationAuditIncludesGuild(t *testing.T) {
+	dir := t.TempDir()
+	store, err := audit.Open(audit.Config{DataDir: dir, RecordContent: true})
+	if err != nil {
+		t.Fatalf("open audit store: %v", err)
+	}
+	recorder := audit.NewRecorder(store, 10, nil, false)
+	manager := channel.NewManager(channel.ManagerConfig{DataDir: dir})
+	b := &Bot{
+		dataDir:       dir,
+		guildID:       "guild-1",
+		manager:       manager,
+		auditRecorder: recorder,
+	}
+	task := newSafeEgressTask(b)
+
+	if err := task.process(botegress.Action{
+		Action:      botegress.ActionMemoryAdd,
+		ChannelID:   "channel-1",
+		MemoryEntry: "Always reply in Traditional Chinese.",
+		RequestedBy: "alice user_id=user-1",
+		Reason:      "user explicitly asked for a memory",
+	}); err != nil {
+		t.Fatalf("process memory add: %v", err)
+	}
+	recorder.Close()
+
+	events, err := audit.QueryTimelineReadOnly(filepath.Join(dir, "audit", "discord.sqlite"), audit.TimelineQueryOptions{
+		GuildID:   "guild-1",
+		TargetID:  "channel-1",
+		EventType: "bot_memory_updated",
+		Limit:     10,
+	})
+	if err != nil {
+		t.Fatalf("query memory audit: %v", err)
+	}
+	if len(events) != 1 || events[0].Status != "applied" {
+		t.Fatalf("memory audit events = %+v, want one applied event visible under guild filter", events)
+	}
+}
+
 func TestSafeEgressDrainChannelFlushesOnlyMatchingPendingActions(t *testing.T) {
 	dir := t.TempDir()
 	rt := &recordingDiscordTransport{}
@@ -161,6 +270,7 @@ func TestSafeEgressDrainChannelFlushesOnlyMatchingPendingActions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new discord session: %v", err)
 	}
+
 	ds.Client = &http.Client{Transport: rt}
 	b := &Bot{discord: ds, dataDir: dir}
 	task := newSafeEgressTask(b)
