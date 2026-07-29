@@ -19,6 +19,10 @@ func commandError(err error) string {
 	if errors.As(err, &limitErr) {
 		return threadAgentLimitMessage(limitErr)
 	}
+	var mcpDiscoveryErr *channel.MCPDiscoveryError
+	if errors.As(err, &mcpDiscoveryErr) {
+		return mcpDiscoveryErrorMessage(mcpDiscoveryErr)
+	}
 	if errors.Is(err, channel.ErrNoThreadAgent) {
 		return L.Get("error.no_thread_agent")
 	}
@@ -52,6 +56,37 @@ func commandErrorString(err error) string {
 		return ""
 	}
 	return strings.TrimPrefix(commandError(err), "❌ ")
+}
+
+func mcpDiscoveryErrorMessage(err *channel.MCPDiscoveryError) string {
+	if err == nil {
+		return ""
+	}
+	reason := mcpDiscoveryUserReason(err)
+	if reason != "" {
+		return L.Getf("error.mcp_scan_failed_reason", err.ServerName, err.Stage, reason)
+	}
+	detail := ""
+	if err.Err != nil {
+		detail = err.Err.Error()
+	}
+	if detail == "" {
+		detail = err.Error()
+	}
+	return L.Getf("error.mcp_scan_failed", err.ServerName, err.Stage, detail)
+}
+
+func mcpDiscoveryUserReason(err *channel.MCPDiscoveryError) string {
+	combined := strings.ToLower(strings.Join([]string{err.Stderr, err.Error()}, "\n"))
+	switch {
+	case strings.Contains(combined, "no providers configured") &&
+		(strings.Contains(combined, "gemini_api_key") || strings.Contains(combined, "openai_api_key")):
+		return L.Get("error.mcp_scan_reason_media_provider_missing")
+	case strings.Contains(combined, "transport closed"):
+		return L.Get("error.mcp_scan_reason_transport_closed")
+	default:
+		return ""
+	}
 }
 
 func threadAgentLimitMessage(err *channel.ThreadAgentLimitError) string {

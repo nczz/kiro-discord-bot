@@ -57,6 +57,33 @@ type MCPToolInfo struct {
 	DiscoveredAt time.Time
 }
 
+// MCPDiscoveryError preserves the scan stage and stderr for callers that can
+// render a safer, actionable user-facing message instead of a bare transport
+// failure.
+type MCPDiscoveryError struct {
+	ServerName string
+	Stage      string
+	Err        error
+	Stderr     string
+}
+
+func (e *MCPDiscoveryError) Error() string {
+	if e == nil {
+		return ""
+	}
+	if e.Err == nil {
+		return fmt.Sprintf("mcp server %q scan failed during %s", e.ServerName, e.Stage)
+	}
+	return fmt.Sprintf("mcp server %q scan failed during %s: %v", e.ServerName, e.Stage, e.Err)
+}
+
+func (e *MCPDiscoveryError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
 type MCPPolicyStore struct {
 	mu                    sync.RWMutex
 	db                    *sql.DB
@@ -244,13 +271,15 @@ func (s *MCPPolicyStore) DiscoverTools(ctx context.Context, serverName string) (
 	initReq.Params.ClientInfo = mcp.Implementation{Name: "kiro-discord-bot-mcp-discovery", Version: "1"}
 	initReq.Params.Capabilities = mcp.ClientCapabilities{}
 	if _, err := c.Initialize(ctx, initReq); err != nil {
-		logMCPDiscoveryError(serverName, "initialize", err, stderrSnapshot())
-		return nil, err
+		stderr := stderrSnapshot()
+		logMCPDiscoveryError(serverName, "initialize", err, stderr)
+		return nil, &MCPDiscoveryError{ServerName: serverName, Stage: "initialize", Err: err, Stderr: stderr}
 	}
 	result, err := c.ListTools(ctx, mcp.ListToolsRequest{})
 	if err != nil {
-		logMCPDiscoveryError(serverName, "tools/list", err, stderrSnapshot())
-		return nil, err
+		stderr := stderrSnapshot()
+		logMCPDiscoveryError(serverName, "tools/list", err, stderr)
+		return nil, &MCPDiscoveryError{ServerName: serverName, Stage: "tools/list", Err: err, Stderr: stderr}
 	}
 	now := time.Now().UTC()
 	tools := make([]MCPToolInfo, 0, len(result.Tools))
@@ -289,7 +318,9 @@ func captureMCPClientStderr(c *mcpclient.Client) func() string {
 	}
 	var mu sync.Mutex
 	var buf bytes.Buffer
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		tmp := make([]byte, 1024)
 		for {
 			n, err := r.Read(tmp)
@@ -317,6 +348,10 @@ func captureMCPClientStderr(c *mcpclient.Client) func() string {
 		}
 	}()
 	return func() string {
+		select {
+		case <-done:
+		case <-time.After(100 * time.Millisecond):
+		}
 		mu.Lock()
 		defer mu.Unlock()
 		return strings.TrimSpace(buf.String())

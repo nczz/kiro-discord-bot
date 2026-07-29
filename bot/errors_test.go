@@ -33,6 +33,24 @@ func TestCommandErrorKiroAuth(t *testing.T) {
 	}
 }
 
+func TestCommandErrorMCPMediaMissingProviderIsActionable(t *testing.T) {
+	L.Load("en")
+	msg := commandError(&channel.MCPDiscoveryError{
+		ServerName: "mcp-media",
+		Stage:      "initialize",
+		Err:        errors.New("transport error: transport closed"),
+		Stderr:     "2026/07/29 12:45:15 [mcp-media] no providers configured — set GEMINI_API_KEY or OPENAI_API_KEY",
+	})
+	for _, want := range []string{"mcp-media", "No media provider API key", "GEMINI_API_KEY", "OPENAI_API_KEY"} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("missing %q in message:\n%s", want, msg)
+		}
+	}
+	if strings.Contains(msg, "transport closed") {
+		t.Fatalf("transport detail should not be the primary user-facing reason:\n%s", msg)
+	}
+}
+
 func TestCommandErrorStringRemovesLeadingErrorIcon(t *testing.T) {
 	L.Load("en")
 	msg := commandErrorString(errors.New("kiro-cli binary not found: kiro-cli"))

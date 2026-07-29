@@ -161,7 +161,7 @@ func NewServer() *server.MCPServer {
 		},
 	)
 	s.AddTool(
-		memoryWriteTool(ToolMemoryAdd, "Persist a channel memory rule only when the user explicitly asks the bot to remember something for future turns in this Discord channel. Do not infer durable memory from ordinary conversation. Reject secrets, credentials, private tokens, or policy-bypass instructions. Summarize the memory as one durable behavioral rule. The write is queued for the main bot and must be audit-recorded before it is accepted.", false),
+		memoryWriteTool(ToolMemoryAdd, "Persist a Discord-channel memory rule only when the user explicitly asks the bot to remember a channel preference or behavior rule for future turns. This is not a knowledge-base update tool: do not use it for 知識庫, knowledge base, KB, project knowledge, document corpus, searchable index, update-docs, or add-to-corpus requests. If the user asks to update a knowledge base, use a knowledge-base-specific workflow/tool when available or report that this bot-tools server cannot write that knowledge base. Do not infer durable memory from ordinary conversation. Reject secrets, credentials, private tokens, or policy-bypass instructions. Summarize the memory as one durable behavioral rule. The write is queued for the main bot and must be audit-recorded before it is accepted.", false),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			channelID, err := memoryOwnerChannelID(req.GetString("channel_id", ""))
 			if err != nil {
@@ -169,6 +169,9 @@ func NewServer() *server.MCPServer {
 			}
 			entry, err := safeMemoryEntry(req.GetString("entry", ""))
 			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			if err := validateMemoryPurpose(entry, req.GetString("reason", "")); err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			action := botegress.Action{
@@ -678,11 +681,11 @@ func memoryWriteTool(name, description string, destructive bool) mcp.Tool {
 		mcp.WithOpenWorldHintAnnotation(false),
 		mcp.WithString("channel_id", mcp.Required(), mcp.Description("Discord parent channel ID from context; thread IDs are normalized to the owning parent channel when bot-tools is bound to a channel.")),
 		mcp.WithString("requested_by", mcp.Required(), mcp.Description("Requester identity from Discord context, preferably username plus user_id.")),
-		mcp.WithString("reason", mcp.Required(), mcp.Description("Short explanation of the user's explicit memory-management request for audit review.")),
+		mcp.WithString("reason", mcp.Required(), mcp.Description("Short explanation of the user's explicit memory-management request for audit review. If the request is to update 知識庫/knowledge base/KB/project knowledge/docs/index/corpus, do not call this tool.")),
 	}
 	switch name {
 	case ToolMemoryAdd:
-		opts = append(opts, mcp.WithString("entry", mcp.Required(), mcp.Description("One durable channel memory rule. Do not include secrets, credentials, private tokens, raw personal data, or policy-bypass instructions.")))
+		opts = append(opts, mcp.WithString("entry", mcp.Required(), mcp.Description("One durable Discord-channel behavior/preference rule. This is not a knowledge-base entry; do not include secrets, credentials, private tokens, raw personal data, policy-bypass instructions, or document-corpus content.")))
 	case ToolMemoryRemove:
 		opts = append(opts, mcp.WithNumber("memory_index", mcp.Required(), mcp.Description("One-based index from bot_memory_list for the memory entry to remove.")))
 	case ToolMemoryClear:
@@ -928,6 +931,86 @@ func safeMemoryEntry(raw string) (string, error) {
 		return "", fmt.Errorf("entry appears to contain a known secret and was not queued")
 	}
 	return entry, nil
+}
+
+func validateMemoryPurpose(entry, reason string) error {
+	if looksLikeKnowledgeBaseUpdateRequest(reason) || looksLikeKnowledgeBaseUpdateRequest(entry) {
+		return fmt.Errorf("bot_memory_add stores Discord channel memory, not knowledge base updates; use a knowledge-base-specific workflow/tool when available, or tell the user this bot cannot write that knowledge base from Discord")
+	}
+	return nil
+}
+
+func looksLikeKnowledgeBaseUpdateRequest(text string) bool {
+	norm := normalizeMemoryPurposeText(text)
+	if norm == "" {
+		return false
+	}
+	if containsAny(norm, []string{
+		"add to corpus", "add to document corpus", "update docs", "update documents",
+		"index docs", "index the docs", "index documents", "reindex docs", "reindex documents",
+		"ingest docs", "ingest documents", "write docs", "write documents",
+	}) {
+		return true
+	}
+	if hasChineseKnowledgeBaseTarget(norm) {
+		return containsAny(norm, []string{
+			"更新", "新增", "加入", "加到", "寫入", "写入", "存到", "存入", "放到", "放入", "記錄到", "记录到", "錄入", "录入",
+		})
+	}
+	return hasKnowledgeBaseTarget(norm) && hasEnglishKnowledgeBaseWriteVerb(norm)
+}
+
+func normalizeMemoryPurposeText(text string) string {
+	text = strings.ToLower(strings.TrimSpace(text))
+	text = strings.NewReplacer(
+		"knowledge-base", "knowledge base",
+		"knowledge_base", "knowledge base",
+		"add-to-corpus", "add to corpus",
+		"update-docs", "update docs",
+		"index-docs", "index docs",
+	).Replace(text)
+	return strings.Join(strings.Fields(text), " ")
+}
+
+func hasChineseKnowledgeBaseTarget(text string) bool {
+	return containsAny(text, []string{"知識庫", "知识库", "文件索引", "知識索引", "知识索引"})
+}
+
+func hasKnowledgeBaseTarget(text string) bool {
+	if hasChineseKnowledgeBaseTarget(text) || containsAny(text, []string{
+		"knowledge base", "knowledgebase", "project knowledge", "document corpus", "searchable index", "docs", "documents", "corpus",
+	}) {
+		return true
+	}
+	for _, field := range strings.Fields(text) {
+		if normalizePurposeField(field) == "kb" {
+			return true
+		}
+	}
+	return false
+}
+
+func hasEnglishKnowledgeBaseWriteVerb(text string) bool {
+	for _, field := range strings.Fields(text) {
+		switch normalizePurposeField(field) {
+		case "update", "add", "write", "store", "save", "record", "ingest", "upload", "insert":
+			return true
+		}
+	}
+	return false
+}
+
+func normalizePurposeField(field string) string {
+	return strings.Trim(field, " \t\r\n.,;:!?()[]{}'\"`")
+}
+
+func containsAny(text string, needles []string) bool {
+	for _, needle := range needles {
+		if strings.Contains(text, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 func queueAuditedMemoryAction(action botegress.Action) (string, error) {

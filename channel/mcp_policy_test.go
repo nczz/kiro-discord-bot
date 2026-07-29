@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1296,6 +1297,36 @@ func mustJSON(v any) string {
 	}
 	if len(tools) != 1 || tools[0].Name != "from-proxy" {
 		t.Fatalf("tools = %+v", tools)
+	}
+}
+
+func TestMCPPolicyStoreDiscoveryErrorCapturesStderr(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "mcp.json")
+	cfg := `{"mcpServers":{"broken-media":{"command":"/bin/sh","args":["-c","echo '[mcp-media] no providers configured — set GEMINI_API_KEY or OPENAI_API_KEY' >&2; exit 1"]}}}`
+	if err := os.WriteFile(cfgPath, []byte(cfg), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	t.Setenv("KIRO_MCP_CONFIG", cfgPath)
+	store, err := OpenMCPPolicyStore(dir)
+	if err != nil {
+		t.Fatalf("open policy store: %v", err)
+	}
+	defer store.Close()
+
+	_, err = store.DiscoverTools(context.Background(), "broken-media")
+	if err == nil {
+		t.Fatal("DiscoverTools succeeded for a server that exits during initialize")
+	}
+	var discoveryErr *MCPDiscoveryError
+	if !errors.As(err, &discoveryErr) {
+		t.Fatalf("error type = %T, want *MCPDiscoveryError: %v", err, err)
+	}
+	if discoveryErr.ServerName != "broken-media" || discoveryErr.Stage != "initialize" {
+		t.Fatalf("discovery error context = server %q stage %q", discoveryErr.ServerName, discoveryErr.Stage)
+	}
+	if !strings.Contains(discoveryErr.Stderr, "no providers configured") {
+		t.Fatalf("stderr was not captured: %q", discoveryErr.Stderr)
 	}
 }
 

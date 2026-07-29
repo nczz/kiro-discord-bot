@@ -172,6 +172,52 @@ func TestSafeMemoryEntryRejectsSecretLikeText(t *testing.T) {
 	}
 }
 
+func TestValidateMemoryPurposeRejectsKnowledgeBaseUpdate(t *testing.T) {
+	err := validateMemoryPurpose(
+		"查詢人員時優先使用 Notion 人員對照表。",
+		"使用者要求更新查詢方法到知識庫",
+	)
+	if err == nil {
+		t.Fatal("validateMemoryPurpose accepted a knowledge-base update request")
+	}
+	if !strings.Contains(err.Error(), "not knowledge base updates") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateMemoryPurposeRejectsDocsCorpusAliases(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		reason string
+	}{
+		{name: "update docs", reason: "user asked to update docs"},
+		{name: "index docs", reason: "index the docs with the new query method"},
+		{name: "add corpus", reason: "add to corpus for future retrieval"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := validateMemoryPurpose("Use the new retrieval method.", tc.reason); err == nil {
+				t.Fatalf("validateMemoryPurpose accepted %q as channel memory", tc.reason)
+			}
+		})
+	}
+}
+
+func TestValidateMemoryPurposeAllowsKnowledgeBaseMentionInBehaviorRule(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		entry string
+	}{
+		{name: "local kb fallback", entry: "查詢新品時，不要只依賴本地知識庫回答沒有資料。"},
+		{name: "search kb index", entry: "Always search the knowledge base index first."},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := validateMemoryPurpose(tc.entry, "user explicitly asked the bot to remember a retrieval behavior rule"); err != nil {
+				t.Fatalf("validateMemoryPurpose rejected a memory rule that only mentions knowledge base: %v", err)
+			}
+		})
+	}
+}
+
 func TestQueueAuditedMemoryActionWritesPendingAndAudit(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "audit", "discord.sqlite")

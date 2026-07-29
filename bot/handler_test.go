@@ -2151,6 +2151,19 @@ func TestBuildPromptDocumentsCronOwnerChannelScope(t *testing.T) {
 	}
 }
 
+func TestBuildPromptSeparatesMemoryFromKnowledgeBase(t *testing.T) {
+	got := buildPromptThread("更新查詢方法到知識庫", nil, "channel-1", "thread-1", "guild-1", "alice", "")
+	for _, want := range []string{
+		"bot_memory_add is not a knowledge base",
+		"do not use it for requests phrased as 知識庫",
+		"cannot write that knowledge base from Discord",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("prompt missing %q guidance:\n%s", want, got)
+		}
+	}
+}
+
 func TestBuildPromptInjectsCurrentDatetimeGuidance(t *testing.T) {
 	t.Setenv("CRON_TIMEZONE", "Asia/Taipei")
 	got := buildPromptThread("今天星期幾？", nil, "channel-1", "thread-1", "guild-1", "alice", "")
