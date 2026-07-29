@@ -12,6 +12,8 @@ On first channel setup, these safe tools are enabled by default:
 | --- | --- | --- |
 | `bot_data_summary` | Read | Summarize the bot data directory without message content. |
 | `bot_list_channel_data` | Read | List known channel data folders and metadata presence without message content. |
+| `bot_current_time` | Read | Return the bot's exact current date/time, weekday, day period, and current week in `CRON_TIMEZONE`. |
+| `bot_resolve_date_range` | Read | Resolve structured calendar ranges without agent-side date math. |
 | `bot_list_cron` | Read | List scheduled jobs for the current channel. |
 | `bot_send_file` | Write, non-destructive | Queue a sanitized file upload for Discord delivery. |
 | `bot_send_image_url` | Write, non-destructive | Queue a JPEG/PNG image fetched from an allowed non-secret URL for Discord delivery. |
@@ -36,6 +38,14 @@ These tools are available but not enabled by default:
 Thread IDs are normalized to the parent channel for recurring cron management where the runtime stores scheduled work at channel scope. One-time reminders keep the current delivery target, so a reminder created from a task thread is delivered back to that thread.
 
 Use `bot_create_reminder` for one-time delayed reminders such as "in 10 minutes" or "tomorrow at 09:00". Use `bot_create_cron` only for recurring jobs such as daily, weekly, or periodic automation.
+
+## Time Context Tools
+
+The agent prompt includes a `[Current datetime]` block derived from `CRON_TIMEZONE`. Agents should use that block for simple current-time facts such as "today", "weekday", and "morning or afternoon".
+
+For calculated ranges, agents should translate the user's date phrase into structured `bot_resolve_date_range` fields and call that tool instead of calculating weekdays or month boundaries from model memory. The MCP tool does not parse arbitrary natural-language date text; structured range fields are language-neutral and deterministic. For example, "next month, second week" becomes `range_type=month_week`, `offset=1`, and `week_index=2`.
+
+`CRON_TIMEZONE` is therefore the bot business timezone for cron, reminders, injected current datetime, and time helper tools. `USAGE_TIMEZONE` remains only for usage report aggregation.
 
 ## Safe Discord Egress
 

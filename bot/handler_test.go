@@ -2041,6 +2041,29 @@ func TestBuildPromptDocumentsCronOwnerChannelScope(t *testing.T) {
 	}
 }
 
+func TestBuildPromptInjectsCurrentDatetimeGuidance(t *testing.T) {
+	t.Setenv("CRON_TIMEZONE", "Asia/Taipei")
+	got := buildPromptThread("今天星期幾？", nil, "channel-1", "thread-1", "guild-1", "alice", "")
+	for _, want := range []string{
+		"[Current datetime]",
+		"timezone=Asia/Taipei",
+		"timezone_source=CRON_TIMEZONE",
+		"weekday_zh=",
+		"day_period_zh=",
+		"translate the user's date phrase into structured bot_resolve_date_range fields",
+		"The structured fields are language-neutral",
+		"do not pass natural-language date text to the MCP tool",
+		"明天 => range_type=day offset=1",
+		"下個月第二週 => range_type=month_week offset=1 week_index=2",
+		"過去7天 => range_type=relative_days days=7 direction=past",
+		"Do not calculate weekdays, month boundaries, or relative ranges from model memory",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("prompt missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestBuildPromptMapsCurrentChannelLanguageToDiscordContext(t *testing.T) {
 	got := buildPromptThread("search 本頻道 history", nil, "channel-1", "thread-1", "guild-1", "alice", "")
 	if !strings.Contains(got, "When users say 本頻道") || !strings.Contains(got, "bot_query_channel_history") {

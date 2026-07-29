@@ -123,6 +123,9 @@ func TestDefaultSafeToolNamesExcludeDestructiveTools(t *testing.T) {
 	if !seen[ToolUpdateCron] {
 		t.Fatalf("safe non-destructive update tool should be default-enabled: %+v", tools)
 	}
+	if !seen[ToolCurrentTime] || !seen[ToolResolveDateRange] {
+		t.Fatalf("time helper tools should be default-enabled for safe date answers: %+v", tools)
+	}
 	if seen[ToolQueryAudit] {
 		t.Fatalf("audit query tool must not be default-enabled outside manager-authorized /audit prompt jobs: %+v", tools)
 	}
@@ -163,6 +166,43 @@ func TestCreateCronToolDocumentsBotTimezone(t *testing.T) {
 	desc, _ := schedule["description"].(string)
 	if !strings.Contains(desc, "Asia/Taipei") || !strings.Contains(desc, "Do not convert to UTC") {
 		t.Fatalf("schedule description should pin bot timezone and forbid UTC conversion: %q", desc)
+	}
+}
+
+func TestTimeToolsDocumentTimezoneAndStructuredRangeUse(t *testing.T) {
+	tool := currentTimeTool("Asia/Taipei")
+	if tool.Annotations.ReadOnlyHint == nil || !*tool.Annotations.ReadOnlyHint {
+		t.Fatalf("current time readOnlyHint = %+v, want true", tool.Annotations.ReadOnlyHint)
+	}
+	if !strings.Contains(tool.Description, "CRON_TIMEZONE") || !strings.Contains(tool.Description, "Do not infer current date/time from model memory") {
+		t.Fatalf("current time description missing timezone/model-memory guidance: %q", tool.Description)
+	}
+	if _, ok := tool.InputSchema.Properties["timezone"]; ok {
+		t.Fatalf("current time tool must not expose timezone override: %+v", tool.InputSchema.Properties)
+	}
+
+	rangeTool := resolveDateRangeTool("Asia/Taipei")
+	if rangeTool.Annotations.ReadOnlyHint == nil || !*rangeTool.Annotations.ReadOnlyHint {
+		t.Fatalf("range readOnlyHint = %+v, want true", rangeTool.Annotations.ReadOnlyHint)
+	}
+	for _, want := range []string{"structured MCP arguments", "range_type=month_week", "Do not calculate weekdays", "translate the user's natural-language date phrase"} {
+		if !strings.Contains(rangeTool.Description, want) {
+			t.Fatalf("range tool description missing %q: %q", want, rangeTool.Description)
+		}
+	}
+	for _, field := range []string{"range_type", "offset", "week_index", "month_week_policy", "include_today"} {
+		if _, ok := rangeTool.InputSchema.Properties[field]; !ok {
+			t.Fatalf("range tool schema missing %s: %+v", field, rangeTool.InputSchema.Properties)
+		}
+	}
+	if _, ok := rangeTool.InputSchema.Properties["timezone"]; ok {
+		t.Fatalf("range tool must not expose timezone override: %+v", rangeTool.InputSchema.Properties)
+	}
+	if _, ok := rangeTool.InputSchema.Properties["expression"]; ok {
+		t.Fatalf("range tool must not expose natural-language expression input: %+v", rangeTool.InputSchema.Properties)
+	}
+	if _, ok := rangeTool.InputSchema.Properties["locale"]; ok {
+		t.Fatalf("range tool must not expose natural-language locale input: %+v", rangeTool.InputSchema.Properties)
 	}
 }
 

@@ -22,6 +22,7 @@ import (
 	"github.com/nczz/kiro-discord-bot/internal/discordmention"
 	"github.com/nczz/kiro-discord-bot/internal/secrets"
 	"github.com/nczz/kiro-discord-bot/internal/textutil"
+	"github.com/nczz/kiro-discord-bot/internal/timectx"
 	L "github.com/nczz/kiro-discord-bot/locale"
 	"github.com/nczz/kiro-discord-bot/stt"
 )
@@ -501,6 +502,8 @@ func buildPromptThreadWithMentions(text string, attachments []string, channelID,
 	sb.WriteString("For one-time delayed reminders, use bot_create_reminder; for recurring schedules, use bot_create_cron.\n")
 	sb.WriteString("To change, disable, or resume an existing recurring schedule, first use bot_list_cron, then bot_update_cron with only the requested fields. Use enabled=false to disable without deleting; deletion requires bot_delete_cron.\n")
 	sb.WriteString("Attached Discord files are listed as a manifest with local paths and metadata. Do not infer image contents from filenames or metadata alone; inspect the relevant path before visual claims. For bulk image operations, process file paths in batches instead of asking for all images as prompt content.\n")
+	sb.WriteString("For time/date/weekday questions, use the [Current datetime] block below for current facts. For calculated date ranges, relative periods, month/week boundaries, specific weekdays, nth week of a month, or schedule-sensitive answers, translate the user's date phrase into structured bot_resolve_date_range fields and call that tool when available. Examples: 明天 => range_type=day offset=1; 下個月第二週 => range_type=month_week offset=1 week_index=2; 過去7天 => range_type=relative_days days=7 direction=past. The structured fields are language-neutral; do not pass natural-language date text to the MCP tool. Do not calculate weekdays, month boundaries, or relative ranges from model memory when bot time tools are available. State the timezone used for user-visible date/time answers.\n")
+	sb.WriteString(timectx.PromptBlock(time.Now(), os.Getenv("CRON_TIMEZONE")))
 	userIDPart := ""
 	if strings.TrimSpace(userID) != "" {
 		userIDPart = fmt.Sprintf(" user_id=%s", strings.TrimSpace(userID))

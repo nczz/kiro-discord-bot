@@ -12,6 +12,8 @@
 | --- | --- | --- |
 | `bot_data_summary` | Read | 摘要 bot data directory，不包含訊息內容。 |
 | `bot_list_channel_data` | Read | 列出已知 channel data folders 與 metadata 是否存在，不包含訊息內容。 |
+| `bot_current_time` | Read | 回傳 bot 在 `CRON_TIMEZONE` 下的精確目前日期時間、星期、時段與本週範圍。 |
+| `bot_resolve_date_range` | Read | 用結構化欄位解析 calendar range，避免 agent 自己心算日期。 |
 | `bot_list_cron` | Read | 列出目前頻道的排程任務。 |
 | `bot_send_file` | Write, non-destructive | 將 sanitized file upload 排入 Discord delivery queue。 |
 | `bot_send_image_url` | Write, non-destructive | 從允許的 non-secret URL 抓取 JPEG/PNG 圖片並排入 Discord delivery queue。 |
@@ -36,6 +38,14 @@
 Recurring cron 管理在 runtime 中是 channel scope；thread ID 會依需要正規化成 parent channel。一次性 reminder 會保留目前 delivery target，因此在 task thread 中建立的提醒會回到該 thread。
 
 「10 分鐘後提醒我」、「明天 09:00 提醒某人」這類一次性提醒應使用 `bot_create_reminder`。每天、每週或週期性自動化才使用 `bot_create_cron`。
+
+## 時間脈絡工具
+
+Agent prompt 會包含由 `CRON_TIMEZONE` 產生的 `[Current datetime]` 區塊。簡單的「今天」、「星期幾」、「現在上午還下午」應直接使用這個區塊。
+
+需要計算區間時，agent 應把使用者的日期片語拆成 `bot_resolve_date_range` 的結構化欄位並呼叫工具，不要靠模型記憶自行計算星期或月週邊界。MCP 工具不解析任意自然語言日期文字；結構化 range 欄位不依賴 agent 回答語言，結果可重現。例如「下個月第二週」應拆成 `range_type=month_week`、`offset=1`、`week_index=2`。
+
+因此 `CRON_TIMEZONE` 是 cron、reminder、prompt 注入目前時間與時間輔助工具共用的 bot business timezone。`USAGE_TIMEZONE` 只保留給 usage report aggregation。
 
 ## 安全 Discord Egress
 

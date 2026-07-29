@@ -12,6 +12,7 @@ import (
 	"github.com/nczz/kiro-discord-bot/internal/channelmeta"
 	"github.com/nczz/kiro-discord-bot/internal/cronpolicy"
 	"github.com/nczz/kiro-discord-bot/internal/secrets"
+	"github.com/nczz/kiro-discord-bot/internal/timectx"
 	"github.com/robfig/cron/v3"
 	"io"
 	"log"
@@ -32,6 +33,8 @@ func Run() error {
 const (
 	ToolDataSummary         = "bot_data_summary"
 	ToolListChannelData     = "bot_list_channel_data"
+	ToolCurrentTime         = "bot_current_time"
+	ToolResolveDateRange    = "bot_resolve_date_range"
 	ToolSendMessage         = "bot_send_message"
 	ToolSendFile            = "bot_send_file"
 	ToolSendImageURL        = "bot_send_image_url"
@@ -50,6 +53,8 @@ func DefaultSafeToolNames() []string {
 	return []string{
 		ToolDataSummary,
 		ToolListChannelData,
+		ToolCurrentTime,
+		ToolResolveDateRange,
 		ToolListCron,
 		ToolSendFile,
 		ToolSendImageURL,
@@ -90,6 +95,47 @@ func NewServer() *server.MCPServer {
 			}
 			raw, _ := json.MarshalIndent(rows, "", "  ")
 			return mcp.NewToolResultText(string(raw)), nil
+		},
+	)
+	s.AddTool(
+		currentTimeTool(cronTZ),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			current, err := timectx.Current(time.Now(), os.Getenv("CRON_TIMEZONE"))
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			return mcp.NewToolResultText(timectx.JSON(current)), nil
+		},
+	)
+	s.AddTool(
+		resolveDateRangeTool(cronTZ),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			includeTodaySet := false
+			includeToday := false
+			if raw, ok := req.GetArguments()["include_today"].(bool); ok {
+				includeToday = raw
+				includeTodaySet = true
+			}
+			rangeReq := timectx.RangeRequest{
+				ReferenceTime:   req.GetString("reference_time", ""),
+				RangeType:       req.GetString("range_type", ""),
+				Offset:          int(req.GetFloat("offset", 0)),
+				WeekIndex:       int(req.GetFloat("week_index", 0)),
+				Weekday:         req.GetString("weekday", ""),
+				WeekStart:       req.GetString("week_start", ""),
+				MonthWeekPolicy: req.GetString("month_week_policy", ""),
+				Date:            req.GetString("date", ""),
+				Days:            int(req.GetFloat("days", 0)),
+				Direction:       req.GetString("direction", ""),
+			}
+			if includeTodaySet {
+				rangeReq.IncludeToday = &includeToday
+			}
+			result, err := timectx.ResolveDateRange(rangeReq, time.Now(), os.Getenv("CRON_TIMEZONE"))
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			return mcp.NewToolResultText(timectx.JSON(result)), nil
 		},
 	)
 	s.AddTool(
@@ -480,6 +526,7 @@ func writeTool(name, description string, destructive bool) mcp.Tool {
 			mcp.WithString("channel_id", mcp.Required(), mcp.Description("Discord channel ID from context; thread IDs are normalized to the owning parent channel when bot-tools is bound to a channel")),
 			mcp.WithString("guild_id", mcp.Required(), mcp.Description("Discord guild ID from context")),
 			mcp.WithString("created_by", mcp.Description("Username of the requester")),
+
 			mcp.WithString("created_by_id", mcp.Description("Optional Discord user ID of the requester when available in context")),
 		} {
 			opt(&t)
@@ -529,6 +576,46 @@ func readOnlyTool(name, description string) mcp.Tool {
 		mcp.WithIdempotentHintAnnotation(true),
 		mcp.WithOpenWorldHintAnnotation(false),
 	)
+}
+
+func currentTimeTool(cronTZ string) mcp.Tool {
+	return mcp.NewTool(ToolCurrentTime,
+		mcp.WithDescription("Return the bot current date/time in CRON_TIMEZONE, including exact time, weekday, zh-TW weekday, day period, today/yesterday/tomorrow, and current week range. Call this before answering current time, today, tomorrow, yesterday, weekday, morning/afternoon, or exact-time questions when the injected prompt time block is missing, stale, or the task needs a fresh timestamp. Do not infer current date/time from model memory."),
+		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(true),
+		mcp.WithOpenWorldHintAnnotation(false),
+	)
+}
+
+func resolveDateRangeTool(cronTZ string) mcp.Tool {
+	return mcp.NewTool(ToolResolveDateRange,
+		mcp.WithDescription("Resolve deterministic calendar ranges using CRON_TIMEZONE from structured MCP arguments. Call this for calculated date ranges, relative periods, month/week boundaries, specific weekdays, nth week of a month, quarters, years, recent/future N days, or schedule-sensitive date answers. Agents must translate the user's natural-language date phrase into structured fields before calling this tool; for ranges such as '下個月第二週', pass range_type=month_week, offset=1, week_index=2. Do not calculate weekdays, month boundaries, or relative ranges mentally when this tool is available."),
+		mcp.WithString("reference_time", mcp.Description("Optional RFC3339 or YYYY-MM-DD reference time. Defaults to bot current time in CRON_TIMEZONE.")),
+		mcp.WithString("range_type", mcp.Required(), mcp.Description("Structured range type: day, week, month, month_week, quarter, year, relative_days, specific_weekday.")),
+		mcp.WithNumber("offset", mcp.Description("Optional period offset from the reference period: previous=-1, current=0, next=1. For range_type=month_week, offset applies to the month.")),
+		mcp.WithNumber("week_index", mcp.Description("Required for range_type=month_week. The 1-based week number in the target month.")),
+		mcp.WithString("weekday", mcp.Description("Required for range_type=specific_weekday. Accepts monday..sunday or common zh-TW forms such as 週一.")),
+		mcp.WithString("week_start", mcp.Description("Optional week start day. Defaults to monday.")),
+		mcp.WithString("month_week_policy", mcp.Description("Optional nth-week policy. Defaults to calendar_row_clipped_to_month. Alternatives: full_weeks_only, day_blocks_1_7.")),
+		mcp.WithString("date", mcp.Description("Optional YYYY-MM-DD date for range_type=day or weekday lookup.")),
+		mcp.WithNumber("days", mcp.Description("Required for range_type=relative_days.")),
+		mcp.WithString("direction", mcp.Description("Optional for range_type=relative_days: past or future. Defaults to past.")),
+		mcp.WithBoolean("include_today", mcp.Description("Optional for range_type=relative_days. Defaults to true.")),
+		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(true),
+		mcp.WithOpenWorldHintAnnotation(false),
+	)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func queryChannelHistoryTool() mcp.Tool {
