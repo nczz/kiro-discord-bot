@@ -1594,10 +1594,13 @@ func TestSlashCommandsIncludeAgentAndUsage(t *testing.T) {
 func TestA2AConfirmationResponseUsesLocale(t *testing.T) {
 	L.Load("zh-TW")
 	got := formatA2AResponse(botmcp.A2AToolResponse{OK: true, RequiresConfirmation: true, ConfirmationSummary: "啟用 A2A", ChangeID: "change-1", ConfirmationToken: "token-1"})
-	for _, want := range []string{"A2A 需要確認", "啟用 A2A", "change-1", "token-1"} {
+	for _, want := range []string{"A2A 需要確認", "啟用 A2A", "change-1", "核准"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("formatA2AResponse = %q, missing %q", got, want)
 		}
+	}
+	if strings.Contains(got, "token-1") || strings.Contains(got, "confirmation_token:") {
+		t.Fatalf("formatA2AResponse leaked raw confirmation token: %q", got)
 	}
 }
 
@@ -1703,6 +1706,50 @@ func TestA2AButtonsConfirmationCustomIDIsSigned(t *testing.T) {
 	}
 	if validateA2AConfirmationButtonCustomID(customID, "policy_apply", "channel-2", "change-1") {
 		t.Fatal("signed A2A confirmation button custom_id accepted wrong channel")
+	}
+
+	buttonID := a2aPolicyConfirmationButtonCustomID("apply", "state-1", "channel-1", "change-1")
+	if len(buttonID) > 100 {
+		t.Fatalf("policy button custom id length = %d, want Discord-safe <= 100", len(buttonID))
+	}
+	if !validateA2APolicyConfirmationButtonCustomID(buttonID, "apply", "state-1", "channel-1", "change-1") {
+		t.Fatal("signed A2A policy button custom_id did not validate")
+	}
+	if validateA2APolicyConfirmationButtonCustomID(buttonID, "apply", "state-1", "channel-2", "change-1") {
+		t.Fatal("signed A2A policy button custom_id accepted wrong channel")
+	}
+}
+
+func TestA2AConfirmationComponentsStoreTokenForButtonApply(t *testing.T) {
+	L.Load("en")
+	b := &Bot{a2aConfirmations: newA2APolicyConfirmationStore(func() time.Time { return time.Unix(100, 0).UTC() })}
+	payload := a2aSlashPayload{Request: botmcp.A2AToolRequest{GuildID: "guild-1", ChannelID: "channel-1", RequestedByID: "user-1", RequestedBy: "alice"}}
+	resp := botmcp.A2AToolResponse{OK: true, RequiresConfirmation: true, ChangeID: "change-1", ConfirmationToken: "token-1", ExpiresAt: time.Unix(700, 0).UTC().Format(time.RFC3339)}
+	components := b.a2aPolicyConfirmationComponents(payload, resp)
+	if len(components) != 1 {
+		t.Fatalf("components = %+v, want one action row", components)
+	}
+	row, ok := components[0].(discordgo.ActionsRow)
+	if !ok || len(row.Components) != 2 {
+		t.Fatalf("components = %+v, want apply/cancel buttons", components)
+	}
+	button, ok := row.Components[0].(discordgo.Button)
+	if !ok || button.Label != "Approve" || button.Style != discordgo.SuccessButton {
+		t.Fatalf("apply button = %+v", row.Components[0])
+	}
+	parts := strings.Split(button.CustomID, ":")
+	if len(parts) != 5 {
+		t.Fatalf("button custom id = %q", button.CustomID)
+	}
+	entry, ok := b.a2aConfirmations.Get(parts[3])
+	if !ok {
+		t.Fatal("confirmation entry not stored")
+	}
+	if entry.Payload.Request.ConfirmationToken != "token-1" || entry.Payload.Request.ChangeID != "change-1" {
+		t.Fatalf("stored payload = %+v", entry.Payload.Request)
+	}
+	if strings.Contains(formatA2AResponse(resp), "token-1") {
+		t.Fatalf("button confirmation response leaked token")
 	}
 }
 

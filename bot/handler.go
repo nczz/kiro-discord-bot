@@ -1285,6 +1285,8 @@ func (b *Bot) handleInteraction(ds *discordgo.Session, i *discordgo.InteractionC
 			b.handleCWDComponent(ds, i)
 		} else if strings.HasPrefix(customID, usageHistoryCustomPrefix+":") {
 			b.handleUsageHistoryComponent(ds, i)
+		} else if strings.HasPrefix(customID, a2aComponentPrefix+":") {
+			b.handleA2AComponent(ds, i)
 		} else if strings.HasPrefix(customID, "cronp_") {
 			b.handleCronPromptButton(ds, i)
 		} else if strings.HasPrefix(customID, "cron_") {
@@ -1447,7 +1449,19 @@ func (b *Bot) handleSlashCommand(ds *discordgo.Session, i *discordgo.Interaction
 			b.recordCommandResponseDelivery(auditCtx, data.Name, "slash", "sent", payload.content, payload.metadata, sent, err)
 		}
 	}
-	ctx := cmdCtx{channelID: channelID, targetID: rawChannelID, inThread: inThread, reply: reply, replyWithMetadata: replyWithMetadata, guildID: i.GuildID, userID: userID, username: username, interactionID: i.ID}
+	replyWithComponents := func(msg string, components []discordgo.MessageComponent, metadata map[string]any) {
+		metadata = mergeMetadata(metadata, visibilityMetadata)
+		payloads := splitOversizedReply(secrets.RedactEnv(msg), metadata)
+		for idx, payload := range payloads {
+			sendComponents := []discordgo.MessageComponent(nil)
+			if idx == 0 {
+				sendComponents = components
+			}
+			sent, err := responder.SendWithComponents(payload.content, sendComponents)
+			b.recordCommandResponseDelivery(auditCtx, data.Name, "slash", "sent", payload.content, payload.metadata, sent, err)
+		}
+	}
+	ctx := cmdCtx{channelID: channelID, targetID: rawChannelID, inThread: inThread, reply: reply, replyWithMetadata: replyWithMetadata, replyWithComponents: replyWithComponents, guildID: i.GuildID, userID: userID, username: username, interactionID: i.ID}
 
 	go func() {
 		completionStatus := "completed"

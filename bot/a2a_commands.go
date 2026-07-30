@@ -3,22 +3,110 @@ package bot
 import (
 	"context"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/nczz/kiro-discord-bot/a2a"
 	"github.com/nczz/kiro-discord-bot/internal/botmcp"
+	"github.com/nczz/kiro-discord-bot/internal/secrets"
 	L "github.com/nczz/kiro-discord-bot/locale"
 )
 
 type a2aSlashPayload struct {
 	Subcommand string                `json:"subcommand"`
 	Request    botmcp.A2AToolRequest `json:"request"`
+}
+
+const (
+	a2aComponentPrefix        = "a2a"
+	a2aPolicyComponentSection = "policy"
+	a2aPolicyConfirmTTL       = 10 * time.Minute
+)
+
+type a2aPolicyConfirmationEntry struct {
+	Payload   a2aSlashPayload
+	ExpiresAt time.Time
+}
+
+type a2aPolicyConfirmationStore struct {
+	mu      sync.Mutex
+	now     func() time.Time
+	entries map[string]a2aPolicyConfirmationEntry
+}
+
+func newA2APolicyConfirmationStore(now func() time.Time) *a2aPolicyConfirmationStore {
+	if now == nil {
+		now = time.Now
+	}
+	return &a2aPolicyConfirmationStore{now: now, entries: make(map[string]a2aPolicyConfirmationEntry)}
+}
+
+func (s *a2aPolicyConfirmationStore) Put(payload a2aSlashPayload, resp botmcp.A2AToolResponse) string {
+	if s == nil {
+		return ""
+	}
+	payload.Request.ChangeID = resp.ChangeID
+	payload.Request.ConfirmationToken = resp.ConfirmationToken
+	expires := s.now().Add(a2aPolicyConfirmTTL)
+	if resp.ExpiresAt != "" {
+		if parsed, err := time.Parse(time.RFC3339, resp.ExpiresAt); err == nil {
+			expires = parsed
+		}
+	}
+	id := randomA2AConfirmationID()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	now := s.now()
+	for key, entry := range s.entries {
+		if !entry.ExpiresAt.After(now) {
+			delete(s.entries, key)
+		}
+	}
+	s.entries[id] = a2aPolicyConfirmationEntry{Payload: payload, ExpiresAt: expires}
+	return id
+}
+
+func (s *a2aPolicyConfirmationStore) Take(id string) (a2aPolicyConfirmationEntry, bool) {
+	if s == nil {
+		return a2aPolicyConfirmationEntry{}, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entry, ok := s.entries[id]
+	if !ok {
+		return a2aPolicyConfirmationEntry{}, false
+	}
+	if !entry.ExpiresAt.After(s.now()) {
+		delete(s.entries, id)
+		return a2aPolicyConfirmationEntry{}, false
+	}
+	delete(s.entries, id)
+	return entry, true
+}
+
+func (s *a2aPolicyConfirmationStore) Get(id string) (a2aPolicyConfirmationEntry, bool) {
+	if s == nil {
+		return a2aPolicyConfirmationEntry{}, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entry, ok := s.entries[id]
+	if !ok || !entry.ExpiresAt.After(s.now()) {
+		if ok {
+			delete(s.entries, id)
+		}
+		return a2aPolicyConfirmationEntry{}, false
+	}
+	return entry, true
 }
 
 func a2aSlashOptions() []*discordgo.ApplicationCommandOption {
@@ -231,7 +319,110 @@ func (b *Bot) cmdA2A(ctx cmdCtx) {
 	default:
 		resp = botmcp.A2AToolResponse{OK: false, Message: fmt.Sprintf("unknown A2A subcommand %q", payload.Subcommand)}
 	}
+	if resp.OK && resp.RequiresConfirmation && ctx.replyWithComponents != nil {
+		components := b.a2aPolicyConfirmationComponents(payload, resp)
+		ctx.sendReplyWithComponents(formatA2AResponse(resp), components, map[string]any{"a2a_confirmation": "button"})
+		return
+	}
 	ctx.reply(formatA2AResponse(resp))
+}
+
+func (b *Bot) a2aPolicyConfirmationComponents(payload a2aSlashPayload, resp botmcp.A2AToolResponse) []discordgo.MessageComponent {
+	if b.a2aConfirmations == nil || strings.TrimSpace(resp.ConfirmationToken) == "" || strings.TrimSpace(resp.ChangeID) == "" {
+		return nil
+	}
+	stateID := b.a2aConfirmations.Put(payload, resp)
+	if stateID == "" {
+		return nil
+	}
+	return []discordgo.MessageComponent{
+		discordgo.ActionsRow{Components: []discordgo.MessageComponent{
+			discordgo.Button{
+				Label:    L.Get("a2a.confirm.apply"),
+				Style:    discordgo.SuccessButton,
+				CustomID: a2aPolicyConfirmationButtonCustomID("apply", stateID, payload.Request.ChannelID, resp.ChangeID),
+			},
+			discordgo.Button{
+				Label:    L.Get("a2a.confirm.cancel"),
+				Style:    discordgo.SecondaryButton,
+				CustomID: a2aPolicyConfirmationButtonCustomID("cancel", stateID, payload.Request.ChannelID, resp.ChangeID),
+			},
+		}},
+	}
+}
+
+func (b *Bot) handleA2AComponent(ds *discordgo.Session, i *discordgo.InteractionCreate) {
+	data := i.MessageComponentData()
+	parts := strings.Split(data.CustomID, ":")
+	if len(parts) != 5 || parts[0] != a2aComponentPrefix || parts[1] != a2aPolicyComponentSection {
+		return
+	}
+	action, stateID := parts[2], parts[3]
+	entry, ok := b.a2aConfirmations.Get(stateID)
+	if !ok {
+		b.respondA2AComponentUpdate(ds, i, L.Get("a2a.confirm.expired"), nil)
+		return
+	}
+	req := entry.Payload.Request
+	if i.GuildID != req.GuildID || i.ChannelID != req.ChannelID || !validateA2APolicyConfirmationButtonCustomID(data.CustomID, action, stateID, req.ChannelID, req.ChangeID) {
+		respondInteractionEphemeral(ds, i, L.Get("a2a.confirm.invalid"))
+		return
+	}
+	userID, username := interactionUser(i)
+	if userID != req.RequestedByID {
+		respondInteractionEphemeral(ds, i, L.Get("a2a.confirm.original_user_only"))
+		return
+	}
+	if !b.userCanManageAuditTarget(ds, userID, i.ChannelID) {
+		respondInteractionEphemeral(ds, i, L.Get("a2a.remedy.manager_required"))
+		return
+	}
+	switch action {
+	case "cancel":
+		_, _ = b.a2aConfirmations.Take(stateID)
+		b.respondA2AComponentUpdate(ds, i, L.Get("a2a.confirm.cancelled"), nil)
+	case "apply":
+		entry, ok = b.a2aConfirmations.Take(stateID)
+		if !ok {
+			b.respondA2AComponentUpdate(ds, i, L.Get("a2a.confirm.expired"), nil)
+			return
+		}
+		entry.Payload.Request.ManageChannels = true
+		entry.Payload.Request.RequestedBy = username
+		entry.Payload.Request.RequestedByID = userID
+		resp := b.applyA2APolicyConfirmation(entry.Payload, i.GuildID, i.ChannelID)
+		b.respondA2AComponentUpdate(ds, i, formatA2AResponse(resp), nil)
+	default:
+		respondInteractionEphemeral(ds, i, L.Get("a2a.confirm.invalid"))
+	}
+}
+
+func (b *Bot) applyA2APolicyConfirmation(payload a2aSlashPayload, guildID, channelID string) botmcp.A2AToolResponse {
+	svc, err := botmcp.NewA2AService(botmcp.A2AServiceConfig{DataDir: b.dataDir, Config: botmcp.A2AConfigFromEnv(), Node: b.a2aNode, BoundGuildID: guildID, BoundChannelID: channelID, BoundTargetID: channelID, AuditEnabled: true, AuditRecordContent: true, ConnectNATS: false})
+	if err != nil {
+		return botmcp.A2AToolResponse{OK: false, Message: err.Error()}
+	}
+	defer svc.Close()
+	resp, err := svc.PolicyApply(context.Background(), payload.Request)
+	if err != nil {
+		return botmcp.A2AToolResponse{OK: false, Message: err.Error()}
+	}
+	return resp
+}
+
+func (b *Bot) respondA2AComponentUpdate(ds *discordgo.Session, i *discordgo.InteractionCreate, content string, components []discordgo.MessageComponent) {
+	content = truncateDiscordMessageContent(secrets.RedactEnv(content), mcpContentLimit)
+	err := ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseUpdateMessage,
+		Data: &discordgo.InteractionResponseData{
+			Content:         content,
+			Components:      components,
+			AllowedMentions: &discordgo.MessageAllowedMentions{},
+		},
+	})
+	if err != nil {
+		log.Printf("[a2a-ui] interaction update failed channel=%s content_len=%d components=%d: %v", i.ChannelID, len(content), len(components), err)
+	}
 }
 
 func a2aConfirmationButtonCustomID(action, channelID, changeID string) string {
@@ -243,6 +434,33 @@ func a2aConfirmationButtonCustomID(action, channelID, changeID string) string {
 	mac.Write([]byte(changeID))
 	sig := hex.EncodeToString(mac.Sum(nil))[:24]
 	return "a2a:confirm:" + action + ":" + sig
+}
+
+func a2aPolicyConfirmationButtonCustomID(action, stateID, channelID, changeID string) string {
+	mac := macA2APolicyConfirmation(action, stateID, channelID, changeID)
+	return strings.Join([]string{a2aComponentPrefix, a2aPolicyComponentSection, action, stateID, mac}, ":")
+}
+
+func validateA2APolicyConfirmationButtonCustomID(customID, action, stateID, channelID, changeID string) bool {
+	want := a2aPolicyConfirmationButtonCustomID(action, stateID, channelID, changeID)
+	return hmac.Equal([]byte(customID), []byte(want))
+}
+
+func macA2APolicyConfirmation(action, stateID, channelID, changeID string) string {
+	mac := hmac.New(sha256.New, []byte(a2aComponentSecret()))
+	for _, part := range []string{action, stateID, channelID, changeID} {
+		mac.Write([]byte(part))
+		mac.Write([]byte{0})
+	}
+	return hex.EncodeToString(mac.Sum(nil))[:24]
+}
+
+func randomA2AConfirmationID() string {
+	var b [8]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		panic(err)
+	}
+	return hex.EncodeToString(b[:])
 }
 
 func validateA2AConfirmationButtonCustomID(customID, action, channelID, changeID string) bool {
@@ -283,7 +501,7 @@ func formatA2AResponse(resp botmcp.A2AToolResponse) string {
 
 func formatA2AConfirmation(resp botmcp.A2AToolResponse) string {
 	var sb strings.Builder
-	sb.WriteString(L.Getf("a2a.confirmation_required", resp.ConfirmationSummary, resp.ChangeID, resp.ConfirmationToken))
+	sb.WriteString(L.Getf("a2a.confirmation_required", resp.ConfirmationSummary, resp.ChangeID))
 	if len(resp.RiskLabels) > 0 {
 		sb.WriteString("\n")
 		sb.WriteString(L.Getf("a2a.risk_labels", strings.Join(resp.RiskLabels, ", ")))

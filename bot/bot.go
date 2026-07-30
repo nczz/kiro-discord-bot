@@ -43,6 +43,7 @@ type Bot struct {
 	peerPermMu          sync.Mutex
 	peerPermCache       map[string]peerPermissionCacheEntry
 	cronPromptCache     cronPromptStore // parsed cron jobs awaiting button confirmation
+	a2aConfirmations    *a2aPolicyConfirmationStore
 	setupPromptMu       sync.Mutex
 	setupPromptCooldown *setupPromptCooldown
 }
@@ -139,6 +140,7 @@ func NewFromConfig(cfg BotConfig) (*Bot, error) {
 		auditRecorder:       auditRecorder,
 		a2aNode:             cfg.A2ANode,
 		setupPromptCooldown: newSetupPromptCooldown(nil),
+		a2aConfirmations:    newA2APolicyConfirmationStore(nil),
 	}
 	if cfg.STTEnabled && cfg.STTAPIKey != "" {
 		b.sttClient = stt.New(cfg.STTProvider, cfg.STTAPIKey, cfg.STTModel, cfg.STTLanguage)

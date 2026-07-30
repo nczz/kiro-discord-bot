@@ -43,3 +43,27 @@ func (r *deferredSlashResponder) Send(content string) (*discordgo.Message, error
 		Flags:           r.followup,
 	})
 }
+
+func (r *deferredSlashResponder) SendWithComponents(content string, components []discordgo.MessageComponent) (*discordgo.Message, error) {
+	r.mu.Lock()
+	useOriginal := !r.edited
+	if useOriginal {
+		r.edited = true
+	}
+	r.mu.Unlock()
+
+	allowedMentions := &discordgo.MessageAllowedMentions{}
+	if useOriginal {
+		return r.ds.InteractionResponseEdit(r.interaction, &discordgo.WebhookEdit{
+			Content:         &content,
+			Components:      &components,
+			AllowedMentions: allowedMentions,
+		})
+	}
+	return r.ds.FollowupMessageCreate(r.interaction, true, &discordgo.WebhookParams{
+		Content:         content,
+		Components:      components,
+		AllowedMentions: allowedMentions,
+		Flags:           r.followup,
+	})
+}

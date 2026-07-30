@@ -21,17 +21,18 @@ import (
 // cmdCtx holds the execution context for a command, abstracting away
 // the differences between bang commands, slash commands, channel, and thread.
 type cmdCtx struct {
-	channelID         string                       // parent channel (session/memory key)
-	targetID          string                       // where the command was issued (channelID or threadID)
-	inThread          bool                         // true if issued inside a thread
-	reply             func(string)                 // unified reply function
-	replyWithMetadata func(string, map[string]any) // reply with audit metadata
-	args              string                       // optional arguments after the command name
-	guildID           string
-	userID            string
-	username          string
-	messageID         string
-	interactionID     string
+	channelID           string                                                     // parent channel (session/memory key)
+	targetID            string                                                     // where the command was issued (channelID or threadID)
+	inThread            bool                                                       // true if issued inside a thread
+	reply               func(string)                                               // unified reply function
+	replyWithMetadata   func(string, map[string]any)                               // reply with audit metadata
+	replyWithComponents func(string, []discordgo.MessageComponent, map[string]any) // reply with Discord components
+	args                string                                                     // optional arguments after the command name
+	guildID             string
+	userID              string
+	username            string
+	messageID           string
+	interactionID       string
 }
 
 func (ctx cmdCtx) sendReply(msg string) {
@@ -47,6 +48,15 @@ func (ctx cmdCtx) sendReplyWithMetadata(msg string, metadata map[string]any) {
 		return
 	}
 	ctx.sendReply(msg)
+}
+
+func (ctx cmdCtx) sendReplyWithComponents(msg string, components []discordgo.MessageComponent, metadata map[string]any) {
+	msg = secrets.RedactEnv(msg)
+	if ctx.replyWithComponents != nil {
+		ctx.replyWithComponents(msg, components, metadata)
+		return
+	}
+	ctx.sendReplyWithMetadata(msg, metadata)
 }
 
 // --- Scope-aware commands ---
