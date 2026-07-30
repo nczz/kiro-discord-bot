@@ -46,18 +46,18 @@ At the start of each continuation:
 
 ## Current state
 
-- Program state: collaboration contract established; A2A implementation code has not started in this ledger.
-- Current phase: Phase 0 readiness guard, followed by Phase 1 foundation package and config.
-- First execution target: complete Phase 0 guide validation fix and Phase 1 foundation only.
-- Known pre-implementation issue: the Phase 0 readiness snippet in `docs/a2a-nats-implementation-guide.md` currently contains a self-referential forbidden-string check. The first implementation execution must fix that snippet, then run both Phase 0 and Section 7 guide-only verification.
+- Program state: Phase 0 readiness guard and Phase 1 foundation package/config completed; commit pending.
+- Current phase: Phase 1 foundation package and config completed; Phase 2 NATS node and JetStream topology is next after commit.
+- First execution target: completed Phase 0 guide validation fix and Phase 1 foundation only.
+- Known pre-implementation issue: resolved by splitting the self-referential forbidden-string checks in `docs/a2a-nats-implementation-guide.md`.
 
 ## Phase ledger
 
 | Phase | Name | Status | Commit | Required validation evidence | Notes |
 |---:|---|---|---|---|---|
-| 0 | Readiness guard | next | | `a2a-guide-readiness-ok`; `a2a-implementation-guide-ready` | Fix self-referential Phase 0 check before implementation edits. |
-| 1 | Foundation package and config | pending | | `go test ./a2a -run 'Test(Subject|Envelope|TaskState|ErrorCode|NatsMsgID)'`; `go test ./channel -run 'TestDoctor.*A2A|TestDoctorRuntimeOverviewDoesNotLeakRawEnvironmentValues'` | No NATS connection. Disabled path must be no-op. |
-| 2 | NATS node and JetStream topology | pending | | `go test ./a2a -run TestNode`; `go test ./a2a -run TestStreamSetup` | Streams and consumers only; no remote task execution. |
+| 0 | Readiness guard | done | pending commit | `python3 - <<'PY' ...` printed `a2a-guide-readiness-ok`; Section 7 guide-only verification printed `a2a-implementation-guide-ready` | Fixed self-referential Phase 0 check without changing A2A behavior. |
+| 1 | Foundation package and config | done | pending commit | `go test ./a2a -run 'Test(Subject|Envelope|TaskState|ErrorCode|NatsMsgID)'` passed; `go test ./channel -run 'TestDoctor.*A2A|TestDoctorRuntimeOverviewDoesNotLeakRawEnvironmentValues'` passed; targeted config parse tests passed. | No NATS connection. A2A stays disabled when `NATS_URL` is unset. |
+| 2 | NATS node and JetStream topology | next | | `go test ./a2a -run TestNode`; `go test ./a2a -run TestStreamSetup` | Streams and consumers only; no remote task execution. |
 | 3 | Durable stores | pending | | `go test ./a2a -run TestTaskStore`; `go test ./a2a -run TestPolicyStore`; `go test ./a2a -run TestPeerStore` | Durable TaskStore, event store, policy store, peer store. |
 | 4 | Peer card and discovery | pending | | `go test ./a2a -run TestAgentCard`; `go test ./a2a -run TestPeerStore` | Public card sanitizer and manager-visible trust summary. |
 | 5 | Channel ingress and executor | pending | | `go test ./channel -run TestManagerA2A`; `go test ./channel -run TestWorkerA2A`; `go test ./channel -run TestA2A` | Ingress only through `channel.Manager` and worker runtime. |
@@ -77,6 +77,39 @@ Append one subsection per completed phase.
 - A2A implementation code changed: no.
 - Runtime settings touched: no.
 - Deployment hosts touched: no.
+
+
+### Phase 0 — Readiness guard
+
+- Status: done; commit pending.
+- Changed files: `docs/a2a-nats-implementation-guide.md`.
+- Validation:
+  - `python3 - <<'PY' ...` printed `a2a-guide-readiness-ok`.
+  - `python3 - <<'PY' ...` printed `a2a-implementation-guide-ready`.
+- Runtime settings touched: no.
+- Deployment hosts touched: no.
+- Rollback boundary: revert only the Phase 0 guide snippet change if the guide validation contract changes.
+- Next phase: Phase 1 foundation package and config.
+
+### Phase 1 — Foundation package and config
+
+- Status: done; commit pending.
+- Changed files: `.env.example`, `a2a/errors.go`, `a2a/envelope.go`, `a2a/executor.go`, `a2a/idempotency.go`, `a2a/store.go`, `a2a/subject.go`, `a2a/types.go`, `a2a/types_test.go`, `channel/doctor_env.go`, `channel/doctor_env_test.go`, `channel/manager.go`, `config.go`, `config_test.go`, `locale/lang/en.json`, `locale/lang/zh-TW.json`, `main.go`.
+- Validation:
+  - `go test ./a2a -run 'Test(Subject|Envelope|TaskState|ErrorCode|NatsMsgID)'` passed.
+  - `go test ./channel -run 'TestDoctor.*A2A|TestDoctorRuntimeOverviewDoesNotLeakRawEnvironmentValues'` passed.
+  - `go test . -run 'TestLoadConfigParsesA2A'` passed.
+  - LSP workspace diagnostics: no issues found.
+- Done criteria evidence:
+  - A2A disabled path is a config-only no-op while `NATS_URL` is unset.
+  - A2A envs parse through `loadConfig` into `a2a.Config`.
+  - `a2a.Config.ValidateStartup` rejects token-only production mode when `A2A_PRODUCTION_SECURITY=true`.
+  - `/doctor` shows A2A env presence and safe effective values without leaking token, credentials file contents, or TLS material.
+  - Subject, envelope, task-state, error-code, and idempotency tests include positive and negative cases.
+- Runtime settings touched: no.
+- Deployment hosts touched: no.
+- Rollback boundary: revert the `a2a` package plus config/doctor/env documentation wiring added in this phase; no runtime schema or NATS state exists yet.
+- Next phase: Phase 2 NATS node and JetStream topology.
 
 ## Master goal prompt
 

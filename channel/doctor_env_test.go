@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nczz/kiro-discord-bot/a2a"
 	"github.com/nczz/kiro-discord-bot/acp"
 	L "github.com/nczz/kiro-discord-bot/locale"
 )
@@ -21,6 +22,9 @@ func TestDoctorRuntimeOverviewDoesNotLeakRawEnvironmentValues(t *testing.T) {
 	t.Setenv("OMP_PROFILE", "raw-user-profile")
 	t.Setenv("OMP_SESSION_DIR", "/raw/env/omp-session")
 
+	t.Setenv("NATS_TOKEN", "nats-token-secret-value")
+	t.Setenv("NATS_CREDS_FILE", "/raw/env/nats.creds")
+	t.Setenv("NATS_TLS_CA_FILE", "/raw/env/ca.pem")
 	dir := t.TempDir()
 	m := NewManager(ManagerConfig{
 		KiroCLIPath:         "kiro-cli",
@@ -35,6 +39,11 @@ func TestDoctorRuntimeOverviewDoesNotLeakRawEnvironmentValues(t *testing.T) {
 		ChannelAgentIdleSec: 0,
 		MaxScannerBuffer:    64 * 1024 * 1024,
 		DataDir:             dir,
+		A2A: a2a.Config{
+			NATSToken:     "nats-token-secret-value",
+			NATSCredsFile: "/raw/env/nats.creds",
+			NATSTLSCAFile: "/raw/env/ca.pem",
+		},
 	})
 	defer m.StopAll()
 
@@ -43,9 +52,12 @@ func TestDoctorRuntimeOverviewDoesNotLeakRawEnvironmentValues(t *testing.T) {
 		"discord-token-secret-value",
 		"kiro-api-key-secret-value",
 		"stt-api-key-secret-value",
+		"nats-token-secret-value",
 		"/raw/env/default-cwd",
 		"/raw/env/mcp.json",
 		"/raw/env/omp-session",
+		"/raw/env/nats.creds",
+		"/raw/env/ca.pem",
 	} {
 		if strings.Contains(got, notWant) {
 			t.Fatalf("doctor runtime overview leaked %q:\n%s", notWant, got)
@@ -59,6 +71,9 @@ func TestDoctorRuntimeOverviewDoesNotLeakRawEnvironmentValues(t *testing.T) {
 		filepath.Join(dir, "kiro-agent-runtime", "settings", "mcp.json"),
 		"(effective: `default`)",
 		filepath.Join(dir, "omp-agent-runtime", "sessions"),
+		"`NATS_TOKEN`: set (redacted)",
+		"`NATS_CREDS_FILE`: set (redacted)",
+		"(effective: `configured`)",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("doctor runtime overview missing %q:\n%s", want, got)
@@ -92,6 +107,43 @@ func TestDoctorRuntimeOverviewShowsEffectiveDefaultsWhenEnvUnset(t *testing.T) {
 		"(effective: `not restricted`)",
 		"`KIRO_MODEL`: unset",
 		"(effective: `auto`)",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("doctor runtime overview missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestDoctorRuntimeOverviewShowsA2ADisabledAndSafeEffectiveValues(t *testing.T) {
+	L.Load("en")
+	t.Setenv("NATS_URL", "")
+	t.Setenv("A2A_AGENT_ID", "adam-n200")
+	m := NewManager(ManagerConfig{
+		DataDir: t.TempDir(),
+		A2A: a2a.Config{
+			AgentID:                      "adam-n200",
+			TaskTimeoutSec:               3600,
+			MaxDelegationDepth:           1,
+			RequireConfirmationForRemote: true,
+			TaskRetentionDays:            30,
+			ObjectRetentionDays:          30,
+			MaxPendingTasks:              100,
+			MaxOutboundTasksPerChannel:   10,
+			MaxInboundTasksPerChannel:    10,
+			MaxEventRatePerMin:           120,
+		},
+	})
+	defer m.StopAll()
+
+	got := m.doctorRuntimeOverview()
+	for _, want := range []string{
+		"**A2A NATS**",
+		"`NATS_URL`: unset",
+		"(effective: `disabled`)",
+		"`A2A_AGENT_ID`: set",
+		"(effective: `adam-n200`)",
+		"`A2A_REQUIRE_CONFIRMATION_FOR_REMOTE`: unset",
+		"(effective: `true`)",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("doctor runtime overview missing %q:\n%s", want, got)

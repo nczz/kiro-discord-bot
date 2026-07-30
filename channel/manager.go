@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/bwmarrin/discordgo"
+	"github.com/nczz/kiro-discord-bot/a2a"
 	"github.com/nczz/kiro-discord-bot/acp"
 	"github.com/nczz/kiro-discord-bot/audit"
 	"github.com/nczz/kiro-discord-bot/internal/botmcp"
@@ -54,6 +55,7 @@ type Manager struct {
 	guildID         string
 	botID           string
 	dataDir         string
+	a2aConfig       a2a.Config
 
 	// Memory
 	memory      *MemoryStore
@@ -192,6 +194,7 @@ type ManagerConfig struct {
 	UsageTimezone        string
 	UsageRetentionMonths int
 	Audit                AuditSink
+	A2A                  a2a.Config
 }
 
 func NewManager(cfg ManagerConfig) *Manager {
@@ -224,6 +227,7 @@ func NewManager(cfg ManagerConfig) *Manager {
 		guildID:             cfg.GuildID,
 		botID:               cfg.BotID,
 		dataDir:             cfg.DataDir,
+		a2aConfig:           cfg.A2A,
 		memory:              NewMemoryStore(cfg.DataDir),
 		flashMemory:         make(map[string][]string),
 		threadAgentMax:      cfg.ThreadAgentMax,

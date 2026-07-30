@@ -99,6 +99,31 @@ var envSpecs = []envEntry{
 	{Name: "STT_LANGUAGE", Group: "stt"},
 	{Name: "STT_MAX_DURATION_SEC", Group: "stt"},
 
+	// A2A
+	{Name: "NATS_URL", Group: "a2a", Effective: func(m *Manager) string {
+		if m.a2aConfig.Enabled() {
+			return "enabled"
+		}
+		return "disabled"
+	}},
+	{Name: "NATS_CREDS_FILE", Sensitive: true, Group: "a2a", Effective: func(m *Manager) string { return configuredPresence(m.a2aConfig.NATSCredsFile) }},
+	{Name: "NATS_TOKEN", Sensitive: true, Group: "a2a", Effective: func(m *Manager) string { return configuredPresence(m.a2aConfig.NATSToken) }},
+	{Name: "NATS_TLS_CA_FILE", Sensitive: true, Group: "a2a", Effective: func(m *Manager) string { return configuredPresence(m.a2aConfig.NATSTLSCAFile) }},
+	{Name: "A2A_AGENT_ID", Group: "a2a", Effective: func(m *Manager) string { return configuredOrNone(string(m.a2aConfig.AgentID)) }},
+	{Name: "A2A_AGENT_NAME", Group: "a2a", Effective: func(m *Manager) string { return configuredOrNone(m.a2aConfig.AgentName) }},
+	{Name: "A2A_AGENT_DESCRIPTION", Group: "a2a", Effective: func(m *Manager) string { return configuredPresence(m.a2aConfig.AgentDescription) }},
+	{Name: "A2A_TASK_TIMEOUT_SEC", Group: "a2a", Effective: func(m *Manager) string { return strconv.Itoa(m.a2aConfig.TaskTimeoutSec) }},
+	{Name: "A2A_MAX_DELEGATION_DEPTH", Group: "a2a", Effective: func(m *Manager) string { return strconv.Itoa(m.a2aConfig.MaxDelegationDepth) }},
+	{Name: "A2A_AUTO_DELEGATE_ENABLED", Group: "a2a", Effective: func(m *Manager) string { return strconv.FormatBool(m.a2aConfig.AutoDelegateEnabled) }},
+	{Name: "A2A_REQUIRE_CONFIRMATION_FOR_REMOTE", Group: "a2a", Effective: func(m *Manager) string { return strconv.FormatBool(m.a2aConfig.RequireConfirmationForRemote) }},
+	{Name: "A2A_PRODUCTION_SECURITY", Group: "a2a", Effective: func(m *Manager) string { return strconv.FormatBool(m.a2aConfig.ProductionSecurity) }},
+	{Name: "A2A_TASK_RETENTION_DAYS", Group: "a2a", Effective: func(m *Manager) string { return strconv.Itoa(m.a2aConfig.TaskRetentionDays) }},
+	{Name: "A2A_OBJECT_RETENTION_DAYS", Group: "a2a", Effective: func(m *Manager) string { return strconv.Itoa(m.a2aConfig.ObjectRetentionDays) }},
+	{Name: "A2A_MAX_PENDING_TASKS", Group: "a2a", Effective: func(m *Manager) string { return strconv.Itoa(m.a2aConfig.MaxPendingTasks) }},
+	{Name: "A2A_MAX_OUTBOUND_TASKS_PER_CHANNEL", Group: "a2a", Effective: func(m *Manager) string { return strconv.Itoa(m.a2aConfig.MaxOutboundTasksPerChannel) }},
+	{Name: "A2A_MAX_INBOUND_TASKS_PER_CHANNEL", Group: "a2a", Effective: func(m *Manager) string { return strconv.Itoa(m.a2aConfig.MaxInboundTasksPerChannel) }},
+	{Name: "A2A_MAX_EVENT_RATE_PER_MIN", Group: "a2a", Effective: func(m *Manager) string { return strconv.Itoa(m.a2aConfig.MaxEventRatePerMin) }},
+
 	// Discord MCP
 	{Name: "MCP_DISCORD_ALLOWED_GUILDS", Group: "mcp_discord"},
 	{Name: "MCP_DISCORD_ALLOWED_CHANNELS", Group: "mcp_discord"},
@@ -146,6 +171,13 @@ func configuredOrNone(v string) string {
 		return L.Get("doctor.value.not_configured")
 	}
 	return v
+}
+
+func configuredPresence(v string) string {
+	if strings.TrimSpace(v) == "" {
+		return L.Get("doctor.value.not_configured")
+	}
+	return L.Get("doctor.value.configured")
 }
 
 func configuredOrAuto(v string) string {

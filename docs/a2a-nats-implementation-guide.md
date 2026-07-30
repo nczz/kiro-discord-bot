@@ -178,7 +178,7 @@ python - <<'PY'
 from pathlib import Path
 guide = Path('docs/a2a-nats-implementation-guide.md').read_text()
 assert 'Forbidden v1 subjects' in guide and 'a2a.v1.pool.>' in guide
-for forbidden in ['subject `a2a.v1.pool` is allowed', 'publish path | `pool', 'EnsureStreams` with subjects exactly: `a2a.v1.pool', 'PoolDispatcher']:
+for forbidden in ['subject `a2a.v1.' + 'pool` is allowed', 'publish path | `' + 'pool', 'EnsureStreams` with subjects exactly: `a2a.v1.' + 'pool', 'Pool' + 'Dispatcher']:
     assert forbidden not in guide, forbidden
 assert 'standalone cross-agent `error` envelope' in guide
 assert 'channel.Manager' in guide

@@ -73,6 +73,7 @@ func main() {
 			TrustTools:           cfg.TrustTools,
 			UsageTimezone:        cfg.UsageTimezone,
 			UsageRetentionMonths: cfg.UsageRetentionMonths,
+			A2A:                  cfg.A2A,
 		},
 		DiscordToken:       cfg.DiscordToken,
 		HeartbeatSec:       cfg.HeartbeatSec,

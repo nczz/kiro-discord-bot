@@ -34,6 +34,43 @@ func TestLoadConfigNormalizesDataDir(t *testing.T) {
 	}
 }
 
+func TestLoadConfigParsesA2ADisabledByDefault(t *testing.T) {
+	t.Setenv("DISCORD_TOKEN", "token")
+	t.Setenv("DATA_DIR", t.TempDir())
+
+	cfg := loadConfig()
+	if cfg.A2A.Enabled() {
+		t.Fatalf("A2A should be disabled when NATS_URL is unset: %+v", cfg.A2A)
+	}
+	if cfg.A2A.RequireConfirmationForRemote != true || cfg.A2A.AutoDelegateEnabled {
+		t.Fatalf("A2A confirmation/delegation defaults = confirmation %v auto %v", cfg.A2A.RequireConfirmationForRemote, cfg.A2A.AutoDelegateEnabled)
+	}
+	if cfg.A2A.TaskTimeoutSec != 3600 || cfg.A2A.MaxDelegationDepth != 1 {
+		t.Fatalf("A2A defaults = timeout %d depth %d", cfg.A2A.TaskTimeoutSec, cfg.A2A.MaxDelegationDepth)
+	}
+}
+
+func TestLoadConfigParsesA2AEnabledWithProductionMaterial(t *testing.T) {
+	t.Setenv("DISCORD_TOKEN", "token")
+	t.Setenv("DATA_DIR", t.TempDir())
+	t.Setenv("NATS_URL", "nats://127.0.0.1:4222")
+	t.Setenv("NATS_TOKEN", "dev-token")
+	t.Setenv("NATS_CREDS_FILE", "/tmp/nats.creds")
+	t.Setenv("A2A_AGENT_ID", "adam-n200")
+	t.Setenv("A2A_TASK_TIMEOUT_SEC", "90")
+	t.Setenv("A2A_MAX_DELEGATION_DEPTH", "2")
+	t.Setenv("A2A_AUTO_DELEGATE_ENABLED", "true")
+	t.Setenv("A2A_PRODUCTION_SECURITY", "true")
+
+	cfg := loadConfig()
+	if !cfg.A2A.Enabled() {
+		t.Fatal("A2A should be enabled when NATS_URL is set")
+	}
+	if cfg.A2A.AgentID != "adam-n200" || cfg.A2A.TaskTimeoutSec != 90 || cfg.A2A.MaxDelegationDepth != 2 || !cfg.A2A.AutoDelegateEnabled {
+		t.Fatalf("unexpected A2A config: %+v", cfg.A2A)
+	}
+}
+
 func TestEnabledEngineSpecsKeepsOmpDefaultWithKiroSecondary(t *testing.T) {
 	cfg := &Config{
 		AgentEngine:         "omp",

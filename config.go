@@ -5,8 +5,11 @@ import (
 	"os"
 	"strconv"
 
+	"github.com/nczz/kiro-discord-bot/a2a"
 	"github.com/nczz/kiro-discord-bot/internal/paths"
 )
+
+type A2AConfig = a2a.Config
 
 type Config struct {
 	DiscordToken         string
@@ -54,6 +57,7 @@ type Config struct {
 	STTModel             string
 	STTLanguage          string
 	STTMaxDurationSec    int
+	A2A                  A2AConfig
 }
 
 func loadConfig() *Config {
@@ -103,6 +107,26 @@ func loadConfig() *Config {
 		STTModel:             envOr("STT_MODEL", ""),
 		STTLanguage:          envOr("STT_LANGUAGE", ""),
 		STTMaxDurationSec:    envInt("STT_MAX_DURATION_SEC", 300),
+		A2A: A2AConfig{
+			NATSURL:                      envOr("NATS_URL", ""),
+			NATSCredsFile:                envOr("NATS_CREDS_FILE", ""),
+			NATSToken:                    envOr("NATS_TOKEN", ""),
+			NATSTLSCAFile:                envOr("NATS_TLS_CA_FILE", ""),
+			AgentID:                      a2a.AgentID(envOr("A2A_AGENT_ID", "")),
+			AgentName:                    envOr("A2A_AGENT_NAME", ""),
+			AgentDescription:             envOr("A2A_AGENT_DESCRIPTION", ""),
+			TaskTimeoutSec:               envInt("A2A_TASK_TIMEOUT_SEC", 3600),
+			MaxDelegationDepth:           envInt("A2A_MAX_DELEGATION_DEPTH", 1),
+			AutoDelegateEnabled:          envBool("A2A_AUTO_DELEGATE_ENABLED", false),
+			RequireConfirmationForRemote: envBool("A2A_REQUIRE_CONFIRMATION_FOR_REMOTE", true),
+			ProductionSecurity:           envBool("A2A_PRODUCTION_SECURITY", false),
+			TaskRetentionDays:            envInt("A2A_TASK_RETENTION_DAYS", 30),
+			ObjectRetentionDays:          envInt("A2A_OBJECT_RETENTION_DAYS", 30),
+			MaxPendingTasks:              envInt("A2A_MAX_PENDING_TASKS", 100),
+			MaxOutboundTasksPerChannel:   envInt("A2A_MAX_OUTBOUND_TASKS_PER_CHANNEL", 10),
+			MaxInboundTasksPerChannel:    envInt("A2A_MAX_INBOUND_TASKS_PER_CHANNEL", 10),
+			MaxEventRatePerMin:           envInt("A2A_MAX_EVENT_RATE_PER_MIN", 120),
+		},
 	}
 	if cfg.ThreadAgentMax <= 0 {
 		log.Fatalf("THREAD_AGENT_MAX must be greater than 0, got %d", cfg.ThreadAgentMax)
@@ -112,6 +136,9 @@ func loadConfig() *Config {
 		log.Fatalf("resolve DATA_DIR: %v", err)
 	}
 	cfg.DataDir = dataDir
+	if err := cfg.A2A.ValidateStartup(); err != nil {
+		log.Fatalf("invalid A2A config: %v", err)
+	}
 	return cfg
 }
 
