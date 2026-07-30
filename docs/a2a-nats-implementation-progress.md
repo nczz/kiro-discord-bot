@@ -46,8 +46,8 @@ At the start of each continuation:
 
 ## Current state
 
-- Program state: Phase 0 readiness guard and Phase 1 foundation package/config completed in commit `0d720d2`; Phase 2 NATS node and JetStream topology completed in commit `823a998`; Phase 3 durable stores completed in implementation commit `6d3809f`; Phase 4 peer card and discovery completed in implementation commit `ef892e4`; Phase 5 channel ingress and executor completed in implementation commit `9c0683f`.
-- Current phase: Phase 6 transport integration is next.
+- Program state: Phase 0 readiness guard and Phase 1 foundation package/config completed in commit `0d720d2`; Phase 2 NATS node and JetStream topology completed in commit `823a998`; Phase 3 durable stores completed in implementation commit `6d3809f`; Phase 4 peer card and discovery completed in implementation commit `ef892e4`; Phase 5 channel ingress and executor completed in implementation commit `9c0683f`; Phase 6 transport integration completed with implementation commit pending.
+- Current phase: Phase 6 validation passed; Phase 7 bot-tools and Discord UX is next after commit.
 - First execution target: completed Phase 0 guide validation fix and Phase 1 foundation only.
 - Known pre-implementation issue: resolved by splitting the self-referential forbidden-string checks in `docs/a2a-nats-implementation-guide.md`.
 
@@ -61,7 +61,7 @@ At the start of each continuation:
 | 3 | Durable stores | done | `6d3809f` | `go test ./a2a -run 'Test(TaskStore|AcceptedBootstrap|RejectedBeforeAccepted|TerminalImmutable|PolicyStore|PeerStore|ObjectRef)'` passed. | Durable TaskStore, event store, policy store, peer store, and object-ref metadata store. |
 | 4 | Peer card and discovery | done | `ef892e4` | `go test ./a2a -run 'Test(AgentCardSanitizer|ExtendedCard|PeerKV|PeerWatch|Heartbeat|PeerRequestReplyFallback|PeerTrustSummary|VersionCompatibility|StalePeer)'` passed; `go test ./bot ./channel -run 'Test.*A2A.*Peer'` passed. | Public card sanitizer, KV/fallback discovery, heartbeat, and manager-visible trust summary. |
 | 5 | Channel ingress and executor | done | `9c0683f` | `go test ./channel -run 'TestManagerA2A(IngressDisabled|PolicyDenied|AcceptsOnce|InboundQuota|AdmissionBeforeExecution|AckAfterAdmissionNotCompletion|UsesWorker|ProxyDisablesEgress|RemoteMemoryWriteDenied|RemoteMemoryWriteAllowedByPolicy|Timeout|Cancel|InputRequired|AuthRequired|ResultCapture)'` passed; `go test ./channel -run TestWorkerA2A` passed; `go test ./channel -run TestA2A` passed. | Ingress only through `channel.Manager` and worker runtime; no transport consumers yet. |
-| 6 | Transport integration | pending | | `go test ./a2a -run TestTransport`; `go test ./a2a -run TestA2AIntegration` | Two-node embedded JetStream closed loop. |
+| 6 | Transport integration | done | pending | `go test ./a2a -run TestTransport` passed; `go test ./a2a -run 'TestA2AIntegration(TargetedDelegation|DuplicateDelivery|CancelOwnership|AcceptedBootstrap|AdmissionBeforeExecution|AckAfterAdmissionNotCompletion|ReplayAfterReconnect|EventRateQuota|EventRateOverloaded|EventRateZeroUnlimited|NoErrorEnvelope|NoPoolSubject)'` passed. | Two-node embedded JetStream closed loop through durable task/control/event consumers. |
 | 7 | Bot-tools and Discord UX | pending | | `go test ./internal/botmcp -run TestA2A`; `go test ./bot -run TestA2A`; `go test ./locale ./bot -run 'Test.*A2A.*Locale'` | Bot-tools, slash fallback, buttons/modals, requester/manager checks. |
 | 8 | Artifacts, delivery, audit | pending | | `go test ./a2a -run 'TestObject(Store|Digest|Retention|MediaPolicy)'`; `go test ./bot ./internal/botegress ./channel ./audit -run 'TestA2A(Egress|Artifact|ProxyDelivery|MirrorTranscript|CoPresent|TransparentResult|AuditMetadata)'` | Safe egress, Object Store references, transcript modes, audit metadata. |
 | 9 | Production hardening and rollout | pending | | `go test ./a2a ./channel ./internal/botmcp ./bot ./audit ./locale -run 'Test.*A2A|TestDoctor.*A2A'`; rollout guide check prints `a2a-rollout-guide-ok` | Env docs, ACL templates, smokes, rollback guide. |
@@ -197,6 +197,34 @@ Append one subsection per completed phase.
 - Blockers or risks: no Phase 5 blocker. Transport consumers/events are still absent by phase boundary and belong to Phase 6.
 - Rollback boundary: revert `channel/a2a.go`, Phase 5 channel worker/manager target-state wiring, A2A executor DTO/policy helper changes, bot-tools remote memory guard, and Phase 5 tests; Phase 4 peer discovery and Phase 3 stores remain intact.
 - Next phase: Phase 6 transport consumers and event routing.
+
+### Phase 6 — Transport integration
+
+- Status: done; implementation commit pending.
+- Changed files: `a2a/admission.go`, `a2a/integration_test.go`, `a2a/task_store.go`, `a2a/transport.go`, `channel/manager.go`, `docs/a2a-nats-implementation-progress.md`.
+- Validation:
+  - `go test ./a2a -run TestTransport` passed.
+  - `go test ./a2a -run 'TestA2AIntegration(TargetedDelegation|DuplicateDelivery|CancelOwnership|AcceptedBootstrap|AdmissionBeforeExecution|AckAfterAdmissionNotCompletion|ReplayAfterReconnect|EventRateQuota|EventRateOverloaded|EventRateZeroUnlimited|NoErrorEnvelope|NoPoolSubject)'` passed.
+  - `go test ./channel -run TestManagerA2A` passed.
+  - `go test ./a2a -run 'Test(Subject|Envelope|TaskState|ErrorCode|NatsMsgID|PolicyStore)'` passed.
+  - `go test ./bot ./channel -run 'Test.*A2A|TestDoctor.*A2A'` passed.
+  - LSP workspace diagnostics: no issues found.
+  - `go list -f '{{join .Imports "\n"}}' ./a2a` listed no Discord, ACP, bot, channel, or internal bot packages.
+  - `git diff --check` produced no output.
+- Done criteria evidence:
+  - `a2a.Transport` starts task/control/event durable consumers only when the node is enabled and a concrete `SQLiteTaskStore` plus injected `a2a.Executor` exist.
+  - Task receive validates subject and envelope, maps adapter payload into `TaskExecutionRequest`, records durable rejected/accepted outcomes, publishes accepted/rejected events with stable `Nats-Msg-Id`, double-acks only after durable admission/event publication, and starts `RunA2ATask` asynchronously after ack.
+  - Duplicate task delivery checks inbound `(direction,message_id)` and the in-memory started set before execution, so a redelivered task does not enqueue a second run.
+  - Control receive binds subject sender/executor/task ID to an inbound TaskStore row before applying cancel/status handling; forged cancel is rejected before mutation.
+  - Event receive applies accepted bootstrap, pre-accept rejected correlation, status/result/artifact monotonic revisions, terminal immutability, and replay from the durable `A2A_EVENTS` stream after reconnect.
+  - Publisher APIs for task/control/accepted/rejected/status/result set the required stable `Nats-Msg-Id`; event-rate quota `0` remains unlimited and nonzero overflow returns canonical `overloaded`.
+  - `channel.Manager` starts transport consumers after Manager/stores exist and stops them before closing A2A stores; disabled `NATS_URL` remains a no-op.
+  - No pool subject, public HTTP endpoint, SSE stream, push config, gateway adapter, or standalone `error` envelope was added.
+- Runtime settings touched: no.
+- Deployment hosts touched: no.
+- Blockers or risks: no Phase 6 blocker. Phase 7 must add bot-tools/slash/button UX on top of publisher APIs; user-facing Discord delivery remains Phase 8.
+- Rollback boundary: stop consumers and revert `a2a/transport.go`, `a2a/admission.go`, Phase 6 integration tests, `a2a/task_store.go` event-application helpers, and `channel.Manager` transport lifecycle wiring; Phase 5 executor and Phase 3 stores remain intact.
+- Next phase: Phase 7 bot-tools and natural-language Discord UX.
 
 ## Master goal prompt
 

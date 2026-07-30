@@ -62,6 +62,7 @@ type Manager struct {
 	a2aTasks        *a2a.SQLiteTaskStore
 	a2aAdmissions   map[string]a2a.A2AAdmission
 	a2aInboundOpen  map[string]int
+	a2aTransport    *a2a.Transport
 
 	// Memory
 	memory      *MemoryStore
@@ -289,6 +290,23 @@ func NewManager(cfg ManagerConfig) *Manager {
 		} else {
 			m.a2aTasks = store
 		}
+	}
+	if cfg.A2A.Enabled() && m.a2aNode != nil && m.a2aNode.IsEnabled() && m.a2aTasks != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		if transport, err := a2a.StartTransport(ctx, a2a.TransportConfig{
+			Node:               m.a2aNode,
+			Tasks:              m.a2aTasks,
+			Executor:           m,
+			Config:             cfg.A2A,
+			MaxEventRatePerMin: cfg.A2A.MaxEventRatePerMin,
+			Logf:               log.Printf,
+		}); err != nil {
+			log.Printf("[a2a] transport disabled: %v", err)
+		} else {
+			m.a2aTransport = transport
+			log.Printf("[a2a] transport consumers started agent=%s", cfg.A2A.AgentID)
+		}
+		cancel()
 	}
 	if store, err := OpenMCPPolicyStore(cfg.DataDir); err != nil {
 		log.Printf("[mcp-policy] disabled: %v", err)
@@ -820,6 +838,9 @@ func (m *Manager) stopChannel(channelID string) {
 
 // StopAll stops all active workers and agents. Called during graceful shutdown.
 func (m *Manager) StopAll() {
+	if m.a2aTransport != nil {
+		m.a2aTransport.Stop()
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for chID := range m.agents {

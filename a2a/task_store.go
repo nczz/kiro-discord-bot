@@ -275,6 +275,120 @@ func (s *SQLiteTaskStore) GetByDirectionMessage(ctx context.Context, direction s
 	return getTaskByDirectionMessageTx(ctx, s.db, direction, messageID)
 }
 
+func (s *SQLiteTaskStore) GetByDirectionTaskID(ctx context.Context, direction string, taskID TaskID) (TaskRow, error) {
+	return getTaskByDirectionTaskIDTx(ctx, s.db, direction, taskID)
+}
+
+func (s *SQLiteTaskStore) RejectInbound(ctx context.Context, row TaskRow, taskErr TaskError) (TaskRow, error) {
+	row.Direction = "inbound"
+	row.Role = "executor"
+	row.State = TaskStateRejected
+	row.Terminal = true
+	if row.TaskID == "" {
+		row.TaskID = TaskID("msg_" + string(row.MessageID))
+	}
+	if row.Revision <= 0 {
+		row.Revision = 1
+	}
+	row.Error = taskErr
+	stored, err := s.insertTask(ctx, row)
+	if err != nil {
+		return TaskRow{}, err
+	}
+	payload := fmt.Sprintf(`{"error_code":%q,"error_message":%q}`, taskErr.Code, taskErr.Message)
+	if err := s.AppendEvent(ctx, EventRow{TaskID: stored.TaskID, Revision: stored.Revision, EventType: "rejected", State: TaskStateRejected, PayloadJSON: payload}); err != nil {
+		return TaskRow{}, err
+	}
+	return stored, nil
+}
+
+func (s *SQLiteTaskStore) ApplyTaskEvent(ctx context.Context, direction string, taskID TaskID, event EventRow, state TaskState, taskErr TaskError) (TaskRow, error) {
+	if err := ValidateTaskID(taskID); err != nil {
+		return TaskRow{}, err
+	}
+	if event.TaskID == "" {
+		event.TaskID = taskID
+	}
+	if event.TaskID != taskID {
+		return TaskRow{}, fmt.Errorf("event task_id does not match task")
+	}
+	if event.Revision <= 0 {
+		return TaskRow{}, fmt.Errorf("revision must be positive")
+	}
+	if state == "" {
+		state = event.State
+	}
+	if state == "" || !IsKnownTaskState(state) {
+		return TaskRow{}, fmt.Errorf("unknown task state %s", state)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return TaskRow{}, err
+	}
+	defer tx.Rollback()
+	row, err := getTaskByDirectionTaskIDTx(ctx, tx, direction, taskID)
+	if err != nil {
+		return TaskRow{}, err
+	}
+	if event.Revision <= row.Revision {
+		if err := appendEventInTx(ctx, tx, event); err != nil {
+			return TaskRow{}, err
+		}
+		return row, tx.Commit()
+	}
+	if row.Terminal {
+		return TaskRow{}, fmt.Errorf("terminal task is immutable")
+	}
+	now := time.Now().UTC().Format(sqliteTimeFormat)
+	terminal := IsTerminalState(state)
+	if _, err := tx.ExecContext(ctx, `UPDATE a2a_tasks SET state=?, terminal=?, revision=?, updated_at=?, error_code=?, error_message=? WHERE local_id=? AND terminal=0`, state, boolInt(terminal), event.Revision, now, nullString(string(taskErr.Code)), nullString(taskErr.Message), row.LocalID); err != nil {
+		return TaskRow{}, err
+	}
+	if err := appendEventInTx(ctx, tx, event); err != nil {
+		return TaskRow{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return TaskRow{}, err
+	}
+	return s.GetByLocalID(ctx, row.LocalID)
+}
+
+func appendEventInTx(ctx context.Context, tx *sql.Tx, event EventRow) error {
+	if err := ValidateTaskID(event.TaskID); err != nil {
+		return err
+	}
+	if event.Revision <= 0 {
+		return fmt.Errorf("revision must be positive")
+	}
+	event.EventType = strings.TrimSpace(event.EventType)
+	if event.EventType == "" {
+		return fmt.Errorf("event_type is required")
+	}
+	if event.State != "" && !IsKnownTaskState(event.State) {
+		return fmt.Errorf("unknown event state %s", event.State)
+	}
+	if event.CreatedAt.IsZero() {
+		event.CreatedAt = time.Now().UTC()
+	}
+	_, err := tx.ExecContext(ctx, `INSERT INTO a2a_task_events(task_id, revision, event_type, state, payload_json, created_at) VALUES(?,?,?,?,?,?)`, event.TaskID, event.Revision, event.EventType, nullString(string(event.State)), nullString(event.PayloadJSON), event.CreatedAt.UTC().Format(sqliteTimeFormat))
+	if err == nil {
+		return nil
+	}
+	if !strings.Contains(err.Error(), "UNIQUE constraint failed") {
+		return err
+	}
+	var existing EventRow
+	var state, payload, created string
+	err = tx.QueryRowContext(ctx, `SELECT id, task_id, revision, event_type, COALESCE(state,''), COALESCE(payload_json,''), created_at FROM a2a_task_events WHERE task_id=? AND revision=?`, event.TaskID, event.Revision).Scan(&existing.ID, &existing.TaskID, &existing.Revision, &existing.EventType, &state, &payload, &created)
+	if err != nil {
+		return err
+	}
+	if existing.EventType == event.EventType && state == string(event.State) && payload == event.PayloadJSON {
+		return nil
+	}
+	return fmt.Errorf("event revision replay differs")
+}
+
 func normalizeTaskRow(row *TaskRow) error {
 	row.LocalID = strings.TrimSpace(row.LocalID)
 	if row.LocalID == "" {
@@ -346,6 +460,10 @@ func getTaskByLocalIDTx(ctx context.Context, q rowQuerier, localID string) (Task
 
 func getTaskByDirectionMessageTx(ctx context.Context, q rowQuerier, direction string, messageID MessageID) (TaskRow, error) {
 	return scanTask(q.QueryRowContext(ctx, `SELECT local_id, task_id, client_task_ref, message_id, context_id, direction, role, from_agent, to_agent, executor_agent, channel_id, guild_id, channel_ref, skill_id, state, terminal, revision, result_visibility, discord_transcript_mode, discord_context_json, created_at, updated_at, expires_at, error_code, error_message FROM a2a_tasks WHERE direction=? AND message_id=?`, direction, messageID))
+}
+
+func getTaskByDirectionTaskIDTx(ctx context.Context, q rowQuerier, direction string, taskID TaskID) (TaskRow, error) {
+	return scanTask(q.QueryRowContext(ctx, `SELECT local_id, task_id, client_task_ref, message_id, context_id, direction, role, from_agent, to_agent, executor_agent, channel_id, guild_id, channel_ref, skill_id, state, terminal, revision, result_visibility, discord_transcript_mode, discord_context_json, created_at, updated_at, expires_at, error_code, error_message FROM a2a_tasks WHERE direction=? AND task_id=?`, direction, taskID))
 }
 
 func scanTask(row *sql.Row) (TaskRow, error) {
