@@ -175,13 +175,15 @@ func (m *Manager) doctorA2AReadiness() string {
 	hasTLS := strings.TrimSpace(cfg.NATSTLSCAFile) != ""
 	switch {
 	case hasCreds && hasTLS:
-		mode = L.Get("doctor.a2a.auth.creds_mtls")
+		mode = L.Get("doctor.a2a.auth.creds_tls_ca")
 	case hasCreds:
 		mode = L.Get("doctor.a2a.auth.creds")
-	case hasTLS:
-		mode = L.Get("doctor.a2a.auth.mtls")
+	case hasToken && hasTLS:
+		mode = L.Get("doctor.a2a.auth.token_tls_ca")
 	case hasToken:
 		mode = L.Get("doctor.a2a.auth.token_dev")
+	case hasTLS:
+		mode = L.Get("doctor.a2a.auth.tls_ca")
 	}
 	status := L.Get("doctor.a2a.status.disabled")
 	if cfg.Enabled() {
@@ -196,7 +198,7 @@ func (m *Manager) doctorA2AReadiness() string {
 		validation = L.Getf("doctor.a2a.validation.invalid", err.Error())
 	}
 	warning := ""
-	if cfg.Enabled() && hasToken && !hasCreds && !hasTLS && !cfg.ProductionSecurity {
+	if cfg.Enabled() && hasToken && !hasCreds && !cfg.ProductionSecurity {
 		warning = "\n" + L.Get("doctor.a2a.warning.token_only")
 	}
 	return fmt.Sprintf("\n%s\n- %s\n- %s\n- %s\n- %s%s\n", L.Get("doctor.a2a.header"), status, L.Getf("doctor.a2a.auth_mode", mode), guard, validation, warning)

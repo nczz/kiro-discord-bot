@@ -7,7 +7,7 @@ This runbook covers production rollout of the optional A2A NATS custom binding. 
 - Development: one local NATS server with JetStream enabled is enough for two-bot smokes.
 - Production: run a three-node NATS cluster with JetStream enabled, persistent storage, TLS, and monitored stream/consumer health.
 - The A2A binding is disabled by default. `NATS_URL=""` leaves existing Discord behavior unchanged and should be the first rollback step.
-- Production security decision: use NKey/JWT credentials or mTLS. Shared token-only production A2A is rejected when `A2A_PRODUCTION_SECURITY=true`.
+- Production security decision: use NKey/JWT credentials (`NATS_CREDS_FILE`) for client authentication; `NATS_TLS_CA_FILE` is server CA validation only. Shared token-only or unauthenticated production A2A is rejected when `A2A_PRODUCTION_SECURITY=true`.
 
 ## Local development setup
 
@@ -54,6 +54,8 @@ A2A_MAX_INBOUND_TASKS_PER_CHANNEL=10
 A2A_MAX_EVENT_RATE_PER_MIN=120
 ```
 
+`NATS_TLS_CA_FILE` validates the NATS server certificate. It is not client mTLS authentication by itself; this implementation's production client credential is `NATS_CREDS_FILE`.
+
 Do not put raw credentials, tokens, private paths, or internal topology in `A2A_AGENT_DESCRIPTION`; peer cards are discoverable by other A2A participants.
 
 ## One-agent ACL template
@@ -77,11 +79,23 @@ a2a.v1.card.>
 a2a.v1.heartbeat.>
 $KV.A2A_PEERS.>
 
-JetStream API allow:
+JetStream API allow when this credential provisions its own streams/consumers:
+$JS.API.INFO
+$JS.API.STREAM.*.A2A_TASKS
+$JS.API.STREAM.*.A2A_CONTROLS
+$JS.API.STREAM.*.A2A_EVENTS
+$JS.API.CONSUMER.*.A2A_TASKS.a2a_tasks_<self>
+$JS.API.CONSUMER.DURABLE.CREATE.A2A_TASKS.a2a_tasks_<self>
+$JS.API.CONSUMER.*.A2A_CONTROLS.a2a_controls_<self>
+$JS.API.CONSUMER.DURABLE.CREATE.A2A_CONTROLS.a2a_controls_<self>
+$JS.API.CONSUMER.*.A2A_EVENTS.a2a_events_<self>
+$JS.API.CONSUMER.DURABLE.CREATE.A2A_EVENTS.a2a_events_<self>
 $JS.API.STREAM.INFO.KV_A2A_PEERS
 $JS.API.CONSUMER.CREATE.KV_A2A_PEERS.>
 $JS.API.CONSUMER.DELETE.KV_A2A_PEERS.>
 ```
+
+If operators do not want each bot credential to create/update streams and durable consumers, run an explicit provisioning step with a separate admin credential before bot startup, then remove the stream/consumer API permissions from the runtime credential only after confirming startup no longer needs `EnsureStreams`/`EnsureConsumers`.
 
 Response/inbox rule: production must avoid blanket `_INBOX.>` unless account isolation already enforces tenant boundaries. Request/reply discovery fallback and JetStream API calls must use narrow reply inbox permissions, or a separate bucket-admin credential that is not used for task publish.
 

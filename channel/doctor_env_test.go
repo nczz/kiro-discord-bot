@@ -206,7 +206,7 @@ func TestDoctorRuntimeOverviewShowsA2AProductionInvalidWithoutSecrets(t *testing
 		"auth mode: `token-dev`",
 		"production guard: `on`",
 		"startup validation: `invalid`",
-		"token-only production A2A is not allowed",
+		"token-only or unauthenticated production A2A is not allowed",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("doctor runtime overview missing %q:\n%s", want, got)
@@ -214,6 +214,40 @@ func TestDoctorRuntimeOverviewShowsA2AProductionInvalidWithoutSecrets(t *testing
 	}
 	if strings.Contains(got, "raw-token-secret") {
 		t.Fatalf("doctor runtime overview leaked token:\n%s", got)
+	}
+}
+
+func TestDoctorRuntimeOverviewDoesNotTreatTLSCAAsClientAuth(t *testing.T) {
+	L.Load("en")
+	t.Setenv("NATS_URL", "nats://127.0.0.1:4222")
+	t.Setenv("NATS_TOKEN", "raw-token-secret")
+	t.Setenv("NATS_TLS_CA_FILE", "/raw/env/ca.pem")
+	m := NewManager(ManagerConfig{
+		DataDir: t.TempDir(),
+		A2A: a2a.Config{
+			NATSURL:            "nats://127.0.0.1:4222",
+			NATSToken:          "raw-token-secret",
+			NATSTLSCAFile:      "/raw/env/ca.pem",
+			AgentID:            "adam-n200",
+			ProductionSecurity: true,
+		},
+	})
+	defer m.StopAll()
+
+	got := m.doctorRuntimeOverview()
+	for _, want := range []string{
+		"auth mode: `token-dev+tls-ca`",
+		"startup validation: `invalid`",
+		"NATS_CREDS_FILE",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("doctor runtime overview missing %q:\n%s", want, got)
+		}
+	}
+	for _, notWant := range []string{"raw-token-secret", "/raw/env/ca.pem", "auth mode: `mtls`"} {
+		if strings.Contains(got, notWant) {
+			t.Fatalf("doctor runtime overview leaked or mislabeled %q:\n%s", notWant, got)
+		}
 	}
 }
 

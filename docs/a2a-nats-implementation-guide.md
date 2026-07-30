@@ -225,7 +225,7 @@ PY
 4. Implement envelope validation for version, binding, known type, subject/envelope from-to correspondence, RFC3339 timestamps, future expiry, payload size, and task ID grammar.
 5. Implement idempotency key helpers exactly as section 4.3 declares.
 6. Add config envs: `NATS_URL`, `NATS_CREDS_FILE`, `NATS_TOKEN`, `NATS_TLS_CA_FILE`, `A2A_AGENT_ID`, `A2A_AGENT_NAME`, `A2A_AGENT_DESCRIPTION`, `A2A_TASK_TIMEOUT_SEC`, `A2A_MAX_DELEGATION_DEPTH`, `A2A_AUTO_DELEGATE_ENABLED`, `A2A_REQUIRE_CONFIRMATION_FOR_REMOTE`, `A2A_PRODUCTION_SECURITY`, `A2A_TASK_RETENTION_DAYS`, `A2A_OBJECT_RETENTION_DAYS`, `A2A_MAX_PENDING_TASKS`, `A2A_MAX_OUTBOUND_TASKS_PER_CHANNEL`, `A2A_MAX_INBOUND_TASKS_PER_CHANNEL`, `A2A_MAX_EVENT_RATE_PER_MIN`.
-7. Add production guard: if `A2A_PRODUCTION_SECURITY=true` and only `NATS_TOKEN` is configured, startup config validation fails before bot start.
+7. Add production guard: if `A2A_PRODUCTION_SECURITY=true` and `NATS_CREDS_FILE` is not configured, startup config validation fails before bot start; `NATS_TOKEN` and `NATS_TLS_CA_FILE` are not production client credentials.
 8. Add config validation: `NATS_URL != "" && A2A_AGENT_ID == ""` fails startup with an actionable error; all quota/backpressure envs use `0` to mean unlimited.
 9. Add `/doctor` A2A rows that show enabled/disabled/defaults without raw tokens, creds contents, or TLS material.
 
@@ -674,7 +674,7 @@ go test ./bot ./internal/botegress ./channel ./audit -run 'TestA2A(Egress|Artifa
 **Preconditions**:
 
 - Phases 1-8 validation commands pass.
-- Production security decision remains NKey/JWT or mTLS, not shared token.
+- Production security decision remains NKey/JWT credentials for client authentication in this implementation; `NATS_TLS_CA_FILE` is server CA validation only, not client mTLS auth.
 
 **Change steps**:
 
@@ -698,7 +698,17 @@ a2a.v1.card.>
 a2a.v1.heartbeat.>
 $KV.A2A_PEERS.>
 
-JetStream API allow:
+JetStream API allow when this credential provisions its own streams/consumers:
+$JS.API.INFO
+$JS.API.STREAM.*.A2A_TASKS
+$JS.API.STREAM.*.A2A_CONTROLS
+$JS.API.STREAM.*.A2A_EVENTS
+$JS.API.CONSUMER.*.A2A_TASKS.a2a_tasks_<self>
+$JS.API.CONSUMER.DURABLE.CREATE.A2A_TASKS.a2a_tasks_<self>
+$JS.API.CONSUMER.*.A2A_CONTROLS.a2a_controls_<self>
+$JS.API.CONSUMER.DURABLE.CREATE.A2A_CONTROLS.a2a_controls_<self>
+$JS.API.CONSUMER.*.A2A_EVENTS.a2a_events_<self>
+$JS.API.CONSUMER.DURABLE.CREATE.A2A_EVENTS.a2a_events_<self>
 $JS.API.STREAM.INFO.KV_A2A_PEERS
 $JS.API.CONSUMER.CREATE.KV_A2A_PEERS.>
 $JS.API.CONSUMER.DELETE.KV_A2A_PEERS.>

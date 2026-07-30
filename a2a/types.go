@@ -85,8 +85,8 @@ func (c Config) ValidateStartup() error {
 	if err := ValidateAgentID(c.AgentID); err != nil {
 		return fmt.Errorf("A2A_AGENT_ID is required when NATS_URL is set: %w", err)
 	}
-	if c.ProductionSecurity && strings.TrimSpace(c.NATSToken) != "" && strings.TrimSpace(c.NATSCredsFile) == "" && strings.TrimSpace(c.NATSTLSCAFile) == "" {
-		return fmt.Errorf("A2A_PRODUCTION_SECURITY=true requires NATS_CREDS_FILE or NATS_TLS_CA_FILE; token-only production A2A is not allowed")
+	if c.ProductionSecurity && strings.TrimSpace(c.NATSCredsFile) == "" {
+		return fmt.Errorf("A2A_PRODUCTION_SECURITY=true requires NATS_CREDS_FILE; token-only or unauthenticated production A2A is not allowed")
 	}
 	return nil
 }

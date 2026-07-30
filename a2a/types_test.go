@@ -110,8 +110,11 @@ func TestConfigValidateStartupKeepsDisabledNoopAndRejectsTokenOnlyProduction(t *
 	if err := (Config{NATSURL: "nats://127.0.0.1:4222", NATSToken: "token", ProductionSecurity: true, AgentID: "adam-n200"}).ValidateStartup(); err == nil || !strings.Contains(err.Error(), "token-only") {
 		t.Fatalf("token-only production error = %v, want rejection", err)
 	}
-	if err := (Config{NATSURL: "nats://127.0.0.1:4222", NATSToken: "token", NATSTLSCAFile: "/tmp/ca.pem", ProductionSecurity: true, AgentID: "adam-n200"}).ValidateStartup(); err != nil {
-		t.Fatalf("production config with TLS material rejected: %v", err)
+	if err := (Config{NATSURL: "nats://127.0.0.1:4222", NATSToken: "token", NATSTLSCAFile: "/tmp/ca.pem", ProductionSecurity: true, AgentID: "adam-n200"}).ValidateStartup(); err == nil || !strings.Contains(err.Error(), "NATS_CREDS_FILE") {
+		t.Fatalf("production config with token plus TLS CA error = %v, want credentials requirement", err)
+	}
+	if err := (Config{NATSURL: "nats://127.0.0.1:4222", NATSCredsFile: "/tmp/nats.creds", NATSTLSCAFile: "/tmp/ca.pem", ProductionSecurity: true, AgentID: "adam-n200"}).ValidateStartup(); err != nil {
+		t.Fatalf("production config with credentials rejected: %v", err)
 	}
 }
 
