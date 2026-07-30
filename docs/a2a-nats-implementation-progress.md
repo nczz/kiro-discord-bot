@@ -46,8 +46,8 @@ At the start of each continuation:
 
 ## Current state
 
-- Program state: Phase 0 readiness guard and Phase 1 foundation package/config completed in commit `0d720d2`; Phase 2 NATS node and JetStream topology completed in commit `823a998`; Phase 3 durable stores completed in implementation commit `6d3809f`; Phase 4 peer card and discovery completed in implementation commit `ef892e4`; Phase 5 channel ingress and executor completed in implementation commit `9c0683f`; Phase 6 transport integration completed with implementation commit pending.
-- Current phase: Phase 6 validation passed; Phase 7 bot-tools and Discord UX is next after commit.
+- Program state: Phase 0 readiness guard and Phase 1 foundation package/config completed in commit `0d720d2`; Phase 2 NATS node and JetStream topology completed in commit `823a998`; Phase 3 durable stores completed in implementation commit `6d3809f`; Phase 4 peer card and discovery completed in implementation commit `ef892e4`; Phase 5 channel ingress and executor completed in implementation commit `9c0683f`; Phase 6 transport integration completed in implementation commit `6e3e31d`.
+- Current phase: Phase 7 bot-tools and Discord UX is next.
 - First execution target: completed Phase 0 guide validation fix and Phase 1 foundation only.
 - Known pre-implementation issue: resolved by splitting the self-referential forbidden-string checks in `docs/a2a-nats-implementation-guide.md`.
 
@@ -61,7 +61,7 @@ At the start of each continuation:
 | 3 | Durable stores | done | `6d3809f` | `go test ./a2a -run 'Test(TaskStore|AcceptedBootstrap|RejectedBeforeAccepted|TerminalImmutable|PolicyStore|PeerStore|ObjectRef)'` passed. | Durable TaskStore, event store, policy store, peer store, and object-ref metadata store. |
 | 4 | Peer card and discovery | done | `ef892e4` | `go test ./a2a -run 'Test(AgentCardSanitizer|ExtendedCard|PeerKV|PeerWatch|Heartbeat|PeerRequestReplyFallback|PeerTrustSummary|VersionCompatibility|StalePeer)'` passed; `go test ./bot ./channel -run 'Test.*A2A.*Peer'` passed. | Public card sanitizer, KV/fallback discovery, heartbeat, and manager-visible trust summary. |
 | 5 | Channel ingress and executor | done | `9c0683f` | `go test ./channel -run 'TestManagerA2A(IngressDisabled|PolicyDenied|AcceptsOnce|InboundQuota|AdmissionBeforeExecution|AckAfterAdmissionNotCompletion|UsesWorker|ProxyDisablesEgress|RemoteMemoryWriteDenied|RemoteMemoryWriteAllowedByPolicy|Timeout|Cancel|InputRequired|AuthRequired|ResultCapture)'` passed; `go test ./channel -run TestWorkerA2A` passed; `go test ./channel -run TestA2A` passed. | Ingress only through `channel.Manager` and worker runtime; no transport consumers yet. |
-| 6 | Transport integration | done | pending | `go test ./a2a -run TestTransport` passed; `go test ./a2a -run 'TestA2AIntegration(TargetedDelegation|DuplicateDelivery|CancelOwnership|AcceptedBootstrap|AdmissionBeforeExecution|AckAfterAdmissionNotCompletion|ReplayAfterReconnect|EventRateQuota|EventRateOverloaded|EventRateZeroUnlimited|NoErrorEnvelope|NoPoolSubject)'` passed. | Two-node embedded JetStream closed loop through durable task/control/event consumers. |
+| 6 | Transport integration | done | `6e3e31d` | `go test ./a2a -run TestTransport` passed; `go test ./a2a -run 'TestA2AIntegration(TargetedDelegation|DuplicateDelivery|CancelOwnership|AcceptedBootstrap|AdmissionBeforeExecution|AckAfterAdmissionNotCompletion|ReplayAfterReconnect|EventRateQuota|EventRateOverloaded|EventRateZeroUnlimited|NoErrorEnvelope|NoPoolSubject)'` passed. | Two-node embedded JetStream closed loop through durable task/control/event consumers. |
 | 7 | Bot-tools and Discord UX | pending | | `go test ./internal/botmcp -run TestA2A`; `go test ./bot -run TestA2A`; `go test ./locale ./bot -run 'Test.*A2A.*Locale'` | Bot-tools, slash fallback, buttons/modals, requester/manager checks. |
 | 8 | Artifacts, delivery, audit | pending | | `go test ./a2a -run 'TestObject(Store|Digest|Retention|MediaPolicy)'`; `go test ./bot ./internal/botegress ./channel ./audit -run 'TestA2A(Egress|Artifact|ProxyDelivery|MirrorTranscript|CoPresent|TransparentResult|AuditMetadata)'` | Safe egress, Object Store references, transcript modes, audit metadata. |
 | 9 | Production hardening and rollout | pending | | `go test ./a2a ./channel ./internal/botmcp ./bot ./audit ./locale -run 'Test.*A2A|TestDoctor.*A2A'`; rollout guide check prints `a2a-rollout-guide-ok` | Env docs, ACL templates, smokes, rollback guide. |
@@ -200,7 +200,7 @@ Append one subsection per completed phase.
 
 ### Phase 6 — Transport integration
 
-- Status: done; implementation commit pending.
+- Status: done; implementation commit `6e3e31d`.
 - Changed files: `a2a/admission.go`, `a2a/integration_test.go`, `a2a/task_store.go`, `a2a/transport.go`, `channel/manager.go`, `docs/a2a-nats-implementation-progress.md`.
 - Validation:
   - `go test ./a2a -run TestTransport` passed.
