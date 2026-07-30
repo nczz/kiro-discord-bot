@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/bwmarrin/discordgo"
+	"github.com/nczz/kiro-discord-bot/a2a"
 	"github.com/nczz/kiro-discord-bot/audit"
 	"github.com/nczz/kiro-discord-bot/channel"
 	"github.com/nczz/kiro-discord-bot/heartbeat"
@@ -27,6 +28,7 @@ type Bot struct {
 	cronStore           *heartbeat.CronStore
 	cronTask            *heartbeat.CronTask
 	auditRecorder       *audit.Recorder
+	a2aNode             *a2a.Node
 	cronTimezone        string
 	version             string
 	startedAt           time.Time
@@ -72,6 +74,7 @@ type BotConfig struct {
 	STTMaxDurationSec  int
 	BotPeers           string
 	Audit              audit.Config
+	A2ANode            *a2a.Node
 }
 
 func NewFromConfig(cfg BotConfig) (*Bot, error) {
@@ -134,6 +137,7 @@ func NewFromConfig(cfg BotConfig) (*Bot, error) {
 		manualPeers:         manualPeers,
 		peerPermCache:       make(map[string]peerPermissionCacheEntry),
 		auditRecorder:       auditRecorder,
+		a2aNode:             cfg.A2ANode,
 		setupPromptCooldown: newSetupPromptCooldown(nil),
 	}
 	if cfg.STTEnabled && cfg.STTAPIKey != "" {
@@ -194,6 +198,13 @@ func (b *Bot) Stop() {
 	}
 	b.seen.Stop()
 	b.manager.StopAll()
+	if b.a2aNode != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		if err := b.a2aNode.Drain(ctx); err != nil {
+			log.Printf("[a2a] drain failed: %v", err)
+		}
+		cancel()
+	}
 	b.discord.Close()
 	if b.auditRecorder != nil {
 		b.auditRecorder.Close()

@@ -56,6 +56,7 @@ type Manager struct {
 	botID           string
 	dataDir         string
 	a2aConfig       a2a.Config
+	a2aNode         *a2a.Node
 
 	// Memory
 	memory      *MemoryStore
@@ -195,6 +196,7 @@ type ManagerConfig struct {
 	UsageRetentionMonths int
 	Audit                AuditSink
 	A2A                  a2a.Config
+	A2ANode              *a2a.Node
 }
 
 func NewManager(cfg ManagerConfig) *Manager {
@@ -228,6 +230,7 @@ func NewManager(cfg ManagerConfig) *Manager {
 		botID:               cfg.BotID,
 		dataDir:             cfg.DataDir,
 		a2aConfig:           cfg.A2A,
+		a2aNode:             cfg.A2ANode,
 		memory:              NewMemoryStore(cfg.DataDir),
 		flashMemory:         make(map[string][]string),
 		threadAgentMax:      cfg.ThreadAgentMax,

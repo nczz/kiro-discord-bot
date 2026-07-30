@@ -75,11 +75,11 @@ type Config struct {
 }
 
 func (c Config) Enabled() bool {
-	return strings.TrimSpace(c.NATSURL) != ""
+	return strings.TrimSpace(c.NATSURL) != "" && strings.TrimSpace(string(c.AgentID)) != ""
 }
 
 func (c Config) ValidateStartup() error {
-	if !c.Enabled() {
+	if strings.TrimSpace(c.NATSURL) == "" {
 		return nil
 	}
 	if err := ValidateAgentID(c.AgentID); err != nil {

@@ -46,8 +46,8 @@ At the start of each continuation:
 
 ## Current state
 
-- Program state: Phase 0 readiness guard and Phase 1 foundation package/config completed; commit pending.
-- Current phase: Phase 1 foundation package and config completed; Phase 2 NATS node and JetStream topology is next after commit.
+- Program state: Phase 0 readiness guard and Phase 1 foundation package/config completed in commit `0d720d2`; Phase 2 NATS node and JetStream topology completed with commit pending.
+- Current phase: Phase 2 validation passed; Phase 3 durable stores is next after commit.
 - First execution target: completed Phase 0 guide validation fix and Phase 1 foundation only.
 - Known pre-implementation issue: resolved by splitting the self-referential forbidden-string checks in `docs/a2a-nats-implementation-guide.md`.
 
@@ -55,10 +55,10 @@ At the start of each continuation:
 
 | Phase | Name | Status | Commit | Required validation evidence | Notes |
 |---:|---|---|---|---|---|
-| 0 | Readiness guard | done | pending commit | `python3 - <<'PY' ...` printed `a2a-guide-readiness-ok`; Section 7 guide-only verification printed `a2a-implementation-guide-ready` | Fixed self-referential Phase 0 check without changing A2A behavior. |
-| 1 | Foundation package and config | done | pending commit | `go test ./a2a -run 'Test(Subject|Envelope|TaskState|ErrorCode|NatsMsgID)'` passed; `go test ./channel -run 'TestDoctor.*A2A|TestDoctorRuntimeOverviewDoesNotLeakRawEnvironmentValues'` passed; targeted config parse tests passed. | No NATS connection. A2A stays disabled when `NATS_URL` is unset. |
-| 2 | NATS node and JetStream topology | next | | `go test ./a2a -run TestNode`; `go test ./a2a -run TestStreamSetup` | Streams and consumers only; no remote task execution. |
-| 3 | Durable stores | pending | | `go test ./a2a -run TestTaskStore`; `go test ./a2a -run TestPolicyStore`; `go test ./a2a -run TestPeerStore` | Durable TaskStore, event store, policy store, peer store. |
+| 0 | Readiness guard | done | `0d720d2` | `python3 - <<'PY' ...` printed `a2a-guide-readiness-ok`; Section 7 guide-only verification printed `a2a-implementation-guide-ready` | Fixed self-referential Phase 0 check without changing A2A behavior. |
+| 1 | Foundation package and config | done | `0d720d2` | `go test ./a2a -run 'Test(Subject|Envelope|TaskState|ErrorCode|NatsMsgID)'` passed; `go test ./channel -run 'TestDoctor.*A2A|TestDoctorRuntimeOverviewDoesNotLeakRawEnvironmentValues'` passed; targeted config parse tests passed. | No NATS connection. A2A stays disabled when `NATS_URL` is unset. |
+| 2 | NATS node and JetStream topology | done | pending commit | `go test ./a2a -run 'Test(NodeDisabled|ConnectDrain|EnsureStreams|NoPoolSubject|DuplicateNatsMsgID)'` passed; `go test . -run 'TestConfig.*A2A'` passed. | Streams and consumers only; no remote task execution. |
+| 3 | Durable stores | next | | `go test ./a2a -run TestTaskStore`; `go test ./a2a -run TestPolicyStore`; `go test ./a2a -run TestPeerStore` | Durable TaskStore, event store, policy store, peer store. |
 | 4 | Peer card and discovery | pending | | `go test ./a2a -run TestAgentCard`; `go test ./a2a -run TestPeerStore` | Public card sanitizer and manager-visible trust summary. |
 | 5 | Channel ingress and executor | pending | | `go test ./channel -run TestManagerA2A`; `go test ./channel -run TestWorkerA2A`; `go test ./channel -run TestA2A` | Ingress only through `channel.Manager` and worker runtime. |
 | 6 | Transport integration | pending | | `go test ./a2a -run TestTransport`; `go test ./a2a -run TestA2AIntegration` | Two-node embedded JetStream closed loop. |
@@ -81,7 +81,7 @@ Append one subsection per completed phase.
 
 ### Phase 0 — Readiness guard
 
-- Status: done; commit pending.
+- Status: done; commit `0d720d2`.
 - Changed files: `docs/a2a-nats-implementation-guide.md`.
 - Validation:
   - `python3 - <<'PY' ...` printed `a2a-guide-readiness-ok`.
@@ -93,7 +93,7 @@ Append one subsection per completed phase.
 
 ### Phase 1 — Foundation package and config
 
-- Status: done; commit pending.
+- Status: done; commit `0d720d2`.
 - Changed files: `.env.example`, `a2a/errors.go`, `a2a/envelope.go`, `a2a/executor.go`, `a2a/idempotency.go`, `a2a/store.go`, `a2a/subject.go`, `a2a/types.go`, `a2a/types_test.go`, `channel/doctor_env.go`, `channel/doctor_env_test.go`, `channel/manager.go`, `config.go`, `config_test.go`, `locale/lang/en.json`, `locale/lang/zh-TW.json`, `main.go`.
 - Validation:
   - `go test ./a2a -run 'Test(Subject|Envelope|TaskState|ErrorCode|NatsMsgID)'` passed.
@@ -110,6 +110,26 @@ Append one subsection per completed phase.
 - Deployment hosts touched: no.
 - Rollback boundary: revert the `a2a` package plus config/doctor/env documentation wiring added in this phase; no runtime schema or NATS state exists yet.
 - Next phase: Phase 2 NATS node and JetStream topology.
+
+### Phase 2 — NATS node and JetStream topology
+
+- Status: done; commit pending.
+- Changed files: `a2a/nats_test.go`, `a2a/node.go`, `a2a/node_test.go`, `a2a/streams.go`, `a2a/types.go`, `bot/bot.go`, `channel/manager.go`, `config_test.go`, `docs/a2a-nats-implementation-progress.md`, `go.mod`, `go.sum`, `main.go`.
+- Validation:
+  - `go test ./a2a -run 'Test(NodeDisabled|ConnectDrain|EnsureStreams|NoPoolSubject|DuplicateNatsMsgID)'` passed.
+  - `go test . -run 'TestConfig.*A2A'` passed.
+  - LSP workspace diagnostics: no issues found.
+  - `grep 'a2a\\.v1\\.pool' a2a;docs` found the literal only in rejection tests and documentation.
+- Done criteria evidence:
+  - Disabled `a2a.Node` opens no NATS connection or JetStream handle.
+  - Embedded NATS tests prove connect/drain, stream creation, durable consumer creation, and duplicate `Nats-Msg-Id` dedupe.
+  - Stream subjects are exactly `a2a.v1.task.>`, `a2a.v1.control.>`, and `a2a.v1.event.>`.
+  - Local durable consumer filters target only `A2A_AGENT_ID` and do not include pool filters.
+  - Startup constructs a disabled/enabled node and skips all NATS work when disabled.
+- Runtime settings touched: no.
+- Deployment hosts touched: no.
+- Rollback boundary: revert `a2a/node.go`, `a2a/streams.go`, `a2a/nats_test.go`, `a2a/node_test.go`, `go.mod`, `go.sum`, and startup dependency wiring in `main.go`, `bot/bot.go`, and `channel/manager.go`; Phase 1 validators remain usable.
+- Next phase: Phase 3 durable stores.
 
 ## Master goal prompt
 

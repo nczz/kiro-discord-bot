@@ -8,7 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
+	"github.com/nczz/kiro-discord-bot/a2a"
 	"github.com/nczz/kiro-discord-bot/acp"
 	"github.com/nczz/kiro-discord-bot/audit"
 	"github.com/nczz/kiro-discord-bot/bot"
@@ -45,6 +47,28 @@ func main() {
 	runPreflight(cfg)
 
 	log.Printf("kiro-discord-bot %s starting", Version)
+	a2aNode, err := a2a.Connect(context.Background(), a2a.NodeConfig{
+		Config: cfg.A2A,
+		Logf:   log.Printf,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	if a2aNode.IsEnabled() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		if err := a2a.EnsureStreams(ctx, a2aNode); err != nil {
+			cancel()
+			a2aNode.Close()
+			log.Fatal(err)
+		}
+		if err := a2a.EnsureConsumers(ctx, a2aNode); err != nil {
+			cancel()
+			a2aNode.Close()
+			log.Fatal(err)
+		}
+		cancel()
+		log.Printf("[a2a] NATS node enabled agent=%s", cfg.A2A.AgentID)
+	}
 
 	b, err := bot.NewFromConfig(bot.BotConfig{
 		ManagerConfig: channel.ManagerConfig{
@@ -74,6 +98,7 @@ func main() {
 			UsageTimezone:        cfg.UsageTimezone,
 			UsageRetentionMonths: cfg.UsageRetentionMonths,
 			A2A:                  cfg.A2A,
+			A2ANode:              a2aNode,
 		},
 		DiscordToken:       cfg.DiscordToken,
 		HeartbeatSec:       cfg.HeartbeatSec,
@@ -90,6 +115,7 @@ func main() {
 			RecordContent: cfg.AuditRecordContent,
 			RecordTyping:  cfg.AuditRecordTyping,
 		},
+		A2ANode:           a2aNode,
 		STTEnabled:        cfg.STTEnabled,
 		STTProvider:       cfg.STTProvider,
 		STTAPIKey:         cfg.STTAPIKey,
@@ -98,9 +124,11 @@ func main() {
 		STTMaxDurationSec: cfg.STTMaxDurationSec,
 	})
 	if err != nil {
+		a2aNode.Close()
 		log.Fatal(err)
 	}
 	if err := b.Start(); err != nil {
+		a2aNode.Close()
 		log.Fatal(err)
 	}
 	log.Println("Bot running. Ctrl+C to stop.")

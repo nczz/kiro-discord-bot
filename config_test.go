@@ -34,7 +34,7 @@ func TestLoadConfigNormalizesDataDir(t *testing.T) {
 	}
 }
 
-func TestLoadConfigParsesA2ADisabledByDefault(t *testing.T) {
+func TestConfigParsesA2ADisabledByDefault(t *testing.T) {
 	t.Setenv("DISCORD_TOKEN", "token")
 	t.Setenv("DATA_DIR", t.TempDir())
 
@@ -50,7 +50,7 @@ func TestLoadConfigParsesA2ADisabledByDefault(t *testing.T) {
 	}
 }
 
-func TestLoadConfigParsesA2AEnabledWithProductionMaterial(t *testing.T) {
+func TestConfigParsesA2AEnabledWithProductionMaterial(t *testing.T) {
 	t.Setenv("DISCORD_TOKEN", "token")
 	t.Setenv("DATA_DIR", t.TempDir())
 	t.Setenv("NATS_URL", "nats://127.0.0.1:4222")
@@ -68,6 +68,13 @@ func TestLoadConfigParsesA2AEnabledWithProductionMaterial(t *testing.T) {
 	}
 	if cfg.A2A.AgentID != "adam-n200" || cfg.A2A.TaskTimeoutSec != 90 || cfg.A2A.MaxDelegationDepth != 2 || !cfg.A2A.AutoDelegateEnabled {
 		t.Fatalf("unexpected A2A config: %+v", cfg.A2A)
+	}
+}
+
+func TestConfigA2ARequiresAgentIDWhenURLSet(t *testing.T) {
+	err := (A2AConfig{NATSURL: "nats://127.0.0.1:4222"}).ValidateStartup()
+	if err == nil || !strings.Contains(err.Error(), "A2A_AGENT_ID") {
+		t.Fatalf("ValidateStartup error = %v, want A2A_AGENT_ID requirement", err)
 	}
 }
 
