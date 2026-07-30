@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/bwmarrin/discordgo"
+	"github.com/nczz/kiro-discord-bot/a2a"
 	"github.com/nczz/kiro-discord-bot/internal/botmcp"
 	L "github.com/nczz/kiro-discord-bot/locale"
 )
@@ -32,6 +33,8 @@ func a2aSlashOptions() []*discordgo.ApplicationCommandOption {
 	}
 	return []*discordgo.ApplicationCommandOption{
 		{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "peers", Description: L.Get("cmd.a2a.sub.peers")},
+		{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "setup", Description: L.Get("cmd.a2a.sub.setup"), Options: []*discordgo.ApplicationCommandOption{str("peer_agent", L.Get("cmd.a2a.opt.peer_agent"), true), str("skill_id", L.Get("cmd.a2a.opt.skill_id_optional"), false), str("channel_ref", L.Get("cmd.a2a.opt.channel_ref_optional"), false), str("mode", L.Get("cmd.a2a.opt.setup_mode"), false), str("confirmation_token", L.Get("cmd.a2a.opt.confirmation_token"), false)}},
+		{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "ask", Description: L.Get("cmd.a2a.sub.ask"), Options: []*discordgo.ApplicationCommandOption{str("peer_agent", L.Get("cmd.a2a.opt.peer_agent"), true), str("message", L.Get("cmd.a2a.opt.message"), true), str("skill_id", L.Get("cmd.a2a.opt.skill_id_optional"), false), str("reason", L.Get("cmd.a2a.opt.reason_optional"), false), str("confirmation_token", L.Get("cmd.a2a.opt.confirmation_token"), false)}},
 		{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "status", Description: L.Get("cmd.a2a.sub.status"), Options: []*discordgo.ApplicationCommandOption{str("task", L.Get("cmd.a2a.opt.task"), false)}},
 		{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "delegate", Description: L.Get("cmd.a2a.sub.delegate"), Options: []*discordgo.ApplicationCommandOption{str("target_agent", L.Get("cmd.a2a.opt.target_agent"), true), str("skill_id", L.Get("cmd.a2a.opt.skill_id"), true), str("message", L.Get("cmd.a2a.opt.message"), true), str("reason", L.Get("cmd.a2a.opt.reason"), true), str("confirmation_token", L.Get("cmd.a2a.opt.confirmation_token"), false)}},
 		{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "cancel", Description: L.Get("cmd.a2a.sub.cancel"), Options: []*discordgo.ApplicationCommandOption{str("task", L.Get("cmd.a2a.opt.task"), true), str("reason", L.Get("cmd.a2a.opt.reason"), false)}},
@@ -64,9 +67,12 @@ func a2aArgsFromSlashOptions(options []*discordgo.ApplicationCommandInteractionD
 	for _, opt := range sub.Options {
 		switch opt.Name {
 		case "task":
-			payload.Request.TaskID = strings.TrimSpace(opt.StringValue())
+			assignA2ATaskOption(&payload, opt.StringValue())
 		case "target_agent":
 			payload.Request.TargetAgent = opt.StringValue()
+		case "peer_agent":
+			payload.Request.TargetAgent = opt.StringValue()
+			assignA2AAgentOption(&payload, sub.Name, opt.StringValue())
 		case "skill_id":
 			payload.Request.SkillID = opt.StringValue()
 		case "message":
@@ -106,6 +112,10 @@ func assignA2AAgentOption(payload *a2aSlashPayload, subcommand string, value str
 		payload.Request.AcceptFrom = []string{value}
 	case "delegate-to", "undelegate-to":
 		payload.Request.DelegateTo = []string{value}
+	case "setup":
+		payload.Request.AcceptFrom = []string{value}
+		payload.Request.DelegateTo = []string{value}
+		payload.Request.CoPresentFrom = []string{value}
 	case "transcript-from":
 		payload.Request.CoPresentFrom = []string{value}
 	}
@@ -113,6 +123,41 @@ func assignA2AAgentOption(payload *a2aSlashPayload, subcommand string, value str
 
 func applyA2ASubcommandDefaults(payload *a2aSlashPayload) {
 	switch payload.Subcommand {
+	case "setup":
+		enable := true
+		payload.Request.Enable = &enable
+		if strings.TrimSpace(payload.Request.SkillID) == "" {
+			payload.Request.SkillID = "general/task"
+		}
+		if strings.TrimSpace(payload.Request.ChannelRef) == "" {
+			payload.Request.ChannelRef = "discord-" + strings.TrimSpace(payload.Request.ChannelID)
+		}
+		localSkill := a2a.SkillSlug(payload.Request.SkillID)
+		payload.Request.AcceptSkills = []string{localSkill}
+		payload.Request.ExposeSkills = []string{localSkill}
+		payload.Request.DelegateSkills = []string{payload.Request.SkillID}
+		mode := normalizeA2ATranscriptMode(payload.Request.TranscriptMode)
+		if mode == "" {
+			mode = "delegator"
+		}
+		payload.Request.TranscriptMode = mode
+		if mode == "co_present" {
+			share := true
+			payload.Request.ShareDiscordContext = &share
+		}
+	case "ask":
+		if strings.TrimSpace(payload.Request.SkillID) == "" {
+			payload.Request.SkillID = "general/task"
+		}
+		if strings.TrimSpace(payload.Request.Reason) == "" {
+			payload.Request.Reason = "user_request"
+		}
+	case "transcript-mode":
+		if mode := normalizeA2ATranscriptMode(payload.Request.TranscriptMode); mode != "" {
+			payload.Request.TranscriptMode = mode
+			share := mode == "co_present"
+			payload.Request.ShareDiscordContext = &share
+		}
 	case "enable":
 		v := true
 		payload.Request.Enable = &v
@@ -123,6 +168,28 @@ func applyA2ASubcommandDefaults(payload *a2aSlashPayload) {
 		payload.Request.ExposeSkills = []string{payload.Request.SkillID}
 	case "delegate-to", "undelegate-to":
 		payload.Request.DelegateSkills = []string{payload.Request.SkillID}
+	}
+}
+
+func assignA2ATaskOption(payload *a2aSlashPayload, value string) {
+	value = strings.TrimSpace(value)
+	if strings.HasPrefix(value, "local_") {
+		payload.Request.LocalID = value
+		return
+	}
+	payload.Request.TaskID = value
+}
+
+func normalizeA2ATranscriptMode(mode string) string {
+	switch strings.TrimSpace(mode) {
+	case "", "safe", "proxy", "delegator":
+		return "delegator"
+	case "mirror":
+		return "mirror"
+	case "co-present", "copresent", "co_present":
+		return "co_present"
+	default:
+		return strings.TrimSpace(mode)
 	}
 }
 
@@ -147,7 +214,7 @@ func (b *Bot) cmdA2A(ctx cmdCtx) {
 		resp, _ = svc.Peers(context.Background(), payload.Request)
 	case "status":
 		resp, _ = svc.TaskStatus(context.Background(), payload.Request)
-	case "delegate":
+	case "delegate", "ask":
 		resp, _ = svc.Delegate(context.Background(), payload.Request)
 	case "cancel":
 		resp, _ = svc.Cancel(context.Background(), payload.Request)
@@ -155,7 +222,7 @@ func (b *Bot) cmdA2A(ctx cmdCtx) {
 		resp, _ = svc.InputReply(context.Background(), payload.Request)
 	case "authorize":
 		resp, _ = svc.AuthReply(context.Background(), payload.Request)
-	case "enable", "disable", "ref", "expose", "unexpose", "accept-from", "deny-from", "delegate-to", "undelegate-to", "max-concurrent", "transcript-mode", "transcript-from":
+	case "setup", "enable", "disable", "ref", "expose", "unexpose", "accept-from", "deny-from", "delegate-to", "undelegate-to", "max-concurrent", "transcript-mode", "transcript-from":
 		if strings.TrimSpace(payload.Request.ConfirmationToken) == "" {
 			resp, _ = svc.PolicyPlan(context.Background(), payload.Request)
 		} else {
@@ -195,13 +262,235 @@ func a2aComponentSecret() string {
 
 func formatA2AResponse(resp botmcp.A2AToolResponse) string {
 	if resp.RequiresConfirmation {
-		return L.Getf("a2a.confirmation_required", resp.ConfirmationSummary, resp.ChangeID, resp.ConfirmationToken)
+		return formatA2AConfirmation(resp)
 	}
 	if !resp.OK {
-		return L.Getf("a2a.error", resp.Message)
+		return formatA2AError(resp)
 	}
-	if raw, err := json.MarshalIndent(resp, "", "  "); err == nil {
-		return "```json\n" + string(raw) + "\n```"
+	switch {
+	case resp.Task != nil:
+		return formatA2ATask(*resp.Task, resp.Message)
+	case resp.Tasks != nil:
+		return formatA2ATaskList(resp.Tasks)
+	case resp.Peers != nil:
+		return formatA2APeers(resp.Peers, resp.Policy)
+	case resp.Policy != nil:
+		return formatA2APolicy(resp.Message, *resp.Policy)
+	default:
+		return a2aBulletTitle(resp.Message)
 	}
-	return resp.Message
+}
+
+func formatA2AConfirmation(resp botmcp.A2AToolResponse) string {
+	var sb strings.Builder
+	sb.WriteString(L.Getf("a2a.confirmation_required", resp.ConfirmationSummary, resp.ChangeID, resp.ConfirmationToken))
+	if len(resp.RiskLabels) > 0 {
+		sb.WriteString("\n")
+		sb.WriteString(L.Getf("a2a.risk_labels", strings.Join(resp.RiskLabels, ", ")))
+	}
+	if resp.ExpiresAt != "" {
+		sb.WriteString("\n")
+		sb.WriteString(L.Getf("a2a.expires_at", resp.ExpiresAt))
+	}
+	sb.WriteString("\n")
+	sb.WriteString(L.Get("a2a.confirmation_hint"))
+	if resp.Policy != nil {
+		sb.WriteString("\n\n")
+		sb.WriteString(formatA2APolicy(L.Get("a2a.policy.preview"), *resp.Policy))
+	}
+	return sb.String()
+}
+
+func formatA2AError(resp botmcp.A2AToolResponse) string {
+	msg := L.Getf("a2a.error", resp.Message)
+	lower := strings.ToLower(resp.Message)
+	var hint string
+	switch {
+	case strings.Contains(lower, "target peer is unknown"):
+		hint = L.Get("a2a.remedy.peer_unknown")
+	case strings.Contains(lower, "channel a2a policy is disabled"), strings.Contains(lower, "channel_ref is not enabled"):
+		hint = L.Get("a2a.remedy.channel_disabled")
+	case strings.Contains(lower, "not delegated"), strings.Contains(lower, "skill is not delegated"):
+		hint = L.Get("a2a.remedy.not_delegated")
+	case strings.Contains(lower, "does not expose skill"), strings.Contains(lower, "unknown_skill"):
+		hint = L.Get("a2a.remedy.unknown_skill")
+	case strings.Contains(lower, "managechannels"), strings.Contains(lower, "manager required"):
+		hint = L.Get("a2a.remedy.manager_required")
+	}
+	if hint == "" {
+		return msg
+	}
+	return msg + "\n" + hint
+}
+
+func formatA2APeers(peers []botmcp.A2APeerSummary, policy *a2a.ChannelA2APolicy) string {
+	var sb strings.Builder
+	sb.WriteString(L.Get("a2a.peers.title"))
+	sb.WriteString("\n")
+	if len(peers) == 0 {
+		sb.WriteString(L.Get("a2a.peers.empty"))
+		sb.WriteString("\n")
+		sb.WriteString(L.Get("a2a.peers.empty_hint"))
+	} else {
+		for _, peer := range peers {
+			state := L.Get("a2a.state.offline")
+			if peer.Online {
+				state = L.Get("a2a.state.online")
+			} else if peer.Stale {
+				state = L.Get("a2a.state.stale")
+			}
+			trust := L.Get("a2a.trust.untrusted")
+			if peer.Trusted {
+				trust = L.Get("a2a.trust.trusted")
+			}
+			allowed := L.Get("a2a.delegate.not_allowed")
+			if peer.DelegationAllowed {
+				allowed = L.Get("a2a.delegate.allowed")
+			}
+			skills := strings.Join(peer.Skills, ", ")
+			if skills == "" {
+				skills = L.Get("a2a.none")
+			}
+			sb.WriteString(L.Getf("a2a.peers.row_human", peer.AgentID, peer.Name, state, trust, allowed, skills))
+			sb.WriteString("\n")
+		}
+	}
+	if policy != nil {
+		sb.WriteString("\n")
+		sb.WriteString(formatA2APolicy(L.Get("a2a.policy.current"), *policy))
+	}
+	return sb.String()
+}
+
+func formatA2APolicy(title string, policy a2a.ChannelA2APolicy) string {
+	var sb strings.Builder
+	sb.WriteString(a2aBulletTitle(title))
+	sb.WriteString("\n")
+	sb.WriteString(L.Getf("a2a.policy.enabled", yesNo(policy.Enabled)))
+	sb.WriteString("\n")
+	sb.WriteString(L.Getf("a2a.policy.channel_ref", valueOrNone(policy.ChannelRef)))
+	sb.WriteString("\n")
+	sb.WriteString(L.Getf("a2a.policy.mode", valueOrNone(policy.DiscordTranscriptMode)))
+	sb.WriteString("\n")
+	sb.WriteString(L.Getf("a2a.policy.result_visibility", valueOrNone(policy.ResultVisibility)))
+	sb.WriteString("\n")
+	sb.WriteString(L.Getf("a2a.policy.accept_from", joinOrNone(policy.AcceptFrom)))
+	sb.WriteString("\n")
+	sb.WriteString(L.Getf("a2a.policy.accept_skills", joinOrNone(policy.AcceptSkills)))
+	sb.WriteString("\n")
+	sb.WriteString(L.Getf("a2a.policy.expose_skills", joinSkillPoliciesOrNone(policy.ExposeSkills)))
+	sb.WriteString("\n")
+	sb.WriteString(L.Getf("a2a.policy.delegate_to", joinOrNone(policy.DelegateTo)))
+	sb.WriteString("\n")
+	sb.WriteString(L.Getf("a2a.policy.delegate_skills", joinOrNone(policy.DelegateSkills)))
+	sb.WriteString("\n")
+	sb.WriteString(L.Getf("a2a.policy.max_concurrent", policy.MaxConcurrent))
+	if policy.ShareDiscordContext {
+		sb.WriteString("\n")
+		sb.WriteString(L.Getf("a2a.policy.co_present_from", joinOrNone(policy.CoPresentFrom)))
+	}
+	return sb.String()
+}
+
+func formatA2ATask(task botmcp.A2ATaskSummary, message string) string {
+	var sb strings.Builder
+	sb.WriteString(a2aBulletTitle(firstNonEmptyA2A(message, L.Get("a2a.task.title"))))
+	sb.WriteString("\n")
+	sb.WriteString(L.Getf("a2a.task.state", task.State))
+	sb.WriteString("\n")
+	sb.WriteString(L.Getf("a2a.task.local_id", valueOrNone(task.LocalID)))
+	if task.TaskID != "" {
+		sb.WriteString("\n")
+		sb.WriteString(L.Getf("a2a.task.task_id", task.TaskID))
+	}
+	if task.ToAgent != "" || task.ExecutorAgent != "" {
+		sb.WriteString("\n")
+		sb.WriteString(L.Getf("a2a.task.route", valueOrNone(task.FromAgent), valueOrNone(firstNonEmptyA2A(task.ExecutorAgent, task.ToAgent))))
+	}
+	if task.SkillID != "" {
+		sb.WriteString("\n")
+		sb.WriteString(L.Getf("a2a.task.skill", task.SkillID))
+	}
+	if task.ErrorMessage != "" {
+		sb.WriteString("\n")
+		sb.WriteString(L.Getf("a2a.task.error", task.ErrorMessage))
+	}
+	sb.WriteString("\n")
+	sb.WriteString(L.Get("a2a.task.actions_hint"))
+	return sb.String()
+}
+
+func formatA2ATaskList(tasks []botmcp.A2ATaskSummary) string {
+	var sb strings.Builder
+	sb.WriteString(L.Get("a2a.tasks.title"))
+	if len(tasks) == 0 {
+		sb.WriteString("\n")
+		sb.WriteString(L.Get("a2a.tasks.empty"))
+		return sb.String()
+	}
+	for _, task := range tasks {
+		sb.WriteString("\n")
+		sb.WriteString(L.Getf("a2a.tasks.row", valueOrNone(firstNonEmptyA2A(task.LocalID, task.TaskID)), task.State, valueOrNone(firstNonEmptyA2A(task.ExecutorAgent, task.ToAgent)), valueOrNone(task.SkillID)))
+	}
+	return sb.String()
+}
+
+func a2aBulletTitle(title string) string {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		title = "A2A"
+	}
+	return "**" + title + "**"
+}
+
+func joinOrNone(values []string) string {
+	var out []string
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			out = append(out, "`"+value+"`")
+		}
+	}
+	if len(out) == 0 {
+		return L.Get("a2a.none")
+	}
+	return strings.Join(out, ", ")
+}
+
+func joinSkillPoliciesOrNone(values []a2a.SkillPolicy) string {
+	var out []string
+	for _, value := range values {
+		skill := strings.TrimSpace(value.ID)
+		if skill != "" {
+			out = append(out, "`"+skill+"`")
+		}
+	}
+	if len(out) == 0 {
+		return L.Get("a2a.none")
+	}
+	return strings.Join(out, ", ")
+}
+
+func valueOrNone(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return L.Get("a2a.none")
+	}
+	return "`" + value + "`"
+}
+
+func yesNo(v bool) string {
+	if v {
+		return L.Get("a2a.yes")
+	}
+	return L.Get("a2a.no")
+}
+
+func firstNonEmptyA2A(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }

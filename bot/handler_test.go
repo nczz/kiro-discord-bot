@@ -20,6 +20,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/bwmarrin/discordgo"
+	"github.com/nczz/kiro-discord-bot/a2a"
 	"github.com/nczz/kiro-discord-bot/acp"
 	"github.com/nczz/kiro-discord-bot/audit"
 	"github.com/nczz/kiro-discord-bot/channel"
@@ -1569,10 +1570,10 @@ func TestSlashCommandsIncludeAgentAndUsage(t *testing.T) {
 		}
 		if cmd.Name == "a2a" {
 			foundA2A = true
-			if len(cmd.Options) != 18 {
-				t.Fatalf("/a2a should expose 18 subcommands, got %+v", cmd.Options)
+			if len(cmd.Options) != 20 {
+				t.Fatalf("/a2a should expose 20 subcommands, got %+v", cmd.Options)
 			}
-			if cmd.Options[0].Name != "peers" || cmd.Options[2].Name != "delegate" {
+			if cmd.Options[0].Name != "peers" || cmd.Options[1].Name != "setup" || cmd.Options[2].Name != "ask" || cmd.Options[4].Name != "delegate" {
 				t.Fatalf("/a2a subcommands = %+v", cmd.Options)
 			}
 			continue
@@ -1603,8 +1604,91 @@ func TestA2AConfirmationResponseUsesLocale(t *testing.T) {
 func TestA2ALocaleConfirmationResponse(t *testing.T) {
 	L.Load("en")
 	got := formatA2AResponse(botmcp.A2AToolResponse{OK: false, Message: "policy_denied: manager required"})
-	if !strings.Contains(got, "A2A error") || !strings.Contains(got, "policy_denied") {
-		t.Fatalf("formatA2AResponse error = %q, want localized A2A error", got)
+	if !strings.Contains(got, "A2A could not continue") || !strings.Contains(got, "Manage Channels") {
+		t.Fatalf("formatA2AResponse error = %q, want localized actionable A2A error", got)
+	}
+}
+
+func TestA2AFormatTaskResponseIsHumanReadable(t *testing.T) {
+	L.Load("en")
+	got := formatA2AResponse(botmcp.A2AToolResponse{OK: true, Message: "A2A task sent", Task: &botmcp.A2ATaskSummary{LocalID: "local-1", TaskID: "task-1", FromAgent: "m5bot-local", ToAgent: "d80-chunbot", SkillID: "general/task", State: a2a.TaskStateSubmitted}})
+	for _, want := range []string{"**A2A task sent**", "State", "m5bot-local", "d80-chunbot", "general/task", "/a2a status"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("formatA2AResponse task = %q, missing %q", got, want)
+		}
+	}
+	if strings.Contains(got, "```json") {
+		t.Fatalf("formatA2AResponse task exposed raw JSON: %q", got)
+	}
+}
+
+func TestA2ASetupSlashDefaultsHumanFlow(t *testing.T) {
+	raw := a2aArgsFromSlashOptions([]*discordgo.ApplicationCommandInteractionDataOption{{
+		Name: "setup",
+		Options: []*discordgo.ApplicationCommandInteractionDataOption{
+			{Name: "peer_agent", Type: discordgo.ApplicationCommandOptionString, Value: "d80-chunbot"},
+			{Name: "mode", Type: discordgo.ApplicationCommandOptionString, Value: "co_present"},
+		},
+	}}, "guild-1", "channel-1", "user-1", "alice", true)
+	var payload a2aSlashPayload
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Subcommand != "setup" || payload.Request.Enable == nil || !*payload.Request.Enable {
+		t.Fatalf("setup payload enable = %+v", payload)
+	}
+	for _, want := range []string{"d80-chunbot"} {
+		if len(payload.Request.AcceptFrom) != 1 || payload.Request.AcceptFrom[0] != want || len(payload.Request.DelegateTo) != 1 || payload.Request.DelegateTo[0] != want {
+			t.Fatalf("setup peer defaults = %+v, want %s", payload.Request, want)
+		}
+	}
+	if payload.Request.SkillID != "general/task" || len(payload.Request.AcceptSkills) != 1 || payload.Request.AcceptSkills[0] != "task" || len(payload.Request.ExposeSkills) != 1 || payload.Request.ExposeSkills[0] != "task" || len(payload.Request.DelegateSkills) != 1 || payload.Request.DelegateSkills[0] != "general/task" {
+		t.Fatalf("setup skill defaults = %+v", payload.Request)
+	}
+	if payload.Request.TranscriptMode != "co_present" || payload.Request.ShareDiscordContext == nil || !*payload.Request.ShareDiscordContext {
+		t.Fatalf("setup UX defaults = %+v", payload.Request)
+	}
+}
+
+func TestA2ATaskOptionAcceptsDisplayedLocalID(t *testing.T) {
+	raw := a2aArgsFromSlashOptions([]*discordgo.ApplicationCommandInteractionDataOption{{
+		Name: "status",
+		Options: []*discordgo.ApplicationCommandInteractionDataOption{
+			{Name: "task", Type: discordgo.ApplicationCommandOptionString, Value: "local_1234"},
+		},
+	}}, "guild-1", "channel-1", "user-1", "alice", false)
+	var payload a2aSlashPayload
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Request.LocalID != "local_1234" || payload.Request.TaskID != "" {
+		t.Fatalf("task option = %+v, want local id lookup", payload.Request)
+	}
+}
+
+func TestA2ATranscriptModeSafeClearsContextSharing(t *testing.T) {
+	raw := a2aArgsFromSlashOptions([]*discordgo.ApplicationCommandInteractionDataOption{{
+		Name: "transcript-mode",
+		Options: []*discordgo.ApplicationCommandInteractionDataOption{
+			{Name: "mode", Type: discordgo.ApplicationCommandOptionString, Value: "safe"},
+		},
+	}}, "guild-1", "channel-1", "user-1", "alice", true)
+	var payload a2aSlashPayload
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Request.TranscriptMode != "delegator" || payload.Request.ShareDiscordContext == nil || *payload.Request.ShareDiscordContext {
+		t.Fatalf("transcript-mode safe defaults = %+v", payload.Request)
+	}
+}
+
+func TestA2APolicyFormatterIncludesPolicyMutationFields(t *testing.T) {
+	L.Load("en")
+	got := formatA2APolicy("Preview", a2a.ChannelA2APolicy{Enabled: true, ChannelRef: "d80-test", ResultVisibility: "proxy", DiscordTranscriptMode: "delegator", AcceptFrom: []string{"d80-chunbot"}, AcceptSkills: []string{"task"}, ExposeSkills: []a2a.SkillPolicy{{ID: "task"}}, DelegateTo: []string{"d80-chunbot"}, DelegateSkills: []string{"general/task"}, MaxConcurrent: 3})
+	for _, want := range []string{"Result visibility", "Local capabilities exposed", "`task`", "Max concurrent inbound tasks: 3"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("formatA2APolicy = %q, missing %q", got, want)
+		}
 	}
 }
 
