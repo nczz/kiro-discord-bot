@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -54,6 +55,9 @@ func migrateA2ASQLite(ctx context.Context, db *sql.DB, component string, migrati
 	}
 	for _, stmt := range migrations {
 		if _, err := tx.ExecContext(ctx, stmt); err != nil {
+			if strings.Contains(err.Error(), "duplicate column") {
+				continue
+			}
 			return err
 		}
 	}

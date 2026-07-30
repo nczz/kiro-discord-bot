@@ -682,6 +682,7 @@ func (b *Bot) doctor(ctx context.Context, channelID, targetID string) string {
 
 	sb.WriteString(b.doctorDiscordPermissions(channelID, targetID))
 	sb.WriteString(b.doctorBotPeers(targetID))
+	sb.WriteString(b.manager.A2APeerTrustSummary(ctx))
 
 	sb.WriteString("\n")
 	sb.WriteString(b.manager.MCPStatusChecklist(channelID))

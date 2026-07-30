@@ -46,8 +46,8 @@ At the start of each continuation:
 
 ## Current state
 
-- Program state: Phase 0 readiness guard and Phase 1 foundation package/config completed in commit `0d720d2`; Phase 2 NATS node and JetStream topology completed in commit `823a998`; Phase 3 durable stores completed in implementation commit `6d3809f`.
-- Current phase: Phase 4 peer card and discovery is next.
+- Program state: Phase 0 readiness guard and Phase 1 foundation package/config completed in commit `0d720d2`; Phase 2 NATS node and JetStream topology completed in commit `823a998`; Phase 3 durable stores completed in implementation commit `6d3809f`; Phase 4 peer card and discovery completed with implementation commit pending.
+- Current phase: Phase 4 validation passed; Phase 5 channel ingress and executor is next after commit.
 - First execution target: completed Phase 0 guide validation fix and Phase 1 foundation only.
 - Known pre-implementation issue: resolved by splitting the self-referential forbidden-string checks in `docs/a2a-nats-implementation-guide.md`.
 
@@ -59,7 +59,7 @@ At the start of each continuation:
 | 1 | Foundation package and config | done | `0d720d2` | `go test ./a2a -run 'Test(Subject|Envelope|TaskState|ErrorCode|NatsMsgID)'` passed; `go test ./channel -run 'TestDoctor.*A2A|TestDoctorRuntimeOverviewDoesNotLeakRawEnvironmentValues'` passed; targeted config parse tests passed. | No NATS connection. A2A stays disabled when `NATS_URL` is unset. |
 | 2 | NATS node and JetStream topology | done | `823a998` | `go test ./a2a -run 'Test(NodeDisabled|ConnectDrain|EnsureStreams|NoPoolSubject|DuplicateNatsMsgID)'` passed; `go test . -run 'TestConfig.*A2A'` passed. | Streams and consumers only; no remote task execution. |
 | 3 | Durable stores | done | `6d3809f` | `go test ./a2a -run 'Test(TaskStore|AcceptedBootstrap|RejectedBeforeAccepted|TerminalImmutable|PolicyStore|PeerStore|ObjectRef)'` passed. | Durable TaskStore, event store, policy store, peer store, and object-ref metadata store. |
-| 4 | Peer card and discovery | pending | | `go test ./a2a -run TestAgentCard`; `go test ./a2a -run TestPeerStore` | Public card sanitizer and manager-visible trust summary. |
+| 4 | Peer card and discovery | done | pending implementation commit | `go test ./a2a -run 'Test(AgentCardSanitizer|ExtendedCard|PeerKV|PeerWatch|Heartbeat|PeerRequestReplyFallback|PeerTrustSummary|VersionCompatibility|StalePeer)'` passed; `go test ./bot ./channel -run 'Test.*A2A.*Peer'` passed. | Public card sanitizer, KV/fallback discovery, heartbeat, and manager-visible trust summary. |
 | 5 | Channel ingress and executor | pending | | `go test ./channel -run TestManagerA2A`; `go test ./channel -run TestWorkerA2A`; `go test ./channel -run TestA2A` | Ingress only through `channel.Manager` and worker runtime. |
 | 6 | Transport integration | pending | | `go test ./a2a -run TestTransport`; `go test ./a2a -run TestA2AIntegration` | Two-node embedded JetStream closed loop. |
 | 7 | Bot-tools and Discord UX | pending | | `go test ./internal/botmcp -run TestA2A`; `go test ./bot -run TestA2A`; `go test ./locale ./bot -run 'Test.*A2A.*Locale'` | Bot-tools, slash fallback, buttons/modals, requester/manager checks. |
@@ -149,6 +149,28 @@ Append one subsection per completed phase.
 - Deployment hosts touched: no.
 - Rollback boundary: revert Phase 3 store files and tests; Phase 2 NATS node/stream code remains inert.
 - Next phase: Phase 4 peer card and discovery.
+
+### Phase 4 — Peer card and discovery
+
+- Status: done; implementation commit pending.
+- Changed files: `a2a/card.go`, `a2a/card_phase4_test.go`, `a2a/discovery.go`, `a2a/heartbeat.go`, `a2a/peer_store.go`, `a2a/sqlite_store.go`, `bot/a2a_peer_test.go`, `bot/commands.go`, `channel/a2a_peer_test.go`, `channel/manager.go`, `docs/a2a-nats-implementation-progress.md`, `locale/lang/en.json`, `locale/lang/zh-TW.json`.
+- Validation:
+  - `go test ./a2a -run 'Test(AgentCardSanitizer|ExtendedCard|PeerKV|PeerWatch|Heartbeat|PeerRequestReplyFallback|PeerTrustSummary|VersionCompatibility|StalePeer)'` passed.
+  - `go test ./bot ./channel -run 'Test.*A2A.*Peer'` passed.
+  - LSP workspace diagnostics: no issues found.
+  - No Discord or ACP imports exist in `a2a/`.
+  - `git diff --check` produced no output.
+- Done criteria evidence:
+  - Public `AgentCard` builder emits canonical fields only, strips skill examples, removes filesystem paths, Discord IDs, tokens/secrets, and private HTTP/WebSocket URLs, and declares A2A NATS binding v1.0 compatibility without SSE or push notifications.
+  - Extended cards are sanitized separately for authenticated peers and store only coarse channel/runtime/trust metadata.
+  - JetStream KV bucket `A2A_PEERS` is created with TTL, peer card publishes use key `<agentID>`, KV entries upsert `PeerStore`, and delete/tombstone paths mark peers stale.
+  - Fallback request/reply collector gathers multiple peer cards until deadline and reports timeout/no-responder cases explicitly.
+  - Heartbeat payloads publish on `a2a.v1.heartbeat.<agent>.<instance>` and update online/stale display state without being used as authorization.
+  - Manager and bot doctor surfaces expose deterministic localized peer trust summaries with binding, protocol version, signature status, credential issuer/fingerprint, online/stale state, and skill IDs.
+- Runtime settings touched: no.
+- Deployment hosts touched: no.
+- Rollback boundary: revert Phase 4 card/discovery/heartbeat files, peer store display extensions, localized peer summary strings, and the Manager/Bot read-only peer summary wiring; TaskStore and policy store remain intact.
+- Next phase: Phase 5 channel ingress through channel runtime.
 
 ## Master goal prompt
 

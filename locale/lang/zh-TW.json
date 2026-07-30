@@ -569,5 +569,19 @@
   "steering.create.modal.extra": "其他補充 context",
   "steering.create.modal.extra_ph": "不適合放在其他欄位，但希望 agent 長期記住的資訊。",
   "steering.modal.title": "編輯 Agent Context",
-  "steering.modal.content": "內容：%s"
+  "steering.modal.content": "內容：%s",
+  "a2a.peers.header": "**A2A Peers**\n",
+  "a2a.peers.store_unavailable": "⚠️ peer store：無法使用\n",
+  "a2a.peers.error": "❌ peer trust summary：%s\n",
+  "a2a.peers.none": "尚未發現 A2A peer。\n",
+  "a2a.peers.state.online": "online",
+  "a2a.peers.state.stale": "stale",
+  "a2a.peers.trust.trusted": "trusted",
+  "a2a.peers.trust.untrusted": "untrusted",
+  "a2a.peers.compat.ok": "compatible",
+  "a2a.peers.compat.unsupported": "unsupported（%s）",
+  "a2a.peers.skills.none": "無",
+  "a2a.peers.credential.unknown": "unknown",
+  "a2a.peers.signature.unknown": "unknown",
+  "a2a.peers.row": "- `%s` `%s`：%s、%s、binding `%s` v%s、%s、signature `%s`、issuer `%s`、fingerprint `%s`、skills：%s\n"
 }

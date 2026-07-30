@@ -569,5 +569,19 @@
   "steering.create.modal.extra": "Other context",
   "steering.create.modal.extra_ph": "Any reusable context that does not fit the other fields.",
   "steering.modal.title": "Edit Agent Context",
-  "steering.modal.content": "Content: %s"
+  "steering.modal.content": "Content: %s",
+  "a2a.peers.header": "**A2A Peers**\n",
+  "a2a.peers.store_unavailable": "⚠️ peer store: unavailable\n",
+  "a2a.peers.error": "❌ peer trust summary: %s\n",
+  "a2a.peers.none": "No discovered A2A peers.\n",
+  "a2a.peers.state.online": "online",
+  "a2a.peers.state.stale": "stale",
+  "a2a.peers.trust.trusted": "trusted",
+  "a2a.peers.trust.untrusted": "untrusted",
+  "a2a.peers.compat.ok": "compatible",
+  "a2a.peers.compat.unsupported": "unsupported (%s)",
+  "a2a.peers.skills.none": "none",
+  "a2a.peers.credential.unknown": "unknown",
+  "a2a.peers.signature.unknown": "unknown",
+  "a2a.peers.row": "- `%s` `%s`: %s, %s, binding `%s` v%s, %s, signature `%s`, issuer `%s`, fingerprint `%s`, skills: %s\n"
 }

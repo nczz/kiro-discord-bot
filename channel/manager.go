@@ -57,6 +57,7 @@ type Manager struct {
 	dataDir         string
 	a2aConfig       a2a.Config
 	a2aNode         *a2a.Node
+	a2aPeers        *a2a.SQLitePeerStore
 
 	// Memory
 	memory      *MemoryStore
@@ -197,6 +198,7 @@ type ManagerConfig struct {
 	Audit                AuditSink
 	A2A                  a2a.Config
 	A2ANode              *a2a.Node
+	A2APeerStore         *a2a.SQLitePeerStore
 }
 
 func NewManager(cfg ManagerConfig) *Manager {
@@ -231,6 +233,7 @@ func NewManager(cfg ManagerConfig) *Manager {
 		dataDir:             cfg.DataDir,
 		a2aConfig:           cfg.A2A,
 		a2aNode:             cfg.A2ANode,
+		a2aPeers:            cfg.A2APeerStore,
 		memory:              NewMemoryStore(cfg.DataDir),
 		flashMemory:         make(map[string][]string),
 		threadAgentMax:      cfg.ThreadAgentMax,
@@ -254,6 +257,13 @@ func NewManager(cfg ManagerConfig) *Manager {
 	if m.ompSessionDir != "" && m.enabledEngines[acp.DialectOmp] {
 		if err := os.MkdirAll(m.ompSessionDir, 0755); err != nil {
 			log.Printf("[agent-runtime] create omp session dir: %v", err)
+		}
+	}
+	if m.a2aPeers == nil && cfg.A2A.Enabled() {
+		if store, err := a2a.OpenPeerStore(cfg.DataDir); err != nil {
+			log.Printf("[a2a] peer store disabled: %v", err)
+		} else {
+			m.a2aPeers = store
 		}
 	}
 	if store, err := OpenMCPPolicyStore(cfg.DataDir); err != nil {
@@ -798,6 +808,9 @@ func (m *Manager) StopAll() {
 	}
 	if m.mcpPolicies != nil {
 		_ = m.mcpPolicies.Close()
+	}
+	if m.a2aPeers != nil {
+		_ = m.a2aPeers.Close()
 	}
 	if m.usage != nil {
 		_ = m.usage.Close()
@@ -2333,6 +2346,62 @@ func (m *Manager) Doctor(ctx context.Context) string {
 	sb.WriteString(m.doctorRuntimeOverview())
 	sb.WriteString(m.doctorListenModeConsistency())
 
+	return sb.String()
+}
+
+func (m *Manager) A2APeerTrustSummary(ctx context.Context) string {
+	if m == nil || !m.a2aConfig.Enabled() {
+		return ""
+	}
+	var sb strings.Builder
+	sb.WriteString("\n" + L.Get("a2a.peers.header"))
+	if m.a2aPeers == nil {
+		sb.WriteString(L.Get("a2a.peers.store_unavailable"))
+		return sb.String()
+	}
+	peers, err := m.a2aPeers.TrustSummary(ctx, 90*time.Second)
+	if err != nil {
+		sb.WriteString(L.Getf("a2a.peers.error", err.Error()))
+		return sb.String()
+	}
+	if len(peers) == 0 {
+		sb.WriteString(L.Get("a2a.peers.none"))
+		return sb.String()
+	}
+	for _, peer := range peers {
+		state := L.Get("a2a.peers.state.online")
+		if peer.Stale {
+			state = L.Get("a2a.peers.state.stale")
+		}
+		trust := L.Get("a2a.peers.trust.untrusted")
+		if peer.Trusted {
+			trust = L.Get("a2a.peers.trust.trusted")
+		}
+		compat := L.Get("a2a.peers.compat.ok")
+		if !peer.Compatibility.Supported {
+			compat = L.Getf("a2a.peers.compat.unsupported", strings.Join(peer.Compatibility.Reasons, "; "))
+		}
+		skills := L.Get("a2a.peers.skills.none")
+		if len(peer.SkillIDs) > 0 {
+			skills = strings.Join(peer.SkillIDs, ", ")
+		}
+		issuer := peer.CredentialIssuer
+		if issuer == "" {
+			issuer = L.Get("a2a.peers.credential.unknown")
+		}
+		fingerprint := peer.CredentialFingerprint
+		if fingerprint == "" {
+			fingerprint = peer.PublicKeyFingerprint
+		}
+		if fingerprint == "" {
+			fingerprint = L.Get("a2a.peers.credential.unknown")
+		}
+		signature := peer.SignatureStatus
+		if signature == "" {
+			signature = L.Get("a2a.peers.signature.unknown")
+		}
+		sb.WriteString(L.Getf("a2a.peers.row", peer.AgentID, peer.Name, state, trust, peer.SupportedBinding, peer.ProtocolVersion, compat, signature, issuer, fingerprint, skills))
+	}
 	return sb.String()
 }
 
