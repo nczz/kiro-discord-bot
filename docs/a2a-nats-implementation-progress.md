@@ -46,9 +46,9 @@ At the start of each continuation:
 
 ## Current state
 
-- Program state: Phase 0 readiness guard and Phase 1 foundation package/config completed in commit `0d720d2`; Phase 2 NATS node and JetStream topology completed in commit `823a998`; Phase 3 durable stores completed in implementation commit `6d3809f`; Phase 4 peer card and discovery completed in implementation commit `ef892e4`; Phase 5 channel ingress and executor completed in implementation commit `9c0683f`; Phase 6 transport integration completed in implementation commit `6e3e31d`; Phase 7 bot-tools and Discord UX completed in implementation commits `f0dbe99` and `8a17e88`; Phase 8 artifacts, delivery, and audit completed in implementation commit `d73e8b2`.
-- Current phase: Phase 9 production hardening and rollout is next.
-- Latest execution target: completed Phase 8 artifacts, result delivery, and audit.
+- Program state: Phase 0 readiness guard and Phase 1 foundation package/config completed in commit `0d720d2`; Phase 2 NATS node and JetStream topology completed in commit `823a998`; Phase 3 durable stores completed in implementation commit `6d3809f`; Phase 4 peer card and discovery completed in implementation commit `ef892e4`; Phase 5 channel ingress and executor completed in implementation commit `9c0683f`; Phase 6 transport integration completed in implementation commit `6e3e31d`; Phase 7 bot-tools and Discord UX completed in implementation commits `f0dbe99` and `8a17e88`; Phase 8 artifacts, delivery, and audit completed in implementation commit `d73e8b2`; Phase 9 production hardening and rollout completed in implementation commit `bbdc70d`.
+- Current phase: A2A NATS implementation program is complete; production rollout smokes remain environment-specific operator gates.
+- Latest execution target: completed Phase 9 production hardening and rollout.
 - Known pre-implementation issue: resolved by splitting the self-referential forbidden-string checks in `docs/a2a-nats-implementation-guide.md`.
 
 ## Phase ledger
@@ -64,7 +64,7 @@ At the start of each continuation:
 | 6 | Transport integration | done | `6e3e31d` | `go test ./a2a -run TestTransport` passed; `go test ./a2a -run 'TestA2AIntegration(TargetedDelegation|DuplicateDelivery|CancelOwnership|AcceptedBootstrap|AdmissionBeforeExecution|AckAfterAdmissionNotCompletion|ReplayAfterReconnect|EventRateQuota|EventRateOverloaded|EventRateZeroUnlimited|NoErrorEnvelope|NoPoolSubject)'` passed. | Two-node embedded JetStream closed loop through durable task/control/event consumers. |
 | 7 | Bot-tools and Discord UX | done | `f0dbe99`, `8a17e88` | `go test ./internal/botmcp -run 'TestA2ATools(Annotations|BoundContext|PolicyPlan|PolicyApply|Delegate|DelegateQuota|Cancel|InputReply|AuthReply)'` passed; `go test ./bot ./locale -run 'TestA2A(Slash|Buttons|Confirmation|Locale|Permission)'` passed; `go test ./a2a -run 'TestSubject|TestEnvelope|TestTaskState|TestTransport'` passed. | Bot-tools A2A service/tool registration, `/a2a` slash fallback, signed confirmation button custom IDs, requester/manager checks, confirmation tokens, and locale-covered confirmation output. |
 | 8 | Artifacts, delivery, audit | done | `d73e8b2` | `go test ./a2a -run 'TestObject(Store|Digest|Retention|MediaPolicy)'` passed; `go test ./bot ./internal/botegress ./channel ./audit -run 'TestA2A(Egress|Artifact|ProxyDelivery|MirrorTranscript|CoPresent|TransparentResult|AuditMetadata)|TestStoreRecordsA2AAuditMetadata'` passed; `go test ./...` passed. | JetStream Object Store backend, generated object refs, proxy/mirror/transparent safe-egress delivery, media policy checks, and A2A audit metadata. |
-| 9 | Production hardening and rollout | pending | | `go test ./a2a ./channel ./internal/botmcp ./bot ./audit ./locale -run 'Test.*A2A|TestDoctor.*A2A'`; rollout guide check prints `a2a-rollout-guide-ok` | Env docs, ACL templates, smokes, rollback guide. |
+| 9 | Production hardening and rollout | done | `bbdc70d` | `go test ./a2a ./channel ./internal/botmcp ./bot ./audit ./locale -run 'Test.*A2A|TestDoctor.*A2A'` passed; rollout guide check printed `a2a-rollout-guide-ok`; Workspace LSP diagnostics reported no issues. | Env docs, ACL templates, dev NATS config, smokes, rollback guide, doctor auth-mode summary, and credential revocation regression. |
 
 ## Evidence log
 
@@ -268,6 +268,26 @@ Append one subsection per completed phase.
 - Blockers or risks: co-present executor-direct Discord posting remains intentionally delivery-layer controlled by the delegator safe-egress path in this implementation; Phase 9 rollout smokes must verify multi-bot Discord permission behavior before production enablement.
 - Rollback boundary: revert Phase 8 object/artifact/audit/delivery wrappers and tests; Phase 7 bot-tools policy/control UX and Phase 6 durable transport remain intact.
 - Next phase: Phase 9 production hardening and rollout.
+
+### Phase 9 — Production hardening and rollout
+
+- Status: done; implementation commit `bbdc70d`.
+- Changed files: `.env.example`, `dev/nats.conf`, `docs/a2a-nats-rollout.md`, `docs/a2a-nats-implementation-guide.md`, `docs/release.md`, `docs-site/docs/guide/a2a-nats-rollout.md`, `docs-site/docs/guide/deployment.md`, `docs-site/docs/guide/environment.md`, `docs-site/docs/guide/release.md`, `channel/doctor_env.go`, `channel/doctor_env_test.go`, `internal/botmcp/a2a_tools_test.go`, `locale/lang/en.json`, `locale/lang/zh-TW.json`.
+- Validation:
+  - `go test ./a2a ./channel ./internal/botmcp ./bot ./audit ./locale -run 'Test.*A2A|TestDoctor.*A2A'` passed.
+  - `python3 - <<'PY' ...` rollout guide check printed `a2a-rollout-guide-ok`.
+  - Workspace LSP diagnostics reported no issues.
+- Done criteria evidence:
+  - A2A remains disabled while `NATS_URL` or `A2A_AGENT_ID` is unset; `.env.example`, `/doctor`, and rollout rollback instructions describe disabled mode as inert for existing Discord behavior.
+  - `a2a.Config.ValidateStartup` token-only production rejection remains covered by Phase 9 validation; `/doctor` now reports A2A auth mode, production guard state, startup validation, and token-only development warning without leaking token or credential paths.
+  - `docs/a2a-nats-rollout.md` and docs-site copy document development single-node NATS, production three-node JetStream, exact per-agent ACL template, response/inbox constraints, authenticated principal binding, negative ACL smokes, credential issue/rotation/revocation, startup/shutdown ordering, rollout gates, rollback, and final validation matrix.
+  - `dev/nats.conf` supplies a non-secret local JetStream config for two-bot smoke testing.
+  - `TestA2AToolsDelegateRejectsRevokedPeerBeforePublishing` proves an untrusted/revoked peer is denied before any new delegated work can publish.
+- Runtime settings touched: no live `.env`, `DATA_DIR`, Docker volume, deployment host, or live service was touched.
+- Deployment hosts touched: no.
+- Blockers or risks: environment-specific production smokes still require real NATS credentials, Discord bot accounts, and target channels; this phase records the gates but does not execute live rollout.
+- Rollback boundary: set `NATS_URL=""`, drain/restart the bot, keep `DATA_DIR` A2A stores and audit rows for postmortem; code/doc rollback is limited to Phase 9 docs/config/doctor/test additions because Phases 1-8 remain inert while A2A is disabled.
+- Next phase: none; A2A NATS implementation program is complete, pending operator rollout in target environments.
 
 ## Master goal prompt
 
