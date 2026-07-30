@@ -845,10 +845,12 @@ a2a-implementation-guide-ready
 
 ## 8. Ready-to-implement goal
 
+Before starting or resuming implementation, read `docs/a2a-nats-implementation-progress.md` after this guide and use it as the durable phase ledger. Implementation resumes from repository state, validation evidence, and git history; chat memory is not authoritative.
+
 After the guide-only verification and reviewer pass, the implementation goal is:
 
 ```text
-Implement docs/a2a-nats-implementation-guide.md exactly, phase by phase, stopping only when each phase validation gate passes and preserving the source spec decisions in docs/a2a-nats-integration-spec.md.
+Implement docs/a2a-nats-implementation-guide.md exactly, phase by phase, using docs/a2a-nats-implementation-progress.md as the execution ledger, stopping only when each phase validation gate passes and preserving the source spec decisions in docs/a2a-nats-integration-spec.md.
 ```
 
-The coding agent must treat any failing phase validation as a blocker to the next phase, fix the issue at the source, rerun that phase validation, then continue.
+The coding agent must treat any failing phase validation as a blocker to the next phase, fix the issue at the source, rerun that phase validation, record evidence in the progress ledger, then continue only when the ledger marks the next phase ready.
