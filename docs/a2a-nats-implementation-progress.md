@@ -46,9 +46,9 @@ At the start of each continuation:
 
 ## Current state
 
-- Program state: Phase 0 readiness guard and Phase 1 foundation package/config completed in commit `0d720d2`; Phase 2 NATS node and JetStream topology completed in commit `823a998`; Phase 3 durable stores completed in implementation commit `6d3809f`; Phase 4 peer card and discovery completed in implementation commit `ef892e4`; Phase 5 channel ingress and executor completed in implementation commit `9c0683f`; Phase 6 transport integration completed in implementation commit `6e3e31d`; Phase 7 bot-tools and Discord UX completed in implementation commits `f0dbe99` and `8a17e88`.
-- Current phase: Phase 8 artifacts, delivery, audit is next.
-- First execution target: completed Phase 0 guide validation fix and Phase 1 foundation only.
+- Program state: Phase 0 readiness guard and Phase 1 foundation package/config completed in commit `0d720d2`; Phase 2 NATS node and JetStream topology completed in commit `823a998`; Phase 3 durable stores completed in implementation commit `6d3809f`; Phase 4 peer card and discovery completed in implementation commit `ef892e4`; Phase 5 channel ingress and executor completed in implementation commit `9c0683f`; Phase 6 transport integration completed in implementation commit `6e3e31d`; Phase 7 bot-tools and Discord UX completed in implementation commits `f0dbe99` and `8a17e88`; Phase 8 artifacts, delivery, and audit completed in implementation commit `d73e8b2`.
+- Current phase: Phase 9 production hardening and rollout is next.
+- Latest execution target: completed Phase 8 artifacts, result delivery, and audit.
 - Known pre-implementation issue: resolved by splitting the self-referential forbidden-string checks in `docs/a2a-nats-implementation-guide.md`.
 
 ## Phase ledger
@@ -63,7 +63,7 @@ At the start of each continuation:
 | 5 | Channel ingress and executor | done | `9c0683f` | `go test ./channel -run 'TestManagerA2A(IngressDisabled|PolicyDenied|AcceptsOnce|InboundQuota|AdmissionBeforeExecution|AckAfterAdmissionNotCompletion|UsesWorker|ProxyDisablesEgress|RemoteMemoryWriteDenied|RemoteMemoryWriteAllowedByPolicy|Timeout|Cancel|InputRequired|AuthRequired|ResultCapture)'` passed; `go test ./channel -run TestWorkerA2A` passed; `go test ./channel -run TestA2A` passed. | Ingress only through `channel.Manager` and worker runtime; no transport consumers yet. |
 | 6 | Transport integration | done | `6e3e31d` | `go test ./a2a -run TestTransport` passed; `go test ./a2a -run 'TestA2AIntegration(TargetedDelegation|DuplicateDelivery|CancelOwnership|AcceptedBootstrap|AdmissionBeforeExecution|AckAfterAdmissionNotCompletion|ReplayAfterReconnect|EventRateQuota|EventRateOverloaded|EventRateZeroUnlimited|NoErrorEnvelope|NoPoolSubject)'` passed. | Two-node embedded JetStream closed loop through durable task/control/event consumers. |
 | 7 | Bot-tools and Discord UX | done | `f0dbe99`, `8a17e88` | `go test ./internal/botmcp -run 'TestA2ATools(Annotations|BoundContext|PolicyPlan|PolicyApply|Delegate|DelegateQuota|Cancel|InputReply|AuthReply)'` passed; `go test ./bot ./locale -run 'TestA2A(Slash|Buttons|Confirmation|Locale|Permission)'` passed; `go test ./a2a -run 'TestSubject|TestEnvelope|TestTaskState|TestTransport'` passed. | Bot-tools A2A service/tool registration, `/a2a` slash fallback, signed confirmation button custom IDs, requester/manager checks, confirmation tokens, and locale-covered confirmation output. |
-| 8 | Artifacts, delivery, audit | pending | | `go test ./a2a -run 'TestObject(Store|Digest|Retention|MediaPolicy)'`; `go test ./bot ./internal/botegress ./channel ./audit -run 'TestA2A(Egress|Artifact|ProxyDelivery|MirrorTranscript|CoPresent|TransparentResult|AuditMetadata)'` | Safe egress, Object Store references, transcript modes, audit metadata. |
+| 8 | Artifacts, delivery, audit | done | `d73e8b2` | `go test ./a2a -run 'TestObject(Store|Digest|Retention|MediaPolicy)'` passed; `go test ./bot ./internal/botegress ./channel ./audit -run 'TestA2A(Egress|Artifact|ProxyDelivery|MirrorTranscript|CoPresent|TransparentResult|AuditMetadata)|TestStoreRecordsA2AAuditMetadata'` passed; `go test ./...` passed. | JetStream Object Store backend, generated object refs, proxy/mirror/transparent safe-egress delivery, media policy checks, and A2A audit metadata. |
 | 9 | Production hardening and rollout | pending | | `go test ./a2a ./channel ./internal/botmcp ./bot ./audit ./locale -run 'Test.*A2A|TestDoctor.*A2A'`; rollout guide check prints `a2a-rollout-guide-ok` | Env docs, ACL templates, smokes, rollback guide. |
 
 ## Evidence log
@@ -246,6 +246,28 @@ Append one subsection per completed phase.
 - Blockers or risks: Phase 7 intentionally does not deliver artifact bytes, mirror/co-present transcript delivery, or result egress; those remain Phase 8.
 - Rollback boundary: revert Phase 7 bot-tools service/registration/tests, `/a2a` command additions, A2A locale keys, and the outbound channel/guild metadata persistence change; Phase 6 transport consumers remain intact.
 - Next phase: Phase 8 artifacts, result delivery, and transcript modes.
+
+### Phase 8 — Artifacts, delivery, audit
+
+- Status: done; implementation commit `d73e8b2`.
+- Changed files: `a2a/admission.go`, `a2a/audit.go`, `a2a/errors.go`, `a2a/executor.go`, `a2a/object_store.go`, `a2a/store_phase3_test.go`, `a2a/task_store.go`, `a2a/transport.go`, `a2a/types_test.go`, `audit/store_test.go`, `channel/a2a.go`, `channel/a2a_phase8_test.go`, `channel/manager.go`, `internal/botmcp/a2a_tools.go`.
+- Validation:
+  - `go test ./a2a -run 'TestObject(Store|Digest|Retention|MediaPolicy)'` passed.
+  - `go test ./bot ./internal/botegress ./channel ./audit -run 'TestA2A(Egress|Artifact|ProxyDelivery|MirrorTranscript|CoPresent|TransparentResult|AuditMetadata)|TestStoreRecordsA2AAuditMetadata'` passed.
+  - `go test ./internal/botmcp -run 'TestA2AITestTool|TestA2ATools' && go test ./bot -run 'TestSlashCommandsIncludeAgentAndUsage|TestA2AConfirmationResponseUsesLocale|TestSlashCommandsApplyVisibilityAndPermissionPolicy|TestChannelOnlySlashCommands' && go test ./a2a -run 'TestSubject|TestEnvelope|TestTaskState|TestTransport'` passed.
+  - `go test ./...` passed.
+  - Workspace LSP diagnostics reported no issues.
+- Done criteria evidence:
+  - `a2a.SQLiteObjectStore` now supports generated `a2a-artifacts` object refs backed by JetStream Object Store bytes, fetch-time digest/size verification, generated `tasks/<taskId>/...` keys, and retention pruning that deletes expired backend objects while preserving permanent rows.
+  - `a2a.TaskExecutionArtifact` and `TaskEventPayload` carry object-ref fields; `a2a.Publisher.PublishArtifact` emits artifact events using artifact-scoped NATS idempotency, and event storage now allows distinct event types at the same revision.
+  - Delegator-side `channel.Manager` delivers proxy final results, mirror/co-present status labels, transparent results, and object artifacts through `internal/botegress.WritePending`, preserving safe egress and `AllowedMentions` behavior.
+  - Artifact Discord delivery fetches object bytes into transient safe-egress files, validates digest/size and channel media policy, and rejects disallowed MIME/size/object-ref policy before queuing the file.
+  - A2A audit helpers normalize spec metadata keys; bot-tools delegation records publish failures and queued tasks with A2A metadata; visible transcript/result delivery records `a2a_transcript_posted` and `a2a_result_delivered`.
+- Runtime settings touched: no.
+- Deployment hosts touched: no.
+- Blockers or risks: co-present executor-direct Discord posting remains intentionally delivery-layer controlled by the delegator safe-egress path in this implementation; Phase 9 rollout smokes must verify multi-bot Discord permission behavior before production enablement.
+- Rollback boundary: revert Phase 8 object/artifact/audit/delivery wrappers and tests; Phase 7 bot-tools policy/control UX and Phase 6 durable transport remain intact.
+- Next phase: Phase 9 production hardening and rollout.
 
 ## Master goal prompt
 
