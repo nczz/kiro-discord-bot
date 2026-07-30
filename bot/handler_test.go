@@ -24,6 +24,7 @@ import (
 	"github.com/nczz/kiro-discord-bot/audit"
 	"github.com/nczz/kiro-discord-bot/channel"
 	"github.com/nczz/kiro-discord-bot/internal/botegress"
+	"github.com/nczz/kiro-discord-bot/internal/botmcp"
 	"github.com/nczz/kiro-discord-bot/internal/discordmention"
 	L "github.com/nczz/kiro-discord-bot/locale"
 )
@@ -1507,6 +1508,7 @@ func TestSlashCommandsIncludeAgentAndUsage(t *testing.T) {
 	foundThread := false
 	foundMCP := false
 	foundSteering := false
+	foundA2A := false
 	for _, cmd := range buildSlashCommands() {
 		if cmd.Name == "mcp" {
 			foundMCP = true
@@ -1565,6 +1567,16 @@ func TestSlashCommandsIncludeAgentAndUsage(t *testing.T) {
 			}
 			continue
 		}
+		if cmd.Name == "a2a" {
+			foundA2A = true
+			if len(cmd.Options) != 18 {
+				t.Fatalf("/a2a should expose 18 subcommands, got %+v", cmd.Options)
+			}
+			if cmd.Options[0].Name != "peers" || cmd.Options[2].Name != "delegate" {
+				t.Fatalf("/a2a subcommands = %+v", cmd.Options)
+			}
+			continue
+		}
 		if cmd.Name != "agent" {
 			continue
 		}
@@ -1573,14 +1585,24 @@ func TestSlashCommandsIncludeAgentAndUsage(t *testing.T) {
 			t.Fatalf("/agent options = %+v, want optional mode", cmd.Options)
 		}
 	}
-	if !foundAgent || !foundUsage || !foundInterrupt || !foundThread || !foundMCP || !foundSteering {
-		t.Fatal("expected /agent, /usage, /interrupt, /thread, /mcp, and /steering slash commands to be registered")
+	if !foundAgent || !foundUsage || !foundInterrupt || !foundThread || !foundMCP || !foundSteering || !foundA2A {
+		t.Fatal("expected /agent, /usage, /interrupt, /thread, /mcp, /steering, and /a2a slash commands to be registered")
+	}
+}
+
+func TestA2AConfirmationResponseUsesLocale(t *testing.T) {
+	L.Load("zh-TW")
+	got := formatA2AResponse(botmcp.A2AToolResponse{OK: true, RequiresConfirmation: true, ConfirmationSummary: "啟用 A2A", ChangeID: "change-1", ConfirmationToken: "token-1"})
+	for _, want := range []string{"A2A 需要確認", "啟用 A2A", "change-1", "token-1"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("formatA2AResponse = %q, missing %q", got, want)
+		}
 	}
 }
 
 func TestSlashCommandsApplyVisibilityAndPermissionPolicy(t *testing.T) {
 	managed := map[string]bool{
-		"audit": true, "mcp": true, "cwd": true, "start": true, "agent": true,
+		"audit": true, "mcp": true, "a2a": true, "cwd": true, "start": true, "agent": true,
 		"steering": true,
 		"cron":     true, "cron-list": true, "cron-run": true, "cron-prompt": true,
 		"memory": true, "flashmemory": true, "clear": true,
@@ -2337,7 +2359,7 @@ func collectMCPComponentCustomIDs(components []discordgo.MessageComponent) []str
 }
 
 func TestChannelOnlySlashCommands(t *testing.T) {
-	for _, name := range []string{"start", "cwd", "steering", "agent", "cron", "cron-list", "cron-run", "cron-prompt", "remind"} {
+	for _, name := range []string{"start", "cwd", "steering", "agent", "a2a", "cron", "cron-list", "cron-run", "cron-prompt", "remind"} {
 		if !isChannelOnlySlashCommand(name) {
 			t.Fatalf("expected /%s to be channel-only", name)
 		}

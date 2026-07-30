@@ -174,7 +174,7 @@ func (p *Publisher) SendTask(ctx context.Context, req TaskExecutionRequest) (Tas
 	}
 	row := TaskRow{}
 	if p.tasks != nil {
-		row, err = p.tasks.CreateOutbound(ctx, TaskRow{ClientTaskRef: req.ClientTaskRef, MessageID: req.MessageID, ContextID: req.ContextID, FromAgent: req.From, ToAgent: req.To, ChannelRef: req.ChannelRef, SkillID: req.SkillID, State: TaskStateSubmitted, ResultVisibility: firstNonEmpty(req.ResultVisibility, "proxy"), DiscordTranscriptMode: firstNonEmpty(req.DiscordTranscriptMode, "delegator")})
+		row, err = p.tasks.CreateOutbound(ctx, TaskRow{ClientTaskRef: req.ClientTaskRef, MessageID: req.MessageID, ContextID: req.ContextID, FromAgent: req.From, ToAgent: req.To, ChannelID: req.ChannelID, GuildID: req.GuildID, ChannelRef: req.ChannelRef, SkillID: req.SkillID, State: TaskStateSubmitted, ResultVisibility: firstNonEmpty(req.ResultVisibility, "proxy"), DiscordTranscriptMode: firstNonEmpty(req.DiscordTranscriptMode, "delegator")})
 		if err != nil {
 			return TaskRow{}, err
 		}

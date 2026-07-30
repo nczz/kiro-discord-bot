@@ -13,7 +13,7 @@ var guildInteractionContexts = []discordgo.InteractionContextType{discordgo.Inte
 
 func commandDefaultMemberPermissions(name string) *int64 {
 	switch name {
-	case "audit", "mcp", "steering", "cwd", "start", "agent", "cron", "cron-list", "cron-run", "cron-prompt", "memory", "flashmemory", "clear":
+	case "audit", "mcp", "a2a", "steering", "cwd", "start", "agent", "cron", "cron-list", "cron-run", "cron-prompt", "memory", "flashmemory", "clear":
 		perms := int64(discordgo.PermissionManageChannels)
 		return &perms
 	default:

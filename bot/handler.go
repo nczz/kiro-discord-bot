@@ -1151,6 +1151,7 @@ func buildSlashCommands() []*discordgo.ApplicationCommand {
 				}},
 			{Type: discordgo.ApplicationCommandOptionString, Name: "value", Description: L.Get("cmd.flashmemory.opt.value"), Required: false},
 		}},
+		{Name: "a2a", Description: L.Get("cmd.a2a.desc"), Options: a2aSlashOptions()},
 	}
 	for _, cmd := range commands {
 		applySlashCommandPolicy(cmd)
@@ -1500,6 +1501,9 @@ func (b *Bot) handleSlashCommand(ds *discordgo.Session, i *discordgo.Interaction
 				return
 			}
 			b.cmdMCP(ctx)
+		case "a2a":
+			ctx.args = a2aArgsFromSlashOptions(data.Options, i.GuildID, rawChannelID, userID, username, b.userCanManageAuditTarget(ds, userID, rawChannelID))
+			b.cmdA2A(ctx)
 		case "steering":
 			ctx.args = steeringArgsFromSlashOptions(data.Options)
 			b.cmdSteering(ctx)

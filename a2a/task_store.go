@@ -279,6 +279,41 @@ func (s *SQLiteTaskStore) GetByDirectionTaskID(ctx context.Context, direction st
 	return getTaskByDirectionTaskIDTx(ctx, s.db, direction, taskID)
 }
 
+func (s *SQLiteTaskStore) CountOpenOutbound(ctx context.Context, channelID string) (int, error) {
+	var count int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM a2a_tasks WHERE direction='outbound' AND terminal=0 AND (?='' OR channel_id=?)`, strings.TrimSpace(channelID), strings.TrimSpace(channelID)).Scan(&count)
+	return count, err
+}
+
+func (s *SQLiteTaskStore) ListByChannel(ctx context.Context, direction string, channelID string, limit int) ([]TaskRow, error) {
+	direction = strings.TrimSpace(direction)
+	channelID = strings.TrimSpace(channelID)
+	if direction != "outbound" && direction != "inbound" {
+		return nil, fmt.Errorf("direction must be outbound or inbound")
+	}
+	if limit <= 0 {
+		limit = 10
+	}
+	if limit > 50 {
+		limit = 50
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT local_id, task_id, client_task_ref, message_id, context_id, direction, role, from_agent, to_agent, executor_agent, channel_id, guild_id, channel_ref, skill_id, state, terminal, revision, result_visibility, discord_transcript_mode, discord_context_json, created_at, updated_at, expires_at, error_code, error_message FROM a2a_tasks WHERE direction=? AND (?='' OR channel_id=?) ORDER BY updated_at DESC LIMIT ?`, direction, channelID, channelID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]TaskRow, 0, limit)
+	for rows.Next() {
+		row, err := scanTaskRows(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+
 func (s *SQLiteTaskStore) RejectInbound(ctx context.Context, row TaskRow, taskErr TaskError) (TaskRow, error) {
 	row.Direction = "inbound"
 	row.Role = "executor"
@@ -472,6 +507,34 @@ func scanTask(row *sql.Row) (TaskRow, error) {
 	var created, updated string
 	var terminal int
 	err := row.Scan(&r.LocalID, &taskID, &clientRef, &r.MessageID, &contextID, &r.Direction, &r.Role, &r.FromAgent, &r.ToAgent, &executor, &channelID, &guildID, &channelRef, &skillID, &r.State, &terminal, &r.Revision, &r.ResultVisibility, &r.DiscordTranscriptMode, &discordCtx, &created, &updated, &expiresAt, &errCode, &errMsg)
+	if err != nil {
+		return TaskRow{}, err
+	}
+	r.TaskID = TaskID(taskID.String)
+	r.ClientTaskRef = clientRef.String
+	r.ContextID = contextID.String
+	r.ExecutorAgent = AgentID(executor.String)
+	r.ChannelID = channelID.String
+	r.GuildID = guildID.String
+	r.ChannelRef = channelRef.String
+	r.SkillID = skillID.String
+	r.Terminal = intBool(terminal)
+	r.DiscordContextJSON = discordCtx.String
+	r.Error = TaskError{Code: ErrorCode(errCode.String), Message: errMsg.String}
+	r.CreatedAt, _ = time.Parse(sqliteTimeFormat, created)
+	r.UpdatedAt, _ = time.Parse(sqliteTimeFormat, updated)
+	if expiresAt.Valid {
+		r.ExpiresAt, _ = time.Parse(sqliteTimeFormat, expiresAt.String)
+	}
+	return r, nil
+}
+
+func scanTaskRows(rows *sql.Rows) (TaskRow, error) {
+	var r TaskRow
+	var taskID, clientRef, contextID, executor, channelID, guildID, channelRef, skillID, discordCtx, expiresAt, errCode, errMsg sql.NullString
+	var created, updated string
+	var terminal int
+	err := rows.Scan(&r.LocalID, &taskID, &clientRef, &r.MessageID, &contextID, &r.Direction, &r.Role, &r.FromAgent, &r.ToAgent, &executor, &channelID, &guildID, &channelRef, &skillID, &r.State, &terminal, &r.Revision, &r.ResultVisibility, &r.DiscordTranscriptMode, &discordCtx, &created, &updated, &expiresAt, &errCode, &errMsg)
 	if err != nil {
 		return TaskRow{}, err
 	}

@@ -65,6 +65,10 @@ func DefaultSafeToolNames() []string {
 		ToolQueryChannelHistory,
 		ToolMemoryList,
 		ToolMemoryAdd,
+		ToolA2APeers,
+		ToolA2APolicyGet,
+		ToolA2ATaskStatus,
+		ToolA2APolicyPlan,
 		ToolCreateCron,
 		ToolUpdateCron,
 		ToolCreateReminder,
@@ -578,6 +582,7 @@ func NewServer() *server.MCPServer {
 			return mcp.NewToolResultText(string(raw)), nil
 		},
 	)
+	registerA2ATools(s)
 	return s
 }
 
