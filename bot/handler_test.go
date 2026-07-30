@@ -1600,6 +1600,44 @@ func TestA2AConfirmationResponseUsesLocale(t *testing.T) {
 	}
 }
 
+func TestA2ALocaleConfirmationResponse(t *testing.T) {
+	L.Load("en")
+	got := formatA2AResponse(botmcp.A2AToolResponse{OK: false, Message: "policy_denied: manager required"})
+	if !strings.Contains(got, "A2A error") || !strings.Contains(got, "policy_denied") {
+		t.Fatalf("formatA2AResponse error = %q, want localized A2A error", got)
+	}
+}
+
+func TestA2AButtonsConfirmationCustomIDIsSigned(t *testing.T) {
+	t.Setenv("A2A_CONFIRMATION_SECRET", "component-secret")
+	customID := a2aConfirmationButtonCustomID("policy_apply", "channel-1", "change-1")
+	if len(customID) > 100 {
+		t.Fatalf("custom id length = %d, want Discord-safe <= 100", len(customID))
+	}
+	if !validateA2AConfirmationButtonCustomID(customID, "policy_apply", "channel-1", "change-1") {
+		t.Fatal("signed A2A confirmation button custom_id did not validate")
+	}
+	if validateA2AConfirmationButtonCustomID(customID, "policy_apply", "channel-2", "change-1") {
+		t.Fatal("signed A2A confirmation button custom_id accepted wrong channel")
+	}
+}
+
+func TestA2ASlashPermissionPolicy(t *testing.T) {
+	for _, cmd := range buildSlashCommands() {
+		if cmd.Name != "a2a" {
+			continue
+		}
+		if cmd.DefaultMemberPermissions == nil || *cmd.DefaultMemberPermissions != int64(discordgo.PermissionManageChannels) {
+			t.Fatalf("/a2a permissions = %v, want ManageChannels", cmd.DefaultMemberPermissions)
+		}
+		if !isChannelOnlySlashCommand("a2a") {
+			t.Fatal("/a2a should be channel-only")
+		}
+		return
+	}
+	t.Fatal("/a2a command not registered")
+}
+
 func TestSlashCommandsApplyVisibilityAndPermissionPolicy(t *testing.T) {
 	managed := map[string]bool{
 		"audit": true, "mcp": true, "a2a": true, "cwd": true, "start": true, "agent": true,

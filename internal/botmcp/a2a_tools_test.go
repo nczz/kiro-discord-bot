@@ -2,13 +2,14 @@ package botmcp
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/nczz/kiro-discord-bot/a2a"
 )
 
-func TestA2APolicyPlanRequiresManagerAndConfirmation(t *testing.T) {
+func TestA2AToolsPolicyPlanPolicyApply(t *testing.T) {
 	now := time.Date(2026, 7, 30, 12, 0, 0, 0, time.UTC)
 	svc, err := NewA2AService(A2AServiceConfig{
 		DataDir:            t.TempDir(),
@@ -56,7 +57,54 @@ func TestA2APolicyPlanRequiresManagerAndConfirmation(t *testing.T) {
 	}
 }
 
-func TestA2AToolAnnotationsProtectWrites(t *testing.T) {
+func TestA2AToolsBoundContextDelegateQuotaCancelInputReplyAuthReply(t *testing.T) {
+	svc, err := NewA2AService(A2AServiceConfig{
+		DataDir:            t.TempDir(),
+		Config:             a2a.Config{AgentID: "adam-n200", MaxOutboundTasksPerChannel: 1, TaskTimeoutSec: 60},
+		BoundGuildID:       "guild-1",
+		BoundChannelID:     "channel-1",
+		ConfirmationSecret: "test-secret",
+		ConnectNATS:        false,
+	})
+	if err != nil {
+		t.Fatalf("NewA2AService: %v", err)
+	}
+	defer svc.Close()
+
+	base := A2AToolRequest{GuildID: "guild-1", ChannelID: "channel-1", RequestedBy: "alice", RequestedByID: "user-1", TargetAgent: "peer-n100", SkillID: "summarize-case", Message: "summarize this"}
+	if got, _ := svc.Peers(context.Background(), A2AToolRequest{GuildID: "guild-1", ChannelID: "channel-2", RequestedBy: "alice", RequestedByID: "user-1"}); got.OK || got.ErrorCode != a2a.ErrorPolicyDenied {
+		t.Fatalf("wrong bound channel response = %+v, want policy_denied", got)
+	}
+	if got, _ := svc.Delegate(context.Background(), base); got.OK || got.ErrorCode != a2a.ErrorChannelNotEnabled {
+		t.Fatalf("Delegate disabled policy response = %+v, want channel_not_enabled", got)
+	}
+
+	if _, err := svc.tasks.CreateOutbound(context.Background(), a2a.TaskRow{MessageID: "msg_quota_1", FromAgent: "adam-n200", ToAgent: "peer-n100", ChannelID: "channel-1", State: a2a.TaskStateSubmitted}); err != nil {
+		t.Fatalf("CreateOutbound: %v", err)
+	}
+	if err := svc.checkOutboundQuota(context.Background(), base); err == nil || !strings.Contains(err.Error(), string(a2a.ErrorOverloaded)) {
+		t.Fatalf("checkOutboundQuota err = %v, want overloaded", err)
+	}
+
+	base.TaskID = "task_missing"
+	base.Input = "requested input"
+	base.Approve = true
+	for name, call := range map[string]func(context.Context, A2AToolRequest) (A2AToolResponse, error){
+		"cancel":      svc.Cancel,
+		"input_reply": svc.InputReply,
+		"auth_reply":  svc.AuthReply,
+	} {
+		got, err := call(context.Background(), base)
+		if err != nil {
+			t.Fatalf("%s err: %v", name, err)
+		}
+		if got.OK || got.ErrorCode != a2a.ErrorTaskNotFound {
+			t.Fatalf("%s response = %+v, want task_not_found", name, got)
+		}
+	}
+}
+
+func TestA2AToolsAnnotations(t *testing.T) {
 	readTool := a2aReadTool(ToolA2APeers, "peers")
 	if readTool.Annotations.ReadOnlyHint == nil || !*readTool.Annotations.ReadOnlyHint {
 		t.Fatalf("read tool readOnlyHint = %+v, want true", readTool.Annotations.ReadOnlyHint)

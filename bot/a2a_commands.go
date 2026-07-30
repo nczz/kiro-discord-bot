@@ -2,8 +2,12 @@ package bot
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/bwmarrin/discordgo"
@@ -161,6 +165,32 @@ func (b *Bot) cmdA2A(ctx cmdCtx) {
 		resp = botmcp.A2AToolResponse{OK: false, Message: fmt.Sprintf("unknown A2A subcommand %q", payload.Subcommand)}
 	}
 	ctx.reply(formatA2AResponse(resp))
+}
+
+func a2aConfirmationButtonCustomID(action, channelID, changeID string) string {
+	mac := hmac.New(sha256.New, []byte(a2aComponentSecret()))
+	mac.Write([]byte(action))
+	mac.Write([]byte{0})
+	mac.Write([]byte(channelID))
+	mac.Write([]byte{0})
+	mac.Write([]byte(changeID))
+	sig := hex.EncodeToString(mac.Sum(nil))[:24]
+	return "a2a:confirm:" + action + ":" + sig
+}
+
+func validateA2AConfirmationButtonCustomID(customID, action, channelID, changeID string) bool {
+	want := a2aConfirmationButtonCustomID(action, channelID, changeID)
+	return hmac.Equal([]byte(customID), []byte(want))
+}
+
+func a2aComponentSecret() string {
+	if v := strings.TrimSpace(os.Getenv("A2A_CONFIRMATION_SECRET")); v != "" {
+		return v
+	}
+	if v := strings.TrimSpace(os.Getenv("DISCORD_TOKEN")); v != "" {
+		return v
+	}
+	return "kiro-a2a-dev-component-secret"
 }
 
 func formatA2AResponse(resp botmcp.A2AToolResponse) string {
