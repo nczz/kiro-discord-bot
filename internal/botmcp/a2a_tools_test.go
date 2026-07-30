@@ -158,6 +158,37 @@ func TestA2AToolsDelegateRejectsRevokedPeerBeforePublishing(t *testing.T) {
 	}
 }
 
+func TestA2AToolsPeersFiltersLocalAgent(t *testing.T) {
+	ctx := context.Background()
+	svc, err := NewA2AService(A2AServiceConfig{
+		DataDir:        t.TempDir(),
+		Config:         a2a.Config{AgentID: "m5bot-local", TaskTimeoutSec: 60},
+		BoundGuildID:   "guild-1",
+		BoundChannelID: "channel-1",
+		ConnectNATS:    false,
+	})
+	if err != nil {
+		t.Fatalf("NewA2AService: %v", err)
+	}
+	defer svc.Close()
+	card := func(agent string) a2a.AgentCard {
+		return a2a.AgentCard{Name: agent, Description: "peer", Version: "1.0.0", SupportedInterfaces: []a2a.A2AInterface{{URL: "nats://nats.example.internal:4222", ProtocolBinding: a2a.ProtocolBindingNATS, ProtocolVersion: a2a.ProtocolVersion}}, Skills: []a2a.AgentSkill{{ID: "general/task", Name: "General", Description: "general"}}}
+	}
+	if _, err := svc.peers.UpsertCard(ctx, "m5bot-local", card("m5bot-local"), true, time.Now().Add(time.Hour)); err != nil {
+		t.Fatalf("Upsert self: %v", err)
+	}
+	if _, err := svc.peers.UpsertCard(ctx, "d80-chunbot", card("d80-chunbot"), true, time.Now().Add(time.Hour)); err != nil {
+		t.Fatalf("Upsert peer: %v", err)
+	}
+	got, err := svc.Peers(ctx, A2AToolRequest{GuildID: "guild-1", ChannelID: "channel-1", RequestedBy: "alice", RequestedByID: "user-1"})
+	if err != nil {
+		t.Fatalf("Peers: %v", err)
+	}
+	if len(got.Peers) != 1 || got.Peers[0].AgentID != "d80-chunbot" {
+		t.Fatalf("Peers = %+v, want remote peer only", got.Peers)
+	}
+}
+
 func TestA2AToolsAnnotations(t *testing.T) {
 	readTool := a2aReadTool(ToolA2APeers, "peers")
 	if readTool.Annotations.ReadOnlyHint == nil || !*readTool.Annotations.ReadOnlyHint {

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/bwmarrin/discordgo"
+	"github.com/nats-io/nats.go"
 	"github.com/nczz/kiro-discord-bot/a2a"
 	"github.com/nczz/kiro-discord-bot/audit"
 	"github.com/nczz/kiro-discord-bot/channel"
@@ -29,6 +30,10 @@ type Bot struct {
 	cronTask            *heartbeat.CronTask
 	auditRecorder       *audit.Recorder
 	a2aNode             *a2a.Node
+	a2aConfig           a2a.Config
+	a2aPeerStore        *a2a.SQLitePeerStore
+	a2aPeerFallbackSub  *nats.Subscription
+	a2aInstanceID       string
 	cronTimezone        string
 	version             string
 	startedAt           time.Time
@@ -139,6 +144,8 @@ func NewFromConfig(cfg BotConfig) (*Bot, error) {
 		peerPermCache:       make(map[string]peerPermissionCacheEntry),
 		auditRecorder:       auditRecorder,
 		a2aNode:             cfg.A2ANode,
+		a2aConfig:           cfg.A2A,
+		a2aInstanceID:       fmt.Sprintf("%s-%d", cfg.A2A.AgentID, time.Now().UnixNano()),
 		setupPromptCooldown: newSetupPromptCooldown(nil),
 		a2aConfirmations:    newA2APolicyConfirmationStore(nil),
 	}
@@ -170,6 +177,14 @@ func NewFromConfig(cfg BotConfig) (*Bot, error) {
 	b.cronTask = cronTask
 	hb.Register(heartbeat.NewThreadCleanupTask(&threadCleanupAdapter{n}, cfg.ThreadAgentIdleSec, cfg.ThreadAgentMax))
 	hb.Register(heartbeat.NewChannelCleanupTask(&channelCleanupAdapter{n}, cfg.ChannelAgentIdleSec))
+	if cfg.A2A.Enabled() {
+		if store, err := a2a.OpenPeerStore(cfg.DataDir); err != nil {
+			log.Printf("[a2a] peer discovery store disabled: %v", err)
+		} else {
+			b.a2aPeerStore = store
+			hb.Register(&a2aDiscoveryTask{bot: b})
+		}
+	}
 	b.hb = hb
 	ds.AddHandler(b.handleMessage)
 	ds.AddHandler(b.handleInteraction)
@@ -190,6 +205,7 @@ func (b *Bot) Start() error {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	b.hbCancel = cancel
+	b.startA2APeerDiscovery(ctx)
 	go b.hb.Start(ctx)
 	return nil
 }
@@ -199,6 +215,9 @@ func (b *Bot) Stop() {
 		b.hbCancel()
 	}
 	b.seen.Stop()
+	if b.a2aPeerFallbackSub != nil {
+		_ = b.a2aPeerFallbackSub.Unsubscribe()
+	}
 	b.manager.StopAll()
 	if b.a2aNode != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -210,5 +229,8 @@ func (b *Bot) Stop() {
 	b.discord.Close()
 	if b.auditRecorder != nil {
 		b.auditRecorder.Close()
+	}
+	if b.a2aPeerStore != nil {
+		_ = b.a2aPeerStore.Close()
 	}
 }

@@ -168,6 +168,12 @@ func CollectPeerCardsFallback(ctx context.Context, nc *nats.Conn, subject string
 	}
 }
 
+// NormalizePeerCardRecordForPublish validates, sanitizes, and encodes a peer
+// card record for direct NATS request/reply fallback publishers.
+func NormalizePeerCardRecordForPublish(record PeerCardRecord) (PeerCardRecord, []byte, error) {
+	return normalizePeerCardRecord(record)
+}
+
 func normalizePeerCardRecord(record PeerCardRecord) (PeerCardRecord, []byte, error) {
 	if record.AgentID == "" {
 		record.AgentID = AgentID(record.Card.Name)

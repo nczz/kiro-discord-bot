@@ -233,6 +233,9 @@ func (s *A2AService) Peers(ctx context.Context, req A2AToolRequest) (A2AToolResp
 	}
 	peers := make([]A2APeerSummary, 0, len(rows))
 	for _, row := range rows {
+		if row.AgentID == s.cfg.Config.AgentID {
+			continue
+		}
 		peers = append(peers, A2APeerSummary{AgentID: string(row.AgentID), Name: row.Name, Trusted: row.Trusted, Online: row.Online, Stale: row.Stale, Skills: append([]string(nil), row.SkillIDs...), DelegationAllowed: stringListAllows(policy.DelegateTo, string(row.AgentID)), ProtocolBinding: row.SupportedBinding, ProtocolVersion: row.ProtocolVersion, SignatureStatus: row.SignatureStatus})
 	}
 	return A2AToolResponse{OK: true, Message: "A2A peers listed", Peers: peers}, nil
