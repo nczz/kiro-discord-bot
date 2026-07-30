@@ -785,6 +785,32 @@ func TestBotToolsEgressDisabledReadsDynamicTargetState(t *testing.T) {
 	}
 }
 
+func TestA2ARemoteMemoryWriteTargetStateDefaultsDenied(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "target.json")
+	if err := os.WriteFile(statePath, []byte(`{"target_channel_id":"thread-1","remote_a2a":true}`), 0644); err != nil {
+		t.Fatalf("write target state: %v", err)
+	}
+	t.Setenv("BOT_TOOLS_TARGET_STATE_PATH", statePath)
+
+	if remoteA2AMemoryWriteAllowed() {
+		t.Fatal("remote A2A memory write allowed without explicit policy")
+	}
+}
+
+func TestA2ARemoteMemoryWriteTargetStateAllowsPolicyOptIn(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "target.json")
+	if err := os.WriteFile(statePath, []byte(`{"target_channel_id":"thread-1","remote_a2a":true,"allow_memory_write":true}`), 0644); err != nil {
+		t.Fatalf("write target state: %v", err)
+	}
+	t.Setenv("BOT_TOOLS_TARGET_STATE_PATH", statePath)
+
+	if !remoteA2AMemoryWriteAllowed() {
+		t.Fatal("remote A2A memory write was denied despite explicit policy")
+	}
+}
+
 func TestValidateMentionUserIDUsesDynamicTargetAllowlist(t *testing.T) {
 	dir := t.TempDir()
 	statePath := filepath.Join(dir, "target.json")

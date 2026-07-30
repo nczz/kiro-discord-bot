@@ -58,6 +58,10 @@ type Manager struct {
 	a2aConfig       a2a.Config
 	a2aNode         *a2a.Node
 	a2aPeers        *a2a.SQLitePeerStore
+	a2aPolicies     *a2a.SQLitePolicyStore
+	a2aTasks        *a2a.SQLiteTaskStore
+	a2aAdmissions   map[string]a2a.A2AAdmission
+	a2aInboundOpen  map[string]int
 
 	// Memory
 	memory      *MemoryStore
@@ -199,6 +203,8 @@ type ManagerConfig struct {
 	A2A                  a2a.Config
 	A2ANode              *a2a.Node
 	A2APeerStore         *a2a.SQLitePeerStore
+	A2APolicyStore       *a2a.SQLitePolicyStore
+	A2ATaskStore         *a2a.SQLiteTaskStore
 }
 
 func NewManager(cfg ManagerConfig) *Manager {
@@ -234,6 +240,10 @@ func NewManager(cfg ManagerConfig) *Manager {
 		a2aConfig:           cfg.A2A,
 		a2aNode:             cfg.A2ANode,
 		a2aPeers:            cfg.A2APeerStore,
+		a2aPolicies:         cfg.A2APolicyStore,
+		a2aTasks:            cfg.A2ATaskStore,
+		a2aAdmissions:       make(map[string]a2a.A2AAdmission),
+		a2aInboundOpen:      make(map[string]int),
 		memory:              NewMemoryStore(cfg.DataDir),
 		flashMemory:         make(map[string][]string),
 		threadAgentMax:      cfg.ThreadAgentMax,
@@ -264,6 +274,20 @@ func NewManager(cfg ManagerConfig) *Manager {
 			log.Printf("[a2a] peer store disabled: %v", err)
 		} else {
 			m.a2aPeers = store
+		}
+	}
+	if m.a2aPolicies == nil && cfg.A2A.Enabled() {
+		if store, err := a2a.OpenPolicyStore(cfg.DataDir, cfg.A2A.AgentID); err != nil {
+			log.Printf("[a2a] policy store disabled: %v", err)
+		} else {
+			m.a2aPolicies = store
+		}
+	}
+	if m.a2aTasks == nil && cfg.A2A.Enabled() {
+		if store, err := a2a.OpenTaskStore(cfg.DataDir); err != nil {
+			log.Printf("[a2a] task store disabled: %v", err)
+		} else {
+			m.a2aTasks = store
 		}
 	}
 	if store, err := OpenMCPPolicyStore(cfg.DataDir); err != nil {
@@ -809,6 +833,12 @@ func (m *Manager) StopAll() {
 	if m.mcpPolicies != nil {
 		_ = m.mcpPolicies.Close()
 	}
+	if m.a2aPolicies != nil {
+		_ = m.a2aPolicies.Close()
+	}
+	if m.a2aTasks != nil {
+		_ = m.a2aTasks.Close()
+	}
 	if m.a2aPeers != nil {
 		_ = m.a2aPeers.Close()
 	}
@@ -873,10 +903,10 @@ func (m *Manager) Enqueue(ds *discordgo.Session, job *Job) error {
 	m.channelLastActivity[job.ChannelID] = time.Now()
 
 	qLen := worker.QueueLen()
-	if job.MessageID != "" {
+	if ds != nil && job.MessageID != "" {
 		_ = ds.MessageReactionAdd(job.ChannelID, job.MessageID, "⏳")
 	}
-	if qLen > 1 && job.DeliveryMode != DeliveryInline {
+	if ds != nil && qLen > 1 && job.DeliveryMode != DeliveryInline {
 		_, _ = sendDiscordText(ds, job.ChannelID, L.Getf("status.queued", qLen), &discordgo.MessageReference{
 			MessageID: job.MessageID,
 			ChannelID: job.ChannelID,

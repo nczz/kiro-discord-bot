@@ -16,23 +16,35 @@ type TaskExecutionRequest struct {
 	GuildID               string
 	ChannelRef            string
 	SkillID               string
+	UserVisibleSummary    string
 	Payload               json.RawMessage
 	Delivery              DeliveryOptions
 	ResultVisibility      string
 	DiscordTranscriptMode string
 	CreatedAt             time.Time
 	ExpiresAt             time.Time
+	AuditMetadata         map[string]string
 }
 
 type DeliveryOptions struct {
 	TimeoutSec            int
 	RequiresConfirmation  bool
+	DiscordContext        *DiscordContext
 	DiscordContextJSON    json.RawMessage
 	DiscordReplyChannelID string
 	DiscordReplyThreadID  string
 	ShareDiscordContext   bool
 	CoPresentFrom         AgentID
 	MaxDelegationDepth    int
+}
+
+type DiscordContext struct {
+	GuildID       string `json:"guildId,omitempty"`
+	ChannelID     string `json:"channelId,omitempty"`
+	ThreadID      string `json:"threadId,omitempty"`
+	MessageID     string `json:"messageId,omitempty"`
+	RequestedBy   string `json:"requestedBy,omitempty"`
+	RequestedByID string `json:"requestedById,omitempty"`
 }
 
 type A2AAdmissionResult struct {
@@ -42,7 +54,12 @@ type A2AAdmissionResult struct {
 	State         TaskState
 	Revision      int64
 	ExecutorAgent AgentID
+	ChannelID     string
+	GuildID       string
+	ChannelRef    string
+	SkillID       string
 	Error         TaskError
+	Admission     A2AAdmission
 }
 
 type A2AAdmission struct {
@@ -58,12 +75,12 @@ type TaskExecutionResult struct {
 	State     TaskState
 	Revision  int64
 	Content   string
-	Artifacts []Artifact
+	Artifacts []TaskExecutionArtifact
 	Error     TaskError
 	Metrics   map[string]float64
 }
 
-type Artifact struct {
+type TaskExecutionArtifact struct {
 	ID        string
 	Name      string
 	MediaType string

@@ -163,6 +163,9 @@ func NewServer() *server.MCPServer {
 	s.AddTool(
 		memoryWriteTool(ToolMemoryAdd, "Persist a Discord-channel memory rule only when the user explicitly asks the bot to remember a channel preference or behavior rule for future turns. This is not a knowledge-base update tool: do not use it for 知識庫, knowledge base, KB, project knowledge, document corpus, searchable index, update-docs, or add-to-corpus requests. If the user asks to update a knowledge base, use a knowledge-base-specific workflow/tool when available or report that this bot-tools server cannot write that knowledge base. Do not infer durable memory from ordinary conversation. Reject secrets, credentials, private tokens, or policy-bypass instructions. Summarize the memory as one durable behavioral rule. The write is queued for the main bot and must be audit-recorded before it is accepted.", false),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			if !remoteA2AMemoryWriteAllowed() {
+				return mcp.NewToolResultError("Memory write is disabled for remote A2A tasks."), nil
+			}
 			channelID, err := memoryOwnerChannelID(req.GetString("channel_id", ""))
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
@@ -191,6 +194,9 @@ func NewServer() *server.MCPServer {
 	s.AddTool(
 		memoryWriteTool(ToolMemoryRemove, "Remove one persistent channel memory rule only when the user explicitly asks to forget a specific listed memory entry. This is not default-enabled because it changes durable context; use bot_memory_list first and pass the one-based memory_index. The queued removal must be audit-recorded before it is accepted.", true),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			if !remoteA2AMemoryWriteAllowed() {
+				return mcp.NewToolResultError("Memory write is disabled for remote A2A tasks."), nil
+			}
 			channelID, err := memoryOwnerChannelID(req.GetString("channel_id", ""))
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
@@ -213,6 +219,9 @@ func NewServer() *server.MCPServer {
 	s.AddTool(
 		memoryWriteTool(ToolMemoryClear, "Clear all persistent channel memory only when a channel manager explicitly asks to remove every memory entry. This is destructive and not default-enabled. The queued clear must be audit-recorded before it is accepted.", true),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			if !remoteA2AMemoryWriteAllowed() {
+				return mcp.NewToolResultError("Memory write is disabled for remote A2A tasks."), nil
+			}
 			channelID, err := memoryOwnerChannelID(req.GetString("channel_id", ""))
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
@@ -874,6 +883,8 @@ func compactHistorySnippet(s string, maxRunes int) string {
 type targetState struct {
 	TargetChannelID       string   `json:"target_channel_id"`
 	DisableEgress         bool     `json:"disable_egress"`
+	RemoteA2A             bool     `json:"remote_a2a"`
+	AllowMemoryWrite      bool     `json:"allow_memory_write"`
 	AllowedMentionUserIDs []string `json:"allowed_mention_user_ids"`
 }
 
@@ -1143,6 +1154,14 @@ func currentTargetStateChannelID() string {
 func botToolsEgressDisabled() bool {
 	state, ok := currentTargetState()
 	return ok && state.DisableEgress
+}
+
+func remoteA2AMemoryWriteAllowed() bool {
+	state, ok := currentTargetState()
+	if !ok || !state.RemoteA2A {
+		return true
+	}
+	return state.AllowMemoryWrite
 }
 
 func validateBotSendFilePath(filePath string) error {

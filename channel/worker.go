@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/bwmarrin/discordgo"
+	"github.com/nczz/kiro-discord-bot/a2a"
 	"github.com/nczz/kiro-discord-bot/acp"
 	"github.com/nczz/kiro-discord-bot/audit"
 	"github.com/nczz/kiro-discord-bot/internal/discordfmt"
@@ -31,26 +32,31 @@ const autoCompactContextThreshold = 90.0
 
 // Job represents a single user message to be processed.
 type Job struct {
-	ChannelID         string
-	ParentChannelID   string
-	GuildID           string
-	MessageID         string
-	Prompt            string
-	Session           *discordgo.Session
-	UserID            string
-	Username          string
-	Attachments       []string
-	ThreadID          string // non-empty = follow-up in existing thread, skip thread creation
-	Transcript        string // STT transcription result, shown in thread if non-empty
-	Handoff           bool   // true when this job is an accepted cross-bot handoff
-	Source            string // message, thread, cron, etc.
-	DeliveryMode      DeliveryMode
-	ThreadMentionOnly bool // listen snapshot for newly created agent threads
-	BotToolsTargetID  string
-	DisableBotEgress  bool
-	DisplayCWD        string // cwd prefix to remove from progress-only location displays
-	FinalReply        func(string)
-	MentionRefs       []discordmention.Ref
+	ChannelID              string
+	ParentChannelID        string
+	GuildID                string
+	MessageID              string
+	Prompt                 string
+	Session                *discordgo.Session
+	UserID                 string
+	Username               string
+	Attachments            []string
+	ThreadID               string // non-empty = follow-up in existing thread, skip thread creation
+	Transcript             string // STT transcription result, shown in thread if non-empty
+	Handoff                bool   // true when this job is an accepted cross-bot handoff
+	Source                 string // message, thread, cron, etc.
+	DeliveryMode           DeliveryMode
+	ThreadMentionOnly      bool // listen snapshot for newly created agent threads
+	BotToolsTargetID       string
+	DisableBotEgress       bool
+	RemoteA2A              bool
+	AllowRemoteMemoryWrite bool
+	A2AResult              chan<- a2a.TaskExecutionResult
+	A2ATaskID              a2a.TaskID
+	A2ARevision            int64
+	DisplayCWD             string // cwd prefix to remove from progress-only location displays
+	FinalReply             func(string)
+	MentionRefs            []discordmention.Ref
 }
 
 type DeliveryMode string
@@ -1008,11 +1014,66 @@ func (job *Job) sendInlineFinalReply(ds *discordgo.Session, content string) erro
 	if job == nil {
 		return nil
 	}
+	if job.A2AResult != nil {
+		return nil
+	}
 	if job.FinalReply != nil {
 		job.FinalReply(content)
 		return nil
 	}
 	return SendLongReplyWithMentions(ds, job.ChannelID, job.MessageID, content, job.MentionRefs)
+}
+
+func (job *Job) emitA2AResult(result a2a.TaskExecutionResult) {
+	if job == nil || job.A2AResult == nil {
+		return
+	}
+	if result.TaskID == "" {
+		result.TaskID = job.A2ATaskID
+	}
+	if result.Revision == 0 {
+		result.Revision = job.A2ARevision
+	}
+	job.A2AResult <- result
+}
+
+func a2aMetrics(metrics acp.TurnMetrics, started time.Time) map[string]float64 {
+	out := map[string]float64{
+		"elapsed_ms":     float64(time.Since(started).Milliseconds()),
+		"context_usage":  metrics.ContextUsage,
+		"turn_duration":  float64(metrics.TurnDurationMs),
+		"metering_items": float64(len(metrics.MeteringUsage)),
+	}
+	return out
+}
+
+func a2aStateForStopReason(stopReason string) a2a.TaskState {
+	switch strings.ToLower(strings.TrimSpace(stopReason)) {
+	case "input_required", "input-required", string(a2a.TaskStateInputRequired):
+		return a2a.TaskStateInputRequired
+	case "auth_required", "auth-required", string(a2a.TaskStateAuthRequired):
+		return a2a.TaskStateAuthRequired
+	default:
+		return a2a.TaskStateCompleted
+	}
+}
+
+func a2aErrorForInline(ctxErr error, message string) a2a.TaskError {
+	code := a2a.ErrorInternal
+	switch ctxErr {
+	case context.DeadlineExceeded:
+		code = a2a.ErrorTimeout
+	case context.Canceled:
+		code = a2a.ErrorCode("canceled")
+	}
+	return a2a.TaskError{Code: code, Message: message}
+}
+
+func a2aStateForInlineError(ctxErr error) a2a.TaskState {
+	if ctxErr == context.Canceled {
+		return a2a.TaskStateCanceled
+	}
+	return a2a.TaskStateFailed
 }
 
 func (w *Worker) executeInline(job *Job) {
@@ -1072,7 +1133,7 @@ func (w *Worker) executeInline(job *Job) {
 		})
 	}
 	targetID := job.inlineBotToolsTargetID()
-	if err := writeBotToolsTargetStateWithRefs(w.botToolsTargetStatePath, targetID, job.DisableBotEgress, job.MentionRefs); err != nil {
+	if err := writeBotToolsTargetStateWithPolicy(w.botToolsTargetStatePath, targetID, job.DisableBotEgress, job.MentionRefs, job.RemoteA2A, job.AllowRemoteMemoryWrite); err != nil {
 		log.Printf("[worker %s] write inline bot-tools target state: %v", w.channelID, err)
 	}
 
@@ -1172,6 +1233,12 @@ func (w *Worker) executeInline(job *Job) {
 					finishJob("✅")
 					return
 				}
+				job.emitA2AResult(a2a.TaskExecutionResult{
+					State:   a2aStateForInlineError(ctxErr),
+					Content: errorContent,
+					Error:   a2aErrorForInline(ctxErr, errMsg),
+					Metrics: a2aMetrics(w.agent.TurnMetrics(), startTime),
+				})
 				if sendErr := job.sendInlineFinalReply(ds, AppendMetricsFooter(errorContent, MetricsWithElapsed(w.agent.TurnMetrics(), startTime))); sendErr != nil {
 					log.Printf("[worker %s] inline error reply failed | user=%s msg=%s err=%v",
 						w.channelID, job.Username, job.MessageID, sendErr)
@@ -1200,6 +1267,12 @@ func (w *Worker) executeInline(job *Job) {
 			if !job.DisableBotEgress {
 				w.drainBeforeFinal(targetID)
 			}
+			state := a2aStateForStopReason(stopReason)
+			job.emitA2AResult(a2a.TaskExecutionResult{
+				State:   state,
+				Content: response,
+				Metrics: a2aMetrics(w.agent.TurnMetrics(), startTime),
+			})
 			if sendErr := job.sendInlineFinalReply(ds, responseWithMetrics); sendErr != nil {
 				reaction := deliveryFailureReaction(sendErr)
 				log.Printf("[worker %s] inline final reply failed | user=%s msg=%s reaction=%s err=%v",
@@ -1255,6 +1328,12 @@ func (w *Worker) executeInline(job *Job) {
 		if !job.DisableBotEgress {
 			w.drainBeforeFinal(targetID)
 		}
+		job.emitA2AResult(a2a.TaskExecutionResult{
+			State:   a2a.TaskStateFailed,
+			Content: errMsg,
+			Error:   a2a.TaskError{Code: a2a.ErrorInternal, Message: errMsg},
+			Metrics: a2aMetrics(w.agent.TurnMetrics(), startTime),
+		})
 		if sendErr := job.sendInlineFinalReply(ds, errMsg); sendErr != nil {
 			log.Printf("[worker %s] inline read-error reply failed | user=%s msg=%s err=%v",
 				w.channelID, job.Username, job.MessageID, sendErr)

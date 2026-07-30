@@ -12,6 +12,8 @@ import (
 type botToolsTargetState struct {
 	TargetChannelID       string               `json:"target_channel_id"`
 	DisableEgress         bool                 `json:"disable_egress,omitempty"`
+	RemoteA2A             bool                 `json:"remote_a2a,omitempty"`
+	AllowMemoryWrite      bool                 `json:"allow_memory_write,omitempty"`
 	AllowedMentionUserIDs []string             `json:"allowed_mention_user_ids,omitempty"`
 	MentionRefs           []discordmention.Ref `json:"mention_refs,omitempty"`
 }
@@ -44,6 +46,10 @@ func writeBotToolsTargetStateOptions(path, targetChannelID string, disableEgress
 }
 
 func writeBotToolsTargetStateWithRefs(path, targetChannelID string, disableEgress bool, refs []discordmention.Ref) error {
+	return writeBotToolsTargetStateWithPolicy(path, targetChannelID, disableEgress, refs, false, false)
+}
+
+func writeBotToolsTargetStateWithPolicy(path, targetChannelID string, disableEgress bool, refs []discordmention.Ref, remoteA2A bool, allowMemoryWrite bool) error {
 	path = strings.TrimSpace(path)
 	targetChannelID = strings.TrimSpace(targetChannelID)
 	if path == "" || targetChannelID == "" {
@@ -55,6 +61,8 @@ func writeBotToolsTargetStateWithRefs(path, targetChannelID string, disableEgres
 	raw, err := json.Marshal(botToolsTargetState{
 		TargetChannelID:       targetChannelID,
 		DisableEgress:         disableEgress,
+		RemoteA2A:             remoteA2A,
+		AllowMemoryWrite:      allowMemoryWrite,
 		AllowedMentionUserIDs: allowedMentionUserIDs(refs),
 		MentionRefs:           cleanMentionRefs(refs),
 	})

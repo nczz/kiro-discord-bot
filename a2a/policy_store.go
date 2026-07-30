@@ -218,3 +218,63 @@ func validateChannelA2APolicy(p ChannelA2APolicy) error {
 
 var skillSlugPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
 var skillPattern = regexp.MustCompile(`^([A-Za-z0-9][A-Za-z0-9_-]{0,63}/)?[A-Za-z0-9][A-Za-z0-9_-]{0,63}(\*)?$`)
+
+func (s *SQLitePolicyStore) GetEnabledByChannelRef(ctx context.Context, channelRef string) (ChannelA2APolicy, error) {
+	channelRef = strings.TrimSpace(channelRef)
+	if !skillSlugPattern.MatchString(channelRef) {
+		return ChannelA2APolicy{}, fmt.Errorf("channel_ref is invalid")
+	}
+	var guildID, channelID string
+	err := s.db.QueryRowContext(ctx, `SELECT guild_id, channel_id FROM channel_a2a_policy WHERE enabled=1 AND channel_ref=?`, channelRef).Scan(&guildID, &channelID)
+	if err != nil {
+		return ChannelA2APolicy{}, err
+	}
+	return s.Get(ctx, guildID, channelID)
+}
+
+func (p ChannelA2APolicy) ValidateInbound(from AgentID, skillID string) error {
+	if !p.Enabled {
+		return fmt.Errorf("%w: channel is not enabled", errorCodeError(ErrorChannelNotEnabled))
+	}
+	if err := ValidateAgentID(from); err != nil {
+		return fmt.Errorf("%w: %v", errorCodeError(ErrorUnauthorizedSender), err)
+	}
+	if !stringListAllowsAgent(p.AcceptFrom, from) {
+		return fmt.Errorf("%w: sender %s is not accepted", errorCodeError(ErrorSenderNotAllowed), from)
+	}
+	slug := SkillSlug(skillID)
+	if !skillSlugPattern.MatchString(slug) {
+		return fmt.Errorf("%w: skill %q is invalid", errorCodeError(ErrorUnknownSkill), skillID)
+	}
+	if !stringListAllowsValue(p.AcceptSkills, slug) {
+		return fmt.Errorf("%w: skill %s is not accepted", errorCodeError(ErrorSkillNotAllowed), slug)
+	}
+	return nil
+}
+
+func SkillSlug(skillID string) string {
+	skillID = strings.TrimSpace(skillID)
+	if idx := strings.LastIndex(skillID, "/"); idx >= 0 {
+		return strings.TrimSpace(skillID[idx+1:])
+	}
+	return skillID
+}
+
+func stringListAllowsAgent(list []string, id AgentID) bool {
+	return stringListAllowsValue(list, string(id))
+}
+
+func stringListAllowsValue(list []string, value string) bool {
+	value = strings.TrimSpace(value)
+	for _, item := range list {
+		item = strings.TrimSpace(item)
+		if item == "*" || item == value {
+			return true
+		}
+	}
+	return false
+}
+
+type errorCodeError ErrorCode
+
+func (e errorCodeError) Error() string { return string(e) }
