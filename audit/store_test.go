@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"github.com/nczz/kiro-discord-bot/a2a"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -221,6 +222,34 @@ func TestStoreRedactsBotAuditEventContent(t *testing.T) {
 	}
 	if strings.Contains(raw, "secret output") {
 		t.Fatalf("expected redacted raw json, got %q", raw)
+	}
+}
+
+func TestStoreRecordsA2AAuditMetadataWithoutContent(t *testing.T) {
+	dir := t.TempDir()
+	store, err := Open(Config{Enabled: true, DBPath: filepath.Join(dir, "discord.sqlite"), RecordContent: false})
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer store.Close()
+	metadata := a2a.AuditMetadata(a2a.AuditMetadataInput{TaskID: "task_audit", ClientTaskRef: "client-1", MessageID: "msg_audit", ContextID: "ctx", FromAgent: "eve-local", ToAgent: "adam-n200", ExecutorAgent: "adam-n200", ChannelID: "c1", GuildID: "g1", ChannelRef: "case", SkillID: "review", State: a2a.TaskStateCompleted, Revision: 4, ResultVisibility: "transparent", DiscordTranscriptMode: "delegator", DiscordMessageID: "discord-msg", ActorAgentID: "eve-local", ActorDiscordUserID: "u1", TranscriptDeliveryKind: "result", SourceEventRevision: 4, SourceEventID: "evt-1", ErrorCode: a2a.ErrorNATSPublishFailed, PayloadSize: 123, ArtifactCount: 2})
+	if err := store.RecordBotEvent(context.Background(), BotEvent{Type: a2a.AuditTranscriptPosted, GuildID: "g1", ChannelID: "c1", Content: "do not keep", Metadata: metadata}); err != nil {
+		t.Fatalf("record bot event: %v", err)
+	}
+	db := openTestDB(t, filepath.Join(dir, "discord.sqlite"))
+	defer db.Close()
+	var content sql.NullString
+	var raw, metadataJSON string
+	if err := db.QueryRow(`SELECT content, raw_json, metadata_json FROM bot_audit_events WHERE event_type='a2a_transcript_posted'`).Scan(&content, &raw, &metadataJSON); err != nil {
+		t.Fatalf("query bot event: %v", err)
+	}
+	if content.Valid || strings.Contains(raw, "do not keep") {
+		t.Fatalf("A2A content was retained content=%q raw=%q", content.String, raw)
+	}
+	for _, key := range []string{"task_id", "client_task_ref", "message_id", "from_agent", "to_agent", "executor_agent", "channel_ref", "discord_transcript_mode", "source_event_revision", "artifact_count"} {
+		if !strings.Contains(metadataJSON, key) {
+			t.Fatalf("metadata key %s missing from %s", key, metadataJSON)
+		}
 	}
 }
 

@@ -92,7 +92,7 @@ func taskStoreMigrations() []string {
 		state TEXT,
 		payload_json TEXT,
 		created_at TEXT NOT NULL,
-		UNIQUE(task_id, revision)
+		UNIQUE(task_id, revision, event_type)
 	)`,
 	}
 }
@@ -192,7 +192,7 @@ func (s *SQLiteTaskStore) BindAccepted(ctx context.Context, messageID MessageID,
 	if _, err := tx.ExecContext(ctx, `UPDATE a2a_tasks SET task_id=?, executor_agent=?, state=?, revision=?, updated_at=? WHERE local_id=? AND task_id IS NULL AND terminal=0`, taskID, executor, TaskStateWorking, row.Revision+1, now, row.LocalID); err != nil {
 		return TaskRow{}, err
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO a2a_task_events(task_id, revision, event_type, state, payload_json, created_at) VALUES(?,?,?,?,?,?) ON CONFLICT(task_id, revision) DO NOTHING`, taskID, row.Revision+1, "accepted", TaskStateWorking, "{}", now); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO a2a_task_events(task_id, revision, event_type, state, payload_json, created_at) VALUES(?,?,?,?,?,?) ON CONFLICT(task_id, revision, event_type) DO NOTHING`, taskID, row.Revision+1, "accepted", TaskStateWorking, "{}", now); err != nil {
 		return TaskRow{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -225,7 +225,7 @@ func (s *SQLiteTaskStore) RejectBeforeAccepted(ctx context.Context, messageID Me
 	if _, err := tx.ExecContext(ctx, `UPDATE a2a_tasks SET task_id=?, executor_agent=?, state=?, terminal=1, revision=revision+1, updated_at=?, error_code=?, error_message=? WHERE local_id=? AND terminal=0`, msgTaskID, executor, TaskStateRejected, now, nullString(string(taskErr.Code)), nullString(taskErr.Message), row.LocalID); err != nil {
 		return TaskRow{}, err
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO a2a_task_events(task_id, revision, event_type, state, payload_json, created_at) VALUES(?,?,?,?,?,?) ON CONFLICT(task_id, revision) DO NOTHING`, msgTaskID, row.Revision+1, "rejected", TaskStateRejected, "{}", now); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO a2a_task_events(task_id, revision, event_type, state, payload_json, created_at) VALUES(?,?,?,?,?,?) ON CONFLICT(task_id, revision, event_type) DO NOTHING`, msgTaskID, row.Revision+1, "rejected", TaskStateRejected, "{}", now); err != nil {
 		return TaskRow{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -258,7 +258,7 @@ func (s *SQLiteTaskStore) markTerminal(ctx context.Context, localID string, stat
 		return TaskRow{}, err
 	}
 	if row.TaskID != "" {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO a2a_task_events(task_id, revision, event_type, state, payload_json, created_at) VALUES(?,?,?,?,?,?) ON CONFLICT(task_id, revision) DO NOTHING`, row.TaskID, row.Revision+1, "status", state, "{}", now); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO a2a_task_events(task_id, revision, event_type, state, payload_json, created_at) VALUES(?,?,?,?,?,?) ON CONFLICT(task_id, revision, event_type) DO NOTHING`, row.TaskID, row.Revision+1, "status", state, "{}", now); err != nil {
 			return TaskRow{}, err
 		}
 	}
@@ -312,7 +312,6 @@ func (s *SQLiteTaskStore) ListByChannel(ctx context.Context, direction string, c
 	}
 	return out, rows.Err()
 }
-
 
 func (s *SQLiteTaskStore) RejectInbound(ctx context.Context, row TaskRow, taskErr TaskError) (TaskRow, error) {
 	row.Direction = "inbound"
@@ -414,7 +413,7 @@ func appendEventInTx(ctx context.Context, tx *sql.Tx, event EventRow) error {
 	}
 	var existing EventRow
 	var state, payload, created string
-	err = tx.QueryRowContext(ctx, `SELECT id, task_id, revision, event_type, COALESCE(state,''), COALESCE(payload_json,''), created_at FROM a2a_task_events WHERE task_id=? AND revision=?`, event.TaskID, event.Revision).Scan(&existing.ID, &existing.TaskID, &existing.Revision, &existing.EventType, &state, &payload, &created)
+	err = tx.QueryRowContext(ctx, `SELECT id, task_id, revision, event_type, COALESCE(state,''), COALESCE(payload_json,''), created_at FROM a2a_task_events WHERE task_id=? AND revision=? AND event_type=?`, event.TaskID, event.Revision, event.EventType).Scan(&existing.ID, &existing.TaskID, &existing.Revision, &existing.EventType, &state, &payload, &created)
 	if err != nil {
 		return err
 	}

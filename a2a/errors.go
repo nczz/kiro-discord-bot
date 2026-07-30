@@ -24,4 +24,8 @@ const (
 	ErrorInputNotExpected     ErrorCode = "input_not_expected"
 	ErrorAuthNotSatisfied     ErrorCode = "auth_not_satisfied"
 	ErrorStoreError           ErrorCode = "store_error"
+	ErrorPayloadTooLarge      ErrorCode = "payload_too_large"
+	ErrorUnsupportedMediaType ErrorCode = "unsupported_media_type"
+	ErrorArtifactFetchFailed  ErrorCode = "artifact_fetch_failed"
+	ErrorNATSPublishFailed    ErrorCode = "nats_publish_failed"
 )

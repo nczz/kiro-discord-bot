@@ -194,7 +194,7 @@ func TestPeerStoreSanitizesCardAndMarksStale(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	card := AgentCard{Name: "eve-local", Description: "uses /Users/eve/project and DISCORD_TOKEN", SupportedInterfaces: []A2AInterface{{URL: "http://127.0.0.1:4222", ProtocolBinding: "urn:kiro-discord-bot:a2a:nats:v1", ProtocolVersion: "1.0"}}, Skills: []AgentSkill{{ID: "backend/review", Name: "Review", Description: "reads /data/private", Examples: []string{"secret example"}}}}
+	card := AgentCard{Name: "eve-local", Description: "uses /Users/eve/project and DISCORD_TOKEN", Version: "1.0.0", SupportedInterfaces: []A2AInterface{{URL: "http://127.0.0.1:4222", ProtocolBinding: "urn:kiro-discord-bot:a2a:nats:v1", ProtocolVersion: "1.0"}}, Skills: []AgentSkill{{ID: "backend/review", Name: "Review", Description: "reads /data/private", Examples: []string{"secret example"}}}}
 	row, err := store.UpsertCard(ctx, "eve-local", card, true, time.Now().Add(-time.Minute))
 	if err != nil {
 		t.Fatalf("UpsertCard: %v", err)
@@ -242,6 +242,75 @@ func TestObjectRefValidatesDigestSizeAndRetention(t *testing.T) {
 	if pruned != 1 {
 		t.Fatalf("pruned %d, want 1", pruned)
 	}
+}
+
+func TestObjectStoreStoresFetchesAndPrunesBackendBytes(t *testing.T) {
+	ctx := context.Background()
+	backend := newMemoryObjectBackend()
+	store, err := OpenObjectStore(t.TempDir(), WithObjectBackend(backend))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	content := []byte("image-bytes")
+	ref, err := store.PutObject(ctx, "task_object", "artifact-image", "../report image.png", "image/png", content, 1)
+	if err != nil {
+		t.Fatalf("PutObject: %v", err)
+	}
+	if strings.Contains(ref.Key, "..") || !strings.HasPrefix(ref.Key, "tasks/task_object/artifact-image/") {
+		t.Fatalf("unsafe key generated: %q", ref.Key)
+	}
+	got, gotRef, err := store.FetchObject(ctx, "artifact-image")
+	if err != nil {
+		t.Fatalf("FetchObject: %v", err)
+	}
+	if string(got) != string(content) || gotRef.Digest != "sha256:"+sha256ForTest(content) {
+		t.Fatalf("bad fetch got=%q ref=%+v", got, gotRef)
+	}
+	expired := gotRef
+	expired.ArtifactID = "artifact-expired"
+	expired.Key = "tasks/task_object/artifact-expired/report.png"
+	expired.ExpiresAt = time.Now().Add(-time.Minute)
+	if _, err := store.PutRef(ctx, expired, content); err != nil {
+		t.Fatalf("PutRef expired: %v", err)
+	}
+	backend.objects[expired.Bucket+"/"+expired.Key] = content
+	pruned, err := store.PruneExpired(ctx, time.Now())
+	if err != nil {
+		t.Fatalf("PruneExpired: %v", err)
+	}
+	if pruned != 1 {
+		t.Fatalf("pruned %d, want 1", pruned)
+	}
+	if _, ok := backend.objects[expired.Bucket+"/"+expired.Key]; ok {
+		t.Fatal("expired backend object was not deleted")
+	}
+}
+
+type memoryObjectBackend struct {
+	objects map[string][]byte
+}
+
+func newMemoryObjectBackend() *memoryObjectBackend {
+	return &memoryObjectBackend{objects: map[string][]byte{}}
+}
+
+func (b *memoryObjectBackend) PutObject(_ context.Context, bucket string, key string, content []byte, _ string) error {
+	b.objects[bucket+"/"+key] = append([]byte(nil), content...)
+	return nil
+}
+
+func (b *memoryObjectBackend) GetObject(_ context.Context, bucket string, key string) ([]byte, error) {
+	content, ok := b.objects[bucket+"/"+key]
+	if !ok {
+		return nil, fmt.Errorf("missing object")
+	}
+	return append([]byte(nil), content...), nil
+}
+
+func (b *memoryObjectBackend) DeleteObject(_ context.Context, bucket string, key string) error {
+	delete(b.objects, bucket+"/"+key)
+	return nil
 }
 
 func phase3TaskRow(message string) TaskRow {

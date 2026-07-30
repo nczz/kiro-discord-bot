@@ -60,6 +60,7 @@ type Manager struct {
 	a2aPeers        *a2a.SQLitePeerStore
 	a2aPolicies     *a2a.SQLitePolicyStore
 	a2aTasks        *a2a.SQLiteTaskStore
+	a2aObjects      *a2a.SQLiteObjectStore
 	a2aAdmissions   map[string]a2a.A2AAdmission
 	a2aInboundOpen  map[string]int
 	a2aTransport    *a2a.Transport
@@ -206,6 +207,7 @@ type ManagerConfig struct {
 	A2APeerStore         *a2a.SQLitePeerStore
 	A2APolicyStore       *a2a.SQLitePolicyStore
 	A2ATaskStore         *a2a.SQLiteTaskStore
+	A2AObjectStore       *a2a.SQLiteObjectStore
 }
 
 func NewManager(cfg ManagerConfig) *Manager {
@@ -243,6 +245,7 @@ func NewManager(cfg ManagerConfig) *Manager {
 		a2aPeers:            cfg.A2APeerStore,
 		a2aPolicies:         cfg.A2APolicyStore,
 		a2aTasks:            cfg.A2ATaskStore,
+		a2aObjects:          cfg.A2AObjectStore,
 		a2aAdmissions:       make(map[string]a2a.A2AAdmission),
 		a2aInboundOpen:      make(map[string]int),
 		memory:              NewMemoryStore(cfg.DataDir),
@@ -291,6 +294,17 @@ func NewManager(cfg ManagerConfig) *Manager {
 			m.a2aTasks = store
 		}
 	}
+	if m.a2aObjects == nil && cfg.A2A.Enabled() {
+		var opts []a2a.ObjectStoreOption
+		if m.a2aNode != nil && m.a2aNode.JetStream() != nil {
+			opts = append(opts, a2a.WithObjectBackend(a2a.NewJetStreamObjectBackend(m.a2aNode.JetStream())))
+		}
+		if store, err := a2a.OpenObjectStore(cfg.DataDir, opts...); err != nil {
+			log.Printf("[a2a] object store disabled: %v", err)
+		} else {
+			m.a2aObjects = store
+		}
+	}
 	if cfg.A2A.Enabled() && m.a2aNode != nil && m.a2aNode.IsEnabled() && m.a2aTasks != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		if transport, err := a2a.StartTransport(ctx, a2a.TransportConfig{
@@ -299,6 +313,7 @@ func NewManager(cfg ManagerConfig) *Manager {
 			Executor:           m,
 			Config:             cfg.A2A,
 			MaxEventRatePerMin: cfg.A2A.MaxEventRatePerMin,
+			EventSink:          m.deliverA2AEvent,
 			Logf:               log.Printf,
 		}); err != nil {
 			log.Printf("[a2a] transport disabled: %v", err)
@@ -859,6 +874,9 @@ func (m *Manager) StopAll() {
 	}
 	if m.a2aTasks != nil {
 		_ = m.a2aTasks.Close()
+	}
+	if m.a2aObjects != nil {
+		_ = m.a2aObjects.Close()
 	}
 	if m.a2aPeers != nil {
 		_ = m.a2aPeers.Close()

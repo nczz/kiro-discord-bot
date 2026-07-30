@@ -32,6 +32,7 @@ type Publisher struct {
 	from  AgentID
 	rate  *eventRateLimiter
 }
+type EventDeliverySink func(context.Context, TaskRow, string, TaskEventPayload) error
 
 type TransportConfig struct {
 	Node               *Node
@@ -39,13 +40,15 @@ type TransportConfig struct {
 	Executor           Executor
 	Config             Config
 	MaxEventRatePerMin int
+	EventSink          EventDeliverySink
 	Logf               func(string, ...any)
 }
 
 type Transport struct {
 	Publisher
-	executor Executor
-	logf     func(string, ...any)
+	executor  Executor
+	logf      func(string, ...any)
+	eventSink EventDeliverySink
 
 	mu       sync.Mutex
 	consumes []jetstream.ConsumeContext
@@ -64,7 +67,7 @@ func NewPublisher(node *Node, tasks *SQLiteTaskStore, from AgentID, maxEventRate
 
 func StartTransport(ctx context.Context, cfg TransportConfig) (*Transport, error) {
 	if cfg.Node == nil || !cfg.Node.IsEnabled() {
-		return &Transport{Publisher: Publisher{node: cfg.Node, tasks: cfg.Tasks, from: cfg.Config.AgentID, rate: &eventRateLimiter{limit: cfg.MaxEventRatePerMin}}, executor: cfg.Executor, logf: cfg.Logf, started: make(map[string]struct{})}, nil
+		return &Transport{Publisher: Publisher{node: cfg.Node, tasks: cfg.Tasks, from: cfg.Config.AgentID, rate: &eventRateLimiter{limit: cfg.MaxEventRatePerMin}}, executor: cfg.Executor, logf: cfg.Logf, eventSink: cfg.EventSink, started: make(map[string]struct{})}, nil
 	}
 	agentID := cfg.Config.AgentID
 	if agentID == "" {
@@ -85,7 +88,7 @@ func StartTransport(ctx context.Context, cfg TransportConfig) (*Transport, error
 	if err := EnsureConsumers(ctx, cfg.Node); err != nil {
 		return nil, err
 	}
-	t := &Transport{Publisher: Publisher{node: cfg.Node, tasks: cfg.Tasks, from: agentID, rate: &eventRateLimiter{limit: cfg.MaxEventRatePerMin}}, executor: cfg.Executor, logf: cfg.Logf, started: make(map[string]struct{})}
+	t := &Transport{Publisher: Publisher{node: cfg.Node, tasks: cfg.Tasks, from: agentID, rate: &eventRateLimiter{limit: cfg.MaxEventRatePerMin}}, executor: cfg.Executor, logf: cfg.Logf, eventSink: cfg.EventSink, started: make(map[string]struct{})}
 	for _, cfg := range consumerConfigs(agentID) {
 		stream, err := t.node.JetStream().Stream(ctx, cfg.Stream)
 		if err != nil {
@@ -226,6 +229,11 @@ func (p *Publisher) PublishResult(ctx context.Context, delegator AgentID, result
 	return p.publishEvent(ctx, delegator, result.TaskID, EventKindResult, messageID, result.Revision, payload)
 }
 
+func (p *Publisher) PublishArtifact(ctx context.Context, delegator AgentID, taskID TaskID, revision int64, artifact TaskExecutionArtifact) error {
+	payload := TaskEventPayload{TaskID: taskID, State: TaskStateWorking, Revision: revision, Artifact: &artifact}
+	return p.publishEvent(ctx, delegator, taskID, EventKindArtifact, MessageID(artifact.ID), revision, payload)
+}
+
 func (p *Publisher) publishPreAcceptEvent(ctx context.Context, delegator AgentID, messageID MessageID, kind string, payload TaskEventPayload) error {
 	if err := p.checkEventRate(time.Now()); err != nil {
 		return err
@@ -253,6 +261,12 @@ func (p *Publisher) publishEvent(ctx context.Context, delegator AgentID, taskID 
 		msgID = StatusEventNatsMsgID(p.from, delegator, taskID, revision)
 	case EventKindResult:
 		msgID = ResultEventNatsMsgID(p.from, delegator, taskID)
+	case EventKindArtifact:
+		artifactID := ""
+		if payload.Artifact != nil {
+			artifactID = payload.Artifact.ID
+		}
+		msgID = ArtifactEventNatsMsgID(p.from, delegator, taskID, artifactID, revision)
 	default:
 		msgID = fmt.Sprintf("event:%s:%s:%s:%s:%d", p.from, delegator, taskID, kind, revision)
 	}
@@ -413,11 +427,9 @@ func (t *Transport) handleEventMessage(ctx context.Context, msg jetstream.Msg) e
 		}
 	case EventKindStatus, EventKindResult, EventKindArtifact:
 		state := payload.State
-		content := payload.Content
 		taskErr := payload.Error
 		if payload.Result != nil {
 			state = payload.Result.State
-			content = payload.Result.Content
 			taskErr = payload.Result.Error
 		}
 		if state == "" && subject.EventKind == EventKindResult {
@@ -427,10 +439,16 @@ func (t *Transport) handleEventMessage(ctx context.Context, msg jetstream.Msg) e
 		if payload.Revision > 0 {
 			revision = payload.Revision
 		}
-		eventPayload, _ := json.Marshal(TaskEventPayload{MessageID: env.MessageID, TaskID: TaskID(subject.TaskKey), State: state, Content: content, Error: taskErr, Revision: revision})
-		if _, err := t.tasks.ApplyTaskEvent(ctx, "outbound", TaskID(subject.TaskKey), EventRow{TaskID: TaskID(subject.TaskKey), Revision: revision, EventType: subject.EventKind, State: state, PayloadJSON: string(eventPayload)}, state, taskErr); err != nil {
+		eventPayload, _ := json.Marshal(payload)
+		row, err := t.tasks.ApplyTaskEvent(ctx, "outbound", TaskID(subject.TaskKey), EventRow{TaskID: TaskID(subject.TaskKey), Revision: revision, EventType: subject.EventKind, State: state, PayloadJSON: string(eventPayload)}, state, taskErr)
+		if err != nil {
 			_ = msg.Nak()
 			return err
+		}
+		if t.eventSink != nil {
+			if err := t.eventSink(ctx, row, subject.EventKind, payload); err != nil {
+				t.log("[a2a] event delivery failed task=%s kind=%s: %v", subject.TaskKey, subject.EventKind, err)
+			}
 		}
 	default:
 		_ = msg.TermWithReason("unsupported event kind")
@@ -481,6 +499,14 @@ func (t *Transport) runAccepted(admission A2AAdmission) {
 	}
 	if result.Revision <= 0 {
 		result.Revision = admission.Revision + 1
+	}
+	for i, artifact := range result.Artifacts {
+		if artifact.ID == "" {
+			artifact.ID = fmt.Sprintf("artifact-%d", i+1)
+		}
+		if err := t.PublishArtifact(context.Background(), admission.Request.From, result.TaskID, result.Revision+int64(i), artifact); err != nil {
+			t.log("[a2a] publish artifact task=%s artifact=%s: %v", result.TaskID, artifact.ID, err)
+		}
 	}
 	var pubErr error
 	if IsTerminalState(result.State) {

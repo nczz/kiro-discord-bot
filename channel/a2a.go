@@ -8,10 +8,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/nczz/kiro-discord-bot/a2a"
+	"github.com/nczz/kiro-discord-bot/audit"
+	"github.com/nczz/kiro-discord-bot/internal/botegress"
 )
 
 var _ a2a.Executor = (*Manager)(nil)
@@ -327,6 +331,15 @@ func validateA2ADeliveryAgainstPolicy(req a2a.TaskExecutionRequest, policy a2a.C
 	if req.Delivery.ShareDiscordContext && !policy.ShareDiscordContext {
 		return fmt.Errorf("shared Discord context is not allowed by channel policy")
 	}
+	if req.Delivery.DiscordContext != nil {
+		dc := req.Delivery.DiscordContext
+		if strings.TrimSpace(dc.GuildID) != "" && strings.TrimSpace(dc.GuildID) != policy.GuildID {
+			return fmt.Errorf("Discord context guild %s is not allowed by channel policy", dc.GuildID)
+		}
+		if strings.TrimSpace(dc.ChannelID) != "" && strings.TrimSpace(dc.ChannelID) != policy.ChannelID {
+			return fmt.Errorf("Discord context channel %s is not allowed by channel policy", dc.ChannelID)
+		}
+	}
 	if req.Delivery.CoPresentFrom != "" && !agentAllowed(policy.CoPresentFrom, req.Delivery.CoPresentFrom) {
 		return fmt.Errorf("co-present sender %s is not allowed", req.Delivery.CoPresentFrom)
 	}
@@ -395,6 +408,240 @@ func buildA2APrompt(admitted a2a.A2AAdmission) string {
 		sb.WriteString("\n")
 	}
 	return sb.String()
+}
+func (m *Manager) deliverA2AEvent(ctx context.Context, row a2a.TaskRow, kind string, payload a2a.TaskEventPayload) error {
+	if m == nil {
+		return nil
+	}
+	targetID := a2aDeliveryTarget(row)
+	if targetID == "" {
+		targetID = row.ChannelID
+	}
+	delivered := false
+	mode := row.DiscordTranscriptMode
+	if mode == "" {
+		mode = "delegator"
+	}
+	deliverText := kind == a2a.EventKindResult || mode == "mirror" || mode == "co_present"
+	if deliverText {
+		content := a2aDeliveryContent(row, kind, payload)
+		if strings.TrimSpace(content) != "" {
+			if _, err := botegress.WritePending(m.dataDir, botegress.Action{Action: botegress.ActionSendMessage, ChannelID: targetID, Content: content}); err != nil {
+				return err
+			}
+			delivered = true
+			m.recordA2ADeliveryAudit(row, kind, targetID, payload, 0, "")
+		}
+	}
+	artifacts := a2aArtifactsForDelivery(kind, payload)
+	for _, artifact := range artifacts {
+		if err := m.deliverA2AArtifact(ctx, row, targetID, kind, payload, artifact); err != nil {
+			m.recordA2ADeliveryAudit(row, kind, targetID, payload, 0, err.Error())
+			return err
+		}
+		delivered = true
+	}
+	if delivered && m.safeEgressDrain != nil {
+		m.safeEgressDrain(targetID)
+	}
+	return nil
+}
+
+func a2aDeliveryTarget(row a2a.TaskRow) string {
+	var dc a2a.DiscordContext
+	if strings.TrimSpace(row.DiscordContextJSON) == "" {
+		return row.ChannelID
+	}
+	if err := json.Unmarshal([]byte(row.DiscordContextJSON), &dc); err != nil {
+		return row.ChannelID
+	}
+	if strings.TrimSpace(dc.ThreadID) != "" {
+		return strings.TrimSpace(dc.ThreadID)
+	}
+	if strings.TrimSpace(dc.ChannelID) != "" {
+		return strings.TrimSpace(dc.ChannelID)
+	}
+	return row.ChannelID
+}
+
+func a2aDeliveryContent(row a2a.TaskRow, kind string, payload a2a.TaskEventPayload) string {
+	content := strings.TrimSpace(payload.Content)
+	if payload.Result != nil {
+		content = strings.TrimSpace(payload.Result.Content)
+	}
+	if content == "" && payload.Error.Message != "" {
+		content = payload.Error.Message
+	}
+	if content == "" {
+		return ""
+	}
+	prefix := fmt.Sprintf("A2A %s from %s", kind, row.ToAgent)
+	if row.SkillID != "" {
+		prefix += " (" + row.SkillID + ")"
+	}
+	return prefix + ":\n" + content
+}
+
+func a2aArtifactsForDelivery(kind string, payload a2a.TaskEventPayload) []a2a.TaskExecutionArtifact {
+	if kind == a2a.EventKindArtifact && payload.Artifact != nil {
+		return []a2a.TaskExecutionArtifact{*payload.Artifact}
+	}
+	if payload.Result != nil && len(payload.Result.Artifacts) > 0 {
+		return payload.Result.Artifacts
+	}
+	return nil
+}
+
+func (m *Manager) deliverA2AArtifact(ctx context.Context, row a2a.TaskRow, targetID, kind string, payload a2a.TaskEventPayload, artifact a2a.TaskExecutionArtifact) error {
+	if m.a2aObjects == nil {
+		return fmt.Errorf("%s: A2A object store is unavailable", a2a.ErrorStoreError)
+	}
+	if strings.TrimSpace(artifact.ID) == "" {
+		return fmt.Errorf("%s: artifact id is required", a2a.ErrorArtifactFetchFailed)
+	}
+	content, ref, err := m.a2aObjects.FetchObject(ctx, artifact.ID)
+	if err != nil {
+		return fmt.Errorf("%s: %v", a2a.ErrorArtifactFetchFailed, err)
+	}
+	if artifact.Digest != "" && artifact.Digest != ref.Digest {
+		return fmt.Errorf("%s: artifact digest mismatch", a2a.ErrorArtifactFetchFailed)
+	}
+	if artifact.SizeBytes > 0 && artifact.SizeBytes != ref.Size {
+		return fmt.Errorf("%s: artifact size mismatch", a2a.ErrorArtifactFetchFailed)
+	}
+	if err := m.validateA2AArtifactPolicy(ctx, row, artifact, ref); err != nil {
+		return err
+	}
+	name := strings.TrimSpace(artifact.Name)
+	if name == "" {
+		name = artifact.ID
+	}
+	dir := filepath.Join(m.dataDir, "egress", "incoming", "a2a-"+string(row.TaskID)+"-"+artifact.ID)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return err
+	}
+	filePath := filepath.Join(dir, safeA2AArtifactName(name))
+	if err := os.WriteFile(filePath, content, 0600); err != nil {
+		return err
+	}
+	caption := fmt.Sprintf("A2A artifact from %s: %s", row.ToAgent, safeA2AArtifactName(name))
+	if _, err := botegress.WritePending(m.dataDir, botegress.Action{Action: botegress.ActionSendFile, ChannelID: targetID, FilePath: filePath, Content: caption, RemoveFileAfterSend: true}); err != nil {
+		_ = os.Remove(filePath)
+		return err
+	}
+	m.recordA2ADeliveryAudit(row, kind, targetID, payload, 1, "")
+	return nil
+}
+func (m *Manager) validateA2AArtifactPolicy(ctx context.Context, row a2a.TaskRow, artifact a2a.TaskExecutionArtifact, ref a2a.ObjectRef) error {
+	if m == nil || m.a2aPolicies == nil {
+		return nil
+	}
+	policy, err := m.a2aPolicies.Get(ctx, row.GuildID, row.ChannelID)
+	if err != nil {
+		return nil
+	}
+	if !policy.DelegateMedia.AllowObjectRefs {
+		return fmt.Errorf("%s: object artifact refs are not allowed", a2a.ErrorUnsupportedMediaType)
+	}
+	size := ref.Size
+	if artifact.SizeBytes > 0 {
+		size = artifact.SizeBytes
+	}
+	if policy.DelegateMedia.MaxBytes > 0 && size > policy.DelegateMedia.MaxBytes {
+		return fmt.Errorf("%s: artifact exceeds media policy", a2a.ErrorPayloadTooLarge)
+	}
+	mediaType := strings.TrimSpace(artifact.MediaType)
+	if mediaType == "" {
+		mediaType = ref.MediaType
+	}
+	if len(policy.DelegateMedia.AllowedMIMETypes) == 0 {
+		return nil
+	}
+	for _, allowed := range policy.DelegateMedia.AllowedMIMETypes {
+		if strings.EqualFold(strings.TrimSpace(allowed), mediaType) {
+			return nil
+		}
+	}
+	return fmt.Errorf("%s: artifact media type %s is not allowed", a2a.ErrorUnsupportedMediaType, mediaType)
+}
+
+func safeA2AArtifactName(name string) string {
+	base := filepath.Base(strings.TrimSpace(name))
+	if base == "." || base == string(filepath.Separator) || base == "" {
+		return "artifact.bin"
+	}
+	return strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			return r
+		case r == '.', r == '-', r == '_':
+			return r
+		default:
+			return '-'
+		}
+	}, base)
+}
+
+func (m *Manager) recordA2ADeliveryAudit(row a2a.TaskRow, kind string, targetID string, payload a2a.TaskEventPayload, artifactCount int, errText string) {
+	if m == nil || m.audit == nil {
+		return
+	}
+	if payload.Result != nil && artifactCount == 0 {
+		artifactCount = len(payload.Result.Artifacts)
+	}
+	metadata := map[string]any{
+		"task_id":                  string(row.TaskID),
+		"client_task_ref":          row.ClientTaskRef,
+		"message_id":               string(row.MessageID),
+		"context_id":               row.ContextID,
+		"from_agent":               string(row.FromAgent),
+		"to_agent":                 string(row.ToAgent),
+		"executor_agent":           string(row.ExecutorAgent),
+		"channel_id":               row.ChannelID,
+		"guild_id":                 row.GuildID,
+		"channel_ref":              row.ChannelRef,
+		"skill_id":                 row.SkillID,
+		"state":                    string(row.State),
+		"revision":                 row.Revision,
+		"result_visibility":        row.ResultVisibility,
+		"discord_transcript_mode":  row.DiscordTranscriptMode,
+		"discord_message_id":       targetID,
+		"transcript_delivery_kind": kind,
+		"source_event_revision":    payload.Revision,
+		"error_code":               string(payload.Error.Code),
+		"artifact_count":           artifactCount,
+	}
+	m.audit.RecordBotEvent(audit.BotEvent{
+		Type:      a2a.AuditTranscriptPosted,
+		GuildID:   row.GuildID,
+		ChannelID: targetID,
+		TargetID:  row.ChannelID,
+		Command:   "a2a",
+		Source:    "a2a",
+		Status:    statusFromError(errText),
+		Error:     errText,
+		Metadata:  metadata,
+	})
+	if kind == a2a.EventKindResult {
+		m.audit.RecordBotEvent(audit.BotEvent{
+			Type:      a2a.AuditResultDelivered,
+			GuildID:   row.GuildID,
+			ChannelID: targetID,
+			TargetID:  row.ChannelID,
+			Command:   "a2a",
+			Source:    "a2a",
+			Status:    statusFromError(errText),
+			Error:     errText,
+			Metadata:  metadata,
+		})
+	}
+}
+
+func statusFromError(errText string) string {
+	if strings.TrimSpace(errText) == "" {
+		return "success"
+	}
+	return "error"
 }
 
 func codeFromA2AError(err error, fallback a2a.ErrorCode) a2a.ErrorCode {

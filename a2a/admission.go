@@ -54,14 +54,15 @@ type ControlPayload struct {
 }
 
 type TaskEventPayload struct {
-	MessageID     MessageID            `json:"messageId,omitempty"`
-	ClientTaskRef string               `json:"clientTaskRef,omitempty"`
-	TaskID        TaskID               `json:"taskId,omitempty"`
-	State         TaskState            `json:"state,omitempty"`
-	Content       string               `json:"content,omitempty"`
-	Error         TaskError            `json:"error,omitempty"`
-	Revision      int64                `json:"revision,omitempty"`
-	Result        *TaskExecutionResult `json:"result,omitempty"`
+	MessageID     MessageID              `json:"messageId,omitempty"`
+	ClientTaskRef string                 `json:"clientTaskRef,omitempty"`
+	TaskID        TaskID                 `json:"taskId,omitempty"`
+	State         TaskState              `json:"state,omitempty"`
+	Content       string                 `json:"content,omitempty"`
+	Error         TaskError              `json:"error,omitempty"`
+	Revision      int64                  `json:"revision,omitempty"`
+	Result        *TaskExecutionResult   `json:"result,omitempty"`
+	Artifact      *TaskExecutionArtifact `json:"artifact,omitempty"`
 }
 
 func taskRequestFromEnvelope(env Envelope, subject Subject) (TaskExecutionRequest, error) {

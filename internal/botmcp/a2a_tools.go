@@ -293,6 +293,7 @@ func (s *A2AService) PolicyPlan(ctx context.Context, req A2AToolRequest) (A2AToo
 	summary := policySummary(policy, planned)
 	token := s.confirmationToken("policy_apply", changeID, req, planned)
 	exp := s.cfg.Now().UTC().Add(10 * time.Minute)
+	_ = s.recordAudit(ctx, a2a.AuditPolicyChangePlanned, req, "planned", "", map[string]any{"change_id": changeID})
 	return A2AToolResponse{OK: true, Message: "A2A policy change planned", RequiresConfirmation: true, ConfirmationSummary: summary, RiskLabels: policyRiskLabels(policy, planned), ExpiresAt: exp.Format(time.RFC3339), ChangeID: changeID, ConfirmationToken: token, Policy: &planned}, nil
 }
 
@@ -310,12 +311,13 @@ func (s *A2AService) PolicyApply(ctx context.Context, req A2AToolRequest) (A2ATo
 		return responseError(fmt.Errorf("%w: change_id does not match policy diff", errorCode(a2a.ErrorPolicyDenied))), nil
 	}
 	if err := s.verifyConfirmation("policy_apply", changeID, req, planned); err != nil {
+		_ = s.recordAudit(ctx, a2a.AuditPolicyChangeDenied, req, "denied", err.Error(), map[string]any{"change_id": changeID})
 		return responseError(err), nil
 	}
 	if err := s.policies.Save(ctx, planned, req.RequestedByID); err != nil {
 		return responseError(fmt.Errorf("%w: %v", errorCode(a2a.ErrorStoreError), err)), nil
 	}
-	_ = s.recordAudit(ctx, "a2a_policy_change_applied", req, "applied", "", map[string]any{"change_id": changeID})
+	_ = s.recordAudit(ctx, a2a.AuditPolicyChangeApplied, req, "applied", "", map[string]any{"change_id": changeID})
 	return A2AToolResponse{OK: true, Message: "A2A policy applied", ChangeID: changeID, Policy: &planned}, nil
 }
 
@@ -374,11 +376,15 @@ func (s *A2AService) Delegate(ctx context.Context, req A2AToolRequest) (A2AToolR
 	}
 	payload, _ := json.Marshal(map[string]string{"kind": "text", "text": message})
 	msgID := a2a.MessageID("msg_" + randomToken(12))
-	row, err := pub.SendTask(ctx, a2a.TaskExecutionRequest{MessageID: msgID, ClientTaskRef: req.RequestedByID, ContextID: "discord:" + req.ChannelID + ":" + string(msgID), From: s.cfg.Config.AgentID, To: target, ChannelID: req.ChannelID, GuildID: req.GuildID, ChannelRef: policy.ChannelRef, SkillID: req.SkillID, UserVisibleSummary: truncateForSummary(message), Payload: payload, Delivery: a2a.DeliveryOptions{TimeoutSec: s.cfg.Config.TaskTimeoutSec, DiscordReplyChannelID: req.ChannelID, DiscordReplyThreadID: deliveryChannelID(req.ChannelID), MaxDelegationDepth: s.cfg.Config.MaxDelegationDepth}, ResultVisibility: firstNonEmpty(req.ResultVisibility, policy.ResultVisibility, "proxy"), DiscordTranscriptMode: firstNonEmpty(req.TranscriptMode, policy.DiscordTranscriptMode, "delegator"), AuditMetadata: map[string]string{"requested_by_id": req.RequestedByID, "reason": req.Reason}})
+	taskReq := a2a.TaskExecutionRequest{MessageID: msgID, ClientTaskRef: req.RequestedByID, ContextID: "discord:" + req.ChannelID + ":" + string(msgID), From: s.cfg.Config.AgentID, To: target, ChannelID: req.ChannelID, GuildID: req.GuildID, ChannelRef: policy.ChannelRef, SkillID: req.SkillID, UserVisibleSummary: truncateForSummary(message), Payload: payload, Delivery: a2a.DeliveryOptions{TimeoutSec: s.cfg.Config.TaskTimeoutSec, DiscordReplyChannelID: req.ChannelID, DiscordReplyThreadID: deliveryChannelID(req.ChannelID), MaxDelegationDepth: s.cfg.Config.MaxDelegationDepth}, ResultVisibility: firstNonEmpty(req.ResultVisibility, policy.ResultVisibility, "proxy"), DiscordTranscriptMode: firstNonEmpty(req.TranscriptMode, policy.DiscordTranscriptMode, "delegator")}
+	row, err := pub.SendTask(ctx, taskReq)
 	if err != nil {
-		return responseError(fmt.Errorf("%w: %v", errorCode(a2a.ErrorInternal), err)), nil
+		meta := a2a.AuditMetadata(a2a.AuditMetadataInput{MessageID: msgID, ClientTaskRef: req.RequestedByID, ContextID: taskReq.ContextID, FromAgent: taskReq.From, ToAgent: taskReq.To, ChannelID: req.ChannelID, GuildID: req.GuildID, ChannelRef: policy.ChannelRef, SkillID: req.SkillID, ResultVisibility: taskReq.ResultVisibility, DiscordTranscriptMode: taskReq.DiscordTranscriptMode, ActorAgentID: s.cfg.Config.AgentID, ActorDiscordUserID: req.RequestedByID, ErrorCode: a2a.ErrorNATSPublishFailed, PayloadSize: len(payload)})
+		_ = s.recordAudit(ctx, a2a.AuditTaskPublishFailed, req, "error", err.Error(), meta)
+		return responseError(fmt.Errorf("%w: %v", errorCode(a2a.ErrorNATSPublishFailed), err)), nil
 	}
-	_ = s.recordAudit(ctx, "a2a_task_send_requested", req, "queued", "", map[string]any{"message_id": msgID, "target_agent": target, "skill_id": req.SkillID})
+	meta := a2a.AuditMetadata(a2a.AuditMetadataInput{TaskID: row.TaskID, ClientTaskRef: row.ClientTaskRef, MessageID: msgID, ContextID: row.ContextID, FromAgent: row.FromAgent, ToAgent: row.ToAgent, ExecutorAgent: row.ExecutorAgent, ChannelID: req.ChannelID, GuildID: req.GuildID, ChannelRef: policy.ChannelRef, SkillID: req.SkillID, State: row.State, Revision: row.Revision, ResultVisibility: row.ResultVisibility, DiscordTranscriptMode: row.DiscordTranscriptMode, ActorAgentID: s.cfg.Config.AgentID, ActorDiscordUserID: req.RequestedByID, PayloadSize: len(payload)})
+	_ = s.recordAudit(ctx, a2a.AuditTaskSendRequested, req, "queued", "", meta)
 	sum := summarizeTask(row)
 	return A2AToolResponse{OK: true, Message: "A2A task sent", Task: &sum}, nil
 }

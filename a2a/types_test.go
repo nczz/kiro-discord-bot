@@ -96,6 +96,7 @@ func TestValidateEnvelopeRejectsSubjectMismatchOversizeAndExpired(t *testing.T) 
 	}
 
 	expired := base
+	expired.CreatedAt = time.Now().UTC().Add(-3 * time.Minute).Format(time.RFC3339Nano)
 	expired.ExpiresAt = time.Now().UTC().Add(-2 * time.Minute).Format(time.RFC3339Nano)
 	if err := ValidateEnvelope(expired, subject); err == nil || !strings.Contains(err.Error(), "expired") {
 		t.Fatalf("expired error = %v, want expired", err)

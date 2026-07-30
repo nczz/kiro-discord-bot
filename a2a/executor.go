@@ -3,6 +3,7 @@ package a2a
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"time"
 )
 
@@ -81,12 +82,29 @@ type TaskExecutionResult struct {
 }
 
 type TaskExecutionArtifact struct {
-	ID        string
-	Name      string
-	MediaType string
-	Digest    string
-	SizeBytes int64
-	URI       string
+	ID        string    `json:"id,omitempty"`
+	Name      string    `json:"name,omitempty"`
+	MediaType string    `json:"mediaType,omitempty"`
+	Digest    string    `json:"digest,omitempty"`
+	SizeBytes int64     `json:"sizeBytes,omitempty"`
+	URI       string    `json:"uri,omitempty"`
+	Bucket    string    `json:"bucket,omitempty"`
+	Key       string    `json:"key,omitempty"`
+	ExpiresAt time.Time `json:"expiresAt,omitempty"`
+}
+
+func ArtifactFromObjectRef(ref ObjectRef, name string) TaskExecutionArtifact {
+	return TaskExecutionArtifact{
+		ID:        ref.ArtifactID,
+		Name:      strings.TrimSpace(name),
+		MediaType: ref.MediaType,
+		Digest:    ref.Digest,
+		SizeBytes: ref.Size,
+		URI:       "nats-object://" + ref.Bucket + "/" + ref.Key,
+		Bucket:    ref.Bucket,
+		Key:       ref.Key,
+		ExpiresAt: ref.ExpiresAt,
+	}
 }
 
 type TaskError struct {
