@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"sort"
 	"strconv"
@@ -320,6 +321,7 @@ func (s *A2AService) PolicyApply(ctx context.Context, req A2AToolRequest) (A2ATo
 	if err := s.policies.Save(ctx, planned, req.RequestedByID); err != nil {
 		return responseError(fmt.Errorf("%w: %v", errorCode(a2a.ErrorStoreError), err)), nil
 	}
+	s.trustDelegatedPeers(ctx, planned.DelegateTo)
 	_ = s.recordAudit(ctx, a2a.AuditPolicyChangeApplied, req, "applied", "", map[string]any{"change_id": changeID})
 	return A2AToolResponse{OK: true, Message: "A2A policy applied", ChangeID: changeID, Policy: &planned}, nil
 }
@@ -456,6 +458,17 @@ func (s *A2AService) validateContext(req A2AToolRequest, manager bool) error {
 		return fmt.Errorf("%w: ManageChannels is required", errorCode(a2a.ErrorPolicyDenied))
 	}
 	return nil
+}
+func (s *A2AService) trustDelegatedPeers(ctx context.Context, agents []string) {
+	for _, raw := range agents {
+		agent := a2a.AgentID(strings.TrimSpace(raw))
+		if err := a2a.ValidateAgentID(agent); err != nil {
+			continue
+		}
+		if err := s.peers.SetTrusted(ctx, agent, true); err != nil && !errors.Is(err, sql.ErrNoRows) {
+			log.Printf("[a2a] trust delegated peer %s failed: %v", agent, err)
+		}
+	}
 }
 
 func (s *A2AService) currentPolicy(ctx context.Context, req A2AToolRequest) (a2a.ChannelA2APolicy, error) {

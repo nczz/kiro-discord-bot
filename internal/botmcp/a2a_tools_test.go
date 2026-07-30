@@ -34,6 +34,11 @@ func TestA2AToolsPolicyPlanPolicyApply(t *testing.T) {
 		t.Fatalf("PolicyPlan unauthorized = %+v, want policy_denied", unauthorized)
 	}
 
+	peerCard := a2a.AgentCard{Name: "peer-n100", Description: "peer", Version: "1.0.0", SupportedInterfaces: []a2a.A2AInterface{{URL: "nats://nats.example.internal:4222", ProtocolBinding: a2a.ProtocolBindingNATS, ProtocolVersion: a2a.ProtocolVersion}}, Skills: []a2a.AgentSkill{{ID: "case/summarize", Name: "Summarize", Description: "summarize"}}}
+	if _, err := svc.peers.UpsertCard(context.Background(), "peer-n100", peerCard, false, time.Now().Add(time.Hour)); err != nil {
+		t.Fatalf("Upsert untrusted peer: %v", err)
+	}
+
 	planReq := A2AToolRequest{GuildID: "guild-1", ChannelID: "channel-1", RequestedBy: "manager", RequestedByID: "manager-1", ManageChannels: true, Enable: &enable, ChannelRef: "case/alpha", ExposeSkills: []string{"search-case"}, DelegateTo: []string{"peer-n100"}, DelegateSkills: []string{"summarize-case"}}
 	planned, err := svc.PolicyPlan(context.Background(), planReq)
 	if err != nil {
@@ -54,6 +59,13 @@ func TestA2AToolsPolicyPlanPolicyApply(t *testing.T) {
 	}
 	if !applied.OK || applied.Policy == nil || !applied.Policy.Enabled || applied.Policy.ChannelRef != "case/alpha" {
 		t.Fatalf("PolicyApply = %+v, want persisted policy", applied)
+	}
+	peer, err := svc.peers.Get(context.Background(), "peer-n100")
+	if err != nil {
+		t.Fatalf("Get trusted peer: %v", err)
+	}
+	if !peer.Trusted {
+		t.Fatal("PolicyApply did not trust confirmed delegated peer")
 	}
 }
 

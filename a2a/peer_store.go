@@ -194,6 +194,20 @@ func (s *SQLitePeerStore) ListPeers(ctx context.Context) ([]PeerRow, error) {
 	return peers, rows.Err()
 }
 
+func (s *SQLitePeerStore) SetTrusted(ctx context.Context, agent AgentID, trusted bool) error {
+	if err := ValidateAgentID(agent); err != nil {
+		return err
+	}
+	res, err := s.db.ExecContext(ctx, `UPDATE a2a_peers SET trusted=?, last_seen_at=last_seen_at WHERE agent_id=?`, boolInt(trusted), agent)
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err == nil && n == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 func (s *SQLitePeerStore) MarkStale(ctx context.Context, agent AgentID) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE a2a_peers SET stale=1, status='stale', expires_at=?, last_seen_at=last_seen_at WHERE agent_id=?`, time.Now().UTC().Format(sqliteTimeFormat), agent)
 	return err

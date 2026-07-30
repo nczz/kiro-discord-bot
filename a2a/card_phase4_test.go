@@ -201,6 +201,28 @@ func TestPeerTrustSummary(t *testing.T) {
 	}
 }
 
+func TestApplyPeerCardRecordPreservesLocalTrust(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenPeerStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	if _, err := store.UpsertCard(ctx, "eve-local", phase4Card("eve-local"), true, time.Now().Add(time.Minute)); err != nil {
+		t.Fatalf("Upsert trusted peer: %v", err)
+	}
+	if err := ApplyPeerCardRecord(ctx, store, PeerCardRecord{AgentID: "eve-local", InstanceID: "instance-b", Card: phase4Card("eve-local"), ExpiresAt: time.Now().Add(time.Minute)}); err != nil {
+		t.Fatalf("ApplyPeerCardRecord: %v", err)
+	}
+	peer, err := store.Get(ctx, "eve-local")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !peer.Trusted {
+		t.Fatal("peer-card refresh revoked local trust")
+	}
+}
+
 func TestVersionCompatibility(t *testing.T) {
 	card := phase4Card("eve-local")
 	if got := CheckVersionCompatibility(card); !got.Supported {

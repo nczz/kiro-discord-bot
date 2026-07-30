@@ -110,7 +110,11 @@ func ApplyPeerCardRecord(ctx context.Context, store *SQLitePeerStore, record Pee
 	if err != nil {
 		return err
 	}
-	_, err = store.UpsertExtendedCard(ctx, record.AgentID, record.Card, record.ExtendedCard, false, record.InstanceID, "online", record.ExpiresAt)
+	trusted := false
+	if existing, err := store.Get(ctx, record.AgentID); err == nil {
+		trusted = existing.Trusted
+	}
+	_, err = store.UpsertExtendedCard(ctx, record.AgentID, record.Card, record.ExtendedCard, trusted, record.InstanceID, "online", record.ExpiresAt)
 	return err
 }
 
