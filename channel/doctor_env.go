@@ -163,7 +163,43 @@ func (m *Manager) doctorRuntimeOverview() string {
 		}
 		sb.WriteString(line + "\n")
 	}
+	sb.WriteString(m.doctorA2AReadiness())
 	return sb.String()
+}
+
+func (m *Manager) doctorA2AReadiness() string {
+	cfg := m.a2aConfig
+	mode := L.Get("doctor.a2a.auth.none")
+	hasToken := strings.TrimSpace(cfg.NATSToken) != ""
+	hasCreds := strings.TrimSpace(cfg.NATSCredsFile) != ""
+	hasTLS := strings.TrimSpace(cfg.NATSTLSCAFile) != ""
+	switch {
+	case hasCreds && hasTLS:
+		mode = L.Get("doctor.a2a.auth.creds_mtls")
+	case hasCreds:
+		mode = L.Get("doctor.a2a.auth.creds")
+	case hasTLS:
+		mode = L.Get("doctor.a2a.auth.mtls")
+	case hasToken:
+		mode = L.Get("doctor.a2a.auth.token_dev")
+	}
+	status := L.Get("doctor.a2a.status.disabled")
+	if cfg.Enabled() {
+		status = L.Get("doctor.a2a.status.enabled")
+	}
+	guard := L.Get("doctor.a2a.guard.off")
+	if cfg.ProductionSecurity {
+		guard = L.Get("doctor.a2a.guard.on")
+	}
+	validation := L.Get("doctor.a2a.validation.ok")
+	if err := cfg.ValidateStartup(); err != nil {
+		validation = L.Getf("doctor.a2a.validation.invalid", err.Error())
+	}
+	warning := ""
+	if cfg.Enabled() && hasToken && !hasCreds && !hasTLS && !cfg.ProductionSecurity {
+		warning = "\n" + L.Get("doctor.a2a.warning.token_only")
+	}
+	return fmt.Sprintf("\n%s\n- %s\n- %s\n- %s\n- %s%s\n", L.Get("doctor.a2a.header"), status, L.Getf("doctor.a2a.auth_mode", mode), guard, validation, warning)
 }
 
 func configuredOrNone(v string) string {

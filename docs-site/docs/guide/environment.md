@@ -166,6 +166,34 @@ Do not share `DATA_DIR` between bot identities. Audit DBs, the usage SQLite DB a
 | `AUDIT_LOG_RECORD_CONTENT` | `true` | Include message content in audit projections and raw event payloads. |
 | `AUDIT_LOG_RECORD_TYPING` | `false` | Record Discord typing events. |
 
+
+## A2A NATS Custom Binding
+
+A2A is disabled while `NATS_URL` or `A2A_AGENT_ID` is empty. Existing Discord behavior should remain unchanged in that state. For the rollout procedure, ACL template, and smoke matrix, see [A2A NATS Rollout](a2a-nats-rollout.md).
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `NATS_URL` | empty | NATS server URL list. Empty disables A2A. |
+| `NATS_CREDS_FILE` | empty | NKey/JWT credentials file path. Preferred production credential. |
+| `NATS_TOKEN` | empty | Development token. Do not use as the only production credential. |
+| `NATS_TLS_CA_FILE` | empty | TLS CA file for mTLS/TLS validation. |
+| `A2A_AGENT_ID` | empty | Stable logical agent ID; must match the credential identity. |
+| `A2A_AGENT_NAME` | empty | Public peer-card display name. |
+| `A2A_AGENT_DESCRIPTION` | empty | Public capability summary. Do not include secrets, private paths, hosts, or user data. |
+| `A2A_TASK_TIMEOUT_SEC` | `3600` | Remote task timeout seconds. |
+| `A2A_MAX_DELEGATION_DEPTH` | `1` | Maximum nested delegation depth. |
+| `A2A_AUTO_DELEGATE_ENABLED` | `false` | Allows automatic outbound delegation when channel policy also permits it. |
+| `A2A_REQUIRE_CONFIRMATION_FOR_REMOTE` | `true` | Requires confirmation before remote task execution. |
+| `A2A_PRODUCTION_SECURITY` | `false` | When `true`, rejects token-only production startup. |
+| `A2A_TASK_RETENTION_DAYS` | `30` | Task/event retention. Set `0` only when permanent retention is intentional. |
+| `A2A_OBJECT_RETENTION_DAYS` | `30` | Object/artifact retention. Set `0` only when permanent retention is intentional. |
+| `A2A_MAX_PENDING_TASKS` | `100` | Global pending remote task limit. `0` means unlimited. |
+| `A2A_MAX_OUTBOUND_TASKS_PER_CHANNEL` | `10` | Outbound remote task limit per channel. `0` means unlimited. |
+| `A2A_MAX_INBOUND_TASKS_PER_CHANNEL` | `10` | Inbound remote task limit per channel. `0` means unlimited. |
+| `A2A_MAX_EVENT_RATE_PER_MIN` | `120` | A2A event quota per minute. `0` means unlimited. |
+
+After changing any A2A variable, restart the bot and run `/doctor`. `/doctor` reports enabled/disabled state, auth mode, production guard state, retention, quotas, and redacted credential presence without raw tokens or credential paths.
+
 ## Speech to Text
 
 | Variable | Default | Purpose |

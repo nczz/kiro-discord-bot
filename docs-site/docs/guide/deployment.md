@@ -25,6 +25,10 @@ For Linux hosts, use a service unit with `WorkingDirectory`, `EnvironmentFile`, 
 
 The Compose setup uses host networking, mounts the selected engine authentication state and project roots, and keeps runtime MCP config isolated from global catalog sources. Catalog servers still must be enabled per channel through `/mcp`.
 
+## A2A NATS Deployment
+
+Deploy NATS/JetStream before enabling bot A2A variables. Production should use a three-node JetStream cluster, NKey/JWT credentials or mTLS, one credential per stable `A2A_AGENT_ID`, and `A2A_PRODUCTION_SECURITY=true`. Inject A2A variables through the service manager or container environment, restart or drain the bot, then verify `/doctor` plus the [A2A rollout smokes](a2a-nats-rollout.md). Keep `NATS_URL` empty until the rollout gates are ready.
+
 ## Release Updates
 
 Before tagging or deploying a release, run:

@@ -174,7 +174,7 @@ Every phase below is a coding boundary. Do not start the next phase until its va
 **Validation**:
 
 ```bash
-python - <<'PY'
+python3 - <<'PY'
 from pathlib import Path
 guide = Path('docs/a2a-nats-implementation-guide.md').read_text()
 assert 'Forbidden v1 subjects' in guide and 'a2a.v1.pool.>' in guide
@@ -717,11 +717,11 @@ $JS.API.CONSUMER.DELETE.KV_A2A_PEERS.>
 
 ```bash
 go test ./a2a ./channel ./internal/botmcp ./bot ./audit ./locale -run 'Test.*A2A|TestDoctor.*A2A'
-python - <<'PY'
+python3 - <<'PY'
 from pathlib import Path
-guide = Path('docs/a2a-nats-implementation-guide.md').read_text()
+rollout = Path('docs/a2a-nats-rollout.md').read_text()
 for required in ['local two-bot smoke', 'same-channel co-present smoke', 'cross-server proxy smoke', 'NATS restart smoke', 'credential revocation smoke']:
-    assert required in guide
+    assert required in rollout
 print('a2a-rollout-guide-ok')
 PY
 ```
@@ -761,7 +761,7 @@ Before a coding agent starts implementation, this guide must satisfy every item 
 Run this before starting implementation and after any edit to this guide:
 
 ```bash
-python - <<'PY'
+python3 - <<'PY'
 from pathlib import Path
 import re
 

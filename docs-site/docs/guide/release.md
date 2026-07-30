@@ -17,6 +17,19 @@ RUN_ACP_SMOKE=1 KIRO_CLI=$(which kiro-cli) scripts/release-preflight.sh
 RUN_OMP_SMOKE=1 OMP_PATH=$(which omp) scripts/release-preflight.sh
 ```
 
+When changing A2A NATS behavior or rollout configuration, also run:
+
+```bash
+go test ./a2a ./channel ./internal/botmcp ./bot ./audit ./locale -run 'Test.*A2A|TestDoctor.*A2A'
+python3 - <<'PY'
+from pathlib import Path
+rollout = Path('docs/a2a-nats-rollout.md').read_text()
+for required in ['local two-bot smoke', 'same-channel co-present smoke', 'cross-server proxy smoke', 'NATS restart smoke', 'credential revocation smoke']:
+    assert required in rollout
+print('a2a-rollout-guide-ok')
+PY
+```
+
 ## 2. Review the Diff
 
 Before tagging:
@@ -86,6 +99,7 @@ For macOS launchd hosts:
 - If cron changed, run one safe `/cron-run`.
 - If thread behavior changed, start a task and continue inside its thread.
 - If engine behavior changed, test `/engine`, `/models`, `/model`, `/agent`, `/status`, and `/usage` in both channel and thread scopes for each enabled engine.
+- If A2A NATS changed or is being enabled, complete the [A2A NATS rollout gates](a2a-nats-rollout.md): local two-bot smoke, same-channel co-present smoke, cross-server proxy smoke, NATS restart smoke, credential revocation smoke, and rollback smoke.
 
 Use the [Operation Matrix](operation-matrix.md) for the full channel/thread and Kiro/OMP checklist.
 
@@ -93,7 +107,9 @@ Use the [Operation Matrix](operation-matrix.md) for the full channel/thread and 
 
 Keep previous binaries until the new release has passed live checks. A rollback should restore binaries only; do not delete `DATA_DIR`, Docker volumes, `.kiro/`, or `.env`.
 
-After rollback, restart the service and run `/doctor`.
+For A2A rollback, set `NATS_URL=""`, restart or drain the bot, keep A2A stores/audit rows under `DATA_DIR` for postmortem, run `/doctor`, and verify a simple non-A2A Discord reply.
+
+After any rollback, restart the service and run `/doctor`.
 
 ## 8. Agent CLI Upgrades
 

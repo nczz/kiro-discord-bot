@@ -104,6 +104,60 @@ func TestA2AToolsBoundContextDelegateQuotaCancelInputReplyAuthReply(t *testing.T
 	}
 }
 
+func TestA2AToolsDelegateRejectsRevokedPeerBeforePublishing(t *testing.T) {
+	ctx := context.Background()
+	svc, err := NewA2AService(A2AServiceConfig{
+		DataDir:            t.TempDir(),
+		Config:             a2a.Config{NATSURL: "nats://127.0.0.1:4222", AgentID: "adam-n200", TaskTimeoutSec: 60, MaxDelegationDepth: 1, RequireConfirmationForRemote: false},
+		BoundGuildID:       "guild-1",
+		BoundChannelID:     "channel-1",
+		ConfirmationSecret: "test-secret",
+		ConnectNATS:        false,
+	})
+	if err != nil {
+		t.Fatalf("NewA2AService: %v", err)
+	}
+	defer svc.Close()
+
+	if err := svc.policies.Save(ctx, a2a.ChannelA2APolicy{
+		GuildID:               "guild-1",
+		ChannelID:             "channel-1",
+		Enabled:               true,
+		ChannelRef:            "case/alpha",
+		DelegateTo:            []string{"peer-n100"},
+		DelegateSkills:        []string{"case/summarize"},
+		ResultVisibility:      "proxy",
+		DiscordTranscriptMode: "delegator",
+	}, "manager-1"); err != nil {
+		t.Fatalf("Save policy: %v", err)
+	}
+	card := a2a.AgentCard{
+		Name:        "peer-n100",
+		Description: "peer",
+		Version:     "1.0.0",
+		SupportedInterfaces: []a2a.A2AInterface{{
+			URL:             "nats://nats.example.internal:4222",
+			ProtocolBinding: a2a.ProtocolBindingNATS,
+			ProtocolVersion: a2a.ProtocolVersion,
+		}},
+		Skills: []a2a.AgentSkill{{ID: "case/summarize", Name: "Summarize", Description: "summarize"}},
+	}
+	if _, err := svc.peers.UpsertCard(ctx, "peer-n100", card, true, time.Now().Add(time.Hour)); err != nil {
+		t.Fatalf("Upsert trusted peer: %v", err)
+	}
+	if _, err := svc.peers.UpsertCard(ctx, "peer-n100", card, false, time.Now().Add(time.Hour)); err != nil {
+		t.Fatalf("Upsert revoked peer: %v", err)
+	}
+
+	got, err := svc.Delegate(ctx, A2AToolRequest{GuildID: "guild-1", ChannelID: "channel-1", RequestedBy: "alice", RequestedByID: "user-1", TargetAgent: "peer-n100", SkillID: "case/summarize", Message: "summarize this"})
+	if err != nil {
+		t.Fatalf("Delegate: %v", err)
+	}
+	if got.OK || got.ErrorCode != a2a.ErrorPolicyDenied || !strings.Contains(got.Message, "not trusted") {
+		t.Fatalf("Delegate after peer revocation = %+v, want policy_denied not trusted", got)
+	}
+}
+
 func TestA2AToolsAnnotations(t *testing.T) {
 	readTool := a2aReadTool(ToolA2APeers, "peers")
 	if readTool.Annotations.ReadOnlyHint == nil || !*readTool.Annotations.ReadOnlyHint {

@@ -151,6 +151,72 @@ func TestDoctorRuntimeOverviewShowsA2ADisabledAndSafeEffectiveValues(t *testing.
 	}
 }
 
+func TestDoctorRuntimeOverviewShowsA2AAuthModeWithoutSecrets(t *testing.T) {
+	L.Load("en")
+	t.Setenv("NATS_URL", "nats://127.0.0.1:4222")
+	t.Setenv("NATS_TOKEN", "raw-token-secret")
+	m := NewManager(ManagerConfig{
+		DataDir: t.TempDir(),
+		A2A: a2a.Config{
+			NATSURL:                      "nats://127.0.0.1:4222",
+			NATSToken:                    "raw-token-secret",
+			AgentID:                      "adam-n200",
+			TaskTimeoutSec:               3600,
+			MaxDelegationDepth:           1,
+			RequireConfirmationForRemote: true,
+		},
+	})
+	defer m.StopAll()
+
+	got := m.doctorRuntimeOverview()
+	for _, want := range []string{
+		"**A2A Readiness**",
+		"status: `enabled`",
+		"auth mode: `token-dev`",
+		"production guard: `off`",
+		"startup validation: `ok`",
+		"token-only A2A auth is for development",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("doctor runtime overview missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "raw-token-secret") {
+		t.Fatalf("doctor runtime overview leaked token:\n%s", got)
+	}
+}
+
+func TestDoctorRuntimeOverviewShowsA2AProductionInvalidWithoutSecrets(t *testing.T) {
+	L.Load("en")
+	t.Setenv("NATS_URL", "nats://127.0.0.1:4222")
+	t.Setenv("NATS_TOKEN", "raw-token-secret")
+	m := NewManager(ManagerConfig{
+		DataDir: t.TempDir(),
+		A2A: a2a.Config{
+			NATSURL:            "nats://127.0.0.1:4222",
+			NATSToken:          "raw-token-secret",
+			AgentID:            "adam-n200",
+			ProductionSecurity: true,
+		},
+	})
+	defer m.StopAll()
+
+	got := m.doctorRuntimeOverview()
+	for _, want := range []string{
+		"auth mode: `token-dev`",
+		"production guard: `on`",
+		"startup validation: `invalid`",
+		"token-only production A2A is not allowed",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("doctor runtime overview missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "raw-token-secret") {
+		t.Fatalf("doctor runtime overview leaked token:\n%s", got)
+	}
+}
+
 func TestDoctorListenModeConsistencyReportsOk(t *testing.T) {
 	L.Load("en")
 	m := NewManager(ManagerConfig{})
