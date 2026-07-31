@@ -257,9 +257,15 @@ func (r *RuntimeCutoverReport) checkEnabledPolicy(cfg Config, policy ChannelA2AP
 	}
 	if len(policy.DelegateTo) > 0 || len(policy.DelegateSkills) > 0 {
 		issue := base
-		issue.Severity = RuntimeCutoverSeverityBlocker
-		issue.Code = "legacy_delegate_policy_present"
-		issue.Message = "legacy delegate_to/delegate_skills must be replaced by runtime delegate_targets before runtime cutover"
+		if len(policy.DelegateTargets) == 0 {
+			issue.Severity = RuntimeCutoverSeverityBlocker
+			issue.Code = "legacy_delegate_policy_without_runtime_targets"
+			issue.Message = "legacy delegate_to/delegate_skills must have runtime delegate_targets before runtime cutover"
+		} else {
+			issue.Severity = RuntimeCutoverSeverityWarning
+			issue.Code = "legacy_delegate_policy_present"
+			issue.Message = "legacy delegate_to/delegate_skills remain as migration input; runtime delegate_targets take precedence"
+		}
 		r.addIssue(issue)
 	}
 	for _, target := range policy.DelegateTargets {
@@ -299,9 +305,15 @@ func (r *RuntimeCutoverReport) checkDelegateTarget(base RuntimeCutoverIssue, tar
 		r.addIssue(issue)
 	}
 	if legacyAgent != "" || legacyChannelRef != "" {
-		issue.Severity = RuntimeCutoverSeverityBlocker
-		issue.Code = "legacy_delegate_target_fields"
-		issue.Message = "delegate target must not carry legacy agent_id/channel_ref fields for runtime cutover"
+		if targetRuntime == "" {
+			issue.Severity = RuntimeCutoverSeverityBlocker
+			issue.Code = "legacy_delegate_target_fields"
+			issue.Message = "delegate target without runtime_agent_id still uses legacy agent_id/channel_ref fields"
+		} else {
+			issue.Severity = RuntimeCutoverSeverityWarning
+			issue.Code = "legacy_delegate_target_fields"
+			issue.Message = "delegate target preserves legacy agent_id/channel_ref fields as migration input; runtime_agent_id takes precedence"
+		}
 		r.addIssue(issue)
 	}
 	if !skillPattern.MatchString(strings.TrimSpace(target.SkillID)) {

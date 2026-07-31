@@ -43,6 +43,27 @@ func TestRuntimeCutoverReadinessBlocksLegacyDelegation(t *testing.T) {
 	}
 }
 
+func TestRuntimeCutoverReadinessAllowsRuntimeDelegationWithLegacyMigrationFields(t *testing.T) {
+	policy := runtimeCutoverPolicy()
+	policy.DelegateTo = []string{"eve-local"}
+	policy.DelegateSkills = []string{"general/task"}
+	policy.DelegateTargets = []DelegateTargetPolicy{{
+		RuntimeAgentID: "eve-local-support",
+		AgentID:        "eve-local",
+		ChannelRef:     "support",
+		SkillID:        "general/task",
+	}}
+	report := RuntimeCutoverReadiness(Config{AgentID: "adam-n200", RuntimeIDMode: RuntimeIDModeRuntime}, "guild-1", []ChannelA2APolicy{policy})
+	if !report.Ready || report.BlockerCount != 0 {
+		t.Fatalf("report = %+v, want ready with preserved migration fields as warnings", report)
+	}
+	for _, code := range []string{"legacy_delegate_policy_present", "legacy_delegate_target_fields"} {
+		if !runtimeCutoverHasIssue(report, code) {
+			t.Fatalf("report missing warning %q: %+v", code, report.Issues)
+		}
+	}
+}
+
 func TestRuntimeCutoverReadinessIgnoresDisabledLegacyPolicy(t *testing.T) {
 	active := runtimeCutoverPolicy()
 	disabled := runtimeCutoverPolicy()

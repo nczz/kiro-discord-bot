@@ -413,13 +413,31 @@ Append one subsection per completed phase.
   - `git diff --check` passed.
 - Done criteria evidence:
   - `SQLitePolicyStore.RuntimeCutoverReadiness` and pure `a2a.RuntimeCutoverReadiness` produce a read-only guild-scoped report with `ready`, blocker/warning counts, runtime IDs, channel refs, and issue codes.
-  - The checker blocks production cutover risks: missing/invalid runtime IDs, foreign bot ownership, runtime ID equal to bot ID, missing explicit `accept_from_runtimes`, missing accepted skills, legacy `delegate_to`/`delegate_skills`, and legacy `delegate_targets` using `agent_id`/`channel_ref`.
-  - The checker warns but does not block dual-mode drain, preserved legacy `accept_from`, disabled discoverable rows, legacy co-present lists without runtime equivalents, and remote memory write being enabled.
+  - The checker blocks production cutover risks: missing/invalid runtime IDs, foreign bot ownership, runtime ID equal to bot ID, missing explicit `accept_from_runtimes`, missing accepted skills, and legacy-only delegation without runtime `delegate_targets`.
+  - The checker warns but does not block dual-mode drain, preserved legacy `accept_from`, preserved legacy `delegate_to`/`delegate_skills` when runtime `delegate_targets` exist, preserved legacy `delegate_targets.agent_id`/`channel_ref` migration fields when `runtime_agent_id` exists, disabled discoverable rows, legacy co-present lists without runtime equivalents, and remote memory write being enabled.
   - `bot_a2a_runtime_preflight` exposes the report as a read-only, idempotent, ManageChannels-gated MCP tool; it applies no policy, NATS, service, or filesystem changes.
 - Runtime settings touched: no.
 - Deployment hosts touched: no.
 - Rollback boundary: revert this code/docs commit; no runtime data migration or live service change is involved.
 - Next phase: run the preflight against each intended production guild/bot data dir, fix any blockers in policy rows through existing confirmation flow, then decide whether to authorize R7 production runtime cutover.
+
+### R7 runtime cutover preflight on current bot contexts
+
+- Status: preflight passed for current local M5 and d80 bot contexts; current commit.
+- Changed files: `a2a/runtime_cutover.go`, `a2a/runtime_cutover_test.go`, and this progress ledger.
+- Validation:
+  - Read-only SQLite backups were made from `/Users/chun/Projects/kiro-discord-bot-local/data/a2a/policy.sqlite` and remote `d80:/home/chun/kiro-discord-bot/data/a2a/policy.sqlite`; preflight ran against the backups, not live policy DB files.
+  - `go run /tmp/a2a_preflight_report.go local-m5 /tmp/a2a-preflight-local m5bot-local runtime d80 /tmp/a2a-preflight-d80 d80-chunbot runtime` passed.
+  - `go test ./a2a ./internal/botmcp -run 'Test(RuntimeCutover|A2AToolsRuntimePreflight|A2AToolsAnnotations)'` passed.
+- Done criteria evidence:
+  - Local M5 bot: guild `1495737767827865620`, runtime policy `m5bot-local-m5-main`, channel ref `m5-main`, `ready=true`, blockers `0`, warnings `3`.
+  - Remote d80 bot: guild `1495737767827865620`, runtime policy `d80-chunbot-d80-main`, channel ref `d80-main`, `ready=true`, blockers `0`, warnings `3`.
+  - Remaining warnings on both contexts are preserved migration fields only: `legacy_accept_from_present`, `legacy_delegate_policy_present`, and `legacy_delegate_target_fields`; runtime fields take precedence in runtime mode.
+- Runtime settings touched: no.
+- Live policy DBs touched: no.
+- Deployment hosts touched: no service restart; remote d80 policy DB was copied for read-only preflight evidence.
+- Rollback boundary: revert this docs/code commit; no runtime data migration or live service change is involved.
+- Next phase: operator-authorized production runtime cutover decision for the same current M5/d80 contexts, or continue code-only hardening if production rollout is not authorized.
 
 ## Master goal prompt
 
