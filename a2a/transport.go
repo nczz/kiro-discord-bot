@@ -317,7 +317,7 @@ func (p *Publisher) SendTask(ctx context.Context, req TaskExecutionRequest) (Tas
 		}
 		delivery.DiscordContext = &dc
 	}
-	payload := SendMessagePayload{A2A: req.Payload, ChannelRef: req.ChannelRef, SkillID: req.SkillID, UserVisibleSummary: req.UserVisibleSummary, ClientTaskRef: req.ClientTaskRef, ContextID: req.ContextID, AuditMetadata: req.AuditMetadata, OriginRequester: req.OriginRequester}
+	payload := SendMessagePayload{A2A: req.Payload, ChannelRef: req.ChannelRef, SkillID: req.SkillID, UserVisibleSummary: req.UserVisibleSummary, ClientTaskRef: req.ClientTaskRef, ContextID: req.ContextID, AuditMetadata: req.AuditMetadata, OriginRequester: req.OriginRequester, OriginRuntimeRef: req.OriginRuntimeRef}
 	payload.Delivery = TransportDelivery{TimeoutSec: delivery.TimeoutSec, RequiresConfirmation: delivery.RequiresConfirmation, DiscordContext: delivery.DiscordContext, DiscordReplyChannelID: delivery.DiscordReplyChannelID, DiscordReplyThreadID: delivery.DiscordReplyThreadID, ShareDiscordContext: delivery.ShareDiscordContext, CoPresentFrom: delivery.CoPresentFrom, MaxDelegationDepth: delivery.MaxDelegationDepth, ResultVisibility: req.ResultVisibility, DiscordTranscriptMode: req.DiscordTranscriptMode}
 	raw, err := json.Marshal(payload)
 	if err != nil {
@@ -330,7 +330,7 @@ func (p *Publisher) SendTask(ctx context.Context, req TaskExecutionRequest) (Tas
 	}
 	row := TaskRow{}
 	if p.tasks != nil {
-		row, err = p.tasks.CreateOutbound(ctx, TaskRow{ClientTaskRef: req.ClientTaskRef, MessageID: req.MessageID, ContextID: req.ContextID, FromAgent: req.From, ToAgent: req.To, ChannelID: req.ChannelID, GuildID: req.GuildID, ChannelRef: req.ChannelRef, SkillID: req.SkillID, State: TaskStateSubmitted, ResultVisibility: firstNonEmpty(req.ResultVisibility, "proxy"), DiscordTranscriptMode: firstNonEmpty(req.DiscordTranscriptMode, "delegator"), OriginRequester: req.OriginRequester})
+		row, err = p.tasks.CreateOutbound(ctx, TaskRow{ClientTaskRef: req.ClientTaskRef, MessageID: req.MessageID, ContextID: req.ContextID, FromAgent: req.From, ToAgent: req.To, ChannelID: req.ChannelID, GuildID: req.GuildID, ChannelRef: req.ChannelRef, SkillID: req.SkillID, State: TaskStateSubmitted, ResultVisibility: firstNonEmpty(req.ResultVisibility, "proxy"), DiscordTranscriptMode: firstNonEmpty(req.DiscordTranscriptMode, "delegator"), OriginRequester: req.OriginRequester, OriginRuntimeRef: req.OriginRuntimeRef})
 		if err != nil {
 			return TaskRow{}, err
 		}
@@ -791,7 +791,7 @@ func (t *Transport) recordAndPublishRejected(ctx context.Context, req TaskExecut
 	if taskErr.Code == "" {
 		taskErr.Code = ErrorPolicyDenied
 	}
-	row := TaskRow{TaskID: TaskID("msg_" + string(subject.MessageID)), ClientTaskRef: req.ClientTaskRef, MessageID: subject.MessageID, ContextID: req.ContextID, FromAgent: subject.From, ToAgent: subject.To, ExecutorAgent: subject.To, ChannelRef: req.ChannelRef, SkillID: req.SkillID, State: TaskStateRejected, Revision: 1, Error: taskErr}
+	row := TaskRow{TaskID: TaskID("msg_" + string(subject.MessageID)), ClientTaskRef: req.ClientTaskRef, MessageID: subject.MessageID, ContextID: req.ContextID, FromAgent: subject.From, ToAgent: subject.To, ExecutorAgent: subject.To, ChannelRef: req.ChannelRef, SkillID: req.SkillID, State: TaskStateRejected, Revision: 1, Error: taskErr, OriginRequester: req.OriginRequester, OriginRuntimeRef: req.OriginRuntimeRef}
 	if _, err := t.tasks.RejectInbound(ctx, row, taskErr); err != nil {
 		return err
 	}
@@ -850,7 +850,7 @@ func (t *Transport) markStarted(key string) bool {
 }
 
 func taskRequestFromRow(row TaskRow) TaskExecutionRequest {
-	return TaskExecutionRequest{MessageID: row.MessageID, ClientTaskRef: row.ClientTaskRef, ContextID: row.ContextID, From: row.FromAgent, To: row.ToAgent, ChannelID: row.ChannelID, GuildID: row.GuildID, ChannelRef: row.ChannelRef, SkillID: row.SkillID, ResultVisibility: row.ResultVisibility, DiscordTranscriptMode: row.DiscordTranscriptMode, Delivery: DeliveryOptions{DiscordContextJSON: json.RawMessage(row.DiscordContextJSON)}, OriginRequester: row.OriginRequester}
+	return TaskExecutionRequest{MessageID: row.MessageID, ClientTaskRef: row.ClientTaskRef, ContextID: row.ContextID, From: row.FromAgent, To: row.ToAgent, ChannelID: row.ChannelID, GuildID: row.GuildID, ChannelRef: row.ChannelRef, SkillID: row.SkillID, ResultVisibility: row.ResultVisibility, DiscordTranscriptMode: row.DiscordTranscriptMode, Delivery: DeliveryOptions{DiscordContextJSON: json.RawMessage(row.DiscordContextJSON)}, OriginRequester: row.OriginRequester, OriginRuntimeRef: row.OriginRuntimeRef}
 }
 
 func (p *Publisher) checkEventRate(now time.Time) error {

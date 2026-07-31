@@ -29,6 +29,11 @@ func (m *Manager) AdmitA2ATask(ctx context.Context, req a2a.TaskExecutionRequest
 	if err := validateA2AExecutionRequest("", req); err != nil {
 		return rejectedA2AAdmission(req, a2a.ErrorInvalidEnvelope, err.Error()), nil
 	}
+	if ref, err := normalizeA2AOriginRuntimeRef(req); err != nil {
+		return rejectedA2AAdmission(req, a2a.ErrorInvalidEnvelope, err.Error()), nil
+	} else {
+		req.OriginRuntimeRef = ref
+	}
 	if m.a2aPolicies == nil {
 		return rejectedA2AAdmission(req, a2a.ErrorChannelNotEnabled, "A2A policy store is unavailable"), nil
 	}
@@ -87,6 +92,7 @@ func (m *Manager) AdmitA2ATask(ctx context.Context, req a2a.TaskExecutionRequest
 		ChannelID:             policy.ChannelID,
 		GuildID:               policy.GuildID,
 		OriginRequester:       req.OriginRequester,
+		OriginRuntimeRef:      req.OriginRuntimeRef,
 		ChannelRef:            policy.ChannelRef,
 		SkillID:               a2a.SkillSlug(req.SkillID),
 		State:                 a2a.TaskStateSubmitted,
@@ -146,6 +152,7 @@ func admissionFromRow(req a2a.TaskExecutionRequest, row a2a.TaskRow) a2a.A2AAdmi
 	admission.Request.SkillID = row.SkillID
 	admission.Request.ResultVisibility = row.ResultVisibility
 	admission.Request.DiscordTranscriptMode = row.DiscordTranscriptMode
+	admission.Request.OriginRuntimeRef = row.OriginRuntimeRef
 	return admission
 }
 
@@ -205,6 +212,7 @@ func (m *Manager) RunA2ATask(ctx context.Context, admitted a2a.A2AAdmission) (a2
 		AllowRemoteMemoryWrite: m.remoteMemoryWriteAllowed(admitted.Request.ChannelID),
 		A2ADelegationDepth:     admitted.Request.Delivery.MaxDelegationDepth,
 		A2AResult:              resultCh,
+		A2AOriginLabel:         a2aDelegatedFromLabel(admitted.Request),
 		A2ATaskID:              admitted.TaskID,
 		A2ARevision:            admitted.Revision + 1,
 		OnThreadReady: func(threadID string) {
@@ -378,6 +386,20 @@ func validateA2AExecutionRequest(local a2a.AgentID, req a2a.TaskExecutionRequest
 	if strings.TrimSpace(req.SkillID) == "" {
 		return fmt.Errorf("skill_id is required")
 	}
+	ref := req.OriginRuntimeRef
+	if ref.RuntimeAgentID != "" {
+		if err := a2a.ValidateAgentID(ref.RuntimeAgentID); err != nil {
+			return fmt.Errorf("origin_runtime_ref.runtime_agent_id: %w", err)
+		}
+		if ref.RuntimeAgentID != req.From {
+			return fmt.Errorf("origin_runtime_ref.runtime_agent_id %s does not match from %s", ref.RuntimeAgentID, req.From)
+		}
+	}
+	if ref.BotAgentID != "" {
+		if err := a2a.ValidateAgentID(ref.BotAgentID); err != nil {
+			return fmt.Errorf("origin_runtime_ref.bot_agent_id: %w", err)
+		}
+	}
 	return nil
 }
 
@@ -481,6 +503,58 @@ func a2aRequesterIdentity(req a2a.TaskExecutionRequest) (string, string) {
 	return requesterID, requesterName
 }
 
+func normalizeA2AOriginRuntimeRef(req a2a.TaskExecutionRequest) (a2a.OriginRuntimeRef, error) {
+	ref := req.OriginRuntimeRef
+	ref.RuntimeAgentID = a2a.AgentID(strings.TrimSpace(string(ref.RuntimeAgentID)))
+	ref.BotAgentID = a2a.AgentID(strings.TrimSpace(string(ref.BotAgentID)))
+	ref.ChannelRef = strings.TrimSpace(ref.ChannelRef)
+	ref.DisplayName = strings.TrimSpace(ref.DisplayName)
+	ref.DiscordGuildID = strings.TrimSpace(ref.DiscordGuildID)
+	ref.DiscordChannelID = strings.TrimSpace(ref.DiscordChannelID)
+	ref.DiscordThreadID = strings.TrimSpace(ref.DiscordThreadID)
+	ref.MessageID = strings.TrimSpace(ref.MessageID)
+	if ref.RuntimeAgentID == "" {
+		ref.RuntimeAgentID = req.From
+	}
+	if err := a2a.ValidateAgentID(ref.RuntimeAgentID); err != nil {
+		return a2a.OriginRuntimeRef{}, fmt.Errorf("origin_runtime_ref.runtime_agent_id: %w", err)
+	}
+	if ref.RuntimeAgentID != req.From {
+		return a2a.OriginRuntimeRef{}, fmt.Errorf("origin_runtime_ref.runtime_agent_id %s does not match from %s", ref.RuntimeAgentID, req.From)
+	}
+	if ref.BotAgentID != "" {
+		if err := a2a.ValidateAgentID(ref.BotAgentID); err != nil {
+			return a2a.OriginRuntimeRef{}, fmt.Errorf("origin_runtime_ref.bot_agent_id: %w", err)
+		}
+	}
+	return ref, nil
+}
+
+func a2aDelegatedFromLabel(req a2a.TaskExecutionRequest) string {
+	ref := req.OriginRuntimeRef
+	name := strings.TrimSpace(ref.DisplayName)
+	if name == "" {
+		name = strings.TrimSpace(ref.ChannelRef)
+	}
+	if name == "" {
+		name = strings.TrimSpace(string(req.From))
+	}
+	owner := strings.TrimSpace(string(ref.BotAgentID))
+	if owner == "" {
+		owner = strings.TrimSpace(string(ref.RuntimeAgentID))
+	}
+	if owner == "" {
+		owner = strings.TrimSpace(string(req.From))
+	}
+	if name == "" {
+		return owner
+	}
+	if owner == "" || owner == name {
+		return name
+	}
+	return name + " · " + owner
+}
+
 func discordContextJSON(req a2a.TaskExecutionRequest) string {
 	if len(req.Delivery.DiscordContextJSON) > 0 {
 		return string(req.Delivery.DiscordContextJSON)
@@ -507,6 +581,10 @@ func buildA2APrompt(admitted a2a.A2AAdmission) string {
 	sb.WriteString("task_id=" + string(admitted.TaskID) + "\n")
 	sb.WriteString("channel_ref=" + admitted.Request.ChannelRef + "\n")
 	sb.WriteString("skill_id=" + admitted.Request.SkillID + "\n")
+	if label := a2aDelegatedFromLabel(admitted.Request); label != "" {
+		sb.WriteString("delegated_from=" + label + "\n")
+		sb.WriteString("The Discord response will be prefixed with \"委託自：\" by the bot. Do not add your own source prefix.\n")
+	}
 	sb.WriteString("result_visibility=" + admitted.Request.ResultVisibility + "\n")
 	sb.WriteString("This executor bot owns the Discord conversation for this delegated task. Return ordinary replies as final text; do not call bot-tools for the final answer or duplicate Discord posts. Separate bot-tools egress remains policy-gated.\n\n")
 	if admitted.Continuation != nil {

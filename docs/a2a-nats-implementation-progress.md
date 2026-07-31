@@ -816,6 +816,24 @@ Append one subsection per completed phase.
 - Rollback boundary: restore local `/Users/chun/Projects/kiro-discord-bot-local/bin/kiro-discord-bot.pre-r26-final-20260801013922` and d80 `/opt/kiro-discord-bot/kiro-discord-bot.pre-r26-final-20260801014013`, then restart both services. If needed, restore local metadata from `/Users/chun/Projects/kiro-discord-bot-local/data/channel_metadata.pre-r26-runtime-metadata-20260801013157.json`.
 - Next phase: ask the user to rerun Discord `/a2a peers`; expected visible rows should include both `d80-chunbot-ch-2cbaf623` and `m5bot-local-ch-2cbaf623` under `隨口問`, plus other known channel runtimes such as `大廳`, `測試`, `idempiere-erp`, and `kanboard`, with no `m5-main` or `d80-main` rows.
 
+### R27 delegated-source response label
+
+- Status: deployed locally and to d80.
+- Trigger: receiving bot replies in executor-owned A2A Discord threads needed an explicit, server-owned source ref so readers can see which runtime/channel delegated the task.
+- Decision: add an immutable `OriginRuntimeRef` snapshot to task send payloads and durable task rows. `bot_a2a_delegate` fills it from the bound server/runtime context, not MCP caller input. The receiver validates `origin_runtime_ref.runtime_agent_id` against the envelope `from` agent, persists the snapshot, includes it in task summaries, and prefixes executor-owned Discord replies with `委託自：<display/channel> · <bot>`. Durable A2A result content remains unprefixed.
+- Changed files: `a2a/admission.go`, `a2a/executor.go`, `a2a/store.go`, `a2a/task_store.go`, `a2a/transport.go`, `channel/a2a.go`, `channel/worker.go`, `internal/botmcp/a2a_tools.go`, tests, and this progress ledger.
+- Validation:
+  - Focused regression passed: `env -u NATS_URL -u NATS_CREDS_FILE -u NATS_TOKEN -u NATS_TLS_CA_FILE -u A2A_AGENT_ID -u A2A_RUNTIME_ID_MODE -u A2A_AGENT_NAME -u A2A_AGENT_DESCRIPTION -u A2A_REQUIRE_CONFIRMATION_FOR_REMOTE go test ./a2a ./channel ./internal/botmcp -run 'TestTaskStorePersistsOriginRuntimeRef|TestA2AToolsOriginRuntimeRefUsesServerBoundChannel|TestA2APromptAndReplyPrefixUseDelegatedFromLabel|TestManagerA2ARejectsSpoofedOriginRuntimeRef|TestA2AToolsDelegateAllowsUntrustedExactRuntimePolicy|TestA2AToolsBoundContextDelegateQuotaCancelInputReplyAuthReply|TestManagerA2AResultCapture'`.
+  - Full regression passed: `env -u NATS_URL -u NATS_CREDS_FILE -u NATS_TOKEN -u NATS_TLS_CA_FILE -u A2A_AGENT_ID -u A2A_RUNTIME_ID_MODE -u A2A_AGENT_NAME -u A2A_AGENT_DESCRIPTION -u A2A_REQUIRE_CONFIRMATION_FOR_REMOTE go test ./...`.
+  - LSP workspace diagnostics reported no issues.
+  - Strict reviewer found one blocker: model output beginning with `委託自：` could suppress the server-owned prefix. Fixed by always applying the server prefix; reviewer recheck reported no remaining blockers.
+  - Local binary `/tmp/kiro-discord-bot-darwin-r27-origin-ref` SHA-256 `d4a3c753957dc626e6644d97de92c5c3dc52593a7afb5cba1f8e777e0762aebb` was installed and `local-kiro-bot` restarted ready.
+  - d80 binary `/tmp/kiro-discord-bot-linux-amd64-r27-origin-ref` SHA-256 `7d525854ae9383f917fae0647584ee8c841c96f4ef116be26238b7ae1f3969ad` was installed to `/opt/kiro-discord-bot/kiro-discord-bot`; service restarted active and logged `NATS node enabled`, `transport consumers started`, and `Bot running as ChunBot#4533`.
+- Runtime settings touched: no env or policy changes. `tasks.sqlite` gets additive nullable-compatible column `origin_runtime_ref_json` with default `{}` on next store open.
+- Deployment hosts touched: local M5 bot binary/service and remote d80 bot binary/service.
+- Rollback boundary: restore local `/Users/chun/Projects/kiro-discord-bot-local/bin/kiro-discord-bot.pre-r27-origin-ref-20260801020923` and d80 `/opt/kiro-discord-bot/kiro-discord-bot.pre-r27-origin-ref-20260801021007`, then restart both services.
+- Next phase: issue one real delegated A2A task in Discord and confirm the executor-owned reply starts with `委託自：隨口問 · <delegator bot>` while `/a2a status` keeps durable result content unprefixed.
+
 ## Master goal prompt
 
 Use this prompt when starting or resuming the full implementation program:

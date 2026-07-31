@@ -684,6 +684,37 @@ func TestA2APromptDescribesExecutorOwnedConversation(t *testing.T) {
 	}
 }
 
+func TestA2APromptAndReplyPrefixUseDelegatedFromLabel(t *testing.T) {
+	req := phase5Request()
+	req.OriginRuntimeRef = a2a.OriginRuntimeRef{RuntimeAgentID: "m5bot-local-ch-2cbaf623", BotAgentID: "m5bot-local", ChannelRef: "ch-2cbaf623", DisplayName: "隨口問"}
+	admission := a2a.A2AAdmission{TaskID: "task_abc", Request: req}
+	prompt := buildA2APrompt(admission)
+	if !strings.Contains(prompt, "delegated_from=隨口問 · m5bot-local") || !strings.Contains(prompt, "委託自：") {
+		t.Fatalf("prompt missing delegated source label:\n%s", prompt)
+	}
+	got := prefixA2ADelegatedFrom("完成", a2aDelegatedFromLabel(req))
+	if got != "委託自：隨口問 · m5bot-local\n\n完成" {
+		t.Fatalf("reply prefix = %q", got)
+	}
+	spoofed := prefixA2ADelegatedFrom("委託自：fake\n\n完成", a2aDelegatedFromLabel(req))
+	if !strings.HasPrefix(spoofed, "委託自：隨口問 · m5bot-local\n\n委託自：fake") {
+		t.Fatalf("spoofed prefix was not overridden: %q", spoofed)
+	}
+}
+
+func TestManagerA2ARejectsSpoofedOriginRuntimeRef(t *testing.T) {
+	h := newPhase5Harness(t, nil)
+	req := phase5Request()
+	req.OriginRuntimeRef = a2a.OriginRuntimeRef{RuntimeAgentID: "mallory-local", BotAgentID: "mallory-local", DisplayName: "fake source"}
+	res, err := h.manager.AdmitA2ATask(context.Background(), req)
+	if err != nil {
+		t.Fatalf("AdmitA2ATask error: %v", err)
+	}
+	if res.Accepted || res.Error.Code != a2a.ErrorInvalidEnvelope || !strings.Contains(res.Error.Message, "does not match from") {
+		t.Fatalf("spoofed origin result = %+v", res)
+	}
+}
+
 func TestA2APromptContainsContinuationPayload(t *testing.T) {
 	admission := a2a.A2AAdmission{TaskID: "task_abc", Request: phase5Request(), Continuation: &a2a.A2AContinuation{Kind: a2a.ControlKindInputReply, Payload: json.RawMessage(`{"input":"approved context"}`), Reason: "operator reply"}}
 	prompt := buildA2APrompt(admission)

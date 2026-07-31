@@ -13,6 +13,17 @@ type OriginRequester struct {
 	DiscordGuildID  string `json:"discordGuildId,omitempty"`
 }
 
+type OriginRuntimeRef struct {
+	RuntimeAgentID   AgentID `json:"runtimeAgentId,omitempty"`
+	BotAgentID       AgentID `json:"botAgentId,omitempty"`
+	ChannelRef       string  `json:"channelRef,omitempty"`
+	DisplayName      string  `json:"displayName,omitempty"`
+	DiscordGuildID   string  `json:"discordGuildId,omitempty"`
+	DiscordChannelID string  `json:"discordChannelId,omitempty"`
+	DiscordThreadID  string  `json:"discordThreadId,omitempty"`
+	MessageID        string  `json:"messageId,omitempty"`
+}
+
 type TaskExecutionRequest struct {
 	MessageID             MessageID
 	ClientTaskRef         string
@@ -32,6 +43,7 @@ type TaskExecutionRequest struct {
 	ExpiresAt             time.Time
 	AuditMetadata         map[string]string
 	OriginRequester       OriginRequester
+	OriginRuntimeRef      OriginRuntimeRef
 }
 
 type DeliveryOptions struct {

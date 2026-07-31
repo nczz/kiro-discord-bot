@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -25,6 +26,7 @@ type TaskRow struct {
 	ChannelID             string
 	GuildID               string
 	OriginRequester       OriginRequester
+	OriginRuntimeRef      OriginRuntimeRef
 	ChannelRef            string
 	SkillID               string
 	State                 TaskState
@@ -102,6 +104,7 @@ func taskStoreMigrations() []string {
 		`ALTER TABLE a2a_tasks ADD COLUMN origin_discord_user_id TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE a2a_tasks ADD COLUMN origin_discord_username TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE a2a_tasks ADD COLUMN origin_discord_guild_id TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE a2a_tasks ADD COLUMN origin_runtime_ref_json TEXT NOT NULL DEFAULT '{}'`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_a2a_tasks_message_direction ON a2a_tasks(direction, message_id)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_a2a_tasks_remote_task ON a2a_tasks(direction, task_id) WHERE task_id IS NOT NULL AND task_id <> ''`,
 		`CREATE INDEX IF NOT EXISTS idx_a2a_tasks_client_ref ON a2a_tasks(client_task_ref)`,
@@ -162,13 +165,13 @@ func (s *SQLiteTaskStore) insertTask(ctx context.Context, row TaskRow) (TaskRow,
 	}
 	_, err := s.db.ExecContext(ctx, `INSERT INTO a2a_tasks(
 		local_id, task_id, client_task_ref, message_id, context_id, direction, role, from_agent, to_agent,
-		executor_agent, channel_id, guild_id, origin_discord_user_id, origin_discord_username, origin_discord_guild_id,
+		executor_agent, channel_id, guild_id, origin_discord_user_id, origin_discord_username, origin_discord_guild_id, origin_runtime_ref_json,
 		channel_ref, skill_id, state, terminal, revision, result_visibility, discord_transcript_mode,
 		discord_context_json, created_at, updated_at, expires_at, error_code, error_message)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		row.LocalID, nullString(string(row.TaskID)), nullString(row.ClientTaskRef), row.MessageID, nullString(row.ContextID),
 		row.Direction, row.Role, row.FromAgent, row.ToAgent, nullString(string(row.ExecutorAgent)), nullString(row.ChannelID), nullString(row.GuildID),
-		strings.TrimSpace(row.OriginRequester.DiscordUserID), strings.TrimSpace(row.OriginRequester.DiscordUsername), strings.TrimSpace(row.OriginRequester.DiscordGuildID),
+		strings.TrimSpace(row.OriginRequester.DiscordUserID), strings.TrimSpace(row.OriginRequester.DiscordUsername), strings.TrimSpace(row.OriginRequester.DiscordGuildID), originRuntimeRefJSON(row.OriginRuntimeRef),
 		nullString(row.ChannelRef), nullString(row.SkillID), row.State, boolInt(row.Terminal), row.Revision, row.ResultVisibility, row.DiscordTranscriptMode,
 		nullString(row.DiscordContextJSON), row.CreatedAt.UTC().Format(sqliteTimeFormat), row.UpdatedAt.UTC().Format(sqliteTimeFormat),
 		nullTime(row.ExpiresAt), nullString(string(row.Error.Code)), nullString(row.Error.Message))
@@ -321,7 +324,7 @@ func (s *SQLiteTaskStore) ListByChannel(ctx context.Context, direction string, c
 	if limit > 50 {
 		limit = 50
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT local_id, task_id, client_task_ref, message_id, context_id, direction, role, from_agent, to_agent, executor_agent, channel_id, guild_id, origin_discord_user_id, origin_discord_username, origin_discord_guild_id, channel_ref, skill_id, state, terminal, revision, result_visibility, discord_transcript_mode, discord_context_json, created_at, updated_at, expires_at, error_code, error_message FROM a2a_tasks WHERE direction=? AND (?='' OR channel_id=?) ORDER BY updated_at DESC LIMIT ?`, direction, channelID, channelID, limit)
+	rows, err := s.db.QueryContext(ctx, `SELECT local_id, task_id, client_task_ref, message_id, context_id, direction, role, from_agent, to_agent, executor_agent, channel_id, guild_id, origin_discord_user_id, origin_discord_username, origin_discord_guild_id, origin_runtime_ref_json, channel_ref, skill_id, state, terminal, revision, result_visibility, discord_transcript_mode, discord_context_json, created_at, updated_at, expires_at, error_code, error_message FROM a2a_tasks WHERE direction=? AND (?='' OR channel_id=?) ORDER BY updated_at DESC LIMIT ?`, direction, channelID, channelID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -479,6 +482,17 @@ func normalizeTaskRow(row *TaskRow) error {
 			return err
 		}
 	}
+	row.OriginRuntimeRef = normalizeOriginRuntimeRef(row.OriginRuntimeRef)
+	if row.OriginRuntimeRef.RuntimeAgentID != "" {
+		if err := ValidateAgentID(row.OriginRuntimeRef.RuntimeAgentID); err != nil {
+			return fmt.Errorf("origin_runtime_ref.runtime_agent_id: %w", err)
+		}
+	}
+	if row.OriginRuntimeRef.BotAgentID != "" {
+		if err := ValidateAgentID(row.OriginRuntimeRef.BotAgentID); err != nil {
+			return fmt.Errorf("origin_runtime_ref.bot_agent_id: %w", err)
+		}
+	}
 	if row.State == "" {
 		row.State = TaskStateSubmitted
 	}
@@ -513,23 +527,23 @@ type rowQuerier interface {
 }
 
 func getTaskByLocalIDTx(ctx context.Context, q rowQuerier, localID string) (TaskRow, error) {
-	return scanTask(q.QueryRowContext(ctx, `SELECT local_id, task_id, client_task_ref, message_id, context_id, direction, role, from_agent, to_agent, executor_agent, channel_id, guild_id, origin_discord_user_id, origin_discord_username, origin_discord_guild_id, channel_ref, skill_id, state, terminal, revision, result_visibility, discord_transcript_mode, discord_context_json, created_at, updated_at, expires_at, error_code, error_message FROM a2a_tasks WHERE local_id=?`, localID))
+	return scanTask(q.QueryRowContext(ctx, `SELECT local_id, task_id, client_task_ref, message_id, context_id, direction, role, from_agent, to_agent, executor_agent, channel_id, guild_id, origin_discord_user_id, origin_discord_username, origin_discord_guild_id, origin_runtime_ref_json, channel_ref, skill_id, state, terminal, revision, result_visibility, discord_transcript_mode, discord_context_json, created_at, updated_at, expires_at, error_code, error_message FROM a2a_tasks WHERE local_id=?`, localID))
 }
 
 func getTaskByDirectionMessageTx(ctx context.Context, q rowQuerier, direction string, messageID MessageID) (TaskRow, error) {
-	return scanTask(q.QueryRowContext(ctx, `SELECT local_id, task_id, client_task_ref, message_id, context_id, direction, role, from_agent, to_agent, executor_agent, channel_id, guild_id, origin_discord_user_id, origin_discord_username, origin_discord_guild_id, channel_ref, skill_id, state, terminal, revision, result_visibility, discord_transcript_mode, discord_context_json, created_at, updated_at, expires_at, error_code, error_message FROM a2a_tasks WHERE direction=? AND message_id=?`, direction, messageID))
+	return scanTask(q.QueryRowContext(ctx, `SELECT local_id, task_id, client_task_ref, message_id, context_id, direction, role, from_agent, to_agent, executor_agent, channel_id, guild_id, origin_discord_user_id, origin_discord_username, origin_discord_guild_id, origin_runtime_ref_json, channel_ref, skill_id, state, terminal, revision, result_visibility, discord_transcript_mode, discord_context_json, created_at, updated_at, expires_at, error_code, error_message FROM a2a_tasks WHERE direction=? AND message_id=?`, direction, messageID))
 }
 
 func getTaskByDirectionTaskIDTx(ctx context.Context, q rowQuerier, direction string, taskID TaskID) (TaskRow, error) {
-	return scanTask(q.QueryRowContext(ctx, `SELECT local_id, task_id, client_task_ref, message_id, context_id, direction, role, from_agent, to_agent, executor_agent, channel_id, guild_id, origin_discord_user_id, origin_discord_username, origin_discord_guild_id, channel_ref, skill_id, state, terminal, revision, result_visibility, discord_transcript_mode, discord_context_json, created_at, updated_at, expires_at, error_code, error_message FROM a2a_tasks WHERE direction=? AND task_id=?`, direction, taskID))
+	return scanTask(q.QueryRowContext(ctx, `SELECT local_id, task_id, client_task_ref, message_id, context_id, direction, role, from_agent, to_agent, executor_agent, channel_id, guild_id, origin_discord_user_id, origin_discord_username, origin_discord_guild_id, origin_runtime_ref_json, channel_ref, skill_id, state, terminal, revision, result_visibility, discord_transcript_mode, discord_context_json, created_at, updated_at, expires_at, error_code, error_message FROM a2a_tasks WHERE direction=? AND task_id=?`, direction, taskID))
 }
 
 func scanTask(row *sql.Row) (TaskRow, error) {
 	var r TaskRow
-	var taskID, clientRef, contextID, executor, channelID, guildID, originUserID, originUsername, originGuildID, channelRef, skillID, discordCtx, expiresAt, errCode, errMsg sql.NullString
+	var taskID, clientRef, contextID, executor, channelID, guildID, originUserID, originUsername, originGuildID, originRuntimeJSON, channelRef, skillID, discordCtx, expiresAt, errCode, errMsg sql.NullString
 	var created, updated string
 	var terminal int
-	err := row.Scan(&r.LocalID, &taskID, &clientRef, &r.MessageID, &contextID, &r.Direction, &r.Role, &r.FromAgent, &r.ToAgent, &executor, &channelID, &guildID, &originUserID, &originUsername, &originGuildID, &channelRef, &skillID, &r.State, &terminal, &r.Revision, &r.ResultVisibility, &r.DiscordTranscriptMode, &discordCtx, &created, &updated, &expiresAt, &errCode, &errMsg)
+	err := row.Scan(&r.LocalID, &taskID, &clientRef, &r.MessageID, &contextID, &r.Direction, &r.Role, &r.FromAgent, &r.ToAgent, &executor, &channelID, &guildID, &originUserID, &originUsername, &originGuildID, &originRuntimeJSON, &channelRef, &skillID, &r.State, &terminal, &r.Revision, &r.ResultVisibility, &r.DiscordTranscriptMode, &discordCtx, &created, &updated, &expiresAt, &errCode, &errMsg)
 	if err != nil {
 		return TaskRow{}, err
 	}
@@ -540,6 +554,7 @@ func scanTask(row *sql.Row) (TaskRow, error) {
 	r.ChannelID = channelID.String
 	r.GuildID = guildID.String
 	r.OriginRequester = OriginRequester{DiscordUserID: originUserID.String, DiscordUsername: originUsername.String, DiscordGuildID: originGuildID.String}
+	r.OriginRuntimeRef = parseOriginRuntimeRefJSON(originRuntimeJSON.String)
 	r.ChannelRef = channelRef.String
 	r.SkillID = skillID.String
 	r.Terminal = intBool(terminal)
@@ -555,10 +570,10 @@ func scanTask(row *sql.Row) (TaskRow, error) {
 
 func scanTaskRows(rows *sql.Rows) (TaskRow, error) {
 	var r TaskRow
-	var taskID, clientRef, contextID, executor, channelID, guildID, originUserID, originUsername, originGuildID, channelRef, skillID, discordCtx, expiresAt, errCode, errMsg sql.NullString
+	var taskID, clientRef, contextID, executor, channelID, guildID, originUserID, originUsername, originGuildID, originRuntimeJSON, channelRef, skillID, discordCtx, expiresAt, errCode, errMsg sql.NullString
 	var created, updated string
 	var terminal int
-	err := rows.Scan(&r.LocalID, &taskID, &clientRef, &r.MessageID, &contextID, &r.Direction, &r.Role, &r.FromAgent, &r.ToAgent, &executor, &channelID, &guildID, &originUserID, &originUsername, &originGuildID, &channelRef, &skillID, &r.State, &terminal, &r.Revision, &r.ResultVisibility, &r.DiscordTranscriptMode, &discordCtx, &created, &updated, &expiresAt, &errCode, &errMsg)
+	err := rows.Scan(&r.LocalID, &taskID, &clientRef, &r.MessageID, &contextID, &r.Direction, &r.Role, &r.FromAgent, &r.ToAgent, &executor, &channelID, &guildID, &originUserID, &originUsername, &originGuildID, &originRuntimeJSON, &channelRef, &skillID, &r.State, &terminal, &r.Revision, &r.ResultVisibility, &r.DiscordTranscriptMode, &discordCtx, &created, &updated, &expiresAt, &errCode, &errMsg)
 	if err != nil {
 		return TaskRow{}, err
 	}
@@ -569,6 +584,7 @@ func scanTaskRows(rows *sql.Rows) (TaskRow, error) {
 	r.ChannelID = channelID.String
 	r.GuildID = guildID.String
 	r.OriginRequester = OriginRequester{DiscordUserID: originUserID.String, DiscordUsername: originUsername.String, DiscordGuildID: originGuildID.String}
+	r.OriginRuntimeRef = parseOriginRuntimeRefJSON(originRuntimeJSON.String)
 	r.ChannelRef = channelRef.String
 	r.SkillID = skillID.String
 	r.Terminal = intBool(terminal)
@@ -595,6 +611,40 @@ func nullTime(t time.Time) any {
 	return t.UTC().Format(sqliteTimeFormat)
 }
 
+func normalizeOriginRuntimeRef(ref OriginRuntimeRef) OriginRuntimeRef {
+	return OriginRuntimeRef{
+		RuntimeAgentID:   AgentID(strings.TrimSpace(string(ref.RuntimeAgentID))),
+		BotAgentID:       AgentID(strings.TrimSpace(string(ref.BotAgentID))),
+		ChannelRef:       strings.TrimSpace(ref.ChannelRef),
+		DisplayName:      strings.TrimSpace(ref.DisplayName),
+		DiscordGuildID:   strings.TrimSpace(ref.DiscordGuildID),
+		DiscordChannelID: strings.TrimSpace(ref.DiscordChannelID),
+		DiscordThreadID:  strings.TrimSpace(ref.DiscordThreadID),
+		MessageID:        strings.TrimSpace(ref.MessageID),
+	}
+}
+
+func originRuntimeRefJSON(ref OriginRuntimeRef) string {
+	ref = normalizeOriginRuntimeRef(ref)
+	raw, err := json.Marshal(ref)
+	if err != nil || string(raw) == "null" {
+		return "{}"
+	}
+	return string(raw)
+}
+
+func parseOriginRuntimeRefJSON(raw string) OriginRuntimeRef {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return OriginRuntimeRef{}
+	}
+	var ref OriginRuntimeRef
+	if err := json.Unmarshal([]byte(raw), &ref); err != nil {
+		return OriginRuntimeRef{}
+	}
+	return normalizeOriginRuntimeRef(ref)
+}
+
 func randomLocalID() string {
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {
@@ -604,10 +654,10 @@ func randomLocalID() string {
 }
 
 func taskRecordFromRow(row TaskRow) TaskRecord {
-	return TaskRecord{LocalID: row.LocalID, TaskID: row.TaskID, ClientTaskRef: row.ClientTaskRef, MessageID: row.MessageID, ContextID: row.ContextID, Direction: row.Direction, Role: row.Role, FromAgent: row.FromAgent, ToAgent: row.ToAgent, ExecutorAgent: row.ExecutorAgent, ChannelID: row.ChannelID, GuildID: row.GuildID, OriginRequester: row.OriginRequester, ChannelRef: row.ChannelRef, SkillID: row.SkillID, State: row.State, Terminal: row.Terminal, Revision: row.Revision, ResultVisibility: row.ResultVisibility, DiscordTranscriptMode: row.DiscordTranscriptMode, DiscordContextJSON: row.DiscordContextJSON, Error: row.Error}
+	return TaskRecord{LocalID: row.LocalID, TaskID: row.TaskID, ClientTaskRef: row.ClientTaskRef, MessageID: row.MessageID, ContextID: row.ContextID, Direction: row.Direction, Role: row.Role, FromAgent: row.FromAgent, ToAgent: row.ToAgent, ExecutorAgent: row.ExecutorAgent, ChannelID: row.ChannelID, GuildID: row.GuildID, OriginRequester: row.OriginRequester, OriginRuntimeRef: row.OriginRuntimeRef, ChannelRef: row.ChannelRef, SkillID: row.SkillID, State: row.State, Terminal: row.Terminal, Revision: row.Revision, ResultVisibility: row.ResultVisibility, DiscordTranscriptMode: row.DiscordTranscriptMode, DiscordContextJSON: row.DiscordContextJSON, Error: row.Error}
 }
 func taskRowFromRecord(rec TaskRecord) TaskRow {
-	return TaskRow{LocalID: rec.LocalID, TaskID: rec.TaskID, ClientTaskRef: rec.ClientTaskRef, MessageID: rec.MessageID, ContextID: rec.ContextID, Direction: rec.Direction, Role: rec.Role, FromAgent: rec.FromAgent, ToAgent: rec.ToAgent, ExecutorAgent: rec.ExecutorAgent, ChannelID: rec.ChannelID, GuildID: rec.GuildID, OriginRequester: rec.OriginRequester, ChannelRef: rec.ChannelRef, SkillID: rec.SkillID, State: rec.State, Terminal: rec.Terminal, Revision: rec.Revision, ResultVisibility: rec.ResultVisibility, DiscordTranscriptMode: rec.DiscordTranscriptMode, DiscordContextJSON: rec.DiscordContextJSON, Error: rec.Error}
+	return TaskRow{LocalID: rec.LocalID, TaskID: rec.TaskID, ClientTaskRef: rec.ClientTaskRef, MessageID: rec.MessageID, ContextID: rec.ContextID, Direction: rec.Direction, Role: rec.Role, FromAgent: rec.FromAgent, ToAgent: rec.ToAgent, ExecutorAgent: rec.ExecutorAgent, ChannelID: rec.ChannelID, GuildID: rec.GuildID, OriginRequester: rec.OriginRequester, OriginRuntimeRef: rec.OriginRuntimeRef, ChannelRef: rec.ChannelRef, SkillID: rec.SkillID, State: rec.State, Terminal: rec.Terminal, Revision: rec.Revision, ResultVisibility: rec.ResultVisibility, DiscordTranscriptMode: rec.DiscordTranscriptMode, DiscordContextJSON: rec.DiscordContextJSON, Error: rec.Error}
 }
 
 var errNoTask = errors.New("task not found")

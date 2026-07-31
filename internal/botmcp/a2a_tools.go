@@ -178,6 +178,7 @@ type A2ATaskSummary struct {
 	Terminal              bool                  `json:"terminal"`
 	ErrorCode             a2a.ErrorCode         `json:"errorCode,omitempty"`
 	ErrorMessage          string                `json:"errorMessage,omitempty"`
+	OriginRuntimeRef      a2a.OriginRuntimeRef  `json:"originRuntimeRef,omitempty"`
 	CreatedAt             string                `json:"createdAt,omitempty"`
 	UpdatedAt             string                `json:"updatedAt,omitempty"`
 	Events                []A2ATaskEventSummary `json:"events,omitempty"`
@@ -622,6 +623,7 @@ func (s *A2AService) Delegate(ctx context.Context, req A2AToolRequest) (A2AToolR
 	payload, _ := json.Marshal(map[string]string{"kind": "text", "text": message})
 	msgID := a2a.MessageID("msg_" + randomToken(12))
 	source := sourceAgentForRuntimeMode(s.cfg.Config, policy)
+	originRef := s.originRuntimeRef(req, policy, source, msgID)
 	delivery := deliveryOptionsForDelegate(req, resultVisibility, transcriptMode, source, s.cfg.Config.TaskTimeoutSec, delegationDepth)
 	taskReq := a2a.TaskExecutionRequest{
 		MessageID:             msgID,
@@ -643,6 +645,7 @@ func (s *A2AService) Delegate(ctx context.Context, req A2AToolRequest) (A2AToolR
 			DiscordUsername: strings.TrimSpace(req.RequestedBy),
 			DiscordGuildID:  strings.TrimSpace(req.GuildID),
 		},
+		OriginRuntimeRef: originRef,
 	}
 	discordTargetID, discordParentChannelID, discordThreadID := auditDiscordFields(req, delivery)
 	row, err := pub.SendTask(ctx, taskReq)
@@ -695,7 +698,9 @@ func (s *A2AService) Delegate(ctx context.Context, req A2AToolRequest) (A2AToolR
 	})
 	_ = s.recordAudit(ctx, a2a.AuditTaskSendRequested, req, "queued", "", meta)
 	sum := summarizeTask(row)
-	return A2AToolResponse{OK: true, Message: delegateSuccessMessage(resultVisibility, transcriptMode, deliveryReason), Task: &sum, Metadata: deliveryResponseMetadata(resultVisibility, transcriptMode, deliveryReason, delivery.DiscordReplyThreadID)}, nil
+	metaOut := deliveryResponseMetadata(resultVisibility, transcriptMode, deliveryReason, delivery.DiscordReplyThreadID)
+	metaOut["origin_runtime_ref"] = taskReq.OriginRuntimeRef
+	return A2AToolResponse{OK: true, Message: delegateSuccessMessage(resultVisibility, transcriptMode, deliveryReason), Task: &sum, Metadata: metaOut}, nil
 }
 
 func (s *A2AService) nextDelegationDepth() (int, error) {
@@ -714,6 +719,27 @@ func sourceAgentForRuntimeMode(cfg a2a.Config, policy a2a.ChannelA2APolicy) a2a.
 		return a2a.AgentID(strings.TrimSpace(policy.RuntimeAgentID))
 	}
 	return cfg.AgentID
+}
+
+func (s *A2AService) originRuntimeRef(req A2AToolRequest, policy a2a.ChannelA2APolicy, source a2a.AgentID, msgID a2a.MessageID) a2a.OriginRuntimeRef {
+	channelRef := strings.TrimSpace(policy.ChannelRef)
+	if channelRef == "" {
+		channelRef = defaultChannelRef(req, s.cfg.DataDir)
+	}
+	displayName := channelNameFromMetadata(s.cfg.DataDir, req.ChannelID)
+	if strings.TrimSpace(displayName) == "" {
+		displayName = channelRef
+	}
+	return a2a.OriginRuntimeRef{
+		RuntimeAgentID:   source,
+		BotAgentID:       s.cfg.Config.AgentID,
+		ChannelRef:       channelRef,
+		DisplayName:      displayName,
+		DiscordGuildID:   strings.TrimSpace(req.GuildID),
+		DiscordChannelID: strings.TrimSpace(req.ChannelID),
+		DiscordThreadID:  strings.TrimSpace(deliveryChannelID(req.ChannelID)),
+		MessageID:        string(msgID),
+	}
 }
 
 func (s *A2AService) Cancel(ctx context.Context, req A2AToolRequest) (A2AToolResponse, error) {
@@ -1431,7 +1457,7 @@ func taskLookupError(err error) error {
 }
 
 func summarizeTask(row a2a.TaskRow) A2ATaskSummary {
-	return A2ATaskSummary{LocalID: row.LocalID, TaskID: string(row.TaskID), MessageID: string(row.MessageID), Direction: row.Direction, FromAgent: string(row.FromAgent), ToAgent: string(row.ToAgent), ExecutorAgent: string(row.ExecutorAgent), ChannelID: row.ChannelID, ChannelRef: row.ChannelRef, SkillID: row.SkillID, ResultVisibility: row.ResultVisibility, DiscordTranscriptMode: row.DiscordTranscriptMode, State: row.State, Revision: row.Revision, Terminal: row.Terminal, ErrorCode: row.Error.Code, ErrorMessage: row.Error.Message, CreatedAt: row.CreatedAt.Format(time.RFC3339), UpdatedAt: row.UpdatedAt.Format(time.RFC3339)}
+	return A2ATaskSummary{LocalID: row.LocalID, TaskID: string(row.TaskID), MessageID: string(row.MessageID), Direction: row.Direction, FromAgent: string(row.FromAgent), ToAgent: string(row.ToAgent), ExecutorAgent: string(row.ExecutorAgent), ChannelID: row.ChannelID, ChannelRef: row.ChannelRef, SkillID: row.SkillID, ResultVisibility: row.ResultVisibility, DiscordTranscriptMode: row.DiscordTranscriptMode, State: row.State, Revision: row.Revision, Terminal: row.Terminal, ErrorCode: row.Error.Code, ErrorMessage: row.Error.Message, CreatedAt: row.CreatedAt.Format(time.RFC3339), UpdatedAt: row.UpdatedAt.Format(time.RFC3339), OriginRuntimeRef: row.OriginRuntimeRef}
 }
 
 func taskStatusMessage(row a2a.TaskRow) string {

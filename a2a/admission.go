@@ -30,6 +30,7 @@ type SendMessagePayload struct {
 	Delivery              TransportDelivery      `json:"delivery,omitempty"`
 	AuditMetadata         map[string]string      `json:"auditMetadata,omitempty"`
 	OriginRequester       OriginRequester        `json:"originRequester,omitempty"`
+	OriginRuntimeRef      OriginRuntimeRef       `json:"originRuntimeRef,omitempty"`
 	AdditionalSafetyAttrs map[string]interface{} `json:"-"`
 }
 
@@ -113,6 +114,7 @@ func taskRequestFromEnvelope(env Envelope, subject Subject) (TaskExecutionReques
 		ExpiresAt:             expires,
 		AuditMetadata:         payload.AuditMetadata,
 		OriginRequester:       payload.OriginRequester,
+		OriginRuntimeRef:      payload.OriginRuntimeRef,
 	}, nil
 }
 

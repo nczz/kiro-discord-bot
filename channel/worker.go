@@ -53,6 +53,7 @@ type Job struct {
 	AllowRemoteMemoryWrite bool
 	A2ADelegationDepth     int
 	A2AResult              chan<- a2a.TaskExecutionResult
+	A2AOriginLabel         string
 	A2ATaskID              a2a.TaskID
 	A2ARevision            int64
 	DisplayCWD             string // cwd prefix to remove from progress-only location displays
@@ -779,7 +780,7 @@ func (w *Worker) execute(job *Job) {
 					finishJob()
 					return
 				}
-				if _, sendErr := SendLongThreadWithMentions(ds, threadID, AppendMetricsFooter(errorContent, MetricsWithElapsed(w.agent.TurnMetrics(), startTime)), job.MentionRefs); sendErr != nil {
+				if _, sendErr := SendLongThreadWithMentions(ds, threadID, AppendMetricsFooter(prefixA2ADelegatedFrom(errorContent, job.A2AOriginLabel), MetricsWithElapsed(w.agent.TurnMetrics(), startTime)), job.MentionRefs); sendErr != nil {
 					log.Printf("[worker %s] thread error reply failed | user=%s msg=%s thread=%s err=%v",
 						w.channelID, job.Username, job.MessageID, threadID, sendErr)
 				}
@@ -813,7 +814,7 @@ func (w *Worker) execute(job *Job) {
 			w.drainBeforeFinal(threadID)
 			stopReason := w.agent.StopReason()
 			response = AppendStopReasonNotice(response, stopReason)
-			if sentCount, sendErr := SendLongThreadWithMentions(ds, threadID, AppendMetricsFooter(response, MetricsWithElapsed(w.agent.TurnMetrics(), startTime)), job.MentionRefs); sendErr != nil || sentCount == 0 {
+			if sentCount, sendErr := SendLongThreadWithMentions(ds, threadID, AppendMetricsFooter(prefixA2ADelegatedFrom(response, job.A2AOriginLabel), MetricsWithElapsed(w.agent.TurnMetrics(), startTime)), job.MentionRefs); sendErr != nil || sentCount == 0 {
 				if sendErr == nil {
 					sendErr = fmt.Errorf("no Discord messages delivered")
 				}
@@ -1053,6 +1054,15 @@ func (job *Job) sendInlineFinalReply(ds *discordgo.Session, content string) erro
 		return nil
 	}
 	return SendLongReplyWithMentions(ds, job.ChannelID, job.MessageID, content, job.MentionRefs)
+}
+
+func prefixA2ADelegatedFrom(content, label string) string {
+	label = strings.TrimSpace(label)
+	if label == "" {
+		return content
+	}
+	content = strings.TrimSpace(content)
+	return "委託自：" + EscapeDiscordMarkdown(label) + "\n\n" + content
 }
 
 func (job *Job) emitA2AResult(result a2a.TaskExecutionResult) {

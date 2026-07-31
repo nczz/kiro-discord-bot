@@ -59,6 +59,42 @@ func TestTaskStoreCreateInboundOutboundAndReplay(t *testing.T) {
 	}
 }
 
+func TestTaskStorePersistsOriginRuntimeRef(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenTaskStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("OpenTaskStore: %v", err)
+	}
+	defer store.Close()
+
+	row := phase3TaskRow("origin_ref_msg")
+	row.OriginRuntimeRef = OriginRuntimeRef{
+		RuntimeAgentID:   "m5bot-local-ch-2cbaf623",
+		BotAgentID:       "m5bot-local",
+		ChannelRef:       "ch-2cbaf623",
+		DisplayName:      "隨口問",
+		DiscordGuildID:   "guild",
+		DiscordChannelID: "channel",
+		DiscordThreadID:  "thread",
+		MessageID:        "discord-message",
+	}
+	created, err := store.CreateOutbound(ctx, row)
+	if err != nil {
+		t.Fatalf("CreateOutbound: %v", err)
+	}
+	got, err := store.GetByLocalID(ctx, created.LocalID)
+	if err != nil {
+		t.Fatalf("GetByLocalID: %v", err)
+	}
+	if got.OriginRuntimeRef.RuntimeAgentID != "m5bot-local-ch-2cbaf623" ||
+		got.OriginRuntimeRef.BotAgentID != "m5bot-local" ||
+		got.OriginRuntimeRef.ChannelRef != "ch-2cbaf623" ||
+		got.OriginRuntimeRef.DisplayName != "隨口問" ||
+		got.OriginRuntimeRef.DiscordThreadID != "thread" {
+		t.Fatalf("origin runtime ref = %+v", got.OriginRuntimeRef)
+	}
+}
+
 func TestAcceptedBootstrapBindsOnlyTargetExecutor(t *testing.T) {
 	ctx := context.Background()
 	store, err := OpenTaskStore(t.TempDir())

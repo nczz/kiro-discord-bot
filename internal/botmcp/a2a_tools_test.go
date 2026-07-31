@@ -182,6 +182,33 @@ func TestA2AToolsDefaultPolicyUsesDiscordChannelNameAlias(t *testing.T) {
 	}
 }
 
+func TestA2AToolsOriginRuntimeRefUsesServerBoundChannel(t *testing.T) {
+	dataDir := t.TempDir()
+	if err := channelmeta.Upsert(dataDir, channelmeta.Entry{ID: "channel-1", GuildID: "guild-1", Name: "隨口問", Type: "channel"}); err != nil {
+		t.Fatalf("channel metadata: %v", err)
+	}
+	svc, err := NewA2AService(A2AServiceConfig{
+		DataDir:        dataDir,
+		Config:         a2a.Config{AgentID: "m5bot-local", RuntimeIDMode: a2a.RuntimeIDModeRuntime},
+		BoundGuildID:   "guild-1",
+		BoundChannelID: "channel-1",
+		ConnectNATS:    false,
+	})
+	if err != nil {
+		t.Fatalf("NewA2AService: %v", err)
+	}
+	defer svc.Close()
+	policy, err := svc.currentPolicy(context.Background(), A2AToolRequest{GuildID: "guild-1", ChannelID: "channel-1"})
+	if err != nil {
+		t.Fatalf("currentPolicy: %v", err)
+	}
+	source := sourceAgentForRuntimeMode(svc.cfg.Config, policy)
+	ref := svc.originRuntimeRef(A2AToolRequest{GuildID: "guild-1", ChannelID: "channel-1"}, policy, source, "msg_origin")
+	if ref.RuntimeAgentID != source || ref.BotAgentID != "m5bot-local" || ref.ChannelRef != policy.ChannelRef || ref.DisplayName != "隨口問" || ref.DiscordGuildID != "guild-1" || ref.DiscordChannelID != "channel-1" || ref.MessageID != "msg_origin" {
+		t.Fatalf("origin runtime ref = %+v, source=%s policy=%+v", ref, source, policy)
+	}
+}
+
 func TestA2AToolsPolicySetupDefaultsRuntimeTarget(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, 7, 30, 12, 0, 0, 0, time.UTC)

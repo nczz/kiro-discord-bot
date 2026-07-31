@@ -16,6 +16,7 @@ type TaskRecord struct {
 	ChannelID             string
 	GuildID               string
 	OriginRequester       OriginRequester
+	OriginRuntimeRef      OriginRuntimeRef
 	ChannelRef            string
 	SkillID               string
 	State                 TaskState
