@@ -779,6 +779,24 @@ Append one subsection per completed phase.
 - Rollback boundary: restore `/Users/chun/Projects/kiro-discord-bot-local/bin/kiro-discord-bot.pre-r23-peers-smoke-20260801011249` and restart `local-kiro-bot`.
 - Next phase: if acceptable, build the linux-amd64 R23 binary for d80, backup remote binary, deploy, restart, then repeat the same `/a2a peers` runtime-only smoke against d80.
 
+### R25 d80 peers runtime deployment
+
+- Status: deployed to d80.
+- Trigger: R24 local smoke passed and remote d80 needed the same runtime-only peers behavior.
+- Decision: deploy the reviewed R23 binary to d80, keep current policy DB unchanged, and validate peers UX with a temporary smoke binary that calls `A2AService.Peers` against d80 data.
+- Changed files: this progress ledger only.
+- Validation:
+  - Built `/tmp/kiro-discord-bot-linux-amd64-r23-peers` with SHA-256 `bfe8f689cd01ca449c69f8f91b23526264a16aac6da61e1c190aa725915dead0`.
+  - Installed it to `/opt/kiro-discord-bot/kiro-discord-bot`; remote installed hash matched `bfe8f689cd01ca449c69f8f91b23526264a16aac6da61e1c190aa725915dead0`.
+  - d80 `kiro-discord-bot.service` restarted and was `active`.
+  - d80 logs after restart showed `NATS node enabled agent=d80-chunbot`, `transport consumers started agent=d80-chunbot`, `Bot running as ChunBot#4533`, peer discovery, and `/a2a` slash registration.
+  - Temporary smoke binary `/tmp/a2a-peers-smoke-linux-amd64` SHA-256 `fc1273e1f9c55fb7a9c445e14eba55184afae1ddf30c5bba0af4781299c9a9d2` passed when run with sudo against `/home/chun/kiro-discord-bot/data`; non-sudo failed with readonly SQLite access and did not complete the smoke.
+  - Smoke returned only Discord `channel` runtime rows in guild `1495737767827865620`: `d80-chunbot-d80-main` with one hidden local skill and `delegationAllowed=false`, plus `m5bot-local-m5-main` with `delegationAllowed=true` and skill `m5-main/task`; bot host rows did not appear.
+- Runtime settings touched: no env/policy DB changes.
+- Deployment hosts touched: remote d80 bot binary/service.
+- Rollback boundary: restore `/opt/kiro-discord-bot/kiro-discord-bot.pre-r23-peers-20260801011749` on d80 and restart `kiro-discord-bot.service`.
+- Next phase: observe one natural Discord `/a2a peers` or delegated peer-selection interaction from the user side and confirm the visible Discord response matches the smoke output: runtime rows only, channel context present, no bot host cards.
+
 ## Master goal prompt
 
 Use this prompt when starting or resuming the full implementation program:
