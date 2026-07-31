@@ -155,7 +155,17 @@ Shutdown:
 
 ## Rollout gates
 
-Every production rollout must complete these gates in order:
+Every production rollout must complete the gate profile that matches its security/topology mode.
+
+Internal lightweight profile (`A2A_PRODUCTION_SECURITY=false`, private single-node NATS, TLS + token):
+
+1. current-binary deploy: both bot processes run the committed binary with `A2A_RUNTIME_ID_MODE=runtime`, `NATS_TOKEN` set, and TLS CA validation configured.
+2. exact runtime smoke: a runtime-addressed delegated text task completes through NATS/JetStream.
+3. legacy rejection smoke: a new bot-level `target_agent + target_channel_ref` ask is rejected in `runtime` mode.
+4. service health smoke: both bots report A2A NATS enabled and runtime transport consumers started; the single NATS service remains active.
+5. rollback readiness: binary/env backups exist and rollback is `NATS_URL=""` plus bot restart/drain, or restoring the previous binary/env backup.
+
+Hardened/HA profile (`A2A_PRODUCTION_SECURITY=true` or multi-tenant exposure):
 
 1. local two-bot smoke: two local bots exchange a delegated text task through embedded or local JetStream.
 2. same-channel co-present smoke: both Discord bot accounts can post the expected status/result labels in the same channel/thread with `share_discord_context=true` and approved `co_present_from_runtimes`.

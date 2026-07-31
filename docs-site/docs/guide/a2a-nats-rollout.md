@@ -150,14 +150,25 @@ Shutdown:
 
 ## Rollout gates
 
-Every production rollout must complete these gates in order:
+Every production rollout must complete the gate profile that matches its security/topology mode.
+
+Internal lightweight profile (`A2A_PRODUCTION_SECURITY=false`, private single-node NATS, TLS + token):
+
+1. current-binary deploy: both bot processes run the committed binary with `A2A_RUNTIME_ID_MODE=runtime`, `NATS_TOKEN` set, and TLS CA validation configured.
+2. exact runtime smoke: a runtime-addressed delegated text task completes through NATS/JetStream.
+3. legacy rejection smoke: a new bot-level `target_agent + target_channel_ref` ask is rejected in `runtime` mode.
+4. service health smoke: both bots report A2A NATS enabled and runtime transport consumers started; the single NATS service remains active.
+5. rollback readiness: binary/env backups exist and rollback is `NATS_URL=""` plus bot restart/drain, or restoring the previous binary/env backup.
+
+Hardened/HA profile (`A2A_PRODUCTION_SECURITY=true` or multi-tenant exposure):
 
 1. local two-bot smoke: two local bots exchange a delegated text task through embedded or local JetStream.
-2. same-channel co-present smoke: both Discord bot accounts can post the expected status/result labels in the same channel/thread with `share_discord_context=true` and approved `co_present_from`.
+2. same-channel co-present smoke: both Discord bot accounts can post the expected status/result labels in the same channel/thread with `share_discord_context=true` and approved `co_present_from_runtimes`.
 3. cross-server proxy smoke: executor works in a different Discord server/channel and the requester bot reports the result through proxy visibility.
 4. NATS restart smoke: restart NATS after an accepted task and verify durable task/result state survives reconnect and replay without duplicate Discord delivery.
 5. credential revocation smoke: revoke one peer credential and verify new delegated work from that peer is denied while existing audit/task rows remain readable.
-6. rollback smoke: set `NATS_URL=""`, restart/drain, verify `/doctor` reports disabled and a normal non-A2A Discord agent reply still works.
+6. runtime cutover smoke: with `A2A_RUNTIME_ID_MODE=runtime`, new legacy bot-level `target_agent + target_channel_ref` asks are rejected or require exact runtime migration; no bot-level legacy consumer accepts new work.
+7. rollback smoke: set `NATS_URL=""`, restart/drain, verify `/doctor` reports disabled and a normal non-A2A Discord agent reply still works.
 
 ## Final validation command matrix
 

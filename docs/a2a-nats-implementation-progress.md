@@ -441,7 +441,7 @@ Append one subsection per completed phase.
 
 ### R8 internal lightweight production rollout plan
 
-- Status: planned; current commit.
+- Status: deployed smoke passed; current commit.
 - Decision: user requested internal/lightweight production instead of mandatory three-node NATS. The accepted production profile is one private single-node NATS/JetStream server with persistent storage, TLS server validation, token authentication, localhost-only monitoring, and firewall/VPN host restrictions. This intentionally trades NATS HA for lower operational load.
 - Observed current topology:
   - NATS server: `mxp2`, `nats-server.service` active, single node, config path `/etc/nats-server.conf`, listener `tls://89.233.104.250:4222`, HTTP monitoring `127.0.0.1:8222`, JetStream store `/var/lib/nats/jetstream`.
@@ -460,7 +460,20 @@ Append one subsection per completed phase.
   - Do not expose NATS monitoring outside localhost.
   - Do not delete or reset DATA_DIR, JetStream store, or policy DBs during rollout.
   - If the single NATS node is down, pause new remote work and recover/restart NATS; do not force task DB cleanup.
-- Next phase: execute the authorized lightweight rollout on the current M5/d80 contexts.
+- Lightweight rollout evidence:
+  - Plan/docs commit: `8918fd7`.
+  - Built current binaries: darwin sha256 `ea537fbdffee4dd957cd59aca42967422be9427f3eb22311ead3f2f9d886ebca`; linux amd64 sha256 `f947bff251947b2aa571e647004e0a0118cdeb79719e8fa0bc1782f042a6e8f8`.
+  - Local M5 binary backup: `/Users/chun/Projects/kiro-discord-bot-local/bin/kiro-discord-bot.pre-lightweight-rollout-20260731161704`; current binary sha256 `ea537fbdffee4dd957cd59aca42967422be9427f3eb22311ead3f2f9d886ebca`.
+  - Remote d80 binary backup: `/opt/kiro-discord-bot/kiro-discord-bot.pre-lightweight-rollout-20260731162128`; current binary sha256 `f947bff251947b2aa571e647004e0a0118cdeb79719e8fa0bc1782f042a6e8f8`.
+  - Local M5 service logs: `[a2a] NATS node enabled agent=m5bot-local`, `[a2a] transport consumers started agent=m5bot-local`, `Bot running as M5Bot#8313`.
+  - Remote d80 service logs: `[a2a] NATS node enabled agent=d80-chunbot`, `[a2a] transport consumers started agent=d80-chunbot`, `Bot running as ChunBot#4533`.
+  - Single-node NATS health: `mxp2` `nats-server.service` active with `/usr/sbin/nats-server -c /etc/nats-server.conf`.
+  - Exact runtime smoke passed: `go run /tmp/a2a_smoke.go exact d80-chunbot-d80-main`; message `smoke_exact_1785486172`; terminal `TASK_STATE_COMPLETED`; task `task_692a120a3954415ea5e8801e`; executor `d80-chunbot-d80-main`.
+  - Legacy rejection smoke passed: `go run /tmp/a2a_smoke.go legacy d80-chunbot`; message `smoke_legacy_1785486216`; terminal `TASK_STATE_REJECTED`; executor `d80-chunbot`; error `invalid_envelope: request target d80-chunbot does not match runtime d80-chunbot-d80-main`.
+- Runtime settings touched: no env changes; existing runtime/token/TLS config preserved.
+- Deployment hosts touched: local M5 bot binary/service and remote d80 bot binary/service only; single-node NATS service was inspected but not restarted or modified.
+- Rollback boundary: restore the recorded backup binary on the affected host or set `NATS_URL=""` and restart/drain the bot. DATA_DIR, policy DBs, and JetStream store were not migrated.
+- Next phase: monitor internal lightweight A2A usage; defer hardened credential/HA rollout until `A2A_PRODUCTION_SECURITY=true` and NKey/JWT credentials are required.
 
 ## Master goal prompt
 
