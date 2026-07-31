@@ -269,6 +269,10 @@ func (s *A2AService) Peers(ctx context.Context, req A2AToolRequest) (A2AToolResp
 	}
 	peers := make([]A2APeerSummary, 0, len(rows))
 	runtimeOnly := s.cfg.Config.RuntimeIDMode == a2a.RuntimeIDModeRuntime
+	canonicalRefs := map[string]string{}
+	if runtimeOnly {
+		canonicalRefs = canonicalRuntimeChannelRefs(s.cfg.DataDir, req.GuildID)
+	}
 	for _, row := range rows {
 		if row.AgentID == s.cfg.Config.AgentID || (runtimeOnly && row.Runtime == "kiro-discord-bot") {
 			continue
@@ -278,6 +282,9 @@ func (s *A2AService) Peers(ctx context.Context, req A2AToolRequest) (A2AToolResp
 				continue
 			}
 			if strings.TrimSpace(req.GuildID) == "" || strings.TrimSpace(row.DiscordGuildID) != strings.TrimSpace(req.GuildID) {
+				continue
+			}
+			if canonicalRef := canonicalRefs[strings.TrimSpace(row.DiscordChannelID)]; canonicalRef != "" && strings.TrimSpace(row.ChannelRef) != canonicalRef {
 				continue
 			}
 		}
@@ -823,10 +830,28 @@ func defaultChannelRef(req A2AToolRequest, dataDir string) string {
 	if explicit := strings.TrimSpace(req.ChannelRef); explicit != "" {
 		return explicit
 	}
+
 	if name := channelNameFromMetadata(dataDir, req.ChannelID); name != "" {
 		return a2a.RuntimeAlias(name, runtimeStableKey(req.GuildID, req.ChannelID, "", name))
 	}
 	return a2a.RuntimeAlias("", runtimeStableKey(req.GuildID, req.ChannelID, "", "channel"))
+}
+func canonicalRuntimeChannelRefs(dataDir, guildID string) map[string]string {
+	out := map[string]string{}
+	entries, err := channelmeta.List(dataDir)
+	if err != nil {
+		return out
+	}
+	for _, entry := range entries {
+		if strings.TrimSpace(entry.Type) != "channel" || strings.TrimSpace(entry.GuildID) != strings.TrimSpace(guildID) {
+			continue
+		}
+		ref := a2a.RuntimeAlias(entry.Name, runtimeStableKey(entry.GuildID, entry.ID, "", entry.Name))
+		if ref != "" {
+			out[strings.TrimSpace(entry.ID)] = ref
+		}
+	}
+	return out
 }
 
 func channelNameFromMetadata(dataDir, channelID string) string {
