@@ -137,6 +137,9 @@ type A2APeerSummary struct {
 	ProtocolBinding   string   `json:"protocolBinding,omitempty"`
 	ProtocolVersion   string   `json:"protocolVersion,omitempty"`
 	SignatureStatus   string   `json:"signatureStatus,omitempty"`
+	Runtime           string   `json:"runtime,omitempty"`
+	ChannelRef        string   `json:"channelRef,omitempty"`
+	Wakeable          bool     `json:"wakeable"`
 }
 
 type A2ATaskSummary struct {
@@ -245,23 +248,46 @@ func (s *A2AService) Peers(ctx context.Context, req A2AToolRequest) (A2AToolResp
 		if row.AgentID == s.cfg.Config.AgentID {
 			continue
 		}
-		visibleSkills := visiblePeerSkills(policy, string(row.AgentID), row.SkillIDs)
-		peers = append(peers, A2APeerSummary{AgentID: string(row.AgentID), Name: row.Name, Trusted: row.Trusted, Online: row.Online, Stale: row.Stale, Skills: visibleSkills, HiddenSkillCount: len(row.SkillIDs) - len(visibleSkills), DelegationAllowed: len(visibleSkills) > 0, ProtocolBinding: row.SupportedBinding, ProtocolVersion: row.ProtocolVersion, SignatureStatus: row.SignatureStatus})
+		visibleSkills := visiblePeerSkills(policy, string(row.AgentID), row.SkillIDs, s.cfg.Config.RuntimeIDMode)
+		delegationAllowed := len(visibleSkills) > 0
+		peers = append(peers, A2APeerSummary{AgentID: string(row.AgentID), Name: row.Name, Trusted: row.Trusted, Online: row.Online, Stale: row.Stale, Skills: visibleSkills, HiddenSkillCount: len(row.SkillIDs) - len(visibleSkills), DelegationAllowed: delegationAllowed, Runtime: row.Runtime, ChannelRef: row.ChannelRef, Wakeable: delegationAllowed && row.Runtime == "channel" && !row.Stale, ProtocolBinding: row.SupportedBinding, ProtocolVersion: row.ProtocolVersion, SignatureStatus: row.SignatureStatus})
 	}
 	return A2AToolResponse{OK: true, Message: "A2A peers listed", Peers: peers}, nil
 }
 
-func visiblePeerSkills(policy a2a.ChannelA2APolicy, agent string, skills []string) []string {
+func visiblePeerSkills(policy a2a.ChannelA2APolicy, agent string, skills []string, mode a2a.RuntimeIDMode) []string {
 	if !policy.Enabled {
 		return nil
 	}
+	runtimeOnly := mode == a2a.RuntimeIDModeRuntime
 	out := make([]string, 0, len(skills))
 	for _, skill := range skills {
+		if runtimeOnly {
+			if policyDelegatesExactRuntime(policy, agent, skill) {
+				out = append(out, skill)
+			}
+			continue
+		}
 		if policyDelegatesRuntime(policy, agent, skill, policy.ChannelRef) {
 			out = append(out, skill)
 		}
 	}
 	return out
+}
+
+func policyDelegatesExactRuntime(policy a2a.ChannelA2APolicy, agent, skill string) bool {
+	for _, target := range policy.DelegateTargets {
+		if strings.TrimSpace(target.RuntimeAgentID) == "" {
+			continue
+		}
+		if !stringListAllows([]string{target.RuntimeAgentID}, agent) {
+			continue
+		}
+		if skillListAllows([]string{target.SkillID}, skill) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *A2AService) PolicyGet(ctx context.Context, req A2AToolRequest) (A2AToolResponse, error) {

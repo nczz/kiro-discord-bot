@@ -71,6 +71,71 @@ func TestA2AToolsPolicyPlanPolicyApply(t *testing.T) {
 	}
 }
 
+func TestA2AToolsPeersRuntimeModeListsWakeableRuntimeAndHidesLegacyBot(t *testing.T) {
+	ctx := context.Background()
+	svc, err := NewA2AService(A2AServiceConfig{
+		DataDir:            t.TempDir(),
+		Config:             a2a.Config{AgentID: "adam-n200", RuntimeIDMode: a2a.RuntimeIDModeRuntime},
+		BoundGuildID:       "guild-1",
+		BoundChannelID:     "channel-1",
+		ConfirmationSecret: "test-secret",
+		ConnectNATS:        false,
+	})
+	if err != nil {
+		t.Fatalf("NewA2AService: %v", err)
+	}
+	defer svc.Close()
+
+	if err := svc.policies.Save(ctx, a2a.ChannelA2APolicy{
+		GuildID:            "guild-1",
+		ChannelID:          "channel-1",
+		Enabled:            true,
+		Discoverable:       true,
+		RuntimeAgentID:     "adam-n200-main",
+		BotAgentID:         "adam-n200",
+		ChannelRef:         "main",
+		AcceptFromRuntimes: []string{"peer-n100-support"},
+		AcceptSkills:       []string{"task"},
+		DelegateTo:         []string{"peer-n100"},
+		DelegateSkills:     []string{"general/task"},
+		DelegateTargets: []a2a.DelegateTargetPolicy{{
+			RuntimeAgentID: "peer-n100-support",
+			AgentID:        "peer-n100",
+			ChannelRef:     "support",
+			SkillID:        "task",
+		}},
+	}, "manager"); err != nil {
+		t.Fatalf("Save policy: %v", err)
+	}
+	baseCard := a2a.AgentCard{Name: "peer-n100", Description: "bot host", Version: "1.0.0", SupportedInterfaces: []a2a.A2AInterface{{URL: "nats://nats.example.internal:4222", ProtocolBinding: a2a.ProtocolBindingNATS, ProtocolVersion: a2a.ProtocolVersion}}, Skills: []a2a.AgentSkill{{ID: "general/task", Name: "General", Description: "general"}}}
+	if _, err := svc.peers.UpsertExtendedCard(ctx, "peer-n100", baseCard, a2a.ExtendedAgentCard{Runtime: "kiro-discord-bot"}, true, "peer-host", "online", time.Now().Add(time.Hour)); err != nil {
+		t.Fatalf("Upsert base card: %v", err)
+	}
+	runtimeCard := a2a.AgentCard{Name: "peer-n100-support", Description: "support runtime", Version: "1.0.0", SupportedInterfaces: []a2a.A2AInterface{{URL: "nats://nats.example.internal:4222", ProtocolBinding: a2a.ProtocolBindingNATS, ProtocolVersion: a2a.ProtocolVersion}}, Skills: []a2a.AgentSkill{{ID: "support/task", Name: "Task", Description: "task"}}}
+	if _, err := svc.peers.UpsertExtendedCard(ctx, "peer-n100-support", runtimeCard, a2a.ExtendedAgentCard{Runtime: "channel", ChannelRef: "support"}, false, "peer-host-peer-n100-support", "online", time.Now().Add(time.Hour)); err != nil {
+		t.Fatalf("Upsert runtime card: %v", err)
+	}
+
+	resp, err := svc.Peers(ctx, A2AToolRequest{GuildID: "guild-1", ChannelID: "channel-1", RequestedBy: "alice", RequestedByID: "user-1"})
+	if err != nil {
+		t.Fatalf("Peers: %v", err)
+	}
+	byAgent := map[string]A2APeerSummary{}
+	for _, peer := range resp.Peers {
+		byAgent[peer.AgentID] = peer
+	}
+	if base := byAgent["peer-n100"]; base.DelegationAllowed || base.Wakeable || base.HiddenSkillCount == 0 {
+		t.Fatalf("base peer = %+v, want hidden non-callable bot host in runtime mode", base)
+	}
+	runtime := byAgent["peer-n100-support"]
+	if !runtime.DelegationAllowed || !runtime.Wakeable || runtime.Runtime != "channel" || runtime.ChannelRef != "support" {
+		t.Fatalf("runtime peer = %+v, want wakeable callable channel runtime", runtime)
+	}
+	if len(runtime.Skills) != 1 || runtime.Skills[0] != "support/task" {
+		t.Fatalf("runtime skills = %v, want canonical runtime skill", runtime.Skills)
+	}
+}
+
 func TestA2AToolsPolicySetupDefaultsRuntimeTarget(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, 7, 30, 12, 0, 0, 0, time.UTC)

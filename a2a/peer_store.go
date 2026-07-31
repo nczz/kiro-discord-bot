@@ -74,6 +74,8 @@ type PeerTrustDisplay struct {
 	SupportedBinding      string
 	ProtocolVersion       string
 	Compatibility         PeerCompatibility
+	Runtime               string
+	ChannelRef            string
 }
 
 type SQLitePeerStore struct{ db *sql.DB }
@@ -252,6 +254,8 @@ func (s *SQLitePeerStore) TrustSummary(ctx context.Context, staleAfter time.Dura
 			SupportedBinding:      peer.ProtocolBinding,
 			ProtocolVersion:       peer.ProtocolVersion,
 			Compatibility:         CheckVersionCompatibility(peer.Card),
+			Runtime:               peer.ExtendedCard.Runtime,
+			ChannelRef:            peer.ExtendedCard.ChannelRef,
 		}
 		for _, skill := range peer.Card.Skills {
 			display.SkillIDs = append(display.SkillIDs, skill.ID)

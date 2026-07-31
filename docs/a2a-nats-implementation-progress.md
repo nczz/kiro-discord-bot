@@ -475,6 +475,25 @@ Append one subsection per completed phase.
 - Rollback boundary: restore the recorded backup binary on the affected host or set `NATS_URL=""` and restart/drain the bot. DATA_DIR, policy DBs, and JetStream store were not migrated.
 - Next phase: monitor internal lightweight A2A usage; defer hardened credential/HA rollout until `A2A_PRODUCTION_SECURITY=true` and NKey/JWT credentials are required.
 
+### R9 MCP A2A peer runtime listing fix
+
+- Status: code-ready; current commit.
+- Decision: `bot_a2a_peers` must advertise callable channel runtimes, not stale bot-level host identities, in `A2A_RUNTIME_ID_MODE=runtime`. A channel runtime may have no live ACP subprocess because channel agents are closed for resource use; it is still callable when the bot process is online and the policy allows the runtime target, because inbound A2A admission calls `ensureWorkerForA2A` and wakes/creates the worker before enqueue.
+- Changed files: `a2a/peer_store.go`, `internal/botmcp/a2a_tools.go`, `internal/botmcp/a2a_tool_register.go`, `internal/botmcp/a2a_tools_test.go`, and this progress ledger.
+- Validation:
+  - `go test ./internal/botmcp -run 'TestA2AToolsPeersRuntimeMode|TestDefaultSafeToolNames|TestA2AToolsAnnotations'` passed.
+  - `go test ./...` passed.
+  - `git diff --check` passed.
+  - Live local peer probe after the fix lists `d80-chunbot-d80-main` with `runtime=channel`, `channelRef=d80-main`, `delegationAllowed=true`, `wakeable=true`, and skill `d80-main/task`; stale bot-level `d80-chunbot` is no longer marked callable.
+- Done criteria evidence:
+  - `A2APeerSummary` now includes `runtime`, `channelRef`, and `wakeable`.
+  - Runtime mode peer visibility only marks exact `delegate_targets.runtime_agent_id` matches callable; legacy `delegate_to` migration fields no longer make bot-level host cards appear callable.
+  - Peer trust summaries preserve extended card runtime/channel metadata from peer card storage.
+- Runtime settings touched: no.
+- Deployment hosts touched: no.
+- Rollback boundary: revert this code/docs commit; runtime rollout remains usable, but `bot_a2a_peers` would again risk showing legacy bot host cards as callable in runtime mode.
+- Next phase: deploy this peer-listing fix to local M5 and d80 binaries, then rerun `bot_a2a_peers` from the live MCP context.
+
 ## Master goal prompt
 
 Use this prompt when starting or resuming the full implementation program:

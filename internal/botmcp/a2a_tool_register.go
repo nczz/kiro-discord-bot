@@ -12,7 +12,7 @@ func registerA2ATools(s *server.MCPServer) {
 		tool mcp.Tool
 		call func(context.Context, *A2AService, A2AToolRequest) (A2AToolResponse, error)
 	}{
-		{a2aReadTool(ToolA2APeers, "List known A2A peer agents and skills visible from the current bound Discord channel context."), func(ctx context.Context, svc *A2AService, req A2AToolRequest) (A2AToolResponse, error) {
+		{a2aReadTool(ToolA2APeers, "List known A2A peer agents, callable runtime/channel refs, wakeability, and skills visible from the current bound Discord channel context."), func(ctx context.Context, svc *A2AService, req A2AToolRequest) (A2AToolResponse, error) {
 			return svc.Peers(ctx, req)
 		}},
 		{a2aReadTool(ToolA2APolicyGet, "Show the current bound channel A2A policy in structured, user-friendly terms."), func(ctx context.Context, svc *A2AService, req A2AToolRequest) (A2AToolResponse, error) {
