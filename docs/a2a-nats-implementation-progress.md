@@ -477,7 +477,7 @@ Append one subsection per completed phase.
 
 ### R9 MCP A2A peer runtime listing fix
 
-- Status: code-ready; current commit.
+- Status: deployed smoke passed; current commit.
 - Decision: `bot_a2a_peers` must advertise callable channel runtimes, not stale bot-level host identities, in `A2A_RUNTIME_ID_MODE=runtime`. A channel runtime may have no live ACP subprocess because channel agents are closed for resource use; it is still callable when the bot process is online and the policy allows the runtime target, because inbound A2A admission calls `ensureWorkerForA2A` and wakes/creates the worker before enqueue.
 - Changed files: `a2a/peer_store.go`, `internal/botmcp/a2a_tools.go`, `internal/botmcp/a2a_tool_register.go`, `internal/botmcp/a2a_tools_test.go`, and this progress ledger.
 - Validation:
@@ -485,14 +485,16 @@ Append one subsection per completed phase.
   - `go test ./...` passed.
   - `git diff --check` passed.
   - Live local peer probe after the fix lists `d80-chunbot-d80-main` with `runtime=channel`, `channelRef=d80-main`, `delegationAllowed=true`, `wakeable=true`, and skill `d80-main/task`; stale bot-level `d80-chunbot` is no longer marked callable.
+  - Deployed live local M5 and remote d80 binaries from commit `9fbc228`; local installed binary sha256 after ad-hoc codesign `5153d5f95ce4deb8144c00e8aa730a6fa6cf8079818c51499d739e6d8a258a92`, remote installed linux amd64 sha256 `8d7ac59e04625158ddeff6ad5dba31f151852625c77fb4f27f01877cd0186261`.
+  - Post-deploy exact runtime smoke passed: `go run /tmp/a2a_smoke.go exact d80-chunbot-d80-main`; message `smoke_exact_1785494918`; terminal `TASK_STATE_COMPLETED`; task `task_d55714506dceadfa2d80e1cb`; executor `d80-chunbot-d80-main`.
 - Done criteria evidence:
   - `A2APeerSummary` now includes `runtime`, `channelRef`, and `wakeable`.
   - Runtime mode peer visibility only marks exact `delegate_targets.runtime_agent_id` matches callable; legacy `delegate_to` migration fields no longer make bot-level host cards appear callable.
   - Peer trust summaries preserve extended card runtime/channel metadata from peer card storage.
 - Runtime settings touched: no.
-- Deployment hosts touched: no.
-- Rollback boundary: revert this code/docs commit; runtime rollout remains usable, but `bot_a2a_peers` would again risk showing legacy bot host cards as callable in runtime mode.
-- Next phase: deploy this peer-listing fix to local M5 and d80 binaries, then rerun `bot_a2a_peers` from the live MCP context.
+- Deployment hosts touched: local M5 bot binary/service and remote d80 bot binary/service only.
+- Rollback boundary: restore `/Users/chun/Projects/kiro-discord-bot-local/bin/kiro-discord-bot.pre-peers-fix-20260731184705` locally or `/opt/kiro-discord-bot/kiro-discord-bot.pre-peers-fix-20260731184757` on d80; runtime rollout remains usable, but `bot_a2a_peers` would again risk showing legacy bot host cards as callable in runtime mode.
+- Next phase: monitor live MCP peer output during normal delegation; no additional code phase is open.
 
 ## Master goal prompt
 
