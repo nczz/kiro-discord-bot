@@ -309,8 +309,16 @@ func (p *Publisher) SendTask(ctx context.Context, req TaskExecutionRequest) (Tas
 	if err := ValidateMessageID(req.MessageID); err != nil {
 		return TaskRow{}, err
 	}
+	delivery := req.Delivery
+	if delivery.DiscordContext == nil && len(delivery.DiscordContextJSON) > 0 {
+		var dc DiscordContext
+		if err := json.Unmarshal(delivery.DiscordContextJSON, &dc); err != nil {
+			return TaskRow{}, fmt.Errorf("discord context json: %w", err)
+		}
+		delivery.DiscordContext = &dc
+	}
 	payload := SendMessagePayload{A2A: req.Payload, ChannelRef: req.ChannelRef, SkillID: req.SkillID, UserVisibleSummary: req.UserVisibleSummary, ClientTaskRef: req.ClientTaskRef, ContextID: req.ContextID, AuditMetadata: req.AuditMetadata, OriginRequester: req.OriginRequester}
-	payload.Delivery = TransportDelivery{TimeoutSec: req.Delivery.TimeoutSec, RequiresConfirmation: req.Delivery.RequiresConfirmation, DiscordContext: req.Delivery.DiscordContext, DiscordReplyChannelID: req.Delivery.DiscordReplyChannelID, DiscordReplyThreadID: req.Delivery.DiscordReplyThreadID, ShareDiscordContext: req.Delivery.ShareDiscordContext, CoPresentFrom: req.Delivery.CoPresentFrom, MaxDelegationDepth: req.Delivery.MaxDelegationDepth, ResultVisibility: req.ResultVisibility, DiscordTranscriptMode: req.DiscordTranscriptMode}
+	payload.Delivery = TransportDelivery{TimeoutSec: delivery.TimeoutSec, RequiresConfirmation: delivery.RequiresConfirmation, DiscordContext: delivery.DiscordContext, DiscordReplyChannelID: delivery.DiscordReplyChannelID, DiscordReplyThreadID: delivery.DiscordReplyThreadID, ShareDiscordContext: delivery.ShareDiscordContext, CoPresentFrom: delivery.CoPresentFrom, MaxDelegationDepth: delivery.MaxDelegationDepth, ResultVisibility: req.ResultVisibility, DiscordTranscriptMode: req.DiscordTranscriptMode}
 	raw, err := json.Marshal(payload)
 	if err != nil {
 		return TaskRow{}, err

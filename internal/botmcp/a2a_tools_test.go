@@ -554,6 +554,7 @@ func TestA2AToolsTaskStatusOmitsCoPresentResultText(t *testing.T) {
 		ResultVisibility:      "transparent",
 		DiscordTranscriptMode: "co_present",
 		Terminal:              true,
+		DiscordContextJSON:    `{"guildId":"guild-1","channelId":"channel-1","threadId":"thread-1"}`,
 	})
 	if err != nil {
 		t.Fatalf("CreateOutbound: %v", err)
@@ -568,21 +569,32 @@ func TestA2AToolsTaskStatusOmitsCoPresentResultText(t *testing.T) {
 	if !got.OK || got.Task == nil || len(got.Task.Events) != 1 {
 		t.Fatalf("TaskStatus = %+v, want task event", got)
 	}
-	if got.Task.Events[0].Content != "" || !strings.Contains(got.Message, "omitted") {
-		t.Fatalf("TaskStatus co-present result = %+v message=%q, want omitted content", got.Task.Events[0], got.Message)
+	if got.Task.Events[0].Content != "" || !strings.Contains(got.Message, "Do not post a follow-up") || got.Metadata["discord_thread_id"] != "thread-1" {
+		t.Fatalf("TaskStatus co-present result = %+v metadata=%+v message=%q, want omitted content with follow-up guidance", got.Task.Events[0], got.Metadata, got.Message)
 	}
 }
 
 func TestA2AToolsAutoDeliveryUsesCoPresentForSameDiscordRuntime(t *testing.T) {
 	req := A2AToolRequest{GuildID: "guild-1", ChannelID: "channel-1"}
 	peer := a2a.PeerRow{ExtendedCard: a2a.ExtendedAgentCard{DiscordGuildID: "guild-1", DiscordChannelID: "channel-1"}}
-	visibility, mode := runtimeDeliveryDefaultsForPeer("m5-main", "d80-main", req, peer)
-	if visibility != "transparent" || mode != "co_present" {
-		t.Fatalf("runtimeDeliveryDefaultsForPeer = %s/%s, want transparent/co_present", visibility, mode)
+	visibility, mode, reason := runtimeDeliveryDefaultsForPeer("m5-main", "d80-main", req, peer)
+	if visibility != "transparent" || mode != "co_present" || !strings.Contains(reason, "same Discord channel") {
+		t.Fatalf("runtimeDeliveryDefaultsForPeer = %s/%s (%s), want transparent/co_present same-channel reason", visibility, mode, reason)
 	}
 	delivery := deliveryOptionsForDelegate(req, visibility, mode, "m5bot-local-m5-main", 60, 1)
 	if !delivery.ShareDiscordContext || delivery.CoPresentFrom != "m5bot-local-m5-main" || delivery.DiscordContext == nil || len(delivery.DiscordContextJSON) == 0 {
 		t.Fatalf("deliveryOptionsForDelegate = %+v, want shared Discord context from runtime", delivery)
+	}
+}
+
+func TestA2AToolsAuditDiscordFieldsUsesThreadTarget(t *testing.T) {
+	delivery := a2a.DeliveryOptions{
+		DiscordReplyChannelID: "parent-channel",
+		DiscordReplyThreadID:  "thread-1",
+	}
+	targetID, parentChannelID, threadID := auditDiscordFields(A2AToolRequest{ChannelID: "caller-channel"}, delivery)
+	if targetID != "thread-1" || parentChannelID != "parent-channel" || threadID != "thread-1" {
+		t.Fatalf("auditDiscordFields = %q/%q/%q, want thread target with parent channel", targetID, parentChannelID, threadID)
 	}
 }
 

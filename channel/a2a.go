@@ -731,52 +731,77 @@ func (m *Manager) recordA2ADeliveryAudit(row a2a.TaskRow, kind string, targetID 
 	if payload.Result != nil && artifactCount == 0 {
 		artifactCount = len(payload.Result.Artifacts)
 	}
-	metadata := map[string]any{
-		"task_id":                  string(row.TaskID),
-		"client_task_ref":          row.ClientTaskRef,
-		"message_id":               string(row.MessageID),
-		"context_id":               row.ContextID,
-		"from_agent":               string(row.FromAgent),
-		"to_agent":                 string(row.ToAgent),
-		"executor_agent":           string(row.ExecutorAgent),
-		"channel_id":               row.ChannelID,
-		"guild_id":                 row.GuildID,
-		"channel_ref":              row.ChannelRef,
-		"skill_id":                 row.SkillID,
-		"state":                    string(row.State),
-		"revision":                 row.Revision,
-		"result_visibility":        row.ResultVisibility,
-		"discord_transcript_mode":  row.DiscordTranscriptMode,
-		"discord_message_id":       targetID,
-		"transcript_delivery_kind": kind,
-		"source_event_revision":    payload.Revision,
-		"error_code":               string(payload.Error.Code),
-		"artifact_count":           artifactCount,
-	}
+	parentChannelID, threadID := a2aDiscordAuditTarget(row, targetID)
+	metadata := a2a.AuditMetadata(a2a.AuditMetadataInput{
+		TaskID:                 row.TaskID,
+		ClientTaskRef:          row.ClientTaskRef,
+		MessageID:              row.MessageID,
+		ContextID:              row.ContextID,
+		FromAgent:              row.FromAgent,
+		ToAgent:                row.ToAgent,
+		ExecutorAgent:          row.ExecutorAgent,
+		ChannelID:              row.ChannelID,
+		GuildID:                row.GuildID,
+		ChannelRef:             row.ChannelRef,
+		SkillID:                row.SkillID,
+		State:                  row.State,
+		Revision:               row.Revision,
+		ResultVisibility:       row.ResultVisibility,
+		DiscordTranscriptMode:  row.DiscordTranscriptMode,
+		DiscordTargetID:        targetID,
+		DiscordParentChannelID: parentChannelID,
+		DiscordThreadID:        threadID,
+		TranscriptDeliveryKind: kind,
+		SourceEventRevision:    payload.Revision,
+		ErrorCode:              payload.Error.Code,
+		ArtifactCount:          artifactCount,
+	})
 	m.audit.RecordBotEvent(audit.BotEvent{
-		Type:      a2a.AuditTranscriptPosted,
-		GuildID:   row.GuildID,
-		ChannelID: targetID,
-		TargetID:  row.ChannelID,
-		Command:   "a2a",
-		Source:    "a2a",
-		Status:    statusFromError(errText),
-		Error:     errText,
-		Metadata:  metadata,
+		Type:            a2a.AuditTranscriptPosted,
+		GuildID:         row.GuildID,
+		ChannelID:       parentChannelID,
+		TargetID:        targetID,
+		ThreadID:        threadID,
+		ParentChannelID: parentChannelID,
+		Command:         "a2a",
+		Source:          "a2a",
+		Status:          statusFromError(errText),
+		Error:           errText,
+		Metadata:        metadata,
 	})
 	if kind == a2a.EventKindResult {
 		m.audit.RecordBotEvent(audit.BotEvent{
-			Type:      a2a.AuditResultDelivered,
-			GuildID:   row.GuildID,
-			ChannelID: targetID,
-			TargetID:  row.ChannelID,
-			Command:   "a2a",
-			Source:    "a2a",
-			Status:    statusFromError(errText),
-			Error:     errText,
-			Metadata:  metadata,
+			Type:            a2a.AuditResultDelivered,
+			GuildID:         row.GuildID,
+			ChannelID:       parentChannelID,
+			TargetID:        targetID,
+			ThreadID:        threadID,
+			ParentChannelID: parentChannelID,
+			Command:         "a2a",
+			Source:          "a2a",
+			Status:          statusFromError(errText),
+			Error:           errText,
+			Metadata:        metadata,
 		})
 	}
+}
+
+func a2aDiscordAuditTarget(row a2a.TaskRow, targetID string) (string, string) {
+	parentChannelID := strings.TrimSpace(row.ChannelID)
+	threadID := ""
+	var dc a2a.DiscordContext
+	if strings.TrimSpace(row.DiscordContextJSON) != "" && json.Unmarshal([]byte(row.DiscordContextJSON), &dc) == nil {
+		if v := strings.TrimSpace(dc.ChannelID); v != "" {
+			parentChannelID = v
+		}
+		if v := strings.TrimSpace(dc.ThreadID); v != "" && v != parentChannelID {
+			threadID = v
+		}
+	}
+	if threadID == "" && strings.TrimSpace(targetID) != "" && strings.TrimSpace(targetID) != parentChannelID {
+		threadID = strings.TrimSpace(targetID)
+	}
+	return parentChannelID, threadID
 }
 
 func statusFromError(errText string) string {

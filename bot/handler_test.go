@@ -1732,8 +1732,8 @@ func TestA2ATranscriptModeSafeClearsContextSharing(t *testing.T) {
 
 func TestA2APolicyFormatterIncludesPolicyMutationFields(t *testing.T) {
 	L.Load("en")
-	got := formatA2APolicy("Preview", a2a.ChannelA2APolicy{Enabled: true, ChannelRef: "d80-test", ResultVisibility: "proxy", DiscordTranscriptMode: "delegator", AcceptFrom: []string{"d80-chunbot"}, AcceptSkills: []string{"task"}, ExposeSkills: []a2a.SkillPolicy{{ID: "task"}}, DelegateTo: []string{"d80-chunbot"}, DelegateSkills: []string{"general/task"}, MaxConcurrent: 3})
-	for _, want := range []string{"Result visibility", "Local capabilities exposed", "`task`", "Max concurrent inbound tasks: 3"} {
+	got := formatA2APolicy("Preview", a2a.ChannelA2APolicy{Enabled: true, ChannelRef: "d80-test", ResultVisibility: "transparent", DiscordTranscriptMode: "co_present", ShareDiscordContext: true, AcceptFrom: []string{"d80-chunbot"}, AcceptSkills: []string{"task"}, ExposeSkills: []a2a.SkillPolicy{{ID: "task"}}, DelegateTo: []string{"d80-chunbot"}, DelegateSkills: []string{"general/task"}, CoPresentFromRuntimes: []string{"d80-chunbot-main"}, MaxConcurrent: 3})
+	for _, want := range []string{"Result visibility", "Local capabilities exposed", "`task`", "Max concurrent inbound tasks: 3", "Same-thread co-present readiness: ready", "Co-present runtime allowlist: `d80-chunbot-main`"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("formatA2APolicy = %q, missing %q", got, want)
 		}

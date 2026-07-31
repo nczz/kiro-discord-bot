@@ -638,11 +638,33 @@ func formatA2APolicy(title string, policy a2a.ChannelA2APolicy) string {
 	sb.WriteString(L.Getf("a2a.policy.delegate_targets", joinDelegateTargetsOrNone(policy.DelegateTargets)))
 	sb.WriteString("\n")
 	sb.WriteString(L.Getf("a2a.policy.max_concurrent", policy.MaxConcurrent))
-	if policy.ShareDiscordContext {
-		sb.WriteString("\n")
-		sb.WriteString(L.Getf("a2a.policy.co_present_from", joinOrNone(policy.CoPresentFrom)))
-	}
+	sb.WriteString("\n")
+	sb.WriteString(L.Getf("a2a.policy.co_present_ready", coPresentReadiness(policy)))
+	sb.WriteString("\n")
+	sb.WriteString(L.Getf("a2a.policy.co_present_from", joinOrNone(policy.CoPresentFrom)))
+	sb.WriteString("\n")
+	sb.WriteString(L.Getf("a2a.policy.co_present_from_runtimes", joinOrNone(policy.CoPresentFromRuntimes)))
 	return sb.String()
+}
+
+func coPresentReadiness(policy a2a.ChannelA2APolicy) string {
+	var missing []string
+	if policy.ResultVisibility != "transparent" {
+		missing = append(missing, "result_visibility=transparent")
+	}
+	if policy.DiscordTranscriptMode != "co_present" {
+		missing = append(missing, "discord_transcript_mode=co_present")
+	}
+	if !policy.ShareDiscordContext {
+		missing = append(missing, "share_discord_context=true")
+	}
+	if len(policy.CoPresentFrom) == 0 && len(policy.CoPresentFromRuntimes) == 0 {
+		missing = append(missing, "co_present_from_runtimes")
+	}
+	if len(missing) == 0 {
+		return L.Get("a2a.policy.co_present.ready")
+	}
+	return L.Getf("a2a.policy.co_present.blocked", strings.Join(missing, ", "))
 }
 
 func formatA2AEventDetail(value string) string {

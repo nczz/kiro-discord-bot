@@ -29,6 +29,10 @@ type AuditMetadataInput struct {
 	ResultVisibility       string
 	DiscordTranscriptMode  string
 	DiscordMessageID       string
+	DiscordTargetID        string
+	DiscordParentChannelID string
+	DiscordThreadID        string
+	OriginDiscordMessageID string
 	ActorAgentID           AgentID
 	ActorDiscordUserID     string
 	TranscriptDeliveryKind string
@@ -92,6 +96,10 @@ func AuditMetadata(in AuditMetadataInput) map[string]any {
 	put("revision", in.Revision)
 	put("result_visibility", in.ResultVisibility)
 	put("discord_transcript_mode", in.DiscordTranscriptMode)
+	put("discord_target_id", in.DiscordTargetID)
+	put("discord_parent_channel_id", in.DiscordParentChannelID)
+	put("discord_thread_id", in.DiscordThreadID)
+	put("origin_discord_message_id", in.OriginDiscordMessageID)
 	put("discord_message_id", in.DiscordMessageID)
 	put("actor_agent_id", in.ActorAgentID)
 	put("actor_discord_user_id", in.ActorDiscordUserID)

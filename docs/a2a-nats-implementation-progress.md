@@ -723,6 +723,27 @@ Append one subsection per completed phase.
 - Rollback boundary: restore `/Users/chun/Projects/kiro-discord-bot-local/bin/kiro-discord-bot.pre-a2a-copresent-dedupe-fix-20260801000414` locally or `/opt/kiro-discord-bot/kiro-discord-bot.pre-a2a-copresent-dedupe-fix-20260801000454` on d80, then revert the R21 files above. Co-present executor replies would again risk duplicate delegator channel result posts.
 - Next phase: rerun the original Discord joke-review interaction once from the user side; expected observable result is one M5 review in the shared thread and no `A2A result from ...` ChunBot channel post.
 
+### R22 co-present UX guardrails and status source hardening
+
+- Status: deployed.
+- Trigger: after R21, Discord UX still exposed confusing seams: policy display did not show whether all co-present gates were aligned, `bot_a2a_delegate`/`bot_a2a_task_status` descriptions did not make the no-follow-up rule explicit enough, and audit metadata did not consistently identify the Discord parent/thread target for A2A delivery diagnostics.
+- Decision: make co-present an explicit operator-visible contract. `/a2a policy` now reports same-thread readiness plus legacy/runtime co-present allowlists; MCP tool descriptions and the main bot prompt require `bot_a2a_task_status` as the authoritative progress source and prohibit reposting transparent/co_present executor results; delegate audit metadata now carries `discord_target_id`, `discord_parent_channel_id`, and `discord_thread_id`.
+- Changed files: `a2a/audit.go`, `a2a/transport.go`, `bot/a2a_commands.go`, `bot/handler.go`, `bot/handler_test.go`, `channel/a2a.go`, `internal/botmcp/a2a_tool_register.go`, `internal/botmcp/a2a_tools.go`, `internal/botmcp/a2a_tools_test.go`, `locale/lang/en.json`, `locale/lang/zh-TW.json`, and this progress ledger.
+- Validation:
+  - `go test ./bot -run 'TestA2APolicyFormatterIncludesPolicyMutationFields|TestManagerA2ACoPresentInitialTaskUsesSharedDiscordThread|TestManagerA2AContinuationReusesExecutorConversationThread|TestManagerA2AThreadCreationFailureReleasesWorker'` passed.
+  - `go test ./internal/botmcp -run 'TestA2AToolsTaskStatusOmitsCoPresentResultText|TestA2AToolsAutoDeliveryUsesCoPresentForSameDiscordRuntime|TestA2AToolsAuditDiscordFieldsUsesThreadTarget|TestA2AToolsTaskStatusRequiresOwnerOrManager|TestA2AToolsRuntimePreflight'` passed.
+  - `go test ./channel -run 'TestA2A\(CoPresentTransparentResultDoesNotDuplicateExecutorTranscript|ProxyDelegatorResultDoesNotDuplicateExecutorTranscript|MirrorTranscriptQueuesSafeEgressAndAudit|TransparentResultQueuesSafeEgressAndAudit|SharedContextAcceptsRuntimeAllowedByPolicy\)'` passed.
+  - `env -u NATS_URL -u NATS_CREDS_FILE -u NATS_TOKEN -u NATS_TLS_CA_FILE -u A2A_AGENT_ID -u A2A_RUNTIME_ID_MODE -u A2A_AGENT_NAME -u A2A_AGENT_DESCRIPTION -u A2A_REQUIRE_CONFIRMATION_FOR_REMOTE go test ./...` passed.
+  - `git diff --check` passed.
+  - Built `/tmp/kiro-discord-bot-darwin-a2a-ux-fix` (`9a9e250549268dff301a97d396cb2251c897f7680d43f9df7bfe50c7b0eabdb5` before local codesign), `/tmp/kiro-discord-bot-linux-arm64-a2a-ux-fix` (`f276a82d5c6fb1224d9cab3f769cfffaa210fcd6dd3b8c18cdca735a20f691b5`, wrong arch for d80), and `/tmp/kiro-discord-bot-linux-amd64-a2a-ux-fix` (`6f76c5f5635ccc2a2957c4dacfc275b88b2d3eed113b132c1042cc33fa4c8227`, deployed to d80).
+  - Local M5 bot restarted and logged `NATS node enabled`, `transport consumers started`, and `Bot running as M5Bot#8313`.
+  - Remote d80 bot service is `active` and logged `NATS node enabled`, `transport consumers started`, and `Bot running as ChunBot#4533`. A transient redeploy attempted the arm64 binary on x86_64 and failed with systemd `203/EXEC`; it was immediately replaced by the amd64 build and the service is active.
+  - Live co-present smoke `msg_a2a_copresent_final_f93c3248` reached `TASK_STATE_COMPLETED` revision 2 with `result_visibility=transparent`, `discord_transcript_mode=co_present`, and `discord_context_json` preserving thread `1532779483545862414`. Local audit recorded one executor `agent_response_sent` in that thread with content `A2A co-present final OK f93c3248`.
+- Runtime settings touched: no additional policy changes beyond R20.
+- Deployment hosts touched: local M5 bot binary/service and remote d80 bot binary/service.
+- Rollback boundary: restore `/Users/chun/Projects/kiro-discord-bot-local/bin/kiro-discord-bot.pre-a2a-ux-final-20260801002622` locally or `/opt/kiro-discord-bot/kiro-discord-bot.pre-a2a-ux-final-20260801002715` on d80, then revert the R22 files above. Co-present delivery would continue working from R21, but policy readiness display, stronger MCP/prompt guardrails, and new Discord audit target fields would be removed.
+- Next phase: observe one natural Discord-issued delegation that asks for status/progress after completion; expected result is `bot_a2a_task_status` reports terminal state without reposting the executor's transparent/co_present result.
+
 ## Master goal prompt
 
 Use this prompt when starting or resuming the full implementation program:
