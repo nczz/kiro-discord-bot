@@ -333,12 +333,15 @@ func TestA2AToolsDelegateAllowsUntrustedExactRuntimePolicy(t *testing.T) {
 		t.Fatalf("Upsert runtime peer: %v", err)
 	}
 
-	got, err := svc.Delegate(ctx, A2AToolRequest{GuildID: "guild-1", ChannelID: "channel-1", RequestedBy: "alice", RequestedByID: "user-1", TargetAgent: "peer-n100-support", TargetChannelRef: "support", SkillID: "task", Message: "ping"})
+	got, err := svc.Delegate(ctx, A2AToolRequest{GuildID: "guild-1", ChannelID: "channel-1", RequestedBy: "alice", RequestedByID: "user-1", TargetAgent: "peer-n100-support", SkillID: "task", Message: "ping"})
 	if err != nil {
 		t.Fatalf("Delegate: %v", err)
 	}
 	if !got.OK || !got.RequiresConfirmation || got.ErrorCode != "" || got.ConfirmationToken == "" {
 		t.Fatalf("Delegate exact runtime policy = %+v, want confirmation instead of trust denial", got)
+	}
+	if !strings.Contains(got.ConfirmationSummary, "peer-n100-support@support/support/task") {
+		t.Fatalf("Delegate confirmation summary = %q, want policy target channel_ref", got.ConfirmationSummary)
 	}
 }
 

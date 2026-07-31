@@ -304,6 +304,25 @@ func policyDelegatesExactRuntime(policy a2a.ChannelA2APolicy, agent, skill strin
 	return false
 }
 
+func policyRuntimeTargetChannelRef(policy a2a.ChannelA2APolicy, agent, skill string) string {
+	for _, target := range policy.DelegateTargets {
+		if strings.TrimSpace(target.RuntimeAgentID) == "" {
+			continue
+		}
+		if !stringListAllows([]string{target.RuntimeAgentID}, agent) {
+			continue
+		}
+		if !skillListAllows([]string{target.SkillID}, skill) {
+			continue
+		}
+		ref := strings.TrimSpace(target.ChannelRef)
+		if ref != "" && ref != "*" {
+			return ref
+		}
+	}
+	return ""
+}
+
 func (s *A2AService) PolicyGet(ctx context.Context, req A2AToolRequest) (A2AToolResponse, error) {
 	if err := s.validateContext(req, false); err != nil {
 		return responseError(err), nil
@@ -449,9 +468,13 @@ func (s *A2AService) Delegate(ctx context.Context, req A2AToolRequest) (A2AToolR
 	if effectiveSkill == "" {
 		return responseError(fmt.Errorf("%w: target peer does not expose skill", errorCode(a2a.ErrorUnknownSkill))), nil
 	}
-	if !req.hasExplicitTargetRuntimeRef() && !policyDelegatesRuntime(policy, string(target), effectiveSkill, targetChannelRef) {
-		if inferred := skillChannelRef(effectiveSkill); inferred != "" {
-			targetChannelRef = inferred
+	if !req.hasExplicitTargetRuntimeRef() {
+		if ref := policyRuntimeTargetChannelRef(policy, string(target), effectiveSkill); ref != "" {
+			targetChannelRef = ref
+		} else if !policyDelegatesRuntime(policy, string(target), effectiveSkill, targetChannelRef) {
+			if inferred := skillChannelRef(effectiveSkill); inferred != "" {
+				targetChannelRef = inferred
+			}
 		}
 	}
 	if !policyDelegatesRuntime(policy, string(target), effectiveSkill, targetChannelRef) {
