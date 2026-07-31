@@ -498,20 +498,22 @@ Append one subsection per completed phase.
 
 ### R10 default-enabled A2A MCP tool surface
 
-- Status: code-ready; current commit.
+- Status: deployed smoke passed; current commit.
 - Decision: all A2A MCP tools should be present in the default bot-tools allowlist, with safety enforced by each tool's bound Discord context, requester/manager checks, confirmation tokens, task ownership checks, and policy gates rather than by making lifecycle tools unavailable.
 - Changed files: `internal/botmcp/server.go`, `internal/botmcp/server_test.go`, and this progress ledger.
 - Validation:
   - `go test ./internal/botmcp -run 'TestDefaultSafeToolNames'` passed.
   - `go test ./...` passed.
   - `git diff --check` passed.
+  - Deployed live local M5 and remote d80 binaries from commit `eb4f205`; local installed binary sha256 after ad-hoc codesign `b70f978353b645a0bd51079875df5661d1d0b91e73ca807b408e76fca36cbfe8`, remote installed linux amd64 sha256 `54d9648f0c688b76ababf5831092d0b6ec144b8aeb6c056aa8856d4d338321f5`.
+  - Post-deploy exact runtime smoke passed: `go run /tmp/a2a_smoke.go exact d80-chunbot-d80-main`; message `smoke_exact_1785495270`; terminal `TASK_STATE_COMPLETED`; task `task_ffad2ab130db68ce8e5a156c`; executor `d80-chunbot-d80-main`.
 - Done criteria evidence:
   - Default A2A MCP allowlist includes `bot_a2a_peers`, `bot_a2a_policy_get`, `bot_a2a_task_status`, `bot_a2a_runtime_preflight`, `bot_a2a_policy_plan`, `bot_a2a_delegate`, `bot_a2a_policy_apply`, `bot_a2a_cancel`, `bot_a2a_input_reply`, and `bot_a2a_auth_reply`.
   - Destructive/open operations still keep their internal gates: `bot_a2a_policy_apply` requires ManageChannels plus fresh confirmation; cancel/input/auth continuation validate requester or manager/task state before publishing.
 - Runtime settings touched: no.
-- Deployment hosts touched: no.
-- Rollback boundary: revert this code/docs commit; A2A remains usable, but default channel setup would no longer expose the full MCP lifecycle surface.
-- Next phase: deploy the default allowlist change to local M5 and d80 binaries.
+- Deployment hosts touched: local M5 bot binary/service and remote d80 bot binary/service only.
+- Rollback boundary: restore `/Users/chun/Projects/kiro-discord-bot-local/bin/kiro-discord-bot.pre-a2a-default-20260731185317` locally or `/opt/kiro-discord-bot/kiro-discord-bot.pre-a2a-default-20260731185403` on d80; A2A remains usable, but default channel setup would no longer expose the full MCP lifecycle surface.
+- Next phase: monitor live A2A MCP usage; no additional code phase is open.
 
 ## Master goal prompt
 
