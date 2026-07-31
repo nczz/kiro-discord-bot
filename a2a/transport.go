@@ -516,18 +516,138 @@ func (t *Transport) handleControlMessage(ctx context.Context, msg jetstream.Msg)
 			_ = msg.Nak()
 			return err
 		}
-	case ControlKindStatusRequest, ControlKindInputReply, ControlKindAuthReply:
-		if subject.Control == ControlKindStatusRequest {
-			if err := t.publisherFrom(row.ExecutorAgent).PublishStatus(ctx, row.FromAgent, row.TaskID, row.Revision, row.State, "", row.Error); err != nil {
-				_ = msg.Nak()
+	case ControlKindStatusRequest:
+		if err := t.publisherFrom(row.ExecutorAgent).PublishStatus(ctx, row.FromAgent, row.TaskID, row.Revision, row.State, "", row.Error); err != nil {
+			_ = msg.Nak()
+			return err
+		}
+	case ControlKindInputReply:
+		if row.State != TaskStateInputRequired {
+			if row.State == TaskStateWorking && env.Revision <= row.Revision {
+				if err := t.replayContinuationControl(ctx, msg, row, env, ControlKindInputReply, "input received"); err != nil {
+					return err
+				}
+				break
+			}
+			_ = msg.TermWithReason("input_reply requires TASK_STATE_INPUT_REQUIRED")
+			return TransportError{Code: ErrorInvalidEnvelope, Message: "input_reply requires TASK_STATE_INPUT_REQUIRED"}
+		}
+		if err := t.applyContinuationControl(ctx, msg, row, env, ControlKindInputReply, "input received"); err != nil {
+			return err
+		}
+	case ControlKindAuthReply:
+		payload := controlPayloadFromEnvelope(env)
+		if denied, reason := authReplyDenied(payload); denied {
+			if row.State != TaskStateAuthRequired {
+				_ = msg.TermWithReason("auth denial requires TASK_STATE_AUTH_REQUIRED")
+				return TransportError{Code: ErrorInvalidEnvelope, Message: "auth denial requires TASK_STATE_AUTH_REQUIRED"}
+			}
+			if err := t.applyAuthDeniedControl(ctx, msg, row, env, reason); err != nil {
 				return err
 			}
+			break
+		}
+		if row.State != TaskStateAuthRequired {
+			if row.State == TaskStateWorking && env.Revision <= row.Revision {
+				if err := t.replayContinuationControl(ctx, msg, row, env, ControlKindAuthReply, "authorization received"); err != nil {
+					return err
+				}
+				break
+			}
+			_ = msg.TermWithReason("auth_reply requires TASK_STATE_AUTH_REQUIRED")
+			return TransportError{Code: ErrorInvalidEnvelope, Message: "auth_reply requires TASK_STATE_AUTH_REQUIRED"}
+		}
+		if err := t.applyContinuationControl(ctx, msg, row, env, ControlKindAuthReply, "authorization received"); err != nil {
+			return err
 		}
 	default:
 		_ = msg.TermWithReason("unsupported control kind")
 		return TransportError{Code: ErrorUnsupportedOperation, Message: subject.Control}
 	}
 	return msg.DoubleAck(ctx)
+}
+
+func (t *Transport) applyContinuationControl(ctx context.Context, msg jetstream.Msg, row TaskRow, env Envelope, kind string, content string) error {
+	rev := env.Revision
+	if rev <= row.Revision {
+		rev = row.Revision + 1
+	}
+	applied, err := t.tasks.ApplyTaskEvent(ctx, "inbound", row.TaskID, EventRow{TaskID: row.TaskID, Revision: rev, EventType: kind, State: TaskStateWorking, PayloadJSON: string(env.Payload)}, TaskStateWorking, TaskError{})
+	if err != nil {
+		_ = msg.Nak()
+		return err
+	}
+	if err := t.publisherFrom(row.ExecutorAgent).PublishStatus(ctx, row.FromAgent, row.TaskID, applied.Revision, TaskStateWorking, content, TaskError{}); err != nil {
+		_ = msg.Nak()
+		return err
+	}
+	t.startContinuation(row, env, applied.Revision, kind)
+	return nil
+}
+
+func (t *Transport) replayContinuationControl(ctx context.Context, msg jetstream.Msg, row TaskRow, env Envelope, kind string, content string) error {
+	if err := t.publisherFrom(row.ExecutorAgent).PublishStatus(ctx, row.FromAgent, row.TaskID, row.Revision, TaskStateWorking, content, TaskError{}); err != nil {
+		_ = msg.Nak()
+		return err
+	}
+	t.startContinuation(row, env, row.Revision, kind)
+	return nil
+}
+
+func (t *Transport) applyAuthDeniedControl(ctx context.Context, msg jetstream.Msg, row TaskRow, env Envelope, reason string) error {
+	rev := env.Revision
+	if rev <= row.Revision {
+		rev = row.Revision + 1
+	}
+	taskErr := TaskError{Code: ErrorAuthNotSatisfied, Message: firstNonEmpty(reason, "authorization denied")}
+	applied, err := t.tasks.ApplyTaskEvent(ctx, "inbound", row.TaskID, EventRow{TaskID: row.TaskID, Revision: rev, EventType: ControlKindAuthReply, State: TaskStateFailed, PayloadJSON: string(env.Payload)}, TaskStateFailed, taskErr)
+	if err != nil {
+		_ = msg.Nak()
+		return err
+	}
+	result := TaskExecutionResult{TaskID: row.TaskID, State: TaskStateFailed, Revision: applied.Revision, Error: taskErr, Content: taskErr.Message}
+	if err := t.publisherFrom(row.ExecutorAgent).PublishResult(ctx, row.FromAgent, result, row.MessageID); err != nil {
+		_ = msg.Nak()
+		return err
+	}
+	return nil
+}
+
+func (t *Transport) startContinuation(row TaskRow, env Envelope, revision int64, kind string) {
+	key := strings.TrimSpace(row.LocalID) + ":continuation:" + string(env.MessageID)
+	if !t.markStarted(key) {
+		return
+	}
+	req := taskRequestFromRow(row)
+	admission := A2AAdmission{
+		AdmissionKey: row.LocalID,
+		TaskID:       row.TaskID,
+		State:        TaskStateWorking,
+		Revision:     revision,
+		Request:      req,
+		Continuation: &A2AContinuation{Kind: kind, Payload: controlPayloadFromEnvelope(env).A2A, Reason: controlPayloadFromEnvelope(env).Reason},
+	}
+	go t.runAccepted(admission)
+}
+
+func controlPayloadFromEnvelope(env Envelope) ControlPayload {
+	var payload ControlPayload
+	_ = json.Unmarshal(env.Payload, &payload)
+	return payload
+}
+
+func authReplyDenied(payload ControlPayload) (bool, string) {
+	var auth struct {
+		Approve    *bool  `json:"approve,omitempty"`
+		DenyReason string `json:"denyReason,omitempty"`
+	}
+	if len(payload.A2A) > 0 {
+		_ = json.Unmarshal(payload.A2A, &auth)
+	}
+	if auth.Approve == nil || *auth.Approve {
+		return false, ""
+	}
+	return true, firstNonEmpty(auth.DenyReason, payload.Reason)
 }
 
 func (t *Transport) handleEventMessage(ctx context.Context, msg jetstream.Msg) error {
@@ -555,16 +675,33 @@ func (t *Transport) handleEventMessage(ctx context.Context, msg jetstream.Msg) e
 			_ = msg.TermWithReason("accepted event must use task id key")
 			return fmt.Errorf("accepted event must use task id key")
 		}
-		row, err := t.tasks.BindAccepted(ctx, env.MessageID, TaskID(subject.TaskKey), subject.Executor)
+		row, err := t.tasks.GetByDirectionMessage(ctx, "outbound", env.MessageID)
 		if err != nil {
 			_ = msg.Nak()
 			return err
 		}
-		_ = row
+		if err := validateOutboundEventOwnership(row, subject); err != nil {
+			_ = msg.TermWithReason(err.Error())
+			return err
+		}
+		row, err = t.tasks.BindAccepted(ctx, env.MessageID, TaskID(subject.TaskKey), subject.Executor)
+		if err != nil {
+			_ = msg.Nak()
+			return err
+		}
 	case EventKindRejected:
 		if !strings.HasPrefix(subject.TaskKey, "msg_") {
 			_ = msg.TermWithReason("pre-accept rejected event must use msg_ key")
 			return fmt.Errorf("pre-accept rejected event must use msg_ key")
+		}
+		row, err := t.tasks.GetByDirectionMessage(ctx, "outbound", env.MessageID)
+		if err != nil {
+			_ = msg.Nak()
+			return err
+		}
+		if err := validateOutboundEventOwnership(row, subject); err != nil {
+			_ = msg.TermWithReason(err.Error())
+			return err
 		}
 		if _, err := t.tasks.RejectBeforeAccepted(ctx, env.MessageID, payload.ClientTaskRef, subject.Executor, payload.Error); err != nil {
 			_ = msg.Nak()
@@ -585,7 +722,16 @@ func (t *Transport) handleEventMessage(ctx context.Context, msg jetstream.Msg) e
 			revision = payload.Revision
 		}
 		eventPayload, _ := json.Marshal(payload)
-		row, err := t.tasks.ApplyTaskEvent(ctx, "outbound", TaskID(subject.TaskKey), EventRow{TaskID: TaskID(subject.TaskKey), Revision: revision, EventType: subject.EventKind, State: state, PayloadJSON: string(eventPayload)}, state, taskErr)
+		row, err := t.tasks.GetByDirectionTaskID(ctx, "outbound", TaskID(subject.TaskKey))
+		if err != nil {
+			_ = msg.Nak()
+			return err
+		}
+		if err := validateOutboundEventOwnership(row, subject); err != nil {
+			_ = msg.TermWithReason(err.Error())
+			return err
+		}
+		row, err = t.tasks.ApplyTaskEvent(ctx, "outbound", TaskID(subject.TaskKey), EventRow{TaskID: TaskID(subject.TaskKey), Revision: revision, EventType: subject.EventKind, State: state, PayloadJSON: string(eventPayload)}, state, taskErr)
 		if err != nil {
 			_ = msg.Nak()
 			return err
@@ -615,6 +761,22 @@ func decodeEnvelopeMessage(msg jetstream.Msg) (Subject, Envelope, error) {
 		return Subject{}, Envelope{}, err
 	}
 	return subject, env, nil
+}
+
+func validateOutboundEventOwnership(row TaskRow, subject Subject) error {
+	if row.FromAgent != subject.Delegator {
+		return fmt.Errorf("event delegator %s does not match outbound task from_agent %s", subject.Delegator, row.FromAgent)
+	}
+	if row.ExecutorAgent != "" {
+		if row.ExecutorAgent != subject.Executor {
+			return fmt.Errorf("event executor %s does not match outbound task executor_agent %s", subject.Executor, row.ExecutorAgent)
+		}
+		return nil
+	}
+	if row.ToAgent != subject.Executor {
+		return fmt.Errorf("event executor %s does not match outbound task target %s", subject.Executor, row.ToAgent)
+	}
+	return nil
 }
 
 func (t *Transport) recordAndPublishRejected(ctx context.Context, req TaskExecutionRequest, subject Subject, env Envelope, taskErr TaskError) error {

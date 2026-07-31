@@ -61,9 +61,26 @@ func (e *integrationExecutor) RunA2ATask(ctx context.Context, admission A2AAdmis
 		if result.Revision == 0 {
 			result.Revision = admission.Revision + 1
 		}
-		return result, nil
+		return e.recordResult(ctx, admission, result), nil
 	}
-	return TaskExecutionResult{TaskID: admission.TaskID, State: TaskStateCompleted, Revision: admission.Revision + 1, Content: "remote result"}, nil
+	return e.recordResult(ctx, admission, TaskExecutionResult{TaskID: admission.TaskID, State: TaskStateCompleted, Revision: admission.Revision + 1, Content: "remote result"}), nil
+}
+
+func (e *integrationExecutor) recordResult(ctx context.Context, admission A2AAdmission, result TaskExecutionResult) TaskExecutionResult {
+	if e.tasks == nil {
+		return result
+	}
+	if IsTerminalState(result.State) {
+		if rec, err := e.tasks.MarkTerminal(ctx, admission.AdmissionKey, result.State, result.Error); err == nil {
+			result.Revision = rec.Revision
+		}
+		return result
+	}
+	payload, _ := json.Marshal(result)
+	if row, err := e.tasks.ApplyTaskEvent(ctx, "inbound", admission.TaskID, EventRow{TaskID: admission.TaskID, Revision: result.Revision, EventType: EventKindStatus, State: result.State, PayloadJSON: string(payload)}, result.State, result.Error); err == nil {
+		result.Revision = row.Revision
+	}
+	return result
 }
 
 func (e *integrationExecutor) RunCount() int {
@@ -223,6 +240,146 @@ func TestA2AIntegrationCancelOwnership(t *testing.T) {
 	}
 	waitForTaskState(t, p.aliceDB, "outbound", accepted.TaskID, TaskStateCanceled)
 	releaseExecutor(p.bobExec)
+}
+
+func TestA2AIntegrationEventOwnershipRejectsForgedExecutor(t *testing.T) {
+	p := newIntegrationPair(t, 0)
+	if _, err := p.alice.SendTask(context.Background(), integrationRequest("msg_forged_status")); err != nil {
+		t.Fatalf("SendTask: %v", err)
+	}
+	accepted := waitForOutboundAccepted(t, p.aliceDB, "msg_forged_status")
+	payload := TaskEventPayload{TaskID: accepted.TaskID, State: TaskStateFailed, Revision: accepted.Revision + 10, Error: TaskError{Code: ErrorPolicyDenied, Message: "forged"}}
+	rawPayload, _ := json.Marshal(payload)
+	forged := newEnvelope("mallory", "eve-local", EnvelopeTypeEvent, "msg_forged_status_event", accepted.TaskID, payload.Revision, rawPayload)
+	raw, _ := json.Marshal(forged)
+	if _, err := p.aliceNode.Publish(context.Background(), EventSubject("mallory", "eve-local", string(accepted.TaskID), EventKindStatus), raw, "forged-status"); err != nil {
+		t.Fatalf("publish forged status: %v", err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	row, err := p.aliceDB.GetByDirectionTaskID(context.Background(), "outbound", accepted.TaskID)
+	if err != nil {
+		t.Fatalf("alice row: %v", err)
+	}
+	if row.State == TaskStateFailed || row.Error.Code == ErrorPolicyDenied {
+		t.Fatalf("forged event mutated outbound task = %#v", row)
+	}
+	releaseExecutor(p.bobExec)
+}
+
+func TestA2AIntegrationAcceptedEventRequiresOutboundDelegator(t *testing.T) {
+	srv := runEmbeddedNATS(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	node, err := Connect(ctx, NodeConfig{Config: Config{NATSURL: srv.ClientURL(), AgentID: "eve-local"}})
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	store, err := OpenTaskStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("task store: %v", err)
+	}
+	exec := newIntegrationExecutor(store, "eve-local")
+	transport, err := StartTransport(ctx, TransportConfig{Node: node, Tasks: store, Executor: exec, Config: Config{NATSURL: srv.ClientURL(), AgentID: "eve-local", RuntimeIDMode: RuntimeIDModeRuntime}, RuntimeAgentIDs: []AgentID{"other-local"}, Logf: func(string, ...any) {}})
+	if err != nil {
+		t.Fatalf("start transport: %v", err)
+	}
+	t.Cleanup(func() {
+		transport.Stop()
+		node.Close()
+		_ = store.Close()
+	})
+	if _, err := store.CreateOutbound(context.Background(), TaskRow{ClientTaskRef: "owner-1", MessageID: "msg_foreign_accept", FromAgent: "eve-local", ToAgent: "adam-n200", State: TaskStateSubmitted}); err != nil {
+		t.Fatalf("CreateOutbound: %v", err)
+	}
+	payload := TaskEventPayload{TaskID: "task_foreign_accept", State: TaskStateWorking, Revision: 1}
+	rawPayload, _ := json.Marshal(payload)
+	forged := newEnvelope("adam-n200", "other-local", EnvelopeTypeEvent, "msg_foreign_accept", "task_foreign_accept", 1, rawPayload)
+	raw, _ := json.Marshal(forged)
+	if _, err := node.Publish(context.Background(), EventSubject("other-local", "adam-n200", "task_foreign_accept", EventKindAccepted), raw, "forged-accepted-delegator"); err != nil {
+		t.Fatalf("publish forged accepted: %v", err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	got, err := store.GetByDirectionMessage(context.Background(), "outbound", "msg_foreign_accept")
+	if err != nil {
+		t.Fatalf("outbound row: %v", err)
+	}
+	if got.TaskID != "" || got.State != TaskStateSubmitted || got.ExecutorAgent != "" {
+		t.Fatalf("foreign accepted event mutated outbound task = %#v", got)
+	}
+}
+
+func TestA2AIntegrationPreAcceptRejectRequiresOutboundTargetExecutor(t *testing.T) {
+	p := newIntegrationPair(t, 0)
+	req := integrationRequest("msg_forged_reject")
+	row, err := p.aliceDB.CreateOutbound(context.Background(), TaskRow{ClientTaskRef: req.ClientTaskRef, MessageID: req.MessageID, FromAgent: req.From, ToAgent: req.To, State: TaskStateSubmitted})
+	if err != nil {
+		t.Fatalf("CreateOutbound: %v", err)
+	}
+	payload := TaskEventPayload{MessageID: req.MessageID, ClientTaskRef: req.ClientTaskRef, State: TaskStateRejected, Revision: 1, Error: TaskError{Code: ErrorPolicyDenied, Message: "forged"}}
+	rawPayload, _ := json.Marshal(payload)
+	forged := newEnvelope("mallory", "eve-local", EnvelopeTypeEvent, req.MessageID, "", 1, rawPayload)
+	raw, _ := json.Marshal(forged)
+	if _, err := p.aliceNode.Publish(context.Background(), EventSubject("mallory", "eve-local", "msg_"+string(req.MessageID), EventKindRejected), raw, "forged-reject"); err != nil {
+		t.Fatalf("publish forged rejected: %v", err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	got, err := p.aliceDB.GetByLocalID(context.Background(), row.LocalID)
+	if err != nil {
+		t.Fatalf("outbound row: %v", err)
+	}
+	if got.State == TaskStateRejected || got.Terminal {
+		t.Fatalf("forged pre-accept reject mutated outbound task = %#v", got)
+	}
+}
+
+func TestA2AIntegrationContinuationControlsPublishStatus(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		state   TaskState
+		control string
+		content string
+	}{
+		{name: "input", state: TaskStateInputRequired, control: ControlKindInputReply, content: "input received"},
+		{name: "auth", state: TaskStateAuthRequired, control: ControlKindAuthReply, content: "authorization received"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := newIntegrationPair(t, 0)
+			p.bobExec.result = TaskExecutionResult{State: tc.state, Content: tc.name + " needed"}
+			msgID := MessageID("msg_continue_" + tc.name)
+			if _, err := p.alice.SendTask(context.Background(), integrationRequest(msgID)); err != nil {
+				t.Fatalf("SendTask: %v", err)
+			}
+			accepted := waitForOutboundAccepted(t, p.aliceDB, msgID)
+			releaseExecutor(p.bobExec)
+			blocked := waitForTaskState(t, p.aliceDB, "outbound", accepted.TaskID, tc.state)
+			p.bobExec.result = TaskExecutionResult{State: TaskStateCompleted, Content: tc.name + " continued"}
+			if err := p.alice.PublishControl(context.Background(), "adam-n200", accepted.TaskID, tc.control, blocked.Revision+1, ControlPayload{A2A: json.RawMessage(`{"ok":true}`)}); err != nil {
+				t.Fatalf("PublishControl %s: %v", tc.control, err)
+			}
+			done := waitForTaskState(t, p.aliceDB, "outbound", accepted.TaskID, TaskStateCompleted)
+			if !done.Terminal || done.Error.Code != "" || p.bobExec.RunCount() != 2 {
+				t.Fatalf("continuation result = %#v runs=%d, want terminal completion from resumed executor", done, p.bobExec.RunCount())
+			}
+		})
+	}
+}
+
+func TestA2AIntegrationAuthDenyCompletesAsFailed(t *testing.T) {
+	p := newIntegrationPair(t, 0)
+	p.bobExec.result = TaskExecutionResult{State: TaskStateAuthRequired, Content: "auth needed"}
+	if _, err := p.alice.SendTask(context.Background(), integrationRequest("msg_auth_deny")); err != nil {
+		t.Fatalf("SendTask: %v", err)
+	}
+	accepted := waitForOutboundAccepted(t, p.aliceDB, "msg_auth_deny")
+	releaseExecutor(p.bobExec)
+	blocked := waitForTaskState(t, p.aliceDB, "outbound", accepted.TaskID, TaskStateAuthRequired)
+	if err := p.alice.PublishControl(context.Background(), "adam-n200", accepted.TaskID, ControlKindAuthReply, blocked.Revision+1, ControlPayload{A2A: json.RawMessage(`{"approve":false,"denyReason":"user denied"}`)}); err != nil {
+		t.Fatalf("PublishControl auth deny: %v", err)
+	}
+	done := waitForTaskState(t, p.aliceDB, "outbound", accepted.TaskID, TaskStateFailed)
+	if !done.Terminal || done.Error.Code != ErrorAuthNotSatisfied || p.bobExec.RunCount() != 1 {
+		t.Fatalf("auth deny result = %#v runs=%d, want terminal auth failure without resumed executor", done, p.bobExec.RunCount())
+	}
 }
 
 func TestA2AIntegrationAcceptedBootstrap(t *testing.T) {

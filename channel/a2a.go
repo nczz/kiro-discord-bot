@@ -174,10 +174,12 @@ func (m *Manager) RunA2ATask(ctx context.Context, admitted a2a.A2AAdmission) (a2
 		admitted = stored
 	}
 	m.mu.Unlock()
-	if !ok {
+	if !ok && admitted.Continuation == nil {
 		return a2a.TaskExecutionResult{TaskID: admitted.TaskID, State: a2a.TaskStateRejected, Error: a2a.TaskError{Code: a2a.ErrorTaskNotFound, Message: "A2A admission reservation not found"}}, nil
 	}
-	defer m.releaseA2AAdmission(admitted)
+	if ok {
+		defer m.releaseA2AAdmission(admitted)
+	}
 
 	requesterID, requesterName := a2aRequesterIdentity(admitted.Request)
 
@@ -276,7 +278,9 @@ func (m *Manager) recordA2AResult(ctx context.Context, admitted a2a.A2AAdmission
 	}
 	if m.a2aTasks != nil {
 		payload, _ := json.Marshal(result)
-		_ = m.a2aTasks.AppendEvent(ctx, a2a.EventRow{TaskID: admitted.TaskID, Revision: result.Revision, EventType: "status", State: result.State, PayloadJSON: string(payload)})
+		if row, err := m.a2aTasks.ApplyTaskEvent(ctx, "inbound", admitted.TaskID, a2a.EventRow{TaskID: admitted.TaskID, Revision: result.Revision, EventType: "status", State: result.State, PayloadJSON: string(payload)}, result.State, result.Error); err == nil {
+			result.Revision = row.Revision
+		}
 	}
 	return result
 }
@@ -457,6 +461,19 @@ func buildA2APrompt(admitted a2a.A2AAdmission) string {
 	sb.WriteString("skill_id=" + admitted.Request.SkillID + "\n")
 	sb.WriteString("result_visibility=" + admitted.Request.ResultVisibility + "\n")
 	sb.WriteString("Discord egress is disabled unless this channel policy explicitly permits transparent result delivery. Return the final result as text; do not ask bot-tools to post to Discord.\n\n")
+	if admitted.Continuation != nil {
+		sb.WriteString("[A2A continuation]\n")
+		sb.WriteString("control_kind=" + admitted.Continuation.Kind + "\n")
+		if reason := strings.TrimSpace(admitted.Continuation.Reason); reason != "" {
+			sb.WriteString("reason=" + reason + "\n")
+		}
+		sb.WriteString("Use the continuation payload to resume this same task. Do not restart from the original task unless needed for context; produce the next status or final result for the same task_id.\n\n")
+		if len(admitted.Continuation.Payload) > 0 {
+			sb.WriteString("Canonical A2A continuation payload JSON:\n")
+			sb.Write(admitted.Continuation.Payload)
+			sb.WriteString("\n\n")
+		}
+	}
 	if summary := strings.TrimSpace(admitted.Request.UserVisibleSummary); summary != "" {
 		sb.WriteString(summary + "\n\n")
 	}

@@ -21,7 +21,7 @@ func registerA2ATools(s *server.MCPServer) {
 		{a2aRuntimePreflightTool(), func(ctx context.Context, svc *A2AService, req A2AToolRequest) (A2AToolResponse, error) {
 			return svc.RuntimePreflight(ctx, req)
 		}},
-		{a2aReadTool(ToolA2ATaskStatus, "Authoritative A2A progress source: read TaskStore state for one task or recent outbound tasks in the bound Discord channel. Use this for delegation status/progress; audit rows are only historical timeline evidence and may lag terminal state."), func(ctx context.Context, svc *A2AService, req A2AToolRequest) (A2AToolResponse, error) {
+		{a2aTaskStatusTool(), func(ctx context.Context, svc *A2AService, req A2AToolRequest) (A2AToolResponse, error) {
 			return svc.TaskStatus(ctx, req)
 		}},
 		{a2aPolicyPlanTool(), func(ctx context.Context, svc *A2AService, req A2AToolRequest) (A2AToolResponse, error) {
@@ -50,7 +50,11 @@ func registerA2ATools(s *server.MCPServer) {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			defer svc.Close()
-			resp, err := spec.call(ctx, svc, a2aRequestFromMCP(req))
+			toolReq := a2aRequestFromMCP(req)
+			if spec.tool.Name == ToolA2ATaskStatus {
+				toolReq.ManageChannels = false
+			}
+			resp, err := spec.call(ctx, svc, toolReq)
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
@@ -68,6 +72,18 @@ func a2aReadTool(name, description string) mcp.Tool {
 		mcp.WithOpenWorldHintAnnotation(false),
 	)
 	addA2AContextFields(&t)
+	return t
+}
+
+func a2aTaskStatusTool() mcp.Tool {
+	t := a2aReadTool(ToolA2ATaskStatus, "Authoritative A2A progress source: read TaskStore state and event history for one task or recent outbound tasks in the bound Discord channel. Use this for delegation status/progress; audit rows are only historical timeline evidence and may lag terminal state.")
+	for _, opt := range []mcp.ToolOption{
+		mcp.WithString("task_id", mcp.Description("Remote A2A task ID. If no task matches, the value is also tried as a NATS message_id/Discord correlation ID.")),
+		mcp.WithString("local_id", mcp.Description("Local durable task ID returned by bot_a2a_delegate.")),
+		mcp.WithString("message_id", mcp.Description("Delegation NATS message_id or Discord message correlation ID when known.")),
+	} {
+		opt(&t)
+	}
 	return t
 }
 

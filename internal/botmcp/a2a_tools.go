@@ -76,6 +76,7 @@ type A2AToolRequest struct {
 	Message              string   `json:"message,omitempty"`
 	Reason               string   `json:"reason,omitempty"`
 	TaskID               string   `json:"task_id,omitempty"`
+	MessageID            string   `json:"message_id,omitempty"`
 	LocalID              string   `json:"local_id,omitempty"`
 	Input                string   `json:"input,omitempty"`
 	Approve              bool     `json:"approve,omitempty"`
@@ -146,22 +147,37 @@ type A2APeerSummary struct {
 	DiscordThreadID   string   `json:"discordThreadId,omitempty"`
 }
 
+type A2ATaskEventSummary struct {
+	Revision     int64         `json:"revision"`
+	EventType    string        `json:"eventType"`
+	State        a2a.TaskState `json:"state,omitempty"`
+	Content      string        `json:"content,omitempty"`
+	ErrorCode    a2a.ErrorCode `json:"errorCode,omitempty"`
+	ErrorMessage string        `json:"errorMessage,omitempty"`
+	CreatedAt    string        `json:"createdAt,omitempty"`
+}
+
 type A2ATaskSummary struct {
-	LocalID       string        `json:"localId"`
-	TaskID        string        `json:"taskId,omitempty"`
-	Direction     string        `json:"direction"`
-	FromAgent     string        `json:"fromAgent"`
-	ToAgent       string        `json:"toAgent"`
-	ExecutorAgent string        `json:"executorAgent,omitempty"`
-	ChannelID     string        `json:"channelId,omitempty"`
-	ChannelRef    string        `json:"channelRef,omitempty"`
-	SkillID       string        `json:"skillId,omitempty"`
-	State         a2a.TaskState `json:"state"`
-	Revision      int64         `json:"revision"`
-	Terminal      bool          `json:"terminal"`
-	ErrorCode     a2a.ErrorCode `json:"errorCode,omitempty"`
-	ErrorMessage  string        `json:"errorMessage,omitempty"`
-	UpdatedAt     string        `json:"updatedAt,omitempty"`
+	LocalID               string                `json:"localId"`
+	TaskID                string                `json:"taskId,omitempty"`
+	MessageID             string                `json:"messageId,omitempty"`
+	Direction             string                `json:"direction"`
+	FromAgent             string                `json:"fromAgent"`
+	ToAgent               string                `json:"toAgent"`
+	ExecutorAgent         string                `json:"executorAgent,omitempty"`
+	ChannelID             string                `json:"channelId,omitempty"`
+	ChannelRef            string                `json:"channelRef,omitempty"`
+	SkillID               string                `json:"skillId,omitempty"`
+	ResultVisibility      string                `json:"resultVisibility,omitempty"`
+	DiscordTranscriptMode string                `json:"discordTranscriptMode,omitempty"`
+	State                 a2a.TaskState         `json:"state"`
+	Revision              int64                 `json:"revision"`
+	Terminal              bool                  `json:"terminal"`
+	ErrorCode             a2a.ErrorCode         `json:"errorCode,omitempty"`
+	ErrorMessage          string                `json:"errorMessage,omitempty"`
+	CreatedAt             string                `json:"createdAt,omitempty"`
+	UpdatedAt             string                `json:"updatedAt,omitempty"`
+	Events                []A2ATaskEventSummary `json:"events,omitempty"`
 }
 
 type confirmationPayload struct {
@@ -362,18 +378,29 @@ func (s *A2AService) TaskStatus(ctx context.Context, req A2AToolRequest) (A2AToo
 		if err := authorizeTaskStatus(row, req); err != nil {
 			return responseError(err), nil
 		}
-		sum := summarizeTask(row)
+		sum := s.summarizeTaskWithEvents(ctx, row)
 		return A2AToolResponse{OK: true, Message: "A2A task loaded", Task: &sum}, nil
 	}
 	if strings.TrimSpace(req.TaskID) != "" {
-		row, err := s.tasks.GetByDirectionTaskID(ctx, "outbound", a2a.TaskID(strings.TrimSpace(req.TaskID)))
+		row, err := s.lookupOutboundTaskOrMessage(ctx, strings.TrimSpace(req.TaskID))
 		if err != nil {
 			return responseError(taskLookupError(err)), nil
 		}
 		if err := authorizeTaskStatus(row, req); err != nil {
 			return responseError(err), nil
 		}
-		sum := summarizeTask(row)
+		sum := s.summarizeTaskWithEvents(ctx, row)
+		return A2AToolResponse{OK: true, Message: "A2A task loaded", Task: &sum}, nil
+	}
+	if strings.TrimSpace(req.MessageID) != "" {
+		row, err := s.tasks.GetByDirectionMessage(ctx, "outbound", a2a.MessageID(strings.TrimSpace(req.MessageID)))
+		if err != nil {
+			return responseError(taskLookupError(err)), nil
+		}
+		if err := authorizeTaskStatus(row, req); err != nil {
+			return responseError(err), nil
+		}
+		sum := s.summarizeTaskWithEvents(ctx, row)
 		return A2AToolResponse{OK: true, Message: "A2A task loaded", Task: &sum}, nil
 	}
 	rows, err := s.tasks.ListByChannel(ctx, "outbound", strings.TrimSpace(req.ChannelID), req.Limit)
@@ -391,11 +418,14 @@ func (s *A2AService) TaskStatus(ctx context.Context, req A2AToolRequest) (A2AToo
 }
 
 func authorizeTaskStatus(row a2a.TaskRow, req A2AToolRequest) error {
-	if req.ManageChannels {
-		return nil
+	if strings.TrimSpace(row.GuildID) != "" && strings.TrimSpace(req.GuildID) != "" && strings.TrimSpace(row.GuildID) != strings.TrimSpace(req.GuildID) {
+		return fmt.Errorf("%w: task is not visible from this guild", errorCode(a2a.ErrorPolicyDenied))
 	}
 	if strings.TrimSpace(row.ChannelID) != strings.TrimSpace(req.ChannelID) {
 		return fmt.Errorf("%w: task is not visible from this channel", errorCode(a2a.ErrorPolicyDenied))
+	}
+	if req.ManageChannels {
+		return nil
 	}
 	if strings.TrimSpace(row.ClientTaskRef) == "" || strings.TrimSpace(req.RequestedByID) == "" || strings.TrimSpace(row.ClientTaskRef) != strings.TrimSpace(req.RequestedByID) {
 		return fmt.Errorf("%w: requester does not own this task", errorCode(a2a.ErrorPolicyDenied))
@@ -929,6 +959,31 @@ func (s *A2AService) checkOutboundQuota(ctx context.Context, req A2AToolRequest)
 	return nil
 }
 
+func (s *A2AService) lookupOutboundTaskOrMessage(ctx context.Context, id string) (a2a.TaskRow, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return a2a.TaskRow{}, sql.ErrNoRows
+	}
+	byTask, taskErr := s.tasks.GetByDirectionTaskID(ctx, "outbound", a2a.TaskID(id))
+	byMessage, messageErr := s.tasks.GetByDirectionMessage(ctx, "outbound", a2a.MessageID(id))
+	if taskErr == nil && messageErr == nil {
+		if byTask.LocalID != byMessage.LocalID {
+			return a2a.TaskRow{}, fmt.Errorf("%w: task_id/message_id is ambiguous", errorCode(a2a.ErrorTaskNotFound))
+		}
+		return byTask, nil
+	}
+	if taskErr == nil {
+		return byTask, nil
+	}
+	if messageErr == nil {
+		return byMessage, nil
+	}
+	if !errors.Is(taskErr, sql.ErrNoRows) {
+		return a2a.TaskRow{}, taskErr
+	}
+	return a2a.TaskRow{}, messageErr
+}
+
 func (s *A2AService) lookupOutboundTask(ctx context.Context, req A2AToolRequest) (a2a.TaskRow, error) {
 	if id := strings.TrimSpace(req.LocalID); id != "" {
 		row, err := s.tasks.GetByLocalID(ctx, id)
@@ -938,13 +993,20 @@ func (s *A2AService) lookupOutboundTask(ctx context.Context, req A2AToolRequest)
 		return row, nil
 	}
 	if id := strings.TrimSpace(req.TaskID); id != "" {
-		row, err := s.tasks.GetByDirectionTaskID(ctx, "outbound", a2a.TaskID(id))
+		row, err := s.lookupOutboundTaskOrMessage(ctx, id)
 		if err != nil {
 			return a2a.TaskRow{}, taskLookupError(err)
 		}
 		return row, nil
 	}
-	return a2a.TaskRow{}, fmt.Errorf("%w: task_id or local_id is required", errorCode(a2a.ErrorTaskNotFound))
+	if id := strings.TrimSpace(req.MessageID); id != "" {
+		row, err := s.tasks.GetByDirectionMessage(ctx, "outbound", a2a.MessageID(id))
+		if err != nil {
+			return a2a.TaskRow{}, taskLookupError(err)
+		}
+		return row, nil
+	}
+	return a2a.TaskRow{}, fmt.Errorf("%w: task_id, message_id, or local_id is required", errorCode(a2a.ErrorTaskNotFound))
 }
 
 func (s *A2AService) publisherFor(ctx context.Context) (*a2a.Publisher, error) {
@@ -1090,7 +1152,67 @@ func taskLookupError(err error) error {
 }
 
 func summarizeTask(row a2a.TaskRow) A2ATaskSummary {
-	return A2ATaskSummary{LocalID: row.LocalID, TaskID: string(row.TaskID), Direction: row.Direction, FromAgent: string(row.FromAgent), ToAgent: string(row.ToAgent), ExecutorAgent: string(row.ExecutorAgent), ChannelID: row.ChannelID, ChannelRef: row.ChannelRef, SkillID: row.SkillID, State: row.State, Revision: row.Revision, Terminal: row.Terminal, ErrorCode: row.Error.Code, ErrorMessage: row.Error.Message, UpdatedAt: row.UpdatedAt.Format(time.RFC3339)}
+	return A2ATaskSummary{LocalID: row.LocalID, TaskID: string(row.TaskID), MessageID: string(row.MessageID), Direction: row.Direction, FromAgent: string(row.FromAgent), ToAgent: string(row.ToAgent), ExecutorAgent: string(row.ExecutorAgent), ChannelID: row.ChannelID, ChannelRef: row.ChannelRef, SkillID: row.SkillID, ResultVisibility: row.ResultVisibility, DiscordTranscriptMode: row.DiscordTranscriptMode, State: row.State, Revision: row.Revision, Terminal: row.Terminal, ErrorCode: row.Error.Code, ErrorMessage: row.Error.Message, CreatedAt: row.CreatedAt.Format(time.RFC3339), UpdatedAt: row.UpdatedAt.Format(time.RFC3339)}
+}
+
+func (s *A2AService) summarizeTaskWithEvents(ctx context.Context, row a2a.TaskRow) A2ATaskSummary {
+	sum := summarizeTask(row)
+	if row.TaskID == "" {
+		return sum
+	}
+	events, err := s.tasks.ReplayEvents(ctx, row.TaskID, 0)
+	if err != nil {
+		return sum
+	}
+	sum.Events = make([]A2ATaskEventSummary, 0, len(events))
+	for _, event := range events {
+		sum.Events = append(sum.Events, summarizeTaskEvent(event))
+	}
+	return sum
+}
+
+func summarizeTaskEvent(event a2a.EventRow) A2ATaskEventSummary {
+	sum := A2ATaskEventSummary{Revision: event.Revision, EventType: event.EventType, State: event.State, CreatedAt: event.CreatedAt.Format(time.RFC3339)}
+	var payload a2a.TaskEventPayload
+	if err := json.Unmarshal([]byte(event.PayloadJSON), &payload); err == nil {
+		if payload.State != "" {
+			sum.State = payload.State
+		}
+		if payload.Content != "" {
+			sum.Content = truncateForSummary(payload.Content)
+		}
+		if payload.Error.Code != "" {
+			sum.ErrorCode = payload.Error.Code
+			sum.ErrorMessage = payload.Error.Message
+		}
+		if payload.Result != nil {
+			if payload.Result.State != "" {
+				sum.State = payload.Result.State
+			}
+			if payload.Result.Content != "" {
+				sum.Content = truncateForSummary(payload.Result.Content)
+			}
+			if payload.Result.Error.Code != "" {
+				sum.ErrorCode = payload.Result.Error.Code
+				sum.ErrorMessage = payload.Result.Error.Message
+			}
+		}
+		return sum
+	}
+	var result a2a.TaskExecutionResult
+	if err := json.Unmarshal([]byte(event.PayloadJSON), &result); err == nil {
+		if result.State != "" {
+			sum.State = result.State
+		}
+		if result.Content != "" {
+			sum.Content = truncateForSummary(result.Content)
+		}
+		if result.Error.Code != "" {
+			sum.ErrorCode = result.Error.Code
+			sum.ErrorMessage = result.Error.Message
+		}
+	}
+	return sum
 }
 func stringListAllows(list []string, value string) bool {
 	value = strings.TrimSpace(value)

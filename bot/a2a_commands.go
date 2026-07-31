@@ -16,7 +16,9 @@ import (
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/nczz/kiro-discord-bot/a2a"
+	"github.com/nczz/kiro-discord-bot/channel"
 	"github.com/nczz/kiro-discord-bot/internal/botmcp"
+	"github.com/nczz/kiro-discord-bot/internal/discordmention"
 	"github.com/nczz/kiro-discord-bot/internal/secrets"
 	L "github.com/nczz/kiro-discord-bot/locale"
 )
@@ -277,11 +279,12 @@ func applyA2ASubcommandDefaults(payload *a2aSlashPayload) {
 
 func assignA2ATaskOption(payload *a2aSlashPayload, value string) {
 	value = strings.TrimSpace(value)
-	if strings.HasPrefix(value, "local_") {
+	switch {
+	case strings.HasPrefix(value, "local_"):
 		payload.Request.LocalID = value
-		return
+	default:
+		payload.Request.TaskID = value
 	}
-	payload.Request.TaskID = value
 }
 
 func normalizeA2ATranscriptMode(mode string) string {
@@ -642,6 +645,14 @@ func formatA2APolicy(title string, policy a2a.ChannelA2APolicy) string {
 	return sb.String()
 }
 
+func formatA2AEventDetail(value string) string {
+	value = strings.TrimSpace(strings.NewReplacer("\r\n", " ", "\n", " ", "\r", " ").Replace(value))
+	if value == "" {
+		return ""
+	}
+	return channel.EscapeDiscordMarkdown(discordmention.EscapeRaw(value))
+}
+
 func formatA2ATask(task botmcp.A2ATaskSummary, message string) string {
 	var sb strings.Builder
 	sb.WriteString(a2aBulletTitle(firstNonEmptyA2A(message, L.Get("a2a.task.title"))))
@@ -653,6 +664,10 @@ func formatA2ATask(task botmcp.A2ATaskSummary, message string) string {
 		sb.WriteString("\n")
 		sb.WriteString(L.Getf("a2a.task.task_id", task.TaskID))
 	}
+	if task.MessageID != "" {
+		sb.WriteString("\n")
+		sb.WriteString(L.Getf("a2a.task.message_id", task.MessageID))
+	}
 	if task.ToAgent != "" || task.ExecutorAgent != "" {
 		sb.WriteString("\n")
 		sb.WriteString(L.Getf("a2a.task.route", valueOrNone(task.FromAgent), valueOrNone(firstNonEmptyA2A(task.ExecutorAgent, task.ToAgent))))
@@ -660,6 +675,35 @@ func formatA2ATask(task botmcp.A2ATaskSummary, message string) string {
 	if task.SkillID != "" {
 		sb.WriteString("\n")
 		sb.WriteString(L.Getf("a2a.task.skill", task.SkillID))
+	}
+	if task.ChannelRef != "" {
+		sb.WriteString("\n")
+		sb.WriteString(L.Getf("a2a.task.channel_ref", task.ChannelRef))
+	}
+	sb.WriteString("\n")
+	sb.WriteString(L.Getf("a2a.task.delivery", valueOrNone(task.ResultVisibility), valueOrNone(task.DiscordTranscriptMode), task.Revision, task.Terminal))
+	if task.UpdatedAt != "" {
+		sb.WriteString("\n")
+		sb.WriteString(L.Getf("a2a.task.updated_at", task.UpdatedAt))
+	}
+	if len(task.Events) > 0 {
+		sb.WriteString("\n")
+		sb.WriteString(L.Get("a2a.task.events_title"))
+		for _, event := range task.Events {
+			var details []string
+			if event.Content != "" {
+				details = append(details, "content="+formatA2AEventDetail(event.Content))
+			}
+			if event.ErrorMessage != "" {
+				details = append(details, "error="+formatA2AEventDetail(event.ErrorMessage))
+			}
+			content := ""
+			if len(details) > 0 {
+				content = " " + strings.Join(details, " ")
+			}
+			sb.WriteString("\n")
+			sb.WriteString(L.Getf("a2a.task.event_row", event.Revision, event.EventType, event.State, content))
+		}
 	}
 	if task.ErrorMessage != "" {
 		sb.WriteString("\n")

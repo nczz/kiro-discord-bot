@@ -2,6 +2,7 @@ package channel
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -526,6 +527,16 @@ func TestA2APromptContainsPayloadWithoutDiscordEgress(t *testing.T) {
 	}
 	if strings.Contains(prompt, filepath.Clean(homedirForA2ATest())) {
 		t.Fatalf("prompt leaked local home path: %s", prompt)
+	}
+}
+
+func TestA2APromptContainsContinuationPayload(t *testing.T) {
+	admission := a2a.A2AAdmission{TaskID: "task_abc", Request: phase5Request(), Continuation: &a2a.A2AContinuation{Kind: a2a.ControlKindInputReply, Payload: json.RawMessage(`{"input":"approved context"}`), Reason: "operator reply"}}
+	prompt := buildA2APrompt(admission)
+	for _, want := range []string{"[A2A continuation]", "control_kind=input_reply", "operator reply", "Canonical A2A continuation payload JSON", "approved context"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("continuation prompt missing %q:\n%s", want, prompt)
+		}
 	}
 }
 

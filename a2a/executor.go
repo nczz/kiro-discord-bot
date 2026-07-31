@@ -70,12 +70,19 @@ type A2AAdmissionResult struct {
 	Admission     A2AAdmission
 }
 
+type A2AContinuation struct {
+	Kind    string
+	Payload json.RawMessage
+	Reason  string
+}
+
 type A2AAdmission struct {
 	AdmissionKey string
 	TaskID       TaskID
 	State        TaskState
 	Revision     int64
 	Request      TaskExecutionRequest
+	Continuation *A2AContinuation
 }
 
 type TaskExecutionResult struct {

@@ -592,6 +592,61 @@ Append one subsection per completed phase.
 - Rollback boundary: restore `/Users/chun/Projects/kiro-discord-bot-local/bin/kiro-discord-bot.pre-statusfix-20260731211808` locally or `/opt/kiro-discord-bot/kiro-discord-bot.pre-statusfix-20260731211853` on d80; agent prompt/tool descriptions would again be less explicit that audit rows are not authoritative for A2A task progress, and status summaries would omit `channelRef`.
 - Next phase: monitor Discord-issued A2A status/progress questions; no additional code phase is open.
 
+### R15 protocol coverage and status debuggability
+
+- Status: deployed; current worktree.
+- Decision: protocol validation now covers outbound ownership checks, forged executor rejection, duplicate delivery, continuation controls, bootstrap admission, replay, rate limiting, missing pool subjects, and NATS `Msg-Id` publication. A2A status output now exposes authoritative TaskStore identifiers plus the recent task event trail so operators can distinguish current state from older audit events.
+- Changed files: `a2a/transport.go`, `a2a/integration_test.go`, `channel/a2a.go`, `internal/botmcp/a2a_tools.go`, `internal/botmcp/a2a_tool_register.go`, `internal/botmcp/a2a_tools_test.go`, `bot/a2a_commands.go`, `bot/handler.go`, `bot/handler_test.go`, `locale/lang/en.json`, `locale/lang/zh-TW.json`, and this progress ledger.
+- Validation:
+  - `gofmt -w a2a/transport.go a2a/integration_test.go channel/a2a.go internal/botmcp/a2a_tools.go internal/botmcp/a2a_tool_register.go internal/botmcp/a2a_tools_test.go bot/a2a_commands.go bot/handler_test.go` passed.
+  - `go test ./a2a -run 'TestA2AIntegration(TargetedDelegation|DuplicateDelivery|CancelOwnership|EventOwnershipRejectsForgedExecutor|PreAcceptRejectRequiresOutboundTargetExecutor|ContinuationControlsPublishStatus|AcceptedBootstrap|AdmissionBeforeExecution|AckAfterAdmissionNotCompletion|ReplayAfterReconnect|EventRate|NoErrorEnvelope|NoPoolSubject|TransportPublisherDeclaresNatsMsgID)'` passed.
+  - `go test ./internal/botmcp -run 'TestA2ATools(TaskStatusRequiresOwnerOrManager|DelegateAllowsUntrustedExactRuntimePolicy|DelegateRejectsRevokedPeerBeforePublishing|DelegateConfirmationBindsDeliveryMode)'` passed.
+  - `go test ./bot -run 'TestA2A(FormatTaskResponseIsHumanReadable|TaskOptionAcceptsDisplayedLocalID|TaskOptionAcceptsDiscordMessageID|SetupSlashDefaultsHumanFlow|SetupSlashAutoCrossRuntimeUsesProxy|TranscriptModeSafeClearsContextSharing)'` passed.
+  - `env -u NATS_URL -u NATS_CREDS_FILE -u NATS_TOKEN -u NATS_TLS_CA_FILE -u A2A_AGENT_ID -u A2A_RUNTIME_ID_MODE -u A2A_AGENT_NAME -u A2A_AGENT_DESCRIPTION -u A2A_REQUIRE_CONFIRMATION_FOR_REMOTE go test ./...` passed.
+  - Local M5 bot restarted and logged `NATS node enabled`, `transport consumers started`, and `Bot running as M5Bot#8313`.
+  - Remote d80 bot service is `active` and logged `NATS node enabled`, `transport consumers started`, and `Bot running as ChunBot#4533`.
+- Runtime settings touched: no.
+- Deployment hosts touched: local M5 bot binary/service and remote d80 bot binary/service only.
+- Rollback boundary: restore `/Users/chun/Projects/kiro-discord-bot-local/bin/kiro-discord-bot.pre-protocol-fix-20260731214016` locally or `/opt/kiro-discord-bot/kiro-discord-bot.pre-protocol-fix-20260731214058` on d80; A2A protocol edge-case tests and richer status summaries would be absent.
+- Next phase: monitor Discord-issued A2A delegation/status questions; no additional code phase is open.
+
+### R16 strict A2A/Discord review
+
+- Status: deployed review fixes; continuation flow remains blocked.
+- Decision: prior R15 validation was test-heavy but not a full protocol-semantic review. Strict review found one blocking A2A continuation design gap: `input_reply`/`auth_reply` currently advance executor-side state to `TASK_STATE_WORKING` and publish a status, but there is no executor continuation contract that resumes the original job with the supplied payload or handles auth denial. Do not claim continuation support until the executor/manager lifecycle is redesigned and covered end to end.
+- Fixed during review: accepted-event bootstrap now validates the outbound row's delegator/target before binding; TaskStatus manager reads are scoped to the task channel and guild; MCP `bot_a2a_task_status` no longer trusts caller-supplied `manage_channels`; task-id/message-id ambiguous lookups return an error instead of silently selecting one row; slash task options preserve unprefixed remote task IDs and rely on service-side message-id fallback; status event detail rendering escapes markdown/mentions and collapses newlines to prevent spoofed Discord rows.
+- Validation:
+  - `go test ./a2a -run 'TestA2AIntegration(AcceptedEventRequiresOutboundDelegator|EventOwnershipRejectsForgedExecutor|PreAcceptRejectRequiresOutboundTargetExecutor|ContinuationControlsPublishStatus)'` passed.
+  - `go test ./internal/botmcp -run 'TestA2ATools(TaskStatusRequiresOwnerOrManager|TaskStatusManagerCannotCrossGuild|TaskStatusManagerCannotCrossChannel|TaskLookupRejectsTaskMessageAmbiguity)'` passed.
+  - `go test ./bot -run 'TestA2A(FormatTaskResponseIsHumanReadable|TaskOptionAcceptsDisplayedLocalID|TaskOptionKeepsUnprefixedValueInTaskIDField)'` passed.
+  - `env -u NATS_URL -u NATS_CREDS_FILE -u NATS_TOKEN -u NATS_TLS_CA_FILE -u A2A_AGENT_ID -u A2A_RUNTIME_ID_MODE -u A2A_AGENT_NAME -u A2A_AGENT_DESCRIPTION -u A2A_REQUIRE_CONFIRMATION_FOR_REMOTE go test ./...` passed.
+  - `git diff --check` passed.
+  - Local M5 bot restarted and logged `NATS node enabled`, `transport consumers started`, and `Bot running as M5Bot#8313`.
+  - Remote d80 bot service is `active` and logged `NATS node enabled`, `transport consumers started`, and `Bot running as ChunBot#4533`.
+- Runtime settings touched: no.
+- Deployment hosts touched: local M5 bot binary/service and remote d80 bot binary/service only.
+- Rollback boundary: restore `/Users/chun/Projects/kiro-discord-bot-local/bin/kiro-discord-bot.pre-review-fix-20260731215842` locally or `/opt/kiro-discord-bot/kiro-discord-bot.pre-review-fix-20260731215933` on d80, then revert the R16 code/docs edits; this would re-open the accepted-bootstrap delegator mismatch, status manager overread, caller-forged status manager flag, ambiguous lookup, unprefixed task ID regression, and Discord status spoofing hazards.
+- Next phase: design and implement real continuation execution (`input_reply`/`auth_reply`) before advertising or relying on those controls as protocol-complete.
+
+### R17 continuation execution contract
+
+- Status: deployed.
+- Decision: `input_reply` and approved `auth_reply` now resume the same durable task by creating an explicit `A2AContinuation` on the resumed admission, enqueueing a same-task manager job with the continuation payload in the prompt, and using a per-control-message started key to avoid duplicate executor resumes on JetStream redelivery. `auth_reply` with `approve=false` is terminal and publishes a failed result with `auth_not_satisfied` without rerunning the executor.
+- Changed files: `a2a/executor.go`, `a2a/transport.go`, `a2a/integration_test.go`, `channel/a2a.go`, `channel/a2a_phase5_test.go`, and this progress ledger.
+- Validation:
+  - `go test ./a2a -run 'TestA2AIntegration(ContinuationControlsPublishStatus|AuthDenyCompletesAsFailed|AcceptedEventRequiresOutboundDelegator)'` passed.
+  - `go test ./channel -run 'TestA2A(PromptContainsContinuationPayload|PromptContainsPayloadWithoutDiscordEgress|ManagerA2AInputRequired|ManagerA2AAuthRequired)'` passed.
+  - `env -u NATS_URL -u NATS_CREDS_FILE -u NATS_TOKEN -u NATS_TLS_CA_FILE -u A2A_AGENT_ID -u A2A_RUNTIME_ID_MODE -u A2A_AGENT_NAME -u A2A_AGENT_DESCRIPTION -u A2A_REQUIRE_CONFIRMATION_FOR_REMOTE go test ./...` passed.
+  - `git diff --check` passed.
+  - Local M5 bot restarted and logged `NATS node enabled`, `transport consumers started`, and `Bot running as M5Bot#8313`.
+  - Remote d80 bot service is `active` and logged `NATS node enabled`, `transport consumers started`, and `Bot running as ChunBot#4533`.
+  - Controlled live NATS continuation smoke passed against the deployed NATS fabric using isolated smoke runtime IDs `smoke-delegator-d2de5526` and `smoke-executor-d2de5526`: `input_reply` resumed the same task to `TASK_STATE_COMPLETED` at revision 4 with executor runs=2; `auth_reply approve=false` completed as `TASK_STATE_FAILED` with `auth_not_satisfied` and executor runs=1.
+  - Smoke durable consumer cleanup verified for both isolated smoke runtime IDs; no extra consumers needed deletion.
+- Runtime settings touched: no.
+- Deployment hosts touched: local M5 bot binary/service and remote d80 bot binary/service only.
+- Rollback boundary: restore `/Users/chun/Projects/kiro-discord-bot-local/bin/kiro-discord-bot.pre-continuation-fix-20260731220901` locally or `/opt/kiro-discord-bot/kiro-discord-bot.pre-continuation-fix-20260731220948` on d80, then revert the R17 files; continuation controls would again not have a real executor resume path.
+- Next phase: Discord UI smoke only when a real Discord-issued task naturally reaches input/auth-required; protocol-level live continuation verification is complete.
+
 ## Master goal prompt
 
 Use this prompt when starting or resuming the full implementation program:

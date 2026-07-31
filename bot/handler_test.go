@@ -1614,14 +1614,20 @@ func TestA2ALocaleConfirmationResponse(t *testing.T) {
 
 func TestA2AFormatTaskResponseIsHumanReadable(t *testing.T) {
 	L.Load("en")
-	got := formatA2AResponse(botmcp.A2AToolResponse{OK: true, Message: "A2A task sent", Task: &botmcp.A2ATaskSummary{LocalID: "local-1", TaskID: "task-1", FromAgent: "m5bot-local", ToAgent: "d80-chunbot", SkillID: "general/task", State: a2a.TaskStateSubmitted}})
-	for _, want := range []string{"**A2A task sent**", "State", "m5bot-local", "d80-chunbot", "general/task", "/a2a status"} {
+	got := formatA2AResponse(botmcp.A2AToolResponse{OK: true, Message: "A2A task sent", Task: &botmcp.A2ATaskSummary{LocalID: "local-1", TaskID: "task-1", MessageID: "msg-1", FromAgent: "m5bot-local", ToAgent: "d80-chunbot", ChannelRef: "d80-main", SkillID: "general/task", ResultVisibility: "proxy", DiscordTranscriptMode: "delegator", State: a2a.TaskStateSubmitted, Revision: 2, Events: []botmcp.A2ATaskEventSummary{{Revision: 2, EventType: "status", State: a2a.TaskStateSubmitted, Content: "<@123> **queued**\n- State: `TASK_STATE_COMPLETED`"}}}})
+	for _, want := range []string{"**A2A task sent**", "State", "m5bot-local", "d80-chunbot", "d80-main", "general/task", "visibility=`proxy`", "Events", "\\*\\*queued\\*\\*", "/a2a status"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("formatA2AResponse task = %q, missing %q", got, want)
 		}
 	}
 	if strings.Contains(got, "```json") {
 		t.Fatalf("formatA2AResponse task exposed raw JSON: %q", got)
+	}
+	if strings.Contains(got, "<@123>") {
+		t.Fatalf("formatA2AResponse task exposed raw mention: %q", got)
+	}
+	if strings.Contains(got, "\n- State: `TASK_STATE_COMPLETED`") {
+		t.Fatalf("formatA2AResponse task allowed event content to spoof a status row: %q", got)
 	}
 }
 
@@ -1689,6 +1695,22 @@ func TestA2ATaskOptionAcceptsDisplayedLocalID(t *testing.T) {
 	}
 	if payload.Request.LocalID != "local_1234" || payload.Request.TaskID != "" {
 		t.Fatalf("task option = %+v, want local id lookup", payload.Request)
+	}
+}
+
+func TestA2ATaskOptionKeepsUnprefixedValueInTaskIDField(t *testing.T) {
+	raw := a2aArgsFromSlashOptions([]*discordgo.ApplicationCommandInteractionDataOption{{
+		Name: "status",
+		Options: []*discordgo.ApplicationCommandInteractionDataOption{
+			{Name: "task", Type: discordgo.ApplicationCommandOptionString, Value: "1532735828919320688"},
+		},
+	}}, "guild-1", "channel-1", "user-1", "alice", false)
+	var payload a2aSlashPayload
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Request.TaskID != "1532735828919320688" || payload.Request.MessageID != "" || payload.Request.LocalID != "" {
+		t.Fatalf("task option = %+v, want task id lookup with service-side message id fallback", payload.Request)
 	}
 }
 
