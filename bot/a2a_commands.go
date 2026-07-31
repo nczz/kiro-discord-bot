@@ -598,7 +598,9 @@ func formatA2APeers(peers []botmcp.A2APeerSummary, policy *a2a.ChannelA2APolicy)
 			if skills == "" {
 				skills = L.Get("a2a.none")
 			}
-			sb.WriteString(L.Getf("a2a.peers.row_human", peer.AgentID, peer.Name, state, trust, allowed, skills))
+			label := firstNonEmpty(peer.DisplayName, peer.Name, peer.AgentID)
+			reason := firstNonEmpty(peer.DelegationReason, allowed)
+			sb.WriteString(L.Getf("a2a.peers.row_human", label, peer.AgentID, valueOrNone(peer.BotAgentID), valueOrNone(peer.ChannelRef), state, trust, allowed, reason, skills))
 			sb.WriteString("\n")
 		}
 	}

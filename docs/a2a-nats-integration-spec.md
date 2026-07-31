@@ -211,13 +211,13 @@ channel.Manager.ExecuteA2ATask(ctx, req)
 
 ### 4.1 Bot base identity
 
-`A2A_AGENT_ID` 是 bot process/base identity。它用來：
+`A2A_AGENT_ID` 是 bot process/base prefix。它用來：
 
-- 產生 runtime ID namespace。
+- 產生 runtime ID namespace prefix。
 - 綁定 process-level credential owner。
 - 在 audit/doctor 中顯示 bot host identity。
 
-它 **不再是 task/control/event/card/heartbeat 的主要 routing identity**。
+它 **不是 peer list、task/control/event/card/heartbeat 的主要 routing identity**；runtime mode 的 user-facing peer 必須是 Discord channel/thread runtime，不是 bot host card。
 
 ```text
 A2A_AGENT_ID=d80-chunbot
@@ -231,10 +231,16 @@ A2A_AGENT_ID=d80-chunbot
 
 ### 4.2 Runtime agent ID
 
-每個 Discord bot + guild + channel/thread + A2A policy 組合都必須有穩定 runtime agent ID。Runtime ID 是 NATS-visible AgentID：
+每個 Discord bot prefix + guild + channel/thread + A2A policy 組合都必須有穩定 runtime agent ID。Runtime ID 是 NATS-visible AgentID：
 
 ```text
-runtime_agent_id = <bot_base_slug>-<channel_ref_slug>
+runtime_agent_id = <bot_prefix>-<public_channel_alias_slug>
+```
+
+若 alias 無法產生安全 ASCII slug，或 slug 含 raw Discord snowflake-like 數字片段，使用：
+
+```text
+runtime_agent_id = <bot_prefix>-rt-<short_hash(guild_id + channel_id + thread_id + alias)>
 ```
 
 例：
@@ -242,7 +248,8 @@ runtime_agent_id = <bot_base_slug>-<channel_ref_slug>
 ```text
 d80-chunbot-erp-support
 d80-chunbot-backend
-m5bot-main
+m5bot-kiro-discord-bot
+m5bot-rt-4f8a9c01
 ```
 
 限制：
@@ -250,10 +257,9 @@ m5bot-main
 - 格式為 `[A-Za-z0-9_-]{1,64}`。
 - 不含 PID、boot timestamp、random suffix。
 - restart 後不變。
-- 不直接包含 raw Discord guild/channel/thread snowflake。
-- 不包含 private channel name，除非 manager 明確用該名稱作 public alias。
-- 太長時使用 `<bot_base_slug>-rt-<short_hash(channel_ref)>`。
-- 首次 enable/discoverable 時產生後 immutable；`channel_ref` 後續若改名，只更新 alias/display metadata，不改變既有 `runtime_agent_id`。如果部署者需要換 runtime ID，必須建立新 runtime、重新授權 trust/ACL，並 drain 舊 runtime。
+- 不直接包含 raw Discord guild/channel/thread snowflake；任何 15-20 位連續數字片段都必須觸發 hash fallback。
+- 不直接包含 private channel name，除非 manager 明確用該名稱作 public alias；Discord channel name 可作 display metadata，但 metadata-derived alias 必須加短 hash 消除同名 channel collision。
+- 本測試版允許強制重算 runtime ID；相關 policy reference 必須同步 rewrite；發布版 cutover 後再恢復 immutable/drain policy。
 
 ### 4.3 Ephemeral instance ID
 
@@ -267,7 +273,7 @@ instanceID = <runtime_agent_id>-<startUnixNano>-<random6>
 
 ### 4.4 Channel reference
 
-`channel_ref` 是 runtime alias、display、migration metadata。它不再是主要 routing key。
+`channel_ref` 是 runtime public alias、skill namespace、display/migration metadata。runtime-first routing 下，真正 durable routing key 是 `runtime_agent_id`，但 `channel_ref` 仍用於 skill ID canonicalization 與 operator-readable channel scope。
 
 格式：
 
@@ -275,10 +281,13 @@ instanceID = <runtime_agent_id>-<startUnixNano>-<random6>
 [A-Za-z0-9_-]{1,64}
 ```
 
-限制：
+產生順序：
 
-- 同一 bot base identity 內唯一。
-- 不可直接使用 Discord channel ID/name，除非部署者接受它被其他 A2A peers 看見。
+1. manager 明確指定的 public `channel_ref`。
+2. Discord channel metadata name 轉為 ASCII slug 並附加短 hash，例如 `support-a1b2c3d4`。
+3. `ch-<short_hash(guild_id + channel_id + thread_id + alias)>`。
+
+限制：
 - 不可含 `.`, `*`, `>`, `/`, space。
 - 必須可由 manager 在 Discord UX 中理解。
 

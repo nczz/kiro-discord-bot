@@ -20,6 +20,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/nczz/kiro-discord-bot/a2a"
 	"github.com/nczz/kiro-discord-bot/audit"
+	"github.com/nczz/kiro-discord-bot/internal/channelmeta"
 	"github.com/nczz/kiro-discord-bot/internal/secrets"
 )
 
@@ -128,6 +129,7 @@ type A2AToolResponse struct {
 
 type A2APeerSummary struct {
 	AgentID           string   `json:"agentId"`
+	BotAgentID        string   `json:"botAgentId,omitempty"`
 	Name              string   `json:"name"`
 	Trusted           bool     `json:"trusted"`
 	Online            bool     `json:"online"`
@@ -142,6 +144,7 @@ type A2APeerSummary struct {
 	ChannelRef        string   `json:"channelRef,omitempty"`
 	Wakeable          bool     `json:"wakeable"`
 	DisplayName       string   `json:"displayName,omitempty"`
+	DelegationReason  string   `json:"delegationReason,omitempty"`
 	DiscordGuildID    string   `json:"discordGuildId,omitempty"`
 	DiscordChannelID  string   `json:"discordChannelId,omitempty"`
 	DiscordThreadID   string   `json:"discordThreadId,omitempty"`
@@ -265,18 +268,31 @@ func (s *A2AService) Peers(ctx context.Context, req A2AToolRequest) (A2AToolResp
 		return responseError(fmt.Errorf("%w: %v", errorCode(a2a.ErrorStoreError), err)), nil
 	}
 	peers := make([]A2APeerSummary, 0, len(rows))
+	runtimeOnly := s.cfg.Config.RuntimeIDMode == a2a.RuntimeIDModeRuntime
 	for _, row := range rows {
-		if row.AgentID == s.cfg.Config.AgentID {
+		if row.AgentID == s.cfg.Config.AgentID || (runtimeOnly && row.Runtime == "kiro-discord-bot") {
 			continue
+		}
+		if runtimeOnly {
+			if row.Runtime != "channel" && row.Runtime != "thread" {
+				continue
+			}
+			if strings.TrimSpace(req.GuildID) == "" || strings.TrimSpace(row.DiscordGuildID) != strings.TrimSpace(req.GuildID) {
+				continue
+			}
 		}
 		visibleSkills := visiblePeerSkills(policy, string(row.AgentID), row.SkillIDs, s.cfg.Config.RuntimeIDMode)
 		delegationAllowed := len(visibleSkills) > 0
-		peers = append(peers, A2APeerSummary{AgentID: string(row.AgentID), Name: row.Name, Trusted: row.Trusted, Online: row.Online, Stale: row.Stale, Skills: visibleSkills, HiddenSkillCount: len(row.SkillIDs) - len(visibleSkills), DelegationAllowed: delegationAllowed, Runtime: row.Runtime, ChannelRef: row.ChannelRef, DisplayName: peerDisplayName(row), DiscordGuildID: row.DiscordGuildID, DiscordChannelID: row.DiscordChannelID, DiscordThreadID: row.DiscordThreadID, Wakeable: delegationAllowed && row.Runtime == "channel" && !row.Stale, ProtocolBinding: row.SupportedBinding, ProtocolVersion: row.ProtocolVersion, SignatureStatus: row.SignatureStatus})
+		reason := peerDelegationReason(row, policy, visibleSkills, runtimeOnly)
+		peers = append(peers, A2APeerSummary{AgentID: string(row.AgentID), Name: row.Name, BotAgentID: row.BotAgentID, Trusted: row.Trusted, Online: row.Online, Stale: row.Stale, Skills: visibleSkills, HiddenSkillCount: len(row.SkillIDs) - len(visibleSkills), DelegationAllowed: delegationAllowed, DelegationReason: reason, Runtime: row.Runtime, ChannelRef: row.ChannelRef, DisplayName: peerDisplayName(row), DiscordGuildID: row.DiscordGuildID, DiscordChannelID: row.DiscordChannelID, DiscordThreadID: row.DiscordThreadID, Wakeable: delegationAllowed && row.Runtime == "channel" && !row.Stale, ProtocolBinding: row.SupportedBinding, ProtocolVersion: row.ProtocolVersion, SignatureStatus: row.SignatureStatus})
 	}
 	return A2AToolResponse{OK: true, Message: "A2A peers listed", Peers: peers}, nil
 }
 
 func peerDisplayName(peer a2a.PeerTrustDisplay) string {
+	if strings.TrimSpace(peer.DisplayName) != "" {
+		return peer.DisplayName
+	}
 	if strings.TrimSpace(peer.ChannelRef) != "" {
 		return peer.ChannelRef
 	}
@@ -304,6 +320,25 @@ func visiblePeerSkills(policy a2a.ChannelA2APolicy, agent string, skills []strin
 		}
 	}
 	return out
+}
+
+func peerDelegationReason(peer a2a.PeerTrustDisplay, policy a2a.ChannelA2APolicy, visibleSkills []string, runtimeOnly bool) string {
+	if len(visibleSkills) > 0 {
+		return "allowed"
+	}
+	if peer.Stale {
+		return "peer stale"
+	}
+	if runtimeOnly && peer.Runtime != "channel" && peer.Runtime != "thread" {
+		return "not a runtime peer"
+	}
+	if !policy.Enabled {
+		return "channel A2A policy disabled"
+	}
+	if runtimeOnly {
+		return "missing runtime delegate target or skill"
+	}
+	return "missing delegate target or skill"
 }
 
 func policyDelegatesExactRuntime(policy a2a.ChannelA2APolicy, agent, skill string) bool {
@@ -753,24 +788,48 @@ func (s *A2AService) currentPolicy(ctx context.Context, req A2AToolRequest) (a2a
 		return policy, nil
 	}
 	if errors.Is(err, sql.ErrNoRows) {
-		return defaultPolicy(req, s.cfg.Config), nil
+		return defaultPolicy(req, s.cfg.Config, s.cfg.DataDir), nil
 	}
 	return a2a.ChannelA2APolicy{}, fmt.Errorf("%w: %v", errorCode(a2a.ErrorStoreError), err)
 }
 
-func defaultPolicy(req A2AToolRequest, cfg a2a.Config) a2a.ChannelA2APolicy {
-	channelRef := strings.TrimSpace(req.ChannelRef)
-	if channelRef == "" {
-		channelRef = "discord-" + strings.TrimSpace(req.ChannelID)
-	}
+func defaultPolicy(req A2AToolRequest, cfg a2a.Config, dataDir string) a2a.ChannelA2APolicy {
+	channelRef := defaultChannelRef(req, dataDir)
 	policy := a2a.ChannelA2APolicy{GuildID: strings.TrimSpace(req.GuildID), ChannelID: strings.TrimSpace(req.ChannelID), ChannelRef: channelRef, BotAgentID: string(cfg.AgentID), ResultVisibility: "proxy", DiscordTranscriptMode: "delegator"}
-	if runtime, err := a2a.GenerateRuntimeAgentID(cfg.AgentID, channelRef); err == nil {
+	stableKey := runtimeStableKey(req.GuildID, req.ChannelID, "", channelRef)
+	if runtime, err := a2a.GenerateRuntimeAgentIDFromAlias(cfg.AgentID, channelRef, stableKey); err == nil {
 		policy.RuntimeAgentID = string(runtime)
 	}
 	return policy
 }
 
+func defaultChannelRef(req A2AToolRequest, dataDir string) string {
+	if explicit := strings.TrimSpace(req.ChannelRef); explicit != "" {
+		return explicit
+	}
+	if name := channelNameFromMetadata(dataDir, req.ChannelID); name != "" {
+		return a2a.RuntimeAlias(name, runtimeStableKey(req.GuildID, req.ChannelID, "", name))
+	}
+	return a2a.RuntimeAlias("", runtimeStableKey(req.GuildID, req.ChannelID, "", "channel"))
+}
+
+func channelNameFromMetadata(dataDir, channelID string) string {
+	entries, err := channelmeta.Read(dataDir)
+	if err != nil {
+		return ""
+	}
+	if entry, ok := entries[strings.TrimSpace(channelID)]; ok {
+		return strings.TrimSpace(entry.Name)
+	}
+	return ""
+}
+
+func runtimeStableKey(guildID, channelID, threadID, alias string) string {
+	return strings.Join([]string{strings.TrimSpace(guildID), strings.TrimSpace(channelID), strings.TrimSpace(threadID), strings.TrimSpace(alias)}, "\x00")
+}
+
 func (s *A2AService) applyPolicyDiff(policy a2a.ChannelA2APolicy, req A2AToolRequest) a2a.ChannelA2APolicy {
+	explicitChannelRef := strings.TrimSpace(req.ChannelRef) != ""
 	req = applyA2APolicyRequestDefaults(req, policy)
 	if req.Enable != nil {
 		policy.Enabled = *req.Enable
@@ -783,8 +842,21 @@ func (s *A2AService) applyPolicyDiff(policy a2a.ChannelA2APolicy, req A2AToolReq
 		if strings.TrimSpace(policy.BotAgentID) == "" {
 			policy.BotAgentID = string(s.cfg.Config.AgentID)
 		}
+		if !explicitChannelRef && s.cfg.Config.RuntimeIDMode == a2a.RuntimeIDModeRuntime {
+			if name := channelNameFromMetadata(s.cfg.DataDir, policy.ChannelID); name != "" {
+				next := a2a.RuntimeAlias(name, runtimeStableKey(policy.GuildID, policy.ChannelID, "", name))
+				if next != "" && next != policy.ChannelRef {
+					policy.ChannelRef = next
+					policy.RuntimeAgentID = ""
+				}
+			}
+		}
+		if strings.TrimSpace(policy.ChannelRef) == "" || strings.HasPrefix(policy.ChannelRef, "discord-") {
+			policy.ChannelRef = defaultChannelRef(req, s.cfg.DataDir)
+		}
 		if strings.TrimSpace(policy.RuntimeAgentID) == "" {
-			if runtime, err := a2a.GenerateRuntimeAgentID(s.cfg.Config.AgentID, policy.ChannelRef); err == nil {
+			stableKey := runtimeStableKey(policy.GuildID, policy.ChannelID, "", policy.ChannelRef)
+			if runtime, err := a2a.GenerateRuntimeAgentIDFromAlias(s.cfg.Config.AgentID, policy.ChannelRef, stableKey); err == nil {
 				policy.RuntimeAgentID = string(runtime)
 			}
 		}

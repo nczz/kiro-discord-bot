@@ -62,8 +62,28 @@ func TestBuildRuntimeAgentCardIncludesDiscordIdentifiers(t *testing.T) {
 	if card.Name != "adam-n200-main" || card.Description != "Main" || len(card.Skills) != 1 || card.Skills[0].ID != "main/task" {
 		t.Fatalf("runtime card = %+v, want runtime-scoped identity and skill", card)
 	}
-	if ext.ChannelRef != "main" || ext.Runtime != "channel" || ext.DiscordGuildID != "1495737767827865620" || ext.DiscordChannelID != "1495737768905670719" || ext.DiscordThreadID != "1532710952477261854" {
+	if ext.ChannelRef != "main" || ext.Runtime != "channel" || ext.BotAgentID != "adam-n200" || ext.DisplayName != "Main" || ext.DiscordGuildID != "1495737767827865620" || ext.DiscordChannelID != "1495737768905670719" || ext.DiscordThreadID != "1532710952477261854" {
 		t.Fatalf("extended runtime card = %+v, want Discord identifiers", ext)
+	}
+}
+
+func TestRuntimeAliasUsesChannelNameOrStableHash(t *testing.T) {
+	if got := RuntimeAlias("Backend Support", "guild\x00channel"); !strings.HasPrefix(got, "backend-support-") || got == "backend-support" {
+		t.Fatalf("RuntimeAlias ascii = %q, want readable alias with stable disambiguator", got)
+	}
+	if got := RuntimeAlias("support-1495737768905670719-room", "guild\x00channel"); got == "" || strings.Contains(got, "1495737768905670719") || !strings.HasPrefix(got, "ch-") {
+		t.Fatalf("RuntimeAlias snowflake = %q, want hashed public alias", got)
+	}
+	if got := RuntimeAlias("隨口問", "guild\x00channel"); got == "" || strings.Contains(got, "149573") || !strings.HasPrefix(got, "ch-") {
+		t.Fatalf("RuntimeAlias unicode = %q, want hashed public alias", got)
+	}
+	id, err := GenerateRuntimeAgentIDFromAlias("m5bot", "Backend Support", "guild\x00channel")
+	if err != nil || id != "m5bot-backend-support" {
+		t.Fatalf("GenerateRuntimeAgentIDFromAlias = %q/%v, want m5bot-backend-support", id, err)
+	}
+	id, err = GenerateRuntimeAgentIDFromAlias("m5bot", "support-1495737768905670719-room", "guild\x00channel")
+	if err != nil || strings.Contains(string(id), "1495737768905670719") || !strings.HasPrefix(string(id), "m5bot-rt-") {
+		t.Fatalf("GenerateRuntimeAgentIDFromAlias snowflake = %q/%v, want hashed runtime id", id, err)
 	}
 }
 

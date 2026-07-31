@@ -1740,6 +1740,28 @@ func TestA2APolicyFormatterIncludesPolicyMutationFields(t *testing.T) {
 	}
 }
 
+func TestA2APeersFormatterShowsRuntimeContext(t *testing.T) {
+	L.Load("en")
+	got := formatA2APeers([]botmcp.A2APeerSummary{{
+		AgentID:           "m5bot-backend-support",
+		BotAgentID:        "m5bot",
+		Name:              "m5bot-backend-support",
+		DisplayName:       "Backend Support",
+		ChannelRef:        "backend-support",
+		Runtime:           "channel",
+		Online:            true,
+		Trusted:           true,
+		DelegationAllowed: true,
+		DelegationReason:  "allowed",
+		Skills:            []string{"backend-support/task"},
+	}}, nil)
+	for _, want := range []string{"Available A2A runtimes", "Backend Support", "m5bot-backend-support", "bot `m5bot`", "channel `backend-support`", "allowed"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("formatA2APeers = %q, missing %q", got, want)
+		}
+	}
+}
+
 func TestA2AButtonsConfirmationCustomIDIsSigned(t *testing.T) {
 	t.Setenv("A2A_CONFIRMATION_SECRET", "component-secret")
 	customID := a2aConfirmationButtonCustomID("policy_apply", "channel-1", "change-1")

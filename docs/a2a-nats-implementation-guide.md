@@ -197,18 +197,18 @@ Every runtime migration phase below is a coding boundary. Do not start the next 
 
 **Change steps**:
 1. Add `a2a.RuntimeIDMode` with `legacy|dual|runtime` parsing and doctor redaction.
-2. Add runtime ID generation from `bot_agent_id + channel_ref` for first enable only; persist `runtime_agent_id` immutably in `channel_a2a_policy` and treat later `channel_ref` changes as alias/display changes.
+2. Add runtime ID generation from `bot_agent_id` prefix + public channel alias. Manager-provided `channel_ref` can be used directly if safe; Discord metadata names get a stable short hash suffix; unsafe/non-ASCII/snowflake-like aliases use `ch-<hash>`/`rt-<hash>` fallback without raw Discord IDs.
 3. Do not add a separate `a2a_runtime_registry` table in v1; derive `RuntimeRecord` DTOs from policy rows so policy remains the single local ownership authority.
-4. Add migratable policy fields `runtime_agent_id`, `bot_agent_id`, `channel_ref` as nullable for disabled legacy rows; enforce non-empty/immutable only before `enabled=1` or `discoverable=1`.
+4. In the pre-release test line, allow forced runtime ID recalculation when channel aliases are corrected and cascade old runtime references in policy JSON; restore immutable/drain semantics only at release cutover.
 5. Add canonical policy fields `accept_from_runtimes`, `delegate_targets`, `co_present_from_runtimes`, and runtime-scoped `remote_tool_policy_json` with `allow_memory_write=false` by default.
 6. Preserve legacy fields as migration input only.
 
 **Expected result**: config/doctor can show the selected runtime mode and the policy store can load/save multiple policy-derived runtime records for one bot base ID.
 **Validation**: `go test ./a2a ./channel -run 'Test(RuntimeID|PolicyStore|Doctor.*A2A|RemoteMemoryWriteDenied|RemoteMemoryWriteAllowed)'`.
-**Bugs caught**: unstable runtime ID generation, Discord snowflake leakage, duplicate runtime authority tables, accidental memory-write enablement, and missing legacy-field migration reads.
+**Bugs caught**: unstable runtime ID generation, Discord snowflake leakage, duplicate same-name channel aliases, stale policy references after runtime ID rewrite, duplicate runtime authority tables, accidental memory-write enablement, and missing legacy-field migration reads.
 **Rollback boundary**: revert R1 config/runtime/policy migrations only; existing bot-level A2A behavior remains the fallback while `A2A_RUNTIME_ID_MODE=legacy`.
 **Cross-phase contract**: R2-R6 consume policy-derived `RuntimeRecord`, `RuntimeIDMode`, canonical runtime policy fields, and fail-closed remote tool policy.
-**Done criteria**: runtime IDs are deterministic, immutable, and subject-safe; enabled/discoverable policy rows can derive durable runtime records; disabled legacy policy rows migrate without forced runtime IDs; legacy fields remain readable but cannot grant new runtime trust by themselves.
+**Done criteria**: runtime IDs are deterministic, subject-safe, and derived from bot prefix plus explicit alias or metadata alias/hash; enabled/discoverable policy rows can derive durable runtime records; pre-release policy rewrites can force corrected runtime IDs and update stored references; legacy fields remain readable but cannot grant new runtime trust by themselves.
 
 ### Phase R2: Runtime peer cards and discovery
 
@@ -219,17 +219,17 @@ Every runtime migration phase below is a coding boundary. Do not start the next 
 
 **Change steps**:
 1. Build one public AgentCard per policy-derived `RuntimeRecord`.
-2. Add sanitized extended metadata: `runtime_agent_id`, `bot_agent_id`, `channel_ref`, runtime kind, display label.
+2. Add sanitized extended metadata: `runtime_agent_id`, `bot_agent_id`, `channel_ref`, runtime kind, display label, and Discord guild/channel/thread identifiers.
 3. Store trust/stale/heartbeat state by runtime ID.
-4. Keep legacy bot-level card publication only in `dual` mode and mark it `legacy=true`.
-5. Make `/a2a peers` and bot-tools peers output runtime rows and hide skills until delegated.
+4. Keep legacy bot-level card publication only outside strict `runtime` mode; normal runtime UX hides bot host cards.
+5. Make `/a2a peers` and bot-tools peers output server-scoped runtime rows, hide host cards, and hide skills until delegated.
 
 **Validation**: `go test ./a2a ./channel ./internal/botmcp ./bot -run 'Test.*A2A.*(Peer|Card|Heartbeat|Runtime|Discovery)'`.
 **Expected result**: peer discovery surfaces one row per discoverable runtime and stale/heartbeat state is independent per runtime.
 **Bugs caught**: collapsed same-bot runtimes, private channel discovery leaks, and skill exposure before delegation.
 **Rollback boundary**: revert runtime card/discovery publication while keeping R1 runtime policy data.
 **Cross-phase contract**: R3-R5 use peer rows keyed by `runtime_agent_id` with sanitized extended metadata.
-**Done criteria**: disabled/private policies publish no card; two channels on one bot publish two distinct runtime cards; legacy card appears only in dual mode.
+**Done criteria**: disabled/private policies publish no card; two channels on one bot publish two distinct runtime cards; legacy host cards are hidden in runtime mode and appear only for migration modes.
 
 ### Phase R3: Runtime policy canonicalization
 

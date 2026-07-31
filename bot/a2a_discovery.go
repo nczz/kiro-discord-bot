@@ -4,10 +4,12 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/nats-io/nats.go"
 	"github.com/nczz/kiro-discord-bot/a2a"
+	"github.com/nczz/kiro-discord-bot/internal/channelmeta"
 )
 
 const a2aPeerCardTTL = 3 * time.Minute
@@ -165,7 +167,7 @@ func (b *Bot) a2aRuntimePeerCardRecord(now time.Time, policy a2a.ChannelA2APolic
 		GuildID:        policy.GuildID,
 		ChannelID:      policy.ChannelID,
 		ChannelRef:     policy.ChannelRef,
-		DisplayName:    policy.ChannelRef,
+		DisplayName:    b.a2aRuntimeDisplayName(policy),
 		RuntimeKind:    "channel",
 		Enabled:        policy.Enabled,
 		Discoverable:   policy.Discoverable,
@@ -175,6 +177,20 @@ func (b *Bot) a2aRuntimePeerCardRecord(now time.Time, policy a2a.ChannelA2APolic
 		return a2a.PeerCardRecord{}, err
 	}
 	return a2a.PeerCardRecord{AgentID: runtime.RuntimeAgentID, InstanceID: b.a2aInstanceID + "-" + string(runtime.RuntimeAgentID), Card: card, ExtendedCard: ext, PublishedAt: now, ExpiresAt: now.Add(a2aPeerCardTTL)}, nil
+}
+
+func (b *Bot) a2aRuntimeDisplayName(policy a2a.ChannelA2APolicy) string {
+	if b != nil {
+		if entries, err := channelmeta.Read(b.dataDir); err == nil {
+			if entry, ok := entries[strings.TrimSpace(policy.ChannelID)]; ok && strings.TrimSpace(entry.Name) != "" {
+				return strings.TrimSpace(entry.Name)
+			}
+		}
+	}
+	if strings.TrimSpace(policy.ChannelRef) != "" {
+		return strings.TrimSpace(policy.ChannelRef)
+	}
+	return strings.TrimSpace(policy.RuntimeAgentID)
 }
 
 func agentSkillsFromPolicy(policy a2a.ChannelA2APolicy) []a2a.AgentSkill {

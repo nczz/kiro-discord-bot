@@ -14,12 +14,13 @@ const (
 const MaxEnvelopePayloadBytes = 1024 * 1024
 
 var (
-	agentIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
-	taskIDPattern  = regexp.MustCompile(`^[A-Za-z0-9_-]{1,96}$`)
-	tokenPattern   = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
-	digitsPattern  = regexp.MustCompile(`^\d+$`)
-	pidPattern     = regexp.MustCompile(`(?i)(^|[-_])pid[-_]?\d+($|[-_])`)
-	longSuffix     = regexp.MustCompile(`[-_]\d{10,}$`)
+	agentIDPattern  = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+	taskIDPattern   = regexp.MustCompile(`^[A-Za-z0-9_-]{1,96}$`)
+	tokenPattern    = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
+	digitsPattern   = regexp.MustCompile(`^\d+$`)
+	snowflakeDigits = regexp.MustCompile(`\d{15,20}`)
+	pidPattern      = regexp.MustCompile(`(?i)(^|[-_])pid[-_]?\d+($|[-_])`)
+	longSuffix      = regexp.MustCompile(`[-_]\d{10,}$`)
 )
 
 type AgentID string

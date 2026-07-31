@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/nczz/kiro-discord-bot/a2a"
+	"github.com/nczz/kiro-discord-bot/internal/channelmeta"
 )
 
 func TestA2AToolsPolicyPlanPolicyApply(t *testing.T) {
@@ -76,8 +77,8 @@ func TestA2AToolsPeersRuntimeModeListsWakeableRuntimeAndHidesLegacyBot(t *testin
 	svc, err := NewA2AService(A2AServiceConfig{
 		DataDir:            t.TempDir(),
 		Config:             a2a.Config{AgentID: "adam-n200", RuntimeIDMode: a2a.RuntimeIDModeRuntime},
-		BoundGuildID:       "guild-1",
-		BoundChannelID:     "channel-1",
+		BoundGuildID:       "1495737767827865620",
+		BoundChannelID:     "1495737768905670719",
 		ConfirmationSecret: "test-secret",
 		ConnectNATS:        false,
 	})
@@ -87,8 +88,8 @@ func TestA2AToolsPeersRuntimeModeListsWakeableRuntimeAndHidesLegacyBot(t *testin
 	defer svc.Close()
 
 	if err := svc.policies.Save(ctx, a2a.ChannelA2APolicy{
-		GuildID:            "guild-1",
-		ChannelID:          "channel-1",
+		GuildID:            "1495737767827865620",
+		ChannelID:          "1495737768905670719",
 		Enabled:            true,
 		Discoverable:       true,
 		RuntimeAgentID:     "adam-n200-main",
@@ -112,11 +113,10 @@ func TestA2AToolsPeersRuntimeModeListsWakeableRuntimeAndHidesLegacyBot(t *testin
 		t.Fatalf("Upsert base card: %v", err)
 	}
 	runtimeCard := a2a.AgentCard{Name: "peer-n100-support", Description: "support runtime", Version: "1.0.0", SupportedInterfaces: []a2a.A2AInterface{{URL: "nats://nats.example.internal:4222", ProtocolBinding: a2a.ProtocolBindingNATS, ProtocolVersion: a2a.ProtocolVersion}}, Skills: []a2a.AgentSkill{{ID: "support/task", Name: "Task", Description: "task"}}}
-	if _, err := svc.peers.UpsertExtendedCard(ctx, "peer-n100-support", runtimeCard, a2a.ExtendedAgentCard{Runtime: "channel", ChannelRef: "support", DiscordGuildID: "1495737767827865620", DiscordChannelID: "1495737768905670719", DiscordThreadID: "1532710952477261854"}, false, "peer-host-peer-n100-support", "online", time.Now().Add(time.Hour)); err != nil {
+	if _, err := svc.peers.UpsertExtendedCard(ctx, "peer-n100-support", runtimeCard, a2a.ExtendedAgentCard{Runtime: "channel", BotAgentID: "peer-n100", ChannelRef: "support", DisplayName: "Support Room", DiscordGuildID: "1495737767827865620", DiscordChannelID: "1495737768905670719", DiscordThreadID: "1532710952477261854"}, false, "peer-host-peer-n100-support", "online", time.Now().Add(time.Hour)); err != nil {
 		t.Fatalf("Upsert runtime card: %v", err)
 	}
-
-	resp, err := svc.Peers(ctx, A2AToolRequest{GuildID: "guild-1", ChannelID: "channel-1", RequestedBy: "alice", RequestedByID: "user-1"})
+	resp, err := svc.Peers(ctx, A2AToolRequest{GuildID: "1495737767827865620", ChannelID: "1495737768905670719", RequestedBy: "alice", RequestedByID: "user-1"})
 	if err != nil {
 		t.Fatalf("Peers: %v", err)
 	}
@@ -124,18 +124,53 @@ func TestA2AToolsPeersRuntimeModeListsWakeableRuntimeAndHidesLegacyBot(t *testin
 	for _, peer := range resp.Peers {
 		byAgent[peer.AgentID] = peer
 	}
-	if base := byAgent["peer-n100"]; base.DelegationAllowed || base.Wakeable || base.HiddenSkillCount == 0 {
-		t.Fatalf("base peer = %+v, want hidden non-callable bot host in runtime mode", base)
+	if _, ok := byAgent["peer-n100"]; ok {
+		t.Fatalf("base peer leaked into runtime peers = %+v", byAgent["peer-n100"])
 	}
 	runtime := byAgent["peer-n100-support"]
 	if !runtime.DelegationAllowed || !runtime.Wakeable || runtime.Runtime != "channel" || runtime.ChannelRef != "support" {
 		t.Fatalf("runtime peer = %+v, want wakeable callable channel runtime", runtime)
 	}
-	if runtime.DisplayName != "support" || runtime.DiscordGuildID != "1495737767827865620" || runtime.DiscordChannelID != "1495737768905670719" || runtime.DiscordThreadID != "1532710952477261854" {
+	if runtime.DisplayName != "Support Room" || runtime.BotAgentID != "peer-n100" || runtime.DelegationReason != "allowed" || runtime.DiscordGuildID != "1495737767827865620" || runtime.DiscordChannelID != "1495737768905670719" || runtime.DiscordThreadID != "1532710952477261854" {
 		t.Fatalf("runtime identity = %+v, want Discord identifiers and display name", runtime)
 	}
 	if len(runtime.Skills) != 1 || runtime.Skills[0] != "support/task" {
 		t.Fatalf("runtime skills = %v, want canonical runtime skill", runtime.Skills)
+	}
+}
+
+func TestA2AToolsDefaultPolicyUsesDiscordChannelNameAlias(t *testing.T) {
+	dataDir := t.TempDir()
+	if err := channelmeta.Upsert(dataDir, channelmeta.Entry{ID: "channel-1", GuildID: "guild-1", Name: "Backend Support", Type: "channel"}); err != nil {
+		t.Fatalf("channel metadata: %v", err)
+	}
+	svc, err := NewA2AService(A2AServiceConfig{
+		DataDir:        dataDir,
+		Config:         a2a.Config{AgentID: "adam-n200", RuntimeIDMode: a2a.RuntimeIDModeRuntime},
+		BoundGuildID:   "guild-1",
+		BoundChannelID: "channel-1",
+		ConnectNATS:    false,
+	})
+	if err != nil {
+		t.Fatalf("NewA2AService: %v", err)
+	}
+	defer svc.Close()
+	policy, err := svc.currentPolicy(context.Background(), A2AToolRequest{GuildID: "guild-1", ChannelID: "channel-1"})
+	if err != nil {
+		t.Fatalf("currentPolicy: %v", err)
+	}
+	if !strings.HasPrefix(policy.ChannelRef, "backend-support-") || !strings.HasPrefix(policy.RuntimeAgentID, "adam-n200-backend-support-") {
+		t.Fatalf("default policy = %+v, want disambiguated channel-name runtime alias", policy)
+	}
+	if err := channelmeta.Upsert(dataDir, channelmeta.Entry{ID: "channel-2", GuildID: "guild-1", Name: "Backend Support", Type: "channel"}); err != nil {
+		t.Fatalf("channel metadata 2: %v", err)
+	}
+	other, err := svc.currentPolicy(context.Background(), A2AToolRequest{GuildID: "guild-1", ChannelID: "channel-2"})
+	if err != nil {
+		t.Fatalf("currentPolicy other: %v", err)
+	}
+	if other.ChannelRef == policy.ChannelRef || other.RuntimeAgentID == policy.RuntimeAgentID || !strings.HasPrefix(other.ChannelRef, "backend-support-") {
+		t.Fatalf("default policy collision: first=%+v second=%+v", policy, other)
 	}
 }
 

@@ -15,6 +15,8 @@ const (
 type ExtendedAgentCard struct {
 	ChannelRef              string   `json:"channel_ref,omitempty"`
 	Runtime                 string   `json:"runtime,omitempty"`
+	BotAgentID              string   `json:"bot_agent_id,omitempty"`
+	DisplayName             string   `json:"display_name,omitempty"`
 	DiscordGuildID          string   `json:"discord_guild_id,omitempty"`
 	DiscordChannelID        string   `json:"discord_channel_id,omitempty"`
 	DiscordThreadID         string   `json:"discord_thread_id,omitempty"`
@@ -94,6 +96,8 @@ func BuildRuntimeAgentCard(cfg Config, runtime RuntimeRecord, version string, sk
 	ext, err := BuildExtendedAgentCard(card, ExtendedAgentCard{
 		ChannelRef:              runtime.ChannelRef,
 		Runtime:                 runtime.RuntimeKind,
+		BotAgentID:              string(runtime.BotAgentID),
+		DisplayName:             runtime.DisplayName,
 		DiscordGuildID:          runtime.GuildID,
 		DiscordChannelID:        runtime.ChannelID,
 		DiscordThreadID:         runtime.ThreadID,
@@ -121,6 +125,8 @@ func BuildExtendedAgentCard(public AgentCard, ext ExtendedAgentCard) (ExtendedAg
 	out := ExtendedAgentCard{
 		ChannelRef:              sanitizeSkillID(ext.ChannelRef),
 		Runtime:                 sanitizePublicText(ext.Runtime),
+		BotAgentID:              sanitizePublicText(ext.BotAgentID),
+		DisplayName:             sanitizePublicText(ext.DisplayName),
 		DiscordGuildID:          sanitizeDiscordID(ext.DiscordGuildID),
 		DiscordChannelID:        sanitizeDiscordID(ext.DiscordChannelID),
 		DiscordThreadID:         sanitizeDiscordID(ext.DiscordThreadID),

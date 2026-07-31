@@ -744,6 +744,25 @@ Append one subsection per completed phase.
 - Rollback boundary: restore `/Users/chun/Projects/kiro-discord-bot-local/bin/kiro-discord-bot.pre-a2a-ux-final-20260801002622` locally or `/opt/kiro-discord-bot/kiro-discord-bot.pre-a2a-ux-final-20260801002715` on d80, then revert the R22 files above. Co-present delivery would continue working from R21, but policy readiness display, stronger MCP/prompt guardrails, and new Discord audit target fields would be removed.
 - Next phase: observe one natural Discord-issued delegation that asks for status/progress after completion; expected result is `bot_a2a_task_status` reports terminal state without reposting the executor's transparent/co_present result.
 
+### R23 runtime peer identity cutover
+
+- Status: implemented, not deployed.
+- Trigger: `/a2a peers` still exposed bot-host identity alongside runtime identity, and runtime IDs/display names were effectively tied to bot-specific manual refs such as `m5-main`/`d80-main` instead of Discord channel runtime aliases.
+- Decision: treat `A2A_AGENT_ID` as a bot prefix/credential owner only. Runtime mode peer UX now hides bot host cards and shows only Discord channel/thread runtime cards for the current guild. Runtime aliases are generated from explicit `channel_ref`, then Discord channel metadata name plus stable disambiguating hash, then a `ch-<hash>` fallback. Snowflake-like raw digits force hash fallback. Pre-release runtime ID rewrites cascade policy references.
+- Changed files: `a2a/runtime.go`, `a2a/card.go`, `a2a/peer_store.go`, `a2a/policy_store.go`, `bot/a2a_discovery.go`, `bot/a2a_commands.go`, `internal/botmcp/a2a_tools.go`, tests, locale JSON, `docs/a2a-nats-integration-spec.md`, `docs/a2a-nats-implementation-guide.md`, and this progress ledger.
+- Review finding fixed: strict reviewer flagged snowflake leakage in mixed aliases, stale policy references after forced runtime ID rewrites, and duplicate metadata-derived aliases. R23 now hashes mixed-snowflake aliases, rewrites stored policy references when a runtime ID changes, and adds a stable short hash suffix to metadata-derived channel aliases.
+- Validation:
+  - `go test ./a2a ./internal/botmcp -run 'TestRuntimeAliasUsesChannelNameOrStableHash|TestPolicyStoreValidationAndPersistence|TestA2AToolsDefaultPolicyUsesDiscordChannelNameAlias|TestA2AToolsPeersRuntimeModeListsWakeableRuntimeAndHidesLegacyBot'` passed.
+  - `go test ./a2a -run 'TestBuildRuntimeAgentCardIncludesDiscordIdentifiers|TestRuntimeAliasUsesChannelNameOrStableHash|TestRuntimeCutoverReadiness|TestPolicyStore'` passed.
+  - `go test ./bot -run 'TestRuntimePeerCardUsesRuntimeIDAndPolicySkills|TestA2APeersFormatterShowsRuntimeContext|TestA2APolicyFormatterIncludesPolicyMutationFields'` passed.
+  - `go test ./internal/botmcp -run 'TestA2AToolsPeersRuntimeModeListsWakeableRuntimeAndHidesLegacyBot|TestA2AToolsDefaultPolicyUsesDiscordChannelNameAlias|TestA2AToolsPolicyPlanPolicyApply|TestA2AToolsPolicySetupDefaultsRuntimeTarget'` passed.
+  - `env -u NATS_URL -u NATS_CREDS_FILE -u NATS_TOKEN -u NATS_TLS_CA_FILE -u A2A_AGENT_ID -u A2A_RUNTIME_ID_MODE -u A2A_AGENT_NAME -u A2A_AGENT_DESCRIPTION -u A2A_REQUIRE_CONFIRMATION_FOR_REMOTE go test ./...` passed.
+  - `git diff --check` passed.
+- Runtime settings touched: no live env/policy DB changes.
+- Deployment hosts touched: none.
+- Rollback boundary: revert the R23 files above. Runtime mode would again show bot host rows in peers output and default runtime IDs would derive from manual `channel_ref`/`discord-<channel_id>` rather than channel-name aliases/hash fallback.
+- Next phase: commit the reviewed pre-release runtime peer identity refactor, then run a local `/a2a peers` UX smoke before any deployment.
+
 ## Master goal prompt
 
 Use this prompt when starting or resuming the full implementation program:

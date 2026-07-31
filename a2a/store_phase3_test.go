@@ -215,6 +215,33 @@ func TestPolicyStoreValidationAndPersistence(t *testing.T) {
 	if err := store.Save(ctx, bad, "manager"); err == nil {
 		t.Fatal("duplicate channel_ref accepted")
 	}
+
+	delegator := policy
+	delegator.ChannelID = "delegator"
+	delegator.ChannelRef = "delegator"
+	delegator.RuntimeAgentID = "adam-n200-delegator"
+	delegator.AcceptFrom = []string{"adam-n200-backend"}
+	delegator.AcceptFromRuntimes = []string{"adam-n200-backend"}
+	delegator.DelegateTo = []string{"adam-n200-backend"}
+	delegator.DelegateTargets = []DelegateTargetPolicy{{RuntimeAgentID: "adam-n200-backend", SkillID: "backend/review"}}
+	delegator.CoPresentFrom = []string{"adam-n200-backend"}
+	delegator.CoPresentFromRuntimes = []string{"adam-n200-backend"}
+	if err := store.Save(ctx, delegator, "manager"); err != nil {
+		t.Fatalf("Save delegator: %v", err)
+	}
+	renamed := policy
+	renamed.ChannelRef = "backend-renamed"
+	renamed.RuntimeAgentID = "adam-n200-backend-renamed"
+	if err := store.Save(ctx, renamed, "manager"); err != nil {
+		t.Fatalf("Save renamed: %v", err)
+	}
+	gotDelegator, err := store.Get(ctx, "guild", "delegator")
+	if err != nil {
+		t.Fatalf("Get delegator: %v", err)
+	}
+	if gotDelegator.AcceptFrom[0] != "adam-n200-backend-renamed" || gotDelegator.AcceptFromRuntimes[0] != "adam-n200-backend-renamed" || gotDelegator.DelegateTo[0] != "adam-n200-backend-renamed" || gotDelegator.DelegateTargets[0].RuntimeAgentID != "adam-n200-backend-renamed" || gotDelegator.CoPresentFrom[0] != "adam-n200-backend-renamed" || gotDelegator.CoPresentFromRuntimes[0] != "adam-n200-backend-renamed" {
+		t.Fatalf("runtime references were not rewritten: %+v", gotDelegator)
+	}
 }
 
 func TestPeerStoreSanitizesCardAndMarksStale(t *testing.T) {

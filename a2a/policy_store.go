@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"mime"
 	"regexp"
@@ -123,9 +124,6 @@ func (s *SQLitePolicyStore) Save(ctx context.Context, p ChannelA2APolicy, update
 	if err := validateChannelA2APolicy(p); err != nil {
 		return err
 	}
-	if err := s.validatePolicyRuntimeImmutability(ctx, p); err != nil {
-		return err
-	}
 	now := time.Now().UTC()
 	if p.CreatedAt.IsZero() {
 		p.CreatedAt = now
@@ -134,6 +132,15 @@ func (s *SQLitePolicyStore) Save(ctx context.Context, p ChannelA2APolicy, update
 	p.UpdatedBy = strings.TrimSpace(updatedBy)
 	if p.UpdatedBy == "" {
 		return fmt.Errorf("updated_by is required")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var existingRuntime sql.NullString
+	if err := tx.QueryRowContext(ctx, `SELECT runtime_agent_id FROM channel_a2a_policy WHERE guild_id=? AND channel_id=?`, p.GuildID, p.ChannelID).Scan(&existingRuntime); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
 	}
 	acceptFrom, _ := json.Marshal(p.AcceptFrom)
 	acceptFromRuntimes, _ := json.Marshal(p.AcceptFromRuntimes)
@@ -146,27 +153,48 @@ func (s *SQLitePolicyStore) Save(ctx context.Context, p ChannelA2APolicy, update
 	coPresent, _ := json.Marshal(p.CoPresentFrom)
 	coPresentRuntimes, _ := json.Marshal(p.CoPresentFromRuntimes)
 	remote, _ := json.Marshal(p.RemoteToolPolicy)
-	_, err := s.db.ExecContext(ctx, `INSERT INTO channel_a2a_policy(guild_id, channel_id, enabled, discoverable, runtime_agent_id, bot_agent_id, channel_ref, accept_from_json, accept_from_runtimes_json, accept_skills_json, expose_skills_json, delegate_to_json, delegate_skills_json, delegate_targets_json, delegate_media_json, max_concurrent, result_visibility, discord_transcript_mode, share_discord_context, co_present_from_json, co_present_from_runtimes_json, auto_delegate_enabled, remote_tool_policy_json, created_at, updated_at, updated_by)
+	_, err = tx.ExecContext(ctx, `INSERT INTO channel_a2a_policy(guild_id, channel_id, enabled, discoverable, runtime_agent_id, bot_agent_id, channel_ref, accept_from_json, accept_from_runtimes_json, accept_skills_json, expose_skills_json, delegate_to_json, delegate_skills_json, delegate_targets_json, delegate_media_json, max_concurrent, result_visibility, discord_transcript_mode, share_discord_context, co_present_from_json, co_present_from_runtimes_json, auto_delegate_enabled, remote_tool_policy_json, created_at, updated_at, updated_by)
 		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-		ON CONFLICT(guild_id, channel_id) DO UPDATE SET enabled=excluded.enabled, discoverable=excluded.discoverable, runtime_agent_id=CASE WHEN excluded.runtime_agent_id IS NULL OR excluded.runtime_agent_id='' THEN channel_a2a_policy.runtime_agent_id ELSE excluded.runtime_agent_id END, bot_agent_id=CASE WHEN excluded.bot_agent_id IS NULL OR excluded.bot_agent_id='' THEN channel_a2a_policy.bot_agent_id ELSE excluded.bot_agent_id END, channel_ref=excluded.channel_ref, accept_from_json=excluded.accept_from_json, accept_from_runtimes_json=excluded.accept_from_runtimes_json, accept_skills_json=excluded.accept_skills_json, expose_skills_json=excluded.expose_skills_json, delegate_to_json=excluded.delegate_to_json, delegate_skills_json=excluded.delegate_skills_json, delegate_targets_json=excluded.delegate_targets_json, delegate_media_json=excluded.delegate_media_json, max_concurrent=excluded.max_concurrent, result_visibility=excluded.result_visibility, discord_transcript_mode=excluded.discord_transcript_mode, share_discord_context=excluded.share_discord_context, co_present_from_json=excluded.co_present_from_json, co_present_from_runtimes_json=excluded.co_present_from_runtimes_json, auto_delegate_enabled=excluded.auto_delegate_enabled, remote_tool_policy_json=excluded.remote_tool_policy_json, updated_at=excluded.updated_at, updated_by=excluded.updated_by`,
+		ON CONFLICT(guild_id, channel_id) DO UPDATE SET enabled=excluded.enabled, discoverable=excluded.discoverable, runtime_agent_id=excluded.runtime_agent_id, bot_agent_id=excluded.bot_agent_id, channel_ref=excluded.channel_ref, accept_from_json=excluded.accept_from_json, accept_from_runtimes_json=excluded.accept_from_runtimes_json, accept_skills_json=excluded.accept_skills_json, expose_skills_json=excluded.expose_skills_json, delegate_to_json=excluded.delegate_to_json, delegate_skills_json=excluded.delegate_skills_json, delegate_targets_json=excluded.delegate_targets_json, delegate_media_json=excluded.delegate_media_json, max_concurrent=excluded.max_concurrent, result_visibility=excluded.result_visibility, discord_transcript_mode=excluded.discord_transcript_mode, share_discord_context=excluded.share_discord_context, co_present_from_json=excluded.co_present_from_json, co_present_from_runtimes_json=excluded.co_present_from_runtimes_json, auto_delegate_enabled=excluded.auto_delegate_enabled, remote_tool_policy_json=excluded.remote_tool_policy_json, updated_at=excluded.updated_at, updated_by=excluded.updated_by`,
 		p.GuildID, p.ChannelID, boolInt(p.Enabled), boolInt(p.Discoverable), nullEmpty(p.RuntimeAgentID), nullEmpty(p.BotAgentID), p.ChannelRef, string(acceptFrom), string(acceptFromRuntimes), string(acceptSkills), string(exposeSkills), string(delegateTo), string(delegateSkills), string(delegateTargets), string(delegateMedia), p.MaxConcurrent, p.ResultVisibility, p.DiscordTranscriptMode, boolInt(p.ShareDiscordContext), string(coPresent), string(coPresentRuntimes), boolInt(p.AutoDelegateEnabled), string(remote), p.CreatedAt.Format(sqliteTimeFormat), p.UpdatedAt.Format(sqliteTimeFormat), p.UpdatedBy)
-	return err
-}
-
-func (s *SQLitePolicyStore) validatePolicyRuntimeImmutability(ctx context.Context, p ChannelA2APolicy) error {
-	var existing sql.NullString
-	err := s.db.QueryRowContext(ctx, `SELECT runtime_agent_id FROM channel_a2a_policy WHERE guild_id=? AND channel_id=?`, p.GuildID, p.ChannelID).Scan(&existing)
 	if err != nil {
-		if err == sql.ErrNoRows {
-			return nil
-		}
 		return err
 	}
-	next := strings.TrimSpace(p.RuntimeAgentID)
-	if existing.Valid && strings.TrimSpace(existing.String) != "" && next != "" && strings.TrimSpace(existing.String) != next {
-		return fmt.Errorf("runtime_agent_id is immutable for enabled runtime policies")
+	oldRuntime := strings.TrimSpace(existingRuntime.String)
+	newRuntime := strings.TrimSpace(p.RuntimeAgentID)
+	if existingRuntime.Valid && oldRuntime != "" && newRuntime != "" && oldRuntime != newRuntime {
+		if err := rewriteRuntimeIDReferences(ctx, tx, oldRuntime, newRuntime); err != nil {
+			return err
+		}
 	}
-	return nil
+	return tx.Commit()
+}
+
+func rewriteRuntimeIDReferences(ctx context.Context, execer interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}, oldRuntime, newRuntime string) error {
+	oldJSON, err := json.Marshal(oldRuntime)
+	if err != nil {
+		return err
+	}
+	newJSON, err := json.Marshal(newRuntime)
+	if err != nil {
+		return err
+	}
+	_, err = execer.ExecContext(ctx, `UPDATE channel_a2a_policy SET
+		accept_from_json=replace(accept_from_json, ?, ?),
+		accept_from_runtimes_json=replace(accept_from_runtimes_json, ?, ?),
+		delegate_to_json=replace(delegate_to_json, ?, ?),
+		delegate_targets_json=replace(delegate_targets_json, ?, ?),
+		co_present_from_json=replace(co_present_from_json, ?, ?),
+		co_present_from_runtimes_json=replace(co_present_from_runtimes_json, ?, ?)`,
+		string(oldJSON), string(newJSON),
+		string(oldJSON), string(newJSON),
+		string(oldJSON), string(newJSON),
+		string(oldJSON), string(newJSON),
+		string(oldJSON), string(newJSON),
+		string(oldJSON), string(newJSON))
+	return err
 }
 
 func nullEmpty(s string) any {

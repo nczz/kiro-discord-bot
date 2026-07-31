@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/nczz/kiro-discord-bot/a2a"
+	"github.com/nczz/kiro-discord-bot/internal/channelmeta"
 )
 
 func TestBuildBotA2APeerCardUsesStableAgentIDAndGeneralSkill(t *testing.T) {
@@ -34,6 +35,9 @@ func TestRuntimePeerCardUsesRuntimeIDAndPolicySkills(t *testing.T) {
 		guildID:     "guild-1",
 		manualPeers: nil,
 	}
+	if err := channelmeta.Upsert(b.dataDir, channelmeta.Entry{ID: "channel-1", GuildID: "guild-1", Name: "Support Room", Type: "channel"}); err != nil {
+		t.Fatalf("channel metadata: %v", err)
+	}
 	record, err := b.a2aRuntimePeerCardRecord(nowForA2ATest(), a2a.ChannelA2APolicy{
 		GuildID:        "guild-1",
 		ChannelID:      "channel-1",
@@ -47,7 +51,7 @@ func TestRuntimePeerCardUsesRuntimeIDAndPolicySkills(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a2aRuntimePeerCardRecord: %v", err)
 	}
-	if record.AgentID != "m5bot-local-support" || record.Card.Name != "m5bot-local-support" || record.ExtendedCard.ChannelRef != "support" {
+	if record.AgentID != "m5bot-local-support" || record.Card.Name != "m5bot-local-support" || record.ExtendedCard.ChannelRef != "support" || record.ExtendedCard.DisplayName != "Support Room" || record.ExtendedCard.BotAgentID != "m5bot-local" {
 		t.Fatalf("runtime record = %+v", record)
 	}
 	if len(record.Card.Skills) != 1 || record.Card.Skills[0].ID != "support/review" {

@@ -57,12 +57,16 @@ type RuntimeRecord struct {
 }
 
 func GenerateRuntimeAgentID(bot AgentID, channelRef string) (AgentID, error) {
+	return GenerateRuntimeAgentIDFromAlias(bot, channelRef, channelRef)
+}
+
+func GenerateRuntimeAgentIDFromAlias(bot AgentID, publicAlias, stableKey string) (AgentID, error) {
 	if err := ValidateAgentID(bot); err != nil {
 		return "", err
 	}
 	base := string(bot)
-	slug := runtimeSlug(channelRef)
-	if slug != "" && !digitsPattern.MatchString(slug) {
+	slug := runtimeSlug(publicAlias)
+	if publicRuntimeSlug(slug) {
 		candidate := base + "-" + slug
 		if len(candidate) <= 64 {
 			id := AgentID(candidate)
@@ -71,7 +75,11 @@ func GenerateRuntimeAgentID(bot AgentID, channelRef string) (AgentID, error) {
 			}
 		}
 	}
-	sum := sha256.Sum256([]byte(base + "\x00" + strings.TrimSpace(channelRef)))
+	stable := strings.TrimSpace(stableKey)
+	if stable == "" {
+		stable = strings.TrimSpace(publicAlias)
+	}
+	sum := sha256.Sum256([]byte(base + "\x00" + stable))
 	hash := hex.EncodeToString(sum[:6])
 	prefix := base
 	maxPrefix := 64 - len("-rt-") - len(hash)
@@ -86,6 +94,45 @@ func GenerateRuntimeAgentID(bot AgentID, channelRef string) (AgentID, error) {
 		return "", err
 	}
 	return id, nil
+}
+
+func RuntimeAlias(raw, stableKey string) string {
+	slug := runtimeSlug(raw)
+	if publicRuntimeSlug(slug) {
+		if withHash := runtimeAliasWithHash(slug, stableKey); withHash != "" {
+			return withHash
+		}
+		return slug
+	}
+	return "ch-" + runtimeHash(strings.TrimSpace(stableKey), strings.TrimSpace(raw), 4)
+}
+
+func publicRuntimeSlug(slug string) bool {
+	return slug != "" && !digitsPattern.MatchString(slug) && !snowflakeDigits.MatchString(slug)
+}
+
+func runtimeAliasWithHash(slug, stableKey string) string {
+	if strings.TrimSpace(stableKey) == "" {
+		return ""
+	}
+	hash := runtimeHash(stableKey, "", 4)
+	maxSlug := 64 - 1 - len(hash)
+	if len(slug) > maxSlug {
+		slug = strings.TrimRight(slug[:maxSlug], "-_")
+	}
+	if slug == "" {
+		return ""
+	}
+	return slug + "-" + hash
+}
+
+func runtimeHash(stableKey, fallback string, bytes int) string {
+	stable := strings.TrimSpace(stableKey)
+	if stable == "" {
+		stable = strings.TrimSpace(fallback)
+	}
+	sum := sha256.Sum256([]byte(stable))
+	return hex.EncodeToString(sum[:bytes])
 }
 
 func runtimeSlug(raw string) string {

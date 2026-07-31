@@ -76,6 +76,8 @@ type PeerTrustDisplay struct {
 	Compatibility         PeerCompatibility
 	Runtime               string
 	ChannelRef            string
+	BotAgentID            string
+	DisplayName           string
 	DiscordGuildID        string
 	DiscordChannelID      string
 	DiscordThreadID       string
@@ -259,6 +261,8 @@ func (s *SQLitePeerStore) TrustSummary(ctx context.Context, staleAfter time.Dura
 			Compatibility:         CheckVersionCompatibility(peer.Card),
 			Runtime:               peer.ExtendedCard.Runtime,
 			ChannelRef:            peer.ExtendedCard.ChannelRef,
+			BotAgentID:            peer.ExtendedCard.BotAgentID,
+			DisplayName:           peer.ExtendedCard.DisplayName,
 			DiscordGuildID:        peer.ExtendedCard.DiscordGuildID,
 			DiscordChannelID:      peer.ExtendedCard.DiscordChannelID,
 			DiscordThreadID:       peer.ExtendedCard.DiscordThreadID,
