@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/nczz/kiro-discord-bot/a2a"
+	"github.com/nczz/kiro-discord-bot/acp"
 	"github.com/nczz/kiro-discord-bot/audit"
 	"github.com/nczz/kiro-discord-bot/internal/botegress"
 )
@@ -24,7 +25,7 @@ func (m *Manager) AdmitA2ATask(ctx context.Context, req a2a.TaskExecutionRequest
 	if m == nil || !m.a2aConfig.Enabled() {
 		return rejectedA2AAdmission(req, a2a.ErrorChannelNotEnabled, "A2A ingress is disabled"), nil
 	}
-	if err := validateA2AExecutionRequest(m.a2aConfig.AgentID, req); err != nil {
+	if err := validateA2AExecutionRequest("", req); err != nil {
 		return rejectedA2AAdmission(req, a2a.ErrorInvalidEnvelope, err.Error()), nil
 	}
 	if m.a2aPolicies == nil {
@@ -41,7 +42,11 @@ func (m *Manager) AdmitA2ATask(ctx context.Context, req a2a.TaskExecutionRequest
 		}
 		return rejectedA2AAdmission(req, a2a.ErrorStoreError, err.Error()), nil
 	}
-	if err := policy.ValidateInbound(req.From, req.SkillID); err != nil {
+	executor := effectiveA2AExecutorAgent(m.a2aConfig, policy)
+	if err := validateA2ATarget(m.a2aConfig, policy, req); err != nil {
+		return rejectedA2AAdmission(req, a2a.ErrorInvalidEnvelope, err.Error()), nil
+	}
+	if err := policy.ValidateInboundRuntime(req.From, req.SkillID); err != nil {
 		return rejectedA2AAdmission(req, codeFromA2AError(err, a2a.ErrorPolicyDenied), err.Error()), nil
 	}
 	if err := validateA2ADeliveryAgainstPolicy(req, policy); err != nil {
@@ -55,7 +60,7 @@ func (m *Manager) AdmitA2ATask(ctx context.Context, req a2a.TaskExecutionRequest
 		if !ok {
 			admission = admissionFromRow(req, row)
 		}
-		return acceptedA2AAdmission(row, admission, m.a2aConfig.AgentID), nil
+		return acceptedA2AAdmission(row, admission, executor), nil
 	} else if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return rejectedA2AAdmission(req, a2a.ErrorStoreError, err.Error()), nil
 	}
@@ -77,9 +82,10 @@ func (m *Manager) AdmitA2ATask(ctx context.Context, req a2a.TaskExecutionRequest
 		ContextID:             strings.TrimSpace(req.ContextID),
 		FromAgent:             req.From,
 		ToAgent:               req.To,
-		ExecutorAgent:         m.a2aConfig.AgentID,
+		ExecutorAgent:         executor,
 		ChannelID:             policy.ChannelID,
 		GuildID:               policy.GuildID,
+		OriginRequester:       req.OriginRequester,
 		ChannelRef:            policy.ChannelRef,
 		SkillID:               a2a.SkillSlug(req.SkillID),
 		State:                 a2a.TaskStateSubmitted,
@@ -116,7 +122,7 @@ func (m *Manager) AdmitA2ATask(ctx context.Context, req a2a.TaskExecutionRequest
 		TaskID:        row.TaskID,
 		State:         row.State,
 		Revision:      row.Revision,
-		ExecutorAgent: m.a2aConfig.AgentID,
+		ExecutorAgent: executor,
 		ChannelID:     policy.ChannelID,
 		GuildID:       policy.GuildID,
 		ChannelRef:    policy.ChannelRef,
@@ -173,18 +179,22 @@ func (m *Manager) RunA2ATask(ctx context.Context, admitted a2a.A2AAdmission) (a2
 	}
 	defer m.releaseA2AAdmission(admitted)
 
+	requesterID, requesterName := a2aRequesterIdentity(admitted.Request)
+
 	resultCh := make(chan a2a.TaskExecutionResult, 1)
 	job := &Job{
 		ChannelID:              admitted.Request.ChannelID,
 		GuildID:                admitted.Request.GuildID,
 		Prompt:                 buildA2APrompt(admitted),
-		UserID:                 string(admitted.Request.From),
-		Username:               "A2A " + string(admitted.Request.From),
+		UserID:                 requesterID,
+		Username:               requesterName,
+		MessageID:              string(admitted.Request.MessageID),
 		Source:                 "a2a",
 		DeliveryMode:           DeliveryInline,
 		DisableBotEgress:       admitted.Request.ResultVisibility == "" || admitted.Request.ResultVisibility == "proxy",
 		RemoteA2A:              true,
 		AllowRemoteMemoryWrite: m.remoteMemoryWriteAllowed(admitted.Request.ChannelID),
+		A2ADelegationDepth:     admitted.Request.Delivery.MaxDelegationDepth,
 		A2AResult:              resultCh,
 		A2ATaskID:              admitted.TaskID,
 		A2ARevision:            admitted.Revision + 1,
@@ -321,6 +331,39 @@ func validateA2AExecutionRequest(local a2a.AgentID, req a2a.TaskExecutionRequest
 	return nil
 }
 
+func effectiveA2AExecutorAgent(cfg a2a.Config, policy a2a.ChannelA2APolicy) a2a.AgentID {
+	if cfg.RuntimeIDMode.UsesRuntimeIDs() && strings.TrimSpace(policy.RuntimeAgentID) != "" {
+		return a2a.AgentID(strings.TrimSpace(policy.RuntimeAgentID))
+	}
+	return cfg.AgentID
+}
+
+func validateA2ATarget(cfg a2a.Config, policy a2a.ChannelA2APolicy, req a2a.TaskExecutionRequest) error {
+	mode, err := a2a.NormalizeRuntimeIDMode(cfg.RuntimeIDMode.String())
+	if err != nil {
+		return err
+	}
+	runtimeID := a2a.AgentID(strings.TrimSpace(policy.RuntimeAgentID))
+	switch mode {
+	case a2a.RuntimeIDModeRuntime:
+		if runtimeID == "" {
+			return fmt.Errorf("runtime_agent_id is required for runtime mode")
+		}
+		if req.To != runtimeID {
+			return fmt.Errorf("request target %s does not match runtime %s", req.To, runtimeID)
+		}
+	case a2a.RuntimeIDModeDual:
+		if req.To != cfg.AgentID && (runtimeID == "" || req.To != runtimeID) {
+			return fmt.Errorf("request target %s does not match local agent %s or runtime %s", req.To, cfg.AgentID, runtimeID)
+		}
+	default:
+		if req.To != cfg.AgentID {
+			return fmt.Errorf("request target %s does not match local agent %s", req.To, cfg.AgentID)
+		}
+	}
+	return nil
+}
+
 func validateA2ADeliveryAgainstPolicy(req a2a.TaskExecutionRequest, policy a2a.ChannelA2APolicy) error {
 	if req.ResultVisibility != "" && req.ResultVisibility != policy.ResultVisibility {
 		return fmt.Errorf("result_visibility %q is not allowed by channel policy", req.ResultVisibility)
@@ -369,6 +412,21 @@ func effectiveA2AInboundCap(policyCap, configCap int) int {
 func a2aTaskID(req a2a.TaskExecutionRequest) a2a.TaskID {
 	sum := sha256.Sum256([]byte(string(req.From) + ":" + string(req.To) + ":" + string(req.MessageID)))
 	return a2a.TaskID("task_" + hex.EncodeToString(sum[:12]))
+}
+func a2aRequesterIdentity(req a2a.TaskExecutionRequest) (string, string) {
+	requesterID := ""
+	requesterName := ""
+	if strings.TrimSpace(req.OriginRequester.DiscordGuildID) == strings.TrimSpace(req.GuildID) {
+		requesterID = strings.TrimSpace(req.OriginRequester.DiscordUserID)
+		requesterName = strings.TrimSpace(req.OriginRequester.DiscordUsername)
+	}
+	if requesterID == "" {
+		requesterID = string(req.From)
+	}
+	if requesterName == "" {
+		requesterName = "A2A " + string(req.From)
+	}
+	return requesterID, requesterName
 }
 
 func discordContextJSON(req a2a.TaskExecutionRequest) string {
@@ -475,11 +533,24 @@ func a2aDeliveryContent(row a2a.TaskRow, kind string, payload a2a.TaskEventPaylo
 	if content == "" {
 		return ""
 	}
+	if payload.Result != nil {
+		content = AppendMetricsFooter(content, a2aResultMetrics(payload.Result.Metrics))
+	}
 	prefix := fmt.Sprintf("A2A %s from %s", kind, row.ToAgent)
 	if row.SkillID != "" {
 		prefix += " (" + row.SkillID + ")"
 	}
 	return prefix + ":\n" + content
+}
+
+func a2aResultMetrics(metrics map[string]float64) acp.TurnMetrics {
+	if len(metrics) == 0 {
+		return acp.TurnMetrics{}
+	}
+	return acp.TurnMetrics{
+		ContextUsage:   metrics["context_usage"],
+		TurnDurationMs: int64(metrics["turn_duration"]),
+	}
 }
 
 func a2aArtifactsForDelivery(kind string, payload a2a.TaskEventPayload) []a2a.TaskExecutionArtifact {

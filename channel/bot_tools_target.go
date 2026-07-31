@@ -14,6 +14,9 @@ type botToolsTargetState struct {
 	DisableEgress         bool                 `json:"disable_egress,omitempty"`
 	RemoteA2A             bool                 `json:"remote_a2a,omitempty"`
 	AllowMemoryWrite      bool                 `json:"allow_memory_write,omitempty"`
+	DelegationDepth       int                  `json:"delegation_depth,omitempty"`
+	RequesterID           string               `json:"requester_id,omitempty"`
+	RequesterName         string               `json:"requester_name,omitempty"`
 	AllowedMentionUserIDs []string             `json:"allowed_mention_user_ids,omitempty"`
 	MentionRefs           []discordmention.Ref `json:"mention_refs,omitempty"`
 }
@@ -46,10 +49,14 @@ func writeBotToolsTargetStateOptions(path, targetChannelID string, disableEgress
 }
 
 func writeBotToolsTargetStateWithRefs(path, targetChannelID string, disableEgress bool, refs []discordmention.Ref) error {
-	return writeBotToolsTargetStateWithPolicy(path, targetChannelID, disableEgress, refs, false, false)
+	return writeBotToolsTargetStateWithRequester(path, targetChannelID, disableEgress, refs, false, false, "", "", 0)
 }
 
 func writeBotToolsTargetStateWithPolicy(path, targetChannelID string, disableEgress bool, refs []discordmention.Ref, remoteA2A bool, allowMemoryWrite bool) error {
+	return writeBotToolsTargetStateWithRequester(path, targetChannelID, disableEgress, refs, remoteA2A, allowMemoryWrite, "", "", 0)
+}
+
+func writeBotToolsTargetStateWithRequester(path, targetChannelID string, disableEgress bool, refs []discordmention.Ref, remoteA2A bool, allowMemoryWrite bool, requesterID, requesterName string, delegationDepth int) error {
 	path = strings.TrimSpace(path)
 	targetChannelID = strings.TrimSpace(targetChannelID)
 	if path == "" || targetChannelID == "" {
@@ -63,6 +70,9 @@ func writeBotToolsTargetStateWithPolicy(path, targetChannelID string, disableEgr
 		DisableEgress:         disableEgress,
 		RemoteA2A:             remoteA2A,
 		AllowMemoryWrite:      allowMemoryWrite,
+		DelegationDepth:       delegationDepth,
+		RequesterID:           strings.TrimSpace(requesterID),
+		RequesterName:         strings.TrimSpace(requesterName),
 		AllowedMentionUserIDs: allowedMentionUserIDs(refs),
 		MentionRefs:           cleanMentionRefs(refs),
 	})

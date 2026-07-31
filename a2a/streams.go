@@ -52,7 +52,13 @@ func EnsureConsumers(ctx context.Context, node *Node) error {
 	if node == nil || !node.IsEnabled() {
 		return nil
 	}
-	agentID := node.AgentID()
+	return EnsureConsumersForAgent(ctx, node, node.AgentID())
+}
+
+func EnsureConsumersForAgent(ctx context.Context, node *Node, agentID AgentID) error {
+	if node == nil || !node.IsEnabled() {
+		return nil
+	}
 	if err := ValidateAgentID(agentID); err != nil {
 		return fmt.Errorf("agent id: %w", err)
 	}

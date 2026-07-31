@@ -81,11 +81,16 @@ type A2AToolRequest struct {
 	DenyReason           string   `json:"deny_reason,omitempty"`
 	ChangeID             string   `json:"change_id,omitempty"`
 	ConfirmationToken    string   `json:"confirmation_token,omitempty"`
+	PolicyAction         string   `json:"policy_action,omitempty"`
 	RequiresConfirmation bool     `json:"requires_confirmation,omitempty"`
 	DeliveryMode         string   `json:"delivery_mode,omitempty"`
 	TranscriptMode       string   `json:"transcript_mode,omitempty"`
 	ResultVisibility     string   `json:"result_visibility,omitempty"`
 	ChannelRef           string   `json:"channel_ref,omitempty"`
+	TargetChannelID      string   `json:"target_channel_id,omitempty"`
+	TargetThreadID       string   `json:"target_thread_id,omitempty"`
+	TargetChannelRef     string   `json:"target_channel_ref,omitempty"`
+	SetupMode            string   `json:"setup_mode,omitempty"`
 	Enable               *bool    `json:"enable,omitempty"`
 	AcceptFrom           []string `json:"accept_from,omitempty"`
 	AcceptSkills         []string `json:"accept_skills,omitempty"`
@@ -125,6 +130,7 @@ type A2APeerSummary struct {
 	Online            bool     `json:"online"`
 	Stale             bool     `json:"stale"`
 	Skills            []string `json:"skills"`
+	HiddenSkillCount  int      `json:"hiddenSkillCount,omitempty"`
 	DelegationAllowed bool     `json:"delegationAllowed"`
 	ProtocolBinding   string   `json:"protocolBinding,omitempty"`
 	ProtocolVersion   string   `json:"protocolVersion,omitempty"`
@@ -237,9 +243,23 @@ func (s *A2AService) Peers(ctx context.Context, req A2AToolRequest) (A2AToolResp
 		if row.AgentID == s.cfg.Config.AgentID {
 			continue
 		}
-		peers = append(peers, A2APeerSummary{AgentID: string(row.AgentID), Name: row.Name, Trusted: row.Trusted, Online: row.Online, Stale: row.Stale, Skills: append([]string(nil), row.SkillIDs...), DelegationAllowed: stringListAllows(policy.DelegateTo, string(row.AgentID)), ProtocolBinding: row.SupportedBinding, ProtocolVersion: row.ProtocolVersion, SignatureStatus: row.SignatureStatus})
+		visibleSkills := visiblePeerSkills(policy, string(row.AgentID), row.SkillIDs)
+		peers = append(peers, A2APeerSummary{AgentID: string(row.AgentID), Name: row.Name, Trusted: row.Trusted, Online: row.Online, Stale: row.Stale, Skills: visibleSkills, HiddenSkillCount: len(row.SkillIDs) - len(visibleSkills), DelegationAllowed: len(visibleSkills) > 0, ProtocolBinding: row.SupportedBinding, ProtocolVersion: row.ProtocolVersion, SignatureStatus: row.SignatureStatus})
 	}
 	return A2AToolResponse{OK: true, Message: "A2A peers listed", Peers: peers}, nil
+}
+
+func visiblePeerSkills(policy a2a.ChannelA2APolicy, agent string, skills []string) []string {
+	if !policy.Enabled {
+		return nil
+	}
+	out := make([]string, 0, len(skills))
+	for _, skill := range skills {
+		if policyDelegatesRuntime(policy, agent, skill, policy.ChannelRef) {
+			out = append(out, skill)
+		}
+	}
+	return out
 }
 
 func (s *A2AService) PolicyGet(ctx context.Context, req A2AToolRequest) (A2AToolResponse, error) {
@@ -262,6 +282,9 @@ func (s *A2AService) TaskStatus(ctx context.Context, req A2AToolRequest) (A2AToo
 		if err != nil {
 			return responseError(taskLookupError(err)), nil
 		}
+		if err := authorizeTaskStatus(row, req); err != nil {
+			return responseError(err), nil
+		}
 		sum := summarizeTask(row)
 		return A2AToolResponse{OK: true, Message: "A2A task loaded", Task: &sum}, nil
 	}
@@ -269,6 +292,9 @@ func (s *A2AService) TaskStatus(ctx context.Context, req A2AToolRequest) (A2AToo
 		row, err := s.tasks.GetByDirectionTaskID(ctx, "outbound", a2a.TaskID(strings.TrimSpace(req.TaskID)))
 		if err != nil {
 			return responseError(taskLookupError(err)), nil
+		}
+		if err := authorizeTaskStatus(row, req); err != nil {
+			return responseError(err), nil
 		}
 		sum := summarizeTask(row)
 		return A2AToolResponse{OK: true, Message: "A2A task loaded", Task: &sum}, nil
@@ -279,9 +305,25 @@ func (s *A2AService) TaskStatus(ctx context.Context, req A2AToolRequest) (A2AToo
 	}
 	tasks := make([]A2ATaskSummary, 0, len(rows))
 	for _, row := range rows {
+		if err := authorizeTaskStatus(row, req); err != nil {
+			continue
+		}
 		tasks = append(tasks, summarizeTask(row))
 	}
 	return A2AToolResponse{OK: true, Message: "A2A recent tasks listed", Tasks: tasks}, nil
+}
+
+func authorizeTaskStatus(row a2a.TaskRow, req A2AToolRequest) error {
+	if req.ManageChannels {
+		return nil
+	}
+	if strings.TrimSpace(row.ChannelID) != strings.TrimSpace(req.ChannelID) {
+		return fmt.Errorf("%w: task is not visible from this channel", errorCode(a2a.ErrorPolicyDenied))
+	}
+	if strings.TrimSpace(row.ClientTaskRef) == "" || strings.TrimSpace(req.RequestedByID) == "" || strings.TrimSpace(row.ClientTaskRef) != strings.TrimSpace(req.RequestedByID) {
+		return fmt.Errorf("%w: requester does not own this task", errorCode(a2a.ErrorPolicyDenied))
+	}
+	return nil
 }
 
 func (s *A2AService) PolicyPlan(ctx context.Context, req A2AToolRequest) (A2AToolResponse, error) {
@@ -292,7 +334,7 @@ func (s *A2AService) PolicyPlan(ctx context.Context, req A2AToolRequest) (A2AToo
 	if err != nil {
 		return responseError(err), nil
 	}
-	planned := applyPolicyDiff(policy, req)
+	planned := s.applyPolicyDiff(policy, req)
 	changeID := policyChangeID(planned)
 	summary := policySummary(policy, planned)
 	token := s.confirmationToken("policy_apply", changeID, req, planned)
@@ -309,7 +351,7 @@ func (s *A2AService) PolicyApply(ctx context.Context, req A2AToolRequest) (A2ATo
 	if err != nil {
 		return responseError(err), nil
 	}
-	planned := applyPolicyDiff(policy, req)
+	planned := s.applyPolicyDiff(policy, req)
 	changeID := policyChangeID(planned)
 	if strings.TrimSpace(req.ChangeID) != "" && strings.TrimSpace(req.ChangeID) != changeID {
 		return responseError(fmt.Errorf("%w: change_id does not match policy diff", errorCode(a2a.ErrorPolicyDenied))), nil
@@ -348,27 +390,46 @@ func (s *A2AService) Delegate(ctx context.Context, req A2AToolRequest) (A2AToolR
 	if !peer.Trusted {
 		return responseError(fmt.Errorf("%w: target peer is not trusted", errorCode(a2a.ErrorPolicyDenied))), nil
 	}
-	if !stringListAllows(policy.DelegateTo, string(target)) {
-		return responseError(fmt.Errorf("%w: target agent is not delegated by channel policy", errorCode(a2a.ErrorUnauthorizedTarget))), nil
-	}
-	if !stringListAllows(policy.DelegateSkills, req.SkillID) {
-		return responseError(fmt.Errorf("%w: skill is not delegated by channel policy", errorCode(a2a.ErrorSkillNotAllowed))), nil
-	}
-	if !peerHasSkill(peer, req.SkillID) {
+	targetChannelRef := req.targetRuntimeRef(policy.ChannelRef)
+	effectiveSkill := canonicalPeerSkill(peer, req.SkillID, targetChannelRef)
+	if effectiveSkill == "" {
 		return responseError(fmt.Errorf("%w: target peer does not expose skill", errorCode(a2a.ErrorUnknownSkill))), nil
 	}
+	if !req.hasExplicitTargetRuntimeRef() && !policyDelegatesRuntime(policy, string(target), effectiveSkill, targetChannelRef) {
+		if inferred := skillChannelRef(effectiveSkill); inferred != "" {
+			targetChannelRef = inferred
+		}
+	}
+	if !policyDelegatesRuntime(policy, string(target), effectiveSkill, targetChannelRef) {
+		return responseError(fmt.Errorf("%w: target runtime is not delegated by channel policy", errorCode(a2a.ErrorUnauthorizedTarget))), nil
+	}
+	req.SkillID = effectiveSkill
 	message := strings.TrimSpace(req.Message)
 	if message == "" {
 		return responseError(fmt.Errorf("%w: message is required", errorCode(a2a.ErrorInvalidEnvelope))), nil
 	}
+	delegationDepth, err := s.nextDelegationDepth()
+	if err != nil {
+		return responseError(err), nil
+	}
 	if err := s.checkOutboundQuota(ctx, req); err != nil {
 		return responseError(err), nil
 	}
-	changeID := hashString("delegate:" + req.GuildID + ":" + req.ChannelID + ":" + string(target) + ":" + req.SkillID + ":" + message)
+	resultVisibility := firstNonEmpty(req.ResultVisibility, policy.ResultVisibility, "proxy")
+	transcriptMode := firstNonEmpty(req.TranscriptMode, policy.DiscordTranscriptMode, "delegator")
+	switch normalizeSetupMode(req.SetupMode) {
+	case "co_present":
+		resultVisibility, transcriptMode = "transparent", "co_present"
+	case "safe":
+		resultVisibility, transcriptMode = "proxy", "delegator"
+	case "auto":
+		resultVisibility, transcriptMode = runtimeDeliveryDefaults(policy.ChannelRef, targetChannelRef)
+	}
+	changeID := hashString("delegate:" + req.GuildID + ":" + req.ChannelID + ":" + targetChannelRef + ":" + string(target) + ":" + req.SkillID + ":" + resultVisibility + ":" + transcriptMode + ":" + message)
 	needsConfirmation := req.RequiresConfirmation || s.cfg.Config.RequireConfirmationForRemote
 	if needsConfirmation && strings.TrimSpace(req.ConfirmationToken) == "" {
 		exp := s.cfg.Now().UTC().Add(10 * time.Minute)
-		return A2AToolResponse{OK: true, Message: "A2A delegation requires confirmation", RequiresConfirmation: true, ConfirmationSummary: fmt.Sprintf("Delegate %q to %s/%s", truncateForSummary(message), target, req.SkillID), RiskLabels: []string{"remote_task", "data_egress"}, ExpiresAt: exp.Format(time.RFC3339), ChangeID: changeID, ConfirmationToken: s.confirmationToken("delegate", changeID, req, message)}, nil
+		return A2AToolResponse{OK: true, Message: "A2A delegation requires confirmation", RequiresConfirmation: true, ConfirmationSummary: fmt.Sprintf("Delegate %q to %s@%s/%s", truncateForSummary(message), target, targetChannelRef, req.SkillID), RiskLabels: []string{"remote_task", "data_egress"}, ExpiresAt: exp.Format(time.RFC3339), ChangeID: changeID, ConfirmationToken: s.confirmationToken("delegate", changeID, req, message)}, nil
 	}
 	if needsConfirmation {
 		if err := s.verifyConfirmation("delegate", changeID, req, message); err != nil {
@@ -381,17 +442,36 @@ func (s *A2AService) Delegate(ctx context.Context, req A2AToolRequest) (A2AToolR
 	}
 	payload, _ := json.Marshal(map[string]string{"kind": "text", "text": message})
 	msgID := a2a.MessageID("msg_" + randomToken(12))
-	taskReq := a2a.TaskExecutionRequest{MessageID: msgID, ClientTaskRef: req.RequestedByID, ContextID: "discord:" + req.ChannelID + ":" + string(msgID), From: s.cfg.Config.AgentID, To: target, ChannelID: req.ChannelID, GuildID: req.GuildID, ChannelRef: policy.ChannelRef, SkillID: req.SkillID, UserVisibleSummary: truncateForSummary(message), Payload: payload, Delivery: a2a.DeliveryOptions{TimeoutSec: s.cfg.Config.TaskTimeoutSec, DiscordReplyChannelID: req.ChannelID, DiscordReplyThreadID: deliveryChannelID(req.ChannelID), MaxDelegationDepth: s.cfg.Config.MaxDelegationDepth}, ResultVisibility: firstNonEmpty(req.ResultVisibility, policy.ResultVisibility, "proxy"), DiscordTranscriptMode: firstNonEmpty(req.TranscriptMode, policy.DiscordTranscriptMode, "delegator")}
+	source := sourceAgentForRuntimeMode(s.cfg.Config, policy)
+	taskReq := a2a.TaskExecutionRequest{MessageID: msgID, ClientTaskRef: req.RequestedByID, ContextID: "discord:" + req.ChannelID + ":" + string(msgID), From: source, To: target, ChannelID: req.ChannelID, GuildID: req.GuildID, ChannelRef: targetChannelRef, SkillID: req.SkillID, UserVisibleSummary: truncateForSummary(message), Payload: payload, Delivery: a2a.DeliveryOptions{TimeoutSec: s.cfg.Config.TaskTimeoutSec, DiscordReplyChannelID: req.ChannelID, DiscordReplyThreadID: deliveryChannelID(req.ChannelID), MaxDelegationDepth: delegationDepth}, ResultVisibility: resultVisibility, DiscordTranscriptMode: transcriptMode, OriginRequester: a2a.OriginRequester{DiscordUserID: strings.TrimSpace(req.RequestedByID), DiscordUsername: strings.TrimSpace(req.RequestedBy), DiscordGuildID: strings.TrimSpace(req.GuildID)}}
 	row, err := pub.SendTask(ctx, taskReq)
 	if err != nil {
-		meta := a2a.AuditMetadata(a2a.AuditMetadataInput{MessageID: msgID, ClientTaskRef: req.RequestedByID, ContextID: taskReq.ContextID, FromAgent: taskReq.From, ToAgent: taskReq.To, ChannelID: req.ChannelID, GuildID: req.GuildID, ChannelRef: policy.ChannelRef, SkillID: req.SkillID, ResultVisibility: taskReq.ResultVisibility, DiscordTranscriptMode: taskReq.DiscordTranscriptMode, ActorAgentID: s.cfg.Config.AgentID, ActorDiscordUserID: req.RequestedByID, ErrorCode: a2a.ErrorNATSPublishFailed, PayloadSize: len(payload)})
+		meta := a2a.AuditMetadata(a2a.AuditMetadataInput{MessageID: msgID, ClientTaskRef: req.RequestedByID, ContextID: taskReq.ContextID, FromAgent: taskReq.From, ToAgent: taskReq.To, ChannelID: req.ChannelID, GuildID: req.GuildID, ChannelRef: targetChannelRef, SkillID: req.SkillID, ResultVisibility: taskReq.ResultVisibility, DiscordTranscriptMode: taskReq.DiscordTranscriptMode, ActorAgentID: s.cfg.Config.AgentID, ActorDiscordUserID: req.RequestedByID, ErrorCode: a2a.ErrorNATSPublishFailed, PayloadSize: len(payload)})
 		_ = s.recordAudit(ctx, a2a.AuditTaskPublishFailed, req, "error", err.Error(), meta)
 		return responseError(fmt.Errorf("%w: %v", errorCode(a2a.ErrorNATSPublishFailed), err)), nil
 	}
-	meta := a2a.AuditMetadata(a2a.AuditMetadataInput{TaskID: row.TaskID, ClientTaskRef: row.ClientTaskRef, MessageID: msgID, ContextID: row.ContextID, FromAgent: row.FromAgent, ToAgent: row.ToAgent, ExecutorAgent: row.ExecutorAgent, ChannelID: req.ChannelID, GuildID: req.GuildID, ChannelRef: policy.ChannelRef, SkillID: req.SkillID, State: row.State, Revision: row.Revision, ResultVisibility: row.ResultVisibility, DiscordTranscriptMode: row.DiscordTranscriptMode, ActorAgentID: s.cfg.Config.AgentID, ActorDiscordUserID: req.RequestedByID, PayloadSize: len(payload)})
+	meta := a2a.AuditMetadata(a2a.AuditMetadataInput{TaskID: row.TaskID, ClientTaskRef: row.ClientTaskRef, MessageID: msgID, ContextID: row.ContextID, FromAgent: row.FromAgent, ToAgent: row.ToAgent, ExecutorAgent: row.ExecutorAgent, ChannelID: req.ChannelID, GuildID: req.GuildID, ChannelRef: targetChannelRef, SkillID: req.SkillID, State: row.State, Revision: row.Revision, ResultVisibility: row.ResultVisibility, DiscordTranscriptMode: row.DiscordTranscriptMode, ActorAgentID: s.cfg.Config.AgentID, ActorDiscordUserID: req.RequestedByID, PayloadSize: len(payload)})
 	_ = s.recordAudit(ctx, a2a.AuditTaskSendRequested, req, "queued", "", meta)
 	sum := summarizeTask(row)
 	return A2AToolResponse{OK: true, Message: "A2A task sent", Task: &sum}, nil
+}
+
+func (s *A2AService) nextDelegationDepth() (int, error) {
+	state, ok := currentTargetState()
+	if ok && state.RemoteA2A {
+		if state.DelegationDepth <= 0 {
+			return 0, fmt.Errorf("%w: A2A delegation depth exhausted", errorCode(a2a.ErrorPolicyDenied))
+		}
+		return state.DelegationDepth - 1, nil
+	}
+	return s.cfg.Config.MaxDelegationDepth, nil
+}
+
+func sourceAgentForRuntimeMode(cfg a2a.Config, policy a2a.ChannelA2APolicy) a2a.AgentID {
+	if cfg.RuntimeIDMode.UsesRuntimeIDs() && strings.TrimSpace(policy.RuntimeAgentID) != "" {
+		return a2a.AgentID(strings.TrimSpace(policy.RuntimeAgentID))
+	}
+	return cfg.AgentID
 }
 
 func (s *A2AService) Cancel(ctx context.Context, req A2AToolRequest) (A2AToolResponse, error) {
@@ -431,6 +511,9 @@ func (s *A2AService) publishTaskControl(ctx context.Context, req A2AToolRequest,
 	if err != nil {
 		return responseError(err), nil
 	}
+	if row.FromAgent != "" {
+		pub = pub.WithFrom(row.FromAgent)
+	}
 	raw, _ := json.Marshal(payload)
 	to := row.ExecutorAgent
 	if to == "" {
@@ -453,6 +536,14 @@ func (s *A2AService) validateContext(req A2AToolRequest, manager bool) error {
 	}
 	if s.cfg.BoundChannelID != "" && strings.TrimSpace(req.ChannelID) != s.cfg.BoundChannelID && strings.TrimSpace(req.ChannelID) != s.cfg.BoundTargetID {
 		return fmt.Errorf("%w: channel_id does not match bound context", errorCode(a2a.ErrorPolicyDenied))
+	}
+	if state, ok := currentTargetState(); ok {
+		if requesterID := strings.TrimSpace(state.RequesterID); requesterID != "" && strings.TrimSpace(req.RequestedByID) != requesterID {
+			return fmt.Errorf("%w: requested_by_id does not match bound requester", errorCode(a2a.ErrorPolicyDenied))
+		}
+		if requesterName := strings.TrimSpace(state.RequesterName); requesterName != "" && strings.TrimSpace(req.RequestedBy) != requesterName {
+			return fmt.Errorf("%w: requested_by does not match bound requester", errorCode(a2a.ErrorPolicyDenied))
+		}
 	}
 	if manager && !req.ManageChannels {
 		return fmt.Errorf("%w: ManageChannels is required", errorCode(a2a.ErrorPolicyDenied))
@@ -477,21 +568,41 @@ func (s *A2AService) currentPolicy(ctx context.Context, req A2AToolRequest) (a2a
 		return policy, nil
 	}
 	if errors.Is(err, sql.ErrNoRows) {
-		return defaultPolicy(req), nil
+		return defaultPolicy(req, s.cfg.Config), nil
 	}
 	return a2a.ChannelA2APolicy{}, fmt.Errorf("%w: %v", errorCode(a2a.ErrorStoreError), err)
 }
 
-func defaultPolicy(req A2AToolRequest) a2a.ChannelA2APolicy {
-	return a2a.ChannelA2APolicy{GuildID: strings.TrimSpace(req.GuildID), ChannelID: strings.TrimSpace(req.ChannelID), ChannelRef: strings.TrimSpace(req.ChannelRef), ResultVisibility: "proxy", DiscordTranscriptMode: "delegator"}
+func defaultPolicy(req A2AToolRequest, cfg a2a.Config) a2a.ChannelA2APolicy {
+	channelRef := strings.TrimSpace(req.ChannelRef)
+	if channelRef == "" {
+		channelRef = "discord-" + strings.TrimSpace(req.ChannelID)
+	}
+	policy := a2a.ChannelA2APolicy{GuildID: strings.TrimSpace(req.GuildID), ChannelID: strings.TrimSpace(req.ChannelID), ChannelRef: channelRef, BotAgentID: string(cfg.AgentID), ResultVisibility: "proxy", DiscordTranscriptMode: "delegator"}
+	if runtime, err := a2a.GenerateRuntimeAgentID(cfg.AgentID, channelRef); err == nil {
+		policy.RuntimeAgentID = string(runtime)
+	}
+	return policy
 }
 
-func applyPolicyDiff(policy a2a.ChannelA2APolicy, req A2AToolRequest) a2a.ChannelA2APolicy {
+func (s *A2AService) applyPolicyDiff(policy a2a.ChannelA2APolicy, req A2AToolRequest) a2a.ChannelA2APolicy {
+	req = applyA2APolicyRequestDefaults(req, policy)
 	if req.Enable != nil {
 		policy.Enabled = *req.Enable
 	}
 	if v := strings.TrimSpace(req.ChannelRef); v != "" {
 		policy.ChannelRef = v
+	}
+	if policy.Enabled {
+		policy.Discoverable = true
+		if strings.TrimSpace(policy.BotAgentID) == "" {
+			policy.BotAgentID = string(s.cfg.Config.AgentID)
+		}
+		if strings.TrimSpace(policy.RuntimeAgentID) == "" {
+			if runtime, err := a2a.GenerateRuntimeAgentID(s.cfg.Config.AgentID, policy.ChannelRef); err == nil {
+				policy.RuntimeAgentID = string(runtime)
+			}
+		}
 	}
 	policy.AcceptFrom = appendUnique(policy.AcceptFrom, req.AcceptFrom...)
 	policy.AcceptSkills = appendUnique(policy.AcceptSkills, req.AcceptSkills...)
@@ -500,8 +611,27 @@ func applyPolicyDiff(policy a2a.ChannelA2APolicy, req A2AToolRequest) a2a.Channe
 			policy.ExposeSkills = upsertExposeSkill(policy.ExposeSkills, skill)
 		}
 	}
-	policy.DelegateTo = appendUnique(policy.DelegateTo, req.DelegateTo...)
-	policy.DelegateSkills = appendUnique(policy.DelegateSkills, req.DelegateSkills...)
+	if req.PolicyAction == "undelegate-to" {
+		policy.DelegateTo = removeStrings(policy.DelegateTo, req.DelegateTo...)
+		policy.DelegateSkills = removeStrings(policy.DelegateSkills, req.DelegateSkills...)
+		policy.DelegateTargets = removeDelegateTargets(policy.DelegateTargets, req.DelegateTo, strings.TrimSpace(req.TargetChannelRef), req.SkillID)
+	} else {
+		policy.DelegateTo = appendUnique(policy.DelegateTo, req.DelegateTo...)
+		policy.DelegateSkills = appendUnique(policy.DelegateSkills, req.DelegateSkills...)
+		if (len(req.DelegateTo) > 0 || strings.TrimSpace(req.TargetAgent) != "") && strings.TrimSpace(req.SkillID) != "" {
+			agents := req.DelegateTo
+			if len(agents) == 0 {
+				agents = []string{req.TargetAgent}
+			}
+			for _, agent := range agents {
+				policy.DelegateTargets = upsertDelegateTarget(policy.DelegateTargets, a2a.DelegateTargetPolicy{
+					AgentID:    strings.TrimSpace(agent),
+					ChannelRef: req.targetRuntimeRef(policy.ChannelRef),
+					SkillID:    strings.TrimSpace(req.SkillID),
+				})
+			}
+		}
+	}
 	if len(req.DelegateMediaTypes) > 0 {
 		policy.DelegateMedia.AllowedMIMETypes = appendUnique(policy.DelegateMedia.AllowedMIMETypes, req.DelegateMediaTypes...)
 	}
@@ -525,6 +655,165 @@ func applyPolicyDiff(policy a2a.ChannelA2APolicy, req A2AToolRequest) a2a.Channe
 		policy.RemoteToolPolicy.AllowMemoryWrite = *req.AllowMemoryWrite
 	}
 	return policy
+}
+
+func applyPolicyDiff(policy a2a.ChannelA2APolicy, req A2AToolRequest) a2a.ChannelA2APolicy {
+	cfg := a2a.Config{AgentID: a2a.AgentID(strings.TrimSpace(policy.BotAgentID))}
+	if cfg.AgentID == "" {
+		cfg.AgentID = "bot"
+	}
+	return (&A2AService{cfg: A2AServiceConfig{Config: cfg}}).applyPolicyDiff(policy, req)
+}
+
+func applyA2APolicyRequestDefaults(req A2AToolRequest, policy a2a.ChannelA2APolicy) A2AToolRequest {
+	if strings.TrimSpace(req.TargetAgent) == "" || strings.TrimSpace(req.SkillID) == "" {
+		return req
+	}
+	if req.Enable == nil {
+		enable := true
+		req.Enable = &enable
+	}
+	if strings.TrimSpace(req.ChannelRef) == "" {
+		req.ChannelRef = policy.ChannelRef
+	}
+	req.AcceptFrom = appendUnique(req.AcceptFrom, req.TargetAgent)
+	req.DelegateTo = appendUnique(req.DelegateTo, req.TargetAgent)
+	req.CoPresentFrom = appendUnique(req.CoPresentFrom, req.TargetAgent)
+	localSkill := string(a2a.SkillSlug(req.SkillID))
+	req.AcceptSkills = appendUnique(req.AcceptSkills, localSkill)
+	req.ExposeSkills = appendUnique(req.ExposeSkills, localSkill)
+	req.DelegateSkills = appendUnique(req.DelegateSkills, req.SkillID)
+	mode := normalizeSetupMode(req.SetupMode)
+	req.SetupMode = mode
+	if mode == "co_present" || (mode == "auto" && req.targetRuntimeRef(policy.ChannelRef) == policy.ChannelRef) {
+		req.TranscriptMode = "co_present"
+		req.ResultVisibility = "transparent"
+		share := true
+		req.ShareDiscordContext = &share
+	} else if mode == "safe" || mode == "auto" {
+		req.TranscriptMode = "delegator"
+		req.ResultVisibility = "proxy"
+		share := false
+		req.ShareDiscordContext = &share
+	}
+	return req
+}
+
+func normalizeSetupMode(mode string) string {
+	switch strings.TrimSpace(mode) {
+	case "", "auto":
+		return "auto"
+	case "co-present", "copresent", "co_present":
+		return "co_present"
+	case "safe", "proxy", "delegator":
+		return "safe"
+	default:
+		return strings.TrimSpace(mode)
+	}
+}
+
+func (req A2AToolRequest) targetRuntimeRef(fallback string) string {
+	if v := strings.TrimSpace(req.TargetChannelRef); v != "" {
+		return v
+	}
+	if v := strings.TrimSpace(req.TargetThreadID); v != "" {
+		return "discord-" + v
+	}
+	if v := strings.TrimSpace(req.TargetChannelID); v != "" {
+		return "discord-" + v
+	}
+	return strings.TrimSpace(fallback)
+}
+
+func (req A2AToolRequest) hasExplicitTargetRuntimeRef() bool {
+	return strings.TrimSpace(req.TargetChannelRef) != "" || strings.TrimSpace(req.TargetChannelID) != "" || strings.TrimSpace(req.TargetThreadID) != ""
+}
+
+func skillChannelRef(skillID string) string {
+	before, _, ok := strings.Cut(strings.TrimSpace(skillID), "/")
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(before)
+}
+
+func runtimeDeliveryDefaults(sourceChannelRef, targetChannelRef string) (string, string) {
+	if strings.TrimSpace(targetChannelRef) == "" || strings.TrimSpace(targetChannelRef) == strings.TrimSpace(sourceChannelRef) {
+		return "transparent", "co_present"
+	}
+	return "proxy", "delegator"
+}
+
+func policyDelegatesRuntime(policy a2a.ChannelA2APolicy, agent, skill, targetChannelRef string) bool {
+	for _, target := range policy.DelegateTargets {
+		targetAgent := strings.TrimSpace(target.RuntimeAgentID)
+		if targetAgent == "" {
+			targetAgent = strings.TrimSpace(target.AgentID)
+		}
+		if !stringListAllows([]string{targetAgent}, agent) {
+			continue
+		}
+		if !skillListAllows([]string{target.SkillID}, skill) {
+			continue
+		}
+		if target.RuntimeAgentID != "" || target.ChannelRef == "" || targetChannelRef == "" || target.ChannelRef == targetChannelRef || target.ChannelRef == "*" {
+			return true
+		}
+	}
+	return strings.TrimSpace(targetChannelRef) == strings.TrimSpace(policy.ChannelRef) && stringListAllows(policy.DelegateTo, agent) && skillListAllows(policy.DelegateSkills, skill)
+}
+
+func upsertDelegateTarget(targets []a2a.DelegateTargetPolicy, next a2a.DelegateTargetPolicy) []a2a.DelegateTargetPolicy {
+	if next.SkillID == "" || (next.AgentID == "" && next.RuntimeAgentID == "") {
+		return targets
+	}
+	for i, target := range targets {
+		if target.AgentID == next.AgentID && target.RuntimeAgentID == next.RuntimeAgentID && target.ChannelRef == next.ChannelRef && target.SkillID == next.SkillID {
+			targets[i] = next
+			return targets
+		}
+	}
+	return append(targets, next)
+}
+func removeStrings(values []string, remove ...string) []string {
+	if len(values) == 0 || len(remove) == 0 {
+		return values
+	}
+	blocked := make(map[string]bool, len(remove))
+	for _, value := range remove {
+		if value = strings.TrimSpace(value); value != "" {
+			blocked[value] = true
+		}
+	}
+	out := values[:0]
+	for _, value := range values {
+		if !blocked[strings.TrimSpace(value)] {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
+func removeDelegateTargets(targets []a2a.DelegateTargetPolicy, agents []string, channelRef, skillID string) []a2a.DelegateTargetPolicy {
+	if len(targets) == 0 {
+		return targets
+	}
+	agentSet := make(map[string]bool, len(agents))
+	for _, agent := range agents {
+		if agent = strings.TrimSpace(agent); agent != "" {
+			agentSet[agent] = true
+		}
+	}
+	channelRef = strings.TrimSpace(channelRef)
+	skillID = strings.TrimSpace(skillID)
+	out := targets[:0]
+	for _, target := range targets {
+		if agentSet[strings.TrimSpace(target.AgentID)] && (channelRef == "" || strings.TrimSpace(target.ChannelRef) == channelRef) && strings.TrimSpace(target.SkillID) == skillID {
+			continue
+		}
+		out = append(out, target)
+	}
+	return out
 }
 
 func (s *A2AService) checkOutboundQuota(ctx context.Context, req A2AToolRequest) error {
@@ -648,7 +937,27 @@ func A2AConfigFromEnv() a2a.Config {
 }
 
 func a2aConfigFromEnv() a2a.Config {
-	return a2a.Config{NATSURL: os.Getenv("NATS_URL"), NATSCredsFile: os.Getenv("NATS_CREDS_FILE"), NATSToken: os.Getenv("NATS_TOKEN"), NATSTLSCAFile: os.Getenv("NATS_TLS_CA_FILE"), AgentID: a2a.AgentID(os.Getenv("A2A_AGENT_ID")), AgentName: os.Getenv("A2A_AGENT_NAME"), AgentDescription: os.Getenv("A2A_AGENT_DESCRIPTION"), TaskTimeoutSec: envIntLocal("A2A_TASK_TIMEOUT_SEC", 3600), MaxDelegationDepth: envIntLocal("A2A_MAX_DELEGATION_DEPTH", 1), AutoDelegateEnabled: envBoolLocal("A2A_AUTO_DELEGATE_ENABLED", false), RequireConfirmationForRemote: envBoolLocal("A2A_REQUIRE_CONFIRMATION_FOR_REMOTE", true), ProductionSecurity: envBoolLocal("A2A_PRODUCTION_SECURITY", false), TaskRetentionDays: envIntLocal("A2A_TASK_RETENTION_DAYS", 30), ObjectRetentionDays: envIntLocal("A2A_OBJECT_RETENTION_DAYS", 30), MaxPendingTasks: envIntLocal("A2A_MAX_PENDING_TASKS", 100), MaxOutboundTasksPerChannel: envIntLocal("A2A_MAX_OUTBOUND_TASKS_PER_CHANNEL", 10), MaxInboundTasksPerChannel: envIntLocal("A2A_MAX_INBOUND_TASKS_PER_CHANNEL", 10), MaxEventRatePerMin: envIntLocal("A2A_MAX_EVENT_RATE_PER_MIN", 120)}
+	return a2a.Config{
+		NATSURL:                      os.Getenv("NATS_URL"),
+		NATSCredsFile:                os.Getenv("NATS_CREDS_FILE"),
+		NATSToken:                    os.Getenv("NATS_TOKEN"),
+		NATSTLSCAFile:                os.Getenv("NATS_TLS_CA_FILE"),
+		AgentID:                      a2a.AgentID(os.Getenv("A2A_AGENT_ID")),
+		RuntimeIDMode:                a2a.RuntimeIDMode(os.Getenv("A2A_RUNTIME_ID_MODE")),
+		AgentName:                    os.Getenv("A2A_AGENT_NAME"),
+		AgentDescription:             os.Getenv("A2A_AGENT_DESCRIPTION"),
+		TaskTimeoutSec:               envIntLocal("A2A_TASK_TIMEOUT_SEC", 3600),
+		MaxDelegationDepth:           envIntLocal("A2A_MAX_DELEGATION_DEPTH", 1),
+		AutoDelegateEnabled:          envBoolLocal("A2A_AUTO_DELEGATE_ENABLED", false),
+		RequireConfirmationForRemote: envBoolLocal("A2A_REQUIRE_CONFIRMATION_FOR_REMOTE", true),
+		ProductionSecurity:           envBoolLocal("A2A_PRODUCTION_SECURITY", false),
+		TaskRetentionDays:            envIntLocal("A2A_TASK_RETENTION_DAYS", 30),
+		ObjectRetentionDays:          envIntLocal("A2A_OBJECT_RETENTION_DAYS", 30),
+		MaxPendingTasks:              envIntLocal("A2A_MAX_PENDING_TASKS", 100),
+		MaxOutboundTasksPerChannel:   envIntLocal("A2A_MAX_OUTBOUND_TASKS_PER_CHANNEL", 10),
+		MaxInboundTasksPerChannel:    envIntLocal("A2A_MAX_INBOUND_TASKS_PER_CHANNEL", 10),
+		MaxEventRatePerMin:           envIntLocal("A2A_MAX_EVENT_RATE_PER_MIN", 120),
+	}
 }
 
 func envIntLocal(key string, def int) int {
@@ -735,6 +1044,37 @@ func peerHasSkill(peer a2a.PeerRow, skillID string) bool {
 	}
 	return false
 }
+
+func canonicalPeerSkill(peer a2a.PeerRow, skillID, targetChannelRef string) string {
+	slug := a2a.SkillSlug(skillID)
+	for _, skill := range peer.Card.Skills {
+		if skill.ID == skillID {
+			return skill.ID
+		}
+		if strings.TrimSpace(targetChannelRef) != "" && skill.ID == strings.TrimSpace(targetChannelRef)+"/"+slug {
+			return skill.ID
+		}
+	}
+	for _, skill := range peer.Card.Skills {
+		if a2a.SkillSlug(skill.ID) == slug {
+			return skill.ID
+		}
+	}
+	return ""
+}
+
+func skillListAllows(list []string, skill string) bool {
+	if stringListAllows(list, skill) {
+		return true
+	}
+	slug := a2a.SkillSlug(skill)
+	for _, item := range list {
+		if a2a.SkillSlug(item) == slug {
+			return true
+		}
+	}
+	return false
+}
 func policyChangeID(policy a2a.ChannelA2APolicy) string { return hashString(payloadHash(policy)) }
 func payloadHash(payload any) string                    { raw, _ := json.Marshal(payload); return hashString(string(raw)) }
 func hashString(s string) string {
@@ -797,6 +1137,14 @@ func a2aRequestFromMCP(req mcp.CallToolRequest) A2AToolRequest {
 	}
 	if out.RequestedByID == "" {
 		out.RequestedByID = req.GetString("requested_by_id", "")
+	}
+	if state, ok := currentTargetState(); ok {
+		if requesterID := strings.TrimSpace(state.RequesterID); requesterID != "" && strings.TrimSpace(out.RequestedByID) == "" {
+			out.RequestedByID = requesterID
+		}
+		if requesterName := strings.TrimSpace(state.RequesterName); requesterName != "" && strings.TrimSpace(out.RequestedBy) == "" {
+			out.RequestedBy = requesterName
+		}
 	}
 	return out
 }

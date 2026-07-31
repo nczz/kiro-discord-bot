@@ -69,6 +69,45 @@ func BuildPublicAgentCard(cfg Config, version string, skills []AgentSkill) (Agen
 	return card, nil
 }
 
+func BuildRuntimeAgentCard(cfg Config, runtime RuntimeRecord, version string, skills []AgentSkill) (AgentCard, ExtendedAgentCard, error) {
+	if err := validateRuntimeRecord(runtime); err != nil {
+		return AgentCard{}, ExtendedAgentCard{}, err
+	}
+	runtimeCfg := cfg
+	runtimeCfg.AgentID = runtime.RuntimeAgentID
+	runtimeCfg.AgentName = string(runtime.RuntimeAgentID)
+	if strings.TrimSpace(runtime.DisplayName) != "" {
+		runtimeCfg.AgentDescription = runtime.DisplayName
+	}
+	runtimeSkills := make([]AgentSkill, 0, len(skills))
+	for _, skill := range skills {
+		skill.ID = canonicalRuntimeSkillID(runtime.ChannelRef, skill.ID)
+		runtimeSkills = append(runtimeSkills, skill)
+	}
+	card, err := BuildPublicAgentCard(runtimeCfg, version, runtimeSkills)
+	if err != nil {
+		return AgentCard{}, ExtendedAgentCard{}, err
+	}
+	ext, err := BuildExtendedAgentCard(card, ExtendedAgentCard{
+		ChannelRef:              runtime.ChannelRef,
+		Runtime:                 runtime.RuntimeKind,
+		ResultVisibilitySupport: []string{"proxy", "transparent"},
+	})
+	if err != nil {
+		return AgentCard{}, ExtendedAgentCard{}, err
+	}
+	return card, ext, nil
+}
+
+func canonicalRuntimeSkillID(channelRef, skillID string) string {
+	channelRef = sanitizeSkillID(channelRef)
+	skillID = sanitizeSkillID(skillID)
+	if channelRef == "" || strings.Contains(skillID, "/") {
+		return skillID
+	}
+	return channelRef + "/" + SkillSlug(skillID)
+}
+
 func BuildExtendedAgentCard(public AgentCard, ext ExtendedAgentCard) (ExtendedAgentCard, error) {
 	if err := ValidatePeerCard(public); err != nil {
 		return ExtendedAgentCard{}, err

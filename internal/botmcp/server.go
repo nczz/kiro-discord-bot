@@ -69,6 +69,7 @@ func DefaultSafeToolNames() []string {
 		ToolA2APolicyGet,
 		ToolA2ATaskStatus,
 		ToolA2APolicyPlan,
+		ToolA2ADelegate,
 		ToolCreateCron,
 		ToolUpdateCron,
 		ToolCreateReminder,
@@ -890,6 +891,9 @@ type targetState struct {
 	DisableEgress         bool     `json:"disable_egress"`
 	RemoteA2A             bool     `json:"remote_a2a"`
 	AllowMemoryWrite      bool     `json:"allow_memory_write"`
+	DelegationDepth       int      `json:"delegation_depth"`
+	RequesterID           string   `json:"requester_id"`
+	RequesterName         string   `json:"requester_name"`
 	AllowedMentionUserIDs []string `json:"allowed_mention_user_ids"`
 }
 

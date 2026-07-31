@@ -59,6 +59,7 @@ type Config struct {
 	NATSToken                    string
 	NATSTLSCAFile                string
 	AgentID                      AgentID
+	RuntimeIDMode                RuntimeIDMode
 	AgentName                    string
 	AgentDescription             string
 	TaskTimeoutSec               int
@@ -81,6 +82,9 @@ func (c Config) Enabled() bool {
 func (c Config) ValidateStartup() error {
 	if strings.TrimSpace(c.NATSURL) == "" {
 		return nil
+	}
+	if _, err := NormalizeRuntimeIDMode(c.RuntimeIDMode.String()); err != nil {
+		return err
 	}
 	if err := ValidateAgentID(c.AgentID); err != nil {
 		return fmt.Errorf("A2A_AGENT_ID is required when NATS_URL is set: %w", err)

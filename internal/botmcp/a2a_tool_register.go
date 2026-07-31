@@ -82,6 +82,10 @@ func a2aDelegateTool() mcp.Tool {
 		mcp.WithString("skill_id", mcp.Required(), mcp.Description("Approved remote skill ID.")),
 		mcp.WithString("message", mcp.Required(), mcp.Description("Task text to send to the remote agent after redaction and policy checks.")),
 		mcp.WithString("reason", mcp.Required(), mcp.Description("User-visible reason for audit.")),
+		mcp.WithString("target_channel_ref", mcp.Description("Optional target runtime channel_ref; defaults to the current channel runtime.")),
+		mcp.WithString("target_channel_id", mcp.Description("Optional Discord target channel ID used to derive channel_ref as discord-<id>.")),
+		mcp.WithString("target_thread_id", mcp.Description("Optional Discord target thread ID used to derive channel_ref as discord-<id>.")),
+		mcp.WithString("setup_mode", mcp.Description("auto, safe, or co_present. Default auto; same runtime uses co_present, cross-runtime uses proxy.")),
 		mcp.WithBoolean("requires_confirmation", mcp.Description("Set true when remote data egress or sensitive skill confirmation is needed.")),
 		mcp.WithString("confirmation_token", mcp.Description("Fresh token returned by a prior confirmation challenge.")),
 	} {
@@ -134,6 +138,12 @@ func addA2APolicyFields(t *mcp.Tool) {
 	for _, opt := range []mcp.ToolOption{
 		mcp.WithBoolean("enable", mcp.Description("Enable or disable A2A for this channel.")),
 		mcp.WithString("channel_ref", mcp.Description("Stable subject-safe channel reference.")),
+		mcp.WithString("target_agent", mcp.Description("Remote agent for setup-style policy changes; when provided with skill_id, delegate_targets is populated.")),
+		mcp.WithString("skill_id", mcp.Description("Remote skill for setup-style policy changes; defaults are applied by clients.")),
+		mcp.WithString("target_channel_ref", mcp.Description("Target runtime channel_ref for bot+channel scoped delegation.")),
+		mcp.WithString("target_channel_id", mcp.Description("Discord target channel ID used to derive target channel_ref.")),
+		mcp.WithString("target_thread_id", mcp.Description("Discord target thread ID used to derive target channel_ref.")),
+		mcp.WithString("setup_mode", mcp.Description("auto, safe, or co_present setup defaults.")),
 		mcp.WithArray("accept_from", mcp.Description("Inbound agent IDs to accept.")),
 		mcp.WithArray("accept_skills", mcp.Description("Inbound skill IDs to accept.")),
 		mcp.WithArray("expose_skills", mcp.Description("Local skill IDs to expose.")),

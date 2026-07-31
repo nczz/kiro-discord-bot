@@ -119,12 +119,15 @@ func a2aSlashOptions() []*discordgo.ApplicationCommandOption {
 	boolean := func(name, desc string, required bool) *discordgo.ApplicationCommandOption {
 		return &discordgo.ApplicationCommandOption{Type: discordgo.ApplicationCommandOptionBoolean, Name: name, Description: desc, Required: required}
 	}
+	target := func() *discordgo.ApplicationCommandOption {
+		return str("target_channel_ref", L.Get("cmd.a2a.opt.target_channel_ref_optional"), false)
+	}
 	return []*discordgo.ApplicationCommandOption{
 		{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "peers", Description: L.Get("cmd.a2a.sub.peers")},
-		{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "setup", Description: L.Get("cmd.a2a.sub.setup"), Options: []*discordgo.ApplicationCommandOption{str("peer_agent", L.Get("cmd.a2a.opt.peer_agent"), true), str("skill_id", L.Get("cmd.a2a.opt.skill_id_optional"), false), str("channel_ref", L.Get("cmd.a2a.opt.channel_ref_optional"), false), str("mode", L.Get("cmd.a2a.opt.setup_mode"), false), str("confirmation_token", L.Get("cmd.a2a.opt.confirmation_token"), false)}},
-		{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "ask", Description: L.Get("cmd.a2a.sub.ask"), Options: []*discordgo.ApplicationCommandOption{str("peer_agent", L.Get("cmd.a2a.opt.peer_agent"), true), str("message", L.Get("cmd.a2a.opt.message"), true), str("skill_id", L.Get("cmd.a2a.opt.skill_id_optional"), false), str("reason", L.Get("cmd.a2a.opt.reason_optional"), false), str("confirmation_token", L.Get("cmd.a2a.opt.confirmation_token"), false)}},
+		{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "setup", Description: L.Get("cmd.a2a.sub.setup"), Options: []*discordgo.ApplicationCommandOption{str("peer_agent", L.Get("cmd.a2a.opt.peer_agent"), true), str("skill_id", L.Get("cmd.a2a.opt.skill_id_optional"), false), str("channel_ref", L.Get("cmd.a2a.opt.channel_ref_optional"), false), target(), str("mode", L.Get("cmd.a2a.opt.setup_mode"), false), str("confirmation_token", L.Get("cmd.a2a.opt.confirmation_token"), false)}},
+		{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "ask", Description: L.Get("cmd.a2a.sub.ask"), Options: []*discordgo.ApplicationCommandOption{str("peer_agent", L.Get("cmd.a2a.opt.peer_agent"), true), str("message", L.Get("cmd.a2a.opt.message"), true), str("skill_id", L.Get("cmd.a2a.opt.skill_id_optional"), false), target(), str("reason", L.Get("cmd.a2a.opt.reason_optional"), false), str("confirmation_token", L.Get("cmd.a2a.opt.confirmation_token"), false)}},
 		{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "status", Description: L.Get("cmd.a2a.sub.status"), Options: []*discordgo.ApplicationCommandOption{str("task", L.Get("cmd.a2a.opt.task"), false)}},
-		{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "delegate", Description: L.Get("cmd.a2a.sub.delegate"), Options: []*discordgo.ApplicationCommandOption{str("target_agent", L.Get("cmd.a2a.opt.target_agent"), true), str("skill_id", L.Get("cmd.a2a.opt.skill_id"), true), str("message", L.Get("cmd.a2a.opt.message"), true), str("reason", L.Get("cmd.a2a.opt.reason"), true), str("confirmation_token", L.Get("cmd.a2a.opt.confirmation_token"), false)}},
+		{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "delegate", Description: L.Get("cmd.a2a.sub.delegate"), Options: []*discordgo.ApplicationCommandOption{str("target_agent", L.Get("cmd.a2a.opt.target_agent"), true), str("skill_id", L.Get("cmd.a2a.opt.skill_id"), true), str("message", L.Get("cmd.a2a.opt.message"), true), str("reason", L.Get("cmd.a2a.opt.reason"), true), target(), str("confirmation_token", L.Get("cmd.a2a.opt.confirmation_token"), false)}},
 		{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "cancel", Description: L.Get("cmd.a2a.sub.cancel"), Options: []*discordgo.ApplicationCommandOption{str("task", L.Get("cmd.a2a.opt.task"), true), str("reason", L.Get("cmd.a2a.opt.reason"), false)}},
 		{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "reply", Description: L.Get("cmd.a2a.sub.reply"), Options: []*discordgo.ApplicationCommandOption{str("task", L.Get("cmd.a2a.opt.task"), true), str("input", L.Get("cmd.a2a.opt.input"), true)}},
 		{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "authorize", Description: L.Get("cmd.a2a.sub.authorize"), Options: []*discordgo.ApplicationCommandOption{str("task", L.Get("cmd.a2a.opt.task"), true), boolean("approve", L.Get("cmd.a2a.opt.approve"), true), str("deny_reason", L.Get("cmd.a2a.opt.deny_reason"), false)}},
@@ -135,8 +138,8 @@ func a2aSlashOptions() []*discordgo.ApplicationCommandOption {
 		{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "unexpose", Description: L.Get("cmd.a2a.sub.unexpose"), Options: []*discordgo.ApplicationCommandOption{str("skill_id", L.Get("cmd.a2a.opt.skill_id"), true), str("confirmation_token", L.Get("cmd.a2a.opt.confirmation_token"), false)}},
 		{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "accept-from", Description: L.Get("cmd.a2a.sub.accept_from"), Options: []*discordgo.ApplicationCommandOption{str("agent_id", L.Get("cmd.a2a.opt.agent_id"), true), str("confirmation_token", L.Get("cmd.a2a.opt.confirmation_token"), false)}},
 		{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "deny-from", Description: L.Get("cmd.a2a.sub.deny_from"), Options: []*discordgo.ApplicationCommandOption{str("agent_id", L.Get("cmd.a2a.opt.agent_id"), true), str("confirmation_token", L.Get("cmd.a2a.opt.confirmation_token"), false)}},
-		{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "delegate-to", Description: L.Get("cmd.a2a.sub.delegate_to"), Options: []*discordgo.ApplicationCommandOption{str("agent_id", L.Get("cmd.a2a.opt.agent_id"), true), str("skill_id", L.Get("cmd.a2a.opt.skill_id"), true), str("confirmation_token", L.Get("cmd.a2a.opt.confirmation_token"), false)}},
-		{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "undelegate-to", Description: L.Get("cmd.a2a.sub.undelegate_to"), Options: []*discordgo.ApplicationCommandOption{str("agent_id", L.Get("cmd.a2a.opt.agent_id"), true), str("skill_id", L.Get("cmd.a2a.opt.skill_id"), true), str("confirmation_token", L.Get("cmd.a2a.opt.confirmation_token"), false)}},
+		{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "delegate-to", Description: L.Get("cmd.a2a.sub.delegate_to"), Options: []*discordgo.ApplicationCommandOption{str("agent_id", L.Get("cmd.a2a.opt.agent_id"), true), str("skill_id", L.Get("cmd.a2a.opt.skill_id"), true), target(), str("confirmation_token", L.Get("cmd.a2a.opt.confirmation_token"), false)}},
+		{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "undelegate-to", Description: L.Get("cmd.a2a.sub.undelegate_to"), Options: []*discordgo.ApplicationCommandOption{str("agent_id", L.Get("cmd.a2a.opt.agent_id"), true), str("skill_id", L.Get("cmd.a2a.opt.skill_id"), true), target(), str("confirmation_token", L.Get("cmd.a2a.opt.confirmation_token"), false)}},
 		{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "max-concurrent", Description: L.Get("cmd.a2a.sub.max_concurrent"), Options: []*discordgo.ApplicationCommandOption{integer("value", L.Get("cmd.a2a.opt.value"), true), str("confirmation_token", L.Get("cmd.a2a.opt.confirmation_token"), false)}},
 		{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "transcript-mode", Description: L.Get("cmd.a2a.sub.transcript_mode"), Options: []*discordgo.ApplicationCommandOption{str("mode", L.Get("cmd.a2a.opt.mode"), true), str("confirmation_token", L.Get("cmd.a2a.opt.confirmation_token"), false)}},
 		{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "transcript-from", Description: L.Get("cmd.a2a.sub.transcript_from"), Options: []*discordgo.ApplicationCommandOption{str("agent_id", L.Get("cmd.a2a.opt.agent_id"), true), boolean("share", L.Get("cmd.a2a.opt.share"), false), str("confirmation_token", L.Get("cmd.a2a.opt.confirmation_token"), false)}},
@@ -152,6 +155,7 @@ func a2aArgsFromSlashOptions(options []*discordgo.ApplicationCommandInteractionD
 	}
 	sub := options[0]
 	payload.Subcommand = sub.Name
+	payload.Request.PolicyAction = sub.Name
 	for _, opt := range sub.Options {
 		switch opt.Name {
 		case "task":
@@ -181,7 +185,13 @@ func a2aArgsFromSlashOptions(options []*discordgo.ApplicationCommandInteractionD
 			v := int(opt.IntValue())
 			payload.Request.MaxConcurrent = &v
 		case "mode":
-			payload.Request.TranscriptMode = opt.StringValue()
+			if sub.Name == "setup" {
+				payload.Request.SetupMode = opt.StringValue()
+			} else {
+				payload.Request.TranscriptMode = opt.StringValue()
+			}
+		case "target_channel_ref":
+			payload.Request.TargetChannelRef = opt.StringValue()
 		case "share":
 			v := opt.BoolValue()
 			payload.Request.ShareDiscordContext = &v
@@ -224,14 +234,20 @@ func applyA2ASubcommandDefaults(payload *a2aSlashPayload) {
 		payload.Request.AcceptSkills = []string{localSkill}
 		payload.Request.ExposeSkills = []string{localSkill}
 		payload.Request.DelegateSkills = []string{payload.Request.SkillID}
-		mode := normalizeA2ATranscriptMode(payload.Request.TranscriptMode)
-		if mode == "" {
-			mode = "delegator"
+		if strings.TrimSpace(payload.Request.TargetChannelRef) == "" {
+			payload.Request.TargetChannelRef = payload.Request.ChannelRef
 		}
-		payload.Request.TranscriptMode = mode
-		if mode == "co_present" {
+		mode := normalizeA2ASetupMode(payload.Request.SetupMode)
+		payload.Request.SetupMode = mode
+		switch {
+		case mode == "co_present" || (mode == "auto" && payload.Request.TargetChannelRef == payload.Request.ChannelRef):
+			payload.Request.TranscriptMode = "co_present"
+			payload.Request.ResultVisibility = "transparent"
 			share := true
 			payload.Request.ShareDiscordContext = &share
+		default:
+			payload.Request.TranscriptMode = "delegator"
+			payload.Request.ResultVisibility = "proxy"
 		}
 	case "ask":
 		if strings.TrimSpace(payload.Request.SkillID) == "" {
@@ -281,10 +297,20 @@ func normalizeA2ATranscriptMode(mode string) string {
 	}
 }
 
-func (b *Bot) cmdA2A(ctx cmdCtx) {
-	if channelOnly(ctx) {
-		return
+func normalizeA2ASetupMode(mode string) string {
+	switch strings.TrimSpace(mode) {
+	case "", "auto":
+		return "auto"
+	case "co-present", "copresent", "co_present":
+		return "co_present"
+	case "safe", "proxy", "delegator":
+		return "safe"
+	default:
+		return strings.TrimSpace(mode)
 	}
+}
+
+func (b *Bot) cmdA2A(ctx cmdCtx) {
 	var payload a2aSlashPayload
 	if err := json.Unmarshal([]byte(ctx.args), &payload); err != nil {
 		ctx.reply(commandError(err))
@@ -588,6 +614,10 @@ func formatA2APolicy(title string, policy a2a.ChannelA2APolicy) string {
 	sb.WriteString("\n")
 	sb.WriteString(L.Getf("a2a.policy.channel_ref", valueOrNone(policy.ChannelRef)))
 	sb.WriteString("\n")
+	sb.WriteString(L.Getf("a2a.policy.runtime_agent", valueOrNone(policy.RuntimeAgentID), yesNo(policy.Discoverable)))
+	sb.WriteString("\n")
+	sb.WriteString(L.Getf("a2a.policy.bot_agent", valueOrNone(policy.BotAgentID)))
+	sb.WriteString("\n")
 	sb.WriteString(L.Getf("a2a.policy.mode", valueOrNone(policy.DiscordTranscriptMode)))
 	sb.WriteString("\n")
 	sb.WriteString(L.Getf("a2a.policy.result_visibility", valueOrNone(policy.ResultVisibility)))
@@ -601,6 +631,8 @@ func formatA2APolicy(title string, policy a2a.ChannelA2APolicy) string {
 	sb.WriteString(L.Getf("a2a.policy.delegate_to", joinOrNone(policy.DelegateTo)))
 	sb.WriteString("\n")
 	sb.WriteString(L.Getf("a2a.policy.delegate_skills", joinOrNone(policy.DelegateSkills)))
+	sb.WriteString("\n")
+	sb.WriteString(L.Getf("a2a.policy.delegate_targets", joinDelegateTargetsOrNone(policy.DelegateTargets)))
 	sb.WriteString("\n")
 	sb.WriteString(L.Getf("a2a.policy.max_concurrent", policy.MaxConcurrent))
 	if policy.ShareDiscordContext {
@@ -681,6 +713,29 @@ func joinSkillPoliciesOrNone(values []a2a.SkillPolicy) string {
 		skill := strings.TrimSpace(value.ID)
 		if skill != "" {
 			out = append(out, "`"+skill+"`")
+		}
+	}
+	if len(out) == 0 {
+		return L.Get("a2a.none")
+	}
+	return strings.Join(out, ", ")
+}
+
+func joinDelegateTargetsOrNone(values []a2a.DelegateTargetPolicy) string {
+	var out []string
+	for _, value := range values {
+		agent := strings.TrimSpace(value.RuntimeAgentID)
+		if agent == "" {
+			agent = strings.TrimSpace(value.AgentID)
+		}
+		channelRef := strings.TrimSpace(value.ChannelRef)
+		skill := strings.TrimSpace(value.SkillID)
+		if agent != "" && skill != "" {
+			if channelRef != "" {
+				out = append(out, "`"+agent+" @ "+channelRef+" / "+skill+"`")
+			} else {
+				out = append(out, "`"+agent+" / "+skill+"`")
+			}
 		}
 	}
 	if len(out) == 0 {

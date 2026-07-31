@@ -113,6 +113,7 @@ func loadConfig() *Config {
 			NATSToken:                    envOr("NATS_TOKEN", ""),
 			NATSTLSCAFile:                envOr("NATS_TLS_CA_FILE", ""),
 			AgentID:                      a2a.AgentID(envOr("A2A_AGENT_ID", "")),
+			RuntimeIDMode:                a2a.RuntimeIDMode(envOr("A2A_RUNTIME_ID_MODE", "legacy")),
 			AgentName:                    envOr("A2A_AGENT_NAME", ""),
 			AgentDescription:             envOr("A2A_AGENT_DESCRIPTION", ""),
 			TaskTimeoutSec:               envInt("A2A_TASK_TIMEOUT_SEC", 3600),

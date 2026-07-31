@@ -106,7 +106,7 @@ func TestA2AMediaPolicyBlocksDisallowedArtifact(t *testing.T) {
 	}
 	defer policyStore.Close()
 	row := phase8TaskRow()
-	policy := a2a.ChannelA2APolicy{GuildID: row.GuildID, ChannelID: row.ChannelID, Enabled: true, ChannelRef: row.ChannelRef, AcceptFrom: []string{"eve-local"}, AcceptSkills: []string{"review"}, DelegateMedia: a2a.DelegateMediaPolicy{AllowedMIMETypes: []string{"image/png"}, MaxBytes: 4, AllowObjectRefs: true}, ResultVisibility: "transparent", DiscordTranscriptMode: "delegator"}
+	policy := a2a.ChannelA2APolicy{GuildID: row.GuildID, ChannelID: row.ChannelID, Enabled: true, RuntimeAgentID: "adam-n200-" + row.ChannelRef, BotAgentID: "adam-n200", ChannelRef: row.ChannelRef, AcceptFrom: []string{"eve-local"}, AcceptSkills: []string{"review"}, DelegateMedia: a2a.DelegateMediaPolicy{AllowedMIMETypes: []string{"image/png"}, MaxBytes: 4, AllowObjectRefs: true}, ResultVisibility: "transparent", DiscordTranscriptMode: "delegator"}
 	if err := policyStore.Save(context.Background(), policy, "manager"); err != nil {
 		t.Fatalf("Save policy: %v", err)
 	}

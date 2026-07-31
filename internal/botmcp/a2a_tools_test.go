@@ -2,6 +2,8 @@ package botmcp
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -66,6 +68,62 @@ func TestA2AToolsPolicyPlanPolicyApply(t *testing.T) {
 	}
 	if !peer.Trusted {
 		t.Fatal("PolicyApply did not trust confirmed delegated peer")
+	}
+}
+
+func TestA2AToolsPolicySetupDefaultsRuntimeTarget(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 7, 30, 12, 0, 0, 0, time.UTC)
+	svc, err := NewA2AService(A2AServiceConfig{
+		DataDir:            t.TempDir(),
+		Config:             a2a.Config{AgentID: "adam-n200", TaskTimeoutSec: 60, MaxDelegationDepth: 1},
+		BoundGuildID:       "guild-1",
+		BoundChannelID:     "channel-1",
+		ConfirmationSecret: "test-secret",
+		ConnectNATS:        false,
+		Now:                func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatalf("NewA2AService: %v", err)
+	}
+	defer svc.Close()
+
+	req := A2AToolRequest{GuildID: "guild-1", ChannelID: "channel-1", RequestedBy: "manager", RequestedByID: "manager-1", ManageChannels: true, TargetAgent: "peer-n100", SkillID: "general/task", ChannelRef: "m5-main", TargetChannelRef: "erp-support", SetupMode: "auto"}
+	planned, err := svc.PolicyPlan(ctx, req)
+	if err != nil {
+		t.Fatalf("PolicyPlan: %v", err)
+	}
+	if !planned.OK || planned.Policy == nil {
+		t.Fatalf("PolicyPlan = %+v, want planned policy", planned)
+	}
+	policy := planned.Policy
+	if !policy.Enabled {
+		t.Fatalf("setup defaults did not enable policy: %+v", policy)
+	}
+	if policy.ResultVisibility != "proxy" || policy.DiscordTranscriptMode != "delegator" || policy.ShareDiscordContext {
+		t.Fatalf("cross-runtime auto defaults = visibility %q transcript %q share %v, want proxy/delegator/false", policy.ResultVisibility, policy.DiscordTranscriptMode, policy.ShareDiscordContext)
+	}
+	if len(policy.DelegateTargets) != 1 || policy.DelegateTargets[0].AgentID != "peer-n100" || policy.DelegateTargets[0].ChannelRef != "erp-support" || policy.DelegateTargets[0].SkillID != "general/task" {
+		t.Fatalf("delegate targets = %+v, want peer-n100 @ erp-support / general/task", policy.DelegateTargets)
+	}
+	applyReq := req
+	applyReq.ConfirmationToken = planned.ConfirmationToken
+	applied, err := svc.PolicyApply(ctx, applyReq)
+	if err != nil {
+		t.Fatalf("PolicyApply: %v", err)
+	}
+	if !applied.OK || applied.Policy == nil || len(applied.Policy.DelegateTargets) != 1 {
+		t.Fatalf("PolicyApply = %+v, want persisted runtime target", applied)
+	}
+}
+
+func TestA2AToolsLegacyDelegatePolicyCannotCrossRuntime(t *testing.T) {
+	policy := a2a.ChannelA2APolicy{ChannelRef: "m5-main", DelegateTo: []string{"peer-n100"}, DelegateSkills: []string{"general/task"}}
+	if !policyDelegatesRuntime(policy, "peer-n100", "general/task", "m5-main") {
+		t.Fatal("legacy same-runtime delegation was denied")
+	}
+	if policyDelegatesRuntime(policy, "peer-n100", "general/task", "erp-support") {
+		t.Fatal("legacy delegation allowed cross-runtime target")
 	}
 }
 
@@ -135,6 +193,8 @@ func TestA2AToolsDelegateRejectsRevokedPeerBeforePublishing(t *testing.T) {
 		GuildID:               "guild-1",
 		ChannelID:             "channel-1",
 		Enabled:               true,
+		RuntimeAgentID:        "adam-n200-case-alpha",
+		BotAgentID:            "adam-n200",
 		ChannelRef:            "case/alpha",
 		DelegateTo:            []string{"peer-n100"},
 		DelegateSkills:        []string{"case/summarize"},
@@ -198,6 +258,133 @@ func TestA2AToolsPeersFiltersLocalAgent(t *testing.T) {
 	}
 	if len(got.Peers) != 1 || got.Peers[0].AgentID != "d80-chunbot" {
 		t.Fatalf("Peers = %+v, want remote peer only", got.Peers)
+	}
+	if len(got.Peers[0].Skills) != 0 || got.Peers[0].HiddenSkillCount != 1 || got.Peers[0].DelegationAllowed {
+		t.Fatalf("peer skills = %+v hidden=%d allowed=%v, want hidden until channel policy delegates them", got.Peers[0].Skills, got.Peers[0].HiddenSkillCount, got.Peers[0].DelegationAllowed)
+	}
+}
+
+func TestA2AToolsDelegateConfirmationBindsDeliveryMode(t *testing.T) {
+	ctx := context.Background()
+	svc, err := NewA2AService(A2AServiceConfig{
+		DataDir:            t.TempDir(),
+		Config:             a2a.Config{AgentID: "adam-n200", NATSURL: "nats://a2a.example.internal:4222", TaskTimeoutSec: 60, MaxDelegationDepth: 1, RequireConfirmationForRemote: true},
+		BoundGuildID:       "guild-1",
+		BoundChannelID:     "channel-1",
+		ConfirmationSecret: "test-secret",
+		ConnectNATS:        false,
+	})
+	if err != nil {
+		t.Fatalf("NewA2AService: %v", err)
+	}
+	defer svc.Close()
+	if err := svc.policies.Save(ctx, a2a.ChannelA2APolicy{GuildID: "guild-1", ChannelID: "channel-1", Enabled: true, RuntimeAgentID: "adam-n200-m5-main", BotAgentID: "adam-n200", ChannelRef: "m5-main", DelegateTargets: []a2a.DelegateTargetPolicy{{AgentID: "peer-n100", ChannelRef: "erp-support", SkillID: "general/task"}}}, "manager"); err != nil {
+		t.Fatalf("Save policy: %v", err)
+	}
+	card := a2a.AgentCard{Name: "peer-n100", Version: "1.0.0", SupportedInterfaces: []a2a.A2AInterface{{URL: "nats://nats.example.internal:4222", ProtocolBinding: a2a.ProtocolBindingNATS, ProtocolVersion: a2a.ProtocolVersion}}, Skills: []a2a.AgentSkill{{ID: "general/task", Name: "General"}}}
+	if _, err := svc.peers.UpsertCard(ctx, "peer-n100", card, true, time.Now().Add(time.Hour)); err != nil {
+		t.Fatalf("Upsert peer: %v", err)
+	}
+	req := A2AToolRequest{GuildID: "guild-1", ChannelID: "channel-1", RequestedBy: "alice", RequestedByID: "user-1", TargetAgent: "peer-n100", TargetChannelRef: "erp-support", SkillID: "general/task", Message: "ping", SetupMode: "safe"}
+	planned, err := svc.Delegate(ctx, req)
+	if err != nil {
+		t.Fatalf("Delegate plan: %v", err)
+	}
+	if !planned.RequiresConfirmation || planned.ConfirmationToken == "" {
+		t.Fatalf("Delegate plan = %+v, want confirmation token", planned)
+	}
+	req.SetupMode = "co_present"
+	req.ConfirmationToken = planned.ConfirmationToken
+	replayed, err := svc.Delegate(ctx, req)
+	if err != nil {
+		t.Fatalf("Delegate replay: %v", err)
+	}
+	if replayed.OK || replayed.ErrorCode != a2a.ErrorPolicyDenied || !strings.Contains(replayed.Message, "confirmation") {
+		t.Fatalf("Delegate replay = %+v, want confirmation policy denial", replayed)
+	}
+}
+
+func TestA2AToolsNestedDelegationDepthExhausted(t *testing.T) {
+	svc, err := NewA2AService(A2AServiceConfig{
+		DataDir:        t.TempDir(),
+		Config:         a2a.Config{AgentID: "adam-n200", NATSURL: "nats://a2a.example.internal:4222", TaskTimeoutSec: 60, MaxDelegationDepth: 3},
+		BoundGuildID:   "guild-1",
+		BoundChannelID: "channel-1",
+		ConnectNATS:    false,
+	})
+	if err != nil {
+		t.Fatalf("NewA2AService: %v", err)
+	}
+	defer svc.Close()
+	statePath := filepath.Join(t.TempDir(), "target.json")
+	t.Setenv("BOT_TOOLS_TARGET_STATE_PATH", statePath)
+	if err := os.WriteFile(statePath, []byte(`{"target_channel_id":"thread-1","remote_a2a":true,"delegation_depth":0}`), 0644); err != nil {
+		t.Fatalf("write target state: %v", err)
+	}
+	if depth, err := svc.nextDelegationDepth(); err == nil || depth != 0 || !strings.Contains(err.Error(), string(a2a.ErrorPolicyDenied)) {
+		t.Fatalf("nextDelegationDepth exhausted = depth %d err %v, want policy_denied", depth, err)
+	}
+	if err := os.WriteFile(statePath, []byte(`{"target_channel_id":"thread-1","remote_a2a":true,"delegation_depth":2}`), 0644); err != nil {
+		t.Fatalf("write target state: %v", err)
+	}
+	if depth, err := svc.nextDelegationDepth(); err != nil || depth != 1 {
+		t.Fatalf("nextDelegationDepth nested = depth %d err %v, want 1", depth, err)
+	}
+}
+
+func TestA2AToolsUndelegateRemovesRuntimeTarget(t *testing.T) {
+	policy := a2a.ChannelA2APolicy{
+		ChannelRef:      "m5-main",
+		DelegateTo:      []string{"peer-n100"},
+		DelegateSkills:  []string{"general/task"},
+		DelegateTargets: []a2a.DelegateTargetPolicy{{AgentID: "peer-n100", ChannelRef: "erp-support", SkillID: "general/task"}},
+	}
+	got := applyPolicyDiff(policy, A2AToolRequest{PolicyAction: "undelegate-to", DelegateTo: []string{"peer-n100"}, DelegateSkills: []string{"general/task"}, SkillID: "general/task"})
+	if len(got.DelegateTo) != 0 || len(got.DelegateSkills) != 0 || len(got.DelegateTargets) != 0 {
+		t.Fatalf("undelegated policy = %+v, want empty delegate lists", got)
+	}
+}
+
+func TestA2AToolsTaskStatusRequiresOwnerOrManager(t *testing.T) {
+	ctx := context.Background()
+	svc, err := NewA2AService(A2AServiceConfig{
+		DataDir:        t.TempDir(),
+		Config:         a2a.Config{AgentID: "adam-n200", TaskTimeoutSec: 60},
+		BoundGuildID:   "guild-1",
+		BoundChannelID: "channel-1",
+		ConnectNATS:    false,
+	})
+	if err != nil {
+		t.Fatalf("NewA2AService: %v", err)
+	}
+	defer svc.Close()
+	row, err := svc.tasks.CreateOutbound(ctx, a2a.TaskRow{MessageID: "msg_status", ClientTaskRef: "owner-1", FromAgent: "adam-n200", ToAgent: "peer-n100", ChannelID: "channel-1", GuildID: "guild-1", State: a2a.TaskStateSubmitted})
+	if err != nil {
+		t.Fatalf("CreateOutbound: %v", err)
+	}
+	req := A2AToolRequest{GuildID: "guild-1", ChannelID: "channel-1", RequestedBy: "mallory", RequestedByID: "mallory", LocalID: row.LocalID}
+	got, err := svc.TaskStatus(ctx, req)
+	if err != nil {
+		t.Fatalf("TaskStatus: %v", err)
+	}
+	if got.OK || got.ErrorCode != a2a.ErrorPolicyDenied {
+		t.Fatalf("TaskStatus non-owner = %+v, want policy_denied", got)
+	}
+	req.ManageChannels = true
+	got, err = svc.TaskStatus(ctx, req)
+	if err != nil {
+		t.Fatalf("TaskStatus manager: %v", err)
+	}
+	if !got.OK || got.Task == nil || got.Task.TaskID != string(row.TaskID) {
+		t.Fatalf("TaskStatus manager = %+v, want task", got)
+	}
+	ownerReq := A2AToolRequest{GuildID: "guild-1", ChannelID: "channel-1", RequestedBy: "owner", RequestedByID: "owner-1"}
+	listed, err := svc.TaskStatus(ctx, ownerReq)
+	if err != nil {
+		t.Fatalf("TaskStatus owner list: %v", err)
+	}
+	if !listed.OK || len(listed.Tasks) != 1 || listed.Tasks[0].LocalID != row.LocalID {
+		t.Fatalf("TaskStatus owner list = %+v, want only owned task", listed)
 	}
 }
 

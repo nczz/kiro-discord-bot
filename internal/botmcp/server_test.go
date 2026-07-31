@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nczz/kiro-discord-bot/a2a"
 	"github.com/nczz/kiro-discord-bot/audit"
 	"github.com/nczz/kiro-discord-bot/heartbeat"
 	"github.com/nczz/kiro-discord-bot/internal/botegress"
@@ -126,6 +127,9 @@ func TestDefaultSafeToolNamesExcludeDestructiveTools(t *testing.T) {
 	}
 	if !seen[ToolCurrentTime] || !seen[ToolResolveDateRange] {
 		t.Fatalf("time helper tools should be default-enabled for safe date answers: %+v", tools)
+	}
+	if !seen[ToolA2ADelegate] {
+		t.Fatalf("A2A delegate should be default-enabled after requester binding: %+v", tools)
 	}
 	if seen[ToolQueryAudit] {
 		t.Fatalf("audit query tool must not be default-enabled outside manager-authorized /audit prompt jobs: %+v", tools)
@@ -782,6 +786,28 @@ func TestBotToolsEgressDisabledReadsDynamicTargetState(t *testing.T) {
 	}
 	if got := currentTargetStateChannelID(); got != "thread-1" {
 		t.Fatalf("current target = %q, want thread-1", got)
+	}
+}
+
+func TestA2ARequestContextUsesBoundRequesterState(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "target.json")
+	if err := os.WriteFile(statePath, []byte(`{"target_channel_id":"thread-1","requester_id":"user-1","requester_name":"alice"}`), 0644); err != nil {
+		t.Fatalf("write target state: %v", err)
+	}
+	t.Setenv("BOT_TOOLS_TARGET_STATE_PATH", statePath)
+
+	req := A2AToolRequest{GuildID: "guild-1", ChannelID: "channel-1"}
+	req.RequestedByID = "user-1"
+	req.RequestedBy = "alice"
+	svc := &A2AService{cfg: A2AServiceConfig{Config: a2a.Config{AgentID: "adam-n200"}, BoundGuildID: "guild-1", BoundChannelID: "channel-1"}}
+	if err := svc.validateContext(req, false); err != nil {
+		t.Fatalf("bound requester rejected: %v", err)
+	}
+
+	req.RequestedByID = "mallory"
+	if err := svc.validateContext(req, false); err == nil {
+		t.Fatal("spoofed requester accepted despite bound target state")
 	}
 }
 

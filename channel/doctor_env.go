@@ -110,6 +110,7 @@ var envSpecs = []envEntry{
 	{Name: "NATS_TOKEN", Sensitive: true, Group: "a2a", Effective: func(m *Manager) string { return configuredPresence(m.a2aConfig.NATSToken) }},
 	{Name: "NATS_TLS_CA_FILE", Sensitive: true, Group: "a2a", Effective: func(m *Manager) string { return configuredPresence(m.a2aConfig.NATSTLSCAFile) }},
 	{Name: "A2A_AGENT_ID", Group: "a2a", Effective: func(m *Manager) string { return configuredOrNone(string(m.a2aConfig.AgentID)) }},
+	{Name: "A2A_RUNTIME_ID_MODE", Group: "a2a", Effective: func(m *Manager) string { return m.a2aConfig.RuntimeIDMode.String() }},
 	{Name: "A2A_AGENT_NAME", Group: "a2a", Effective: func(m *Manager) string { return configuredOrNone(m.a2aConfig.AgentName) }},
 	{Name: "A2A_AGENT_DESCRIPTION", Group: "a2a", Effective: func(m *Manager) string { return configuredPresence(m.a2aConfig.AgentDescription) }},
 	{Name: "A2A_TASK_TIMEOUT_SEC", Group: "a2a", Effective: func(m *Manager) string { return strconv.Itoa(m.a2aConfig.TaskTimeoutSec) }},

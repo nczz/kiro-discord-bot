@@ -1651,6 +1651,29 @@ func TestA2ASetupSlashDefaultsHumanFlow(t *testing.T) {
 	if payload.Request.TranscriptMode != "co_present" || payload.Request.ShareDiscordContext == nil || !*payload.Request.ShareDiscordContext {
 		t.Fatalf("setup UX defaults = %+v", payload.Request)
 	}
+	if payload.Request.TargetChannelRef != payload.Request.ChannelRef {
+		t.Fatalf("setup target runtime default = %+v", payload.Request)
+	}
+}
+
+func TestA2ASetupSlashAutoCrossRuntimeUsesProxy(t *testing.T) {
+	raw := a2aArgsFromSlashOptions([]*discordgo.ApplicationCommandInteractionDataOption{{
+		Name: "setup",
+		Options: []*discordgo.ApplicationCommandInteractionDataOption{
+			{Name: "peer_agent", Type: discordgo.ApplicationCommandOptionString, Value: "d80-chunbot"},
+			{Name: "target_channel_ref", Type: discordgo.ApplicationCommandOptionString, Value: "erp-support"},
+		},
+	}}, "guild-1", "channel-1", "user-1", "alice", true)
+	var payload a2aSlashPayload
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Request.SetupMode != "auto" || payload.Request.TargetChannelRef != "erp-support" {
+		t.Fatalf("setup target runtime = %+v", payload.Request)
+	}
+	if payload.Request.ResultVisibility != "proxy" || payload.Request.TranscriptMode != "delegator" || payload.Request.ShareDiscordContext != nil {
+		t.Fatalf("cross-runtime auto defaults = %+v", payload.Request)
+	}
 }
 
 func TestA2ATaskOptionAcceptsDisplayedLocalID(t *testing.T) {
@@ -1758,20 +1781,42 @@ func TestA2ASlashPermissionPolicy(t *testing.T) {
 		if cmd.Name != "a2a" {
 			continue
 		}
-		if cmd.DefaultMemberPermissions == nil || *cmd.DefaultMemberPermissions != int64(discordgo.PermissionManageChannels) {
-			t.Fatalf("/a2a permissions = %v, want ManageChannels", cmd.DefaultMemberPermissions)
+		if cmd.DefaultMemberPermissions != nil {
+			t.Fatalf("/a2a permissions = %v, want unrestricted default", cmd.DefaultMemberPermissions)
 		}
-		if !isChannelOnlySlashCommand("a2a") {
-			t.Fatal("/a2a should be channel-only")
+		if isChannelOnlySlashCommand("a2a") {
+			t.Fatal("/a2a should allow thread-aware low-friction subcommands")
 		}
 		return
 	}
 	t.Fatal("/a2a command not registered")
 }
 
+func TestSlashCommandOptionsKeepRequiredBeforeOptional(t *testing.T) {
+	var walk func(prefix string, opts []*discordgo.ApplicationCommandOption)
+	walk = func(prefix string, opts []*discordgo.ApplicationCommandOption) {
+		seenOptional := false
+		for _, opt := range opts {
+			if opt.Type == discordgo.ApplicationCommandOptionSubCommand || opt.Type == discordgo.ApplicationCommandOptionSubCommandGroup {
+				walk(prefix+"/"+opt.Name, opt.Options)
+				continue
+			}
+			if !opt.Required {
+				seenOptional = true
+				continue
+			}
+			if seenOptional {
+				t.Fatalf("%s option %q is required after an optional option", prefix, opt.Name)
+			}
+		}
+	}
+	for _, cmd := range buildSlashCommands() {
+		walk("/"+cmd.Name, cmd.Options)
+	}
+}
 func TestSlashCommandsApplyVisibilityAndPermissionPolicy(t *testing.T) {
 	managed := map[string]bool{
-		"audit": true, "mcp": true, "a2a": true, "cwd": true, "start": true, "agent": true,
+		"audit": true, "mcp": true, "cwd": true, "start": true, "agent": true,
 		"steering": true,
 		"cron":     true, "cron-list": true, "cron-run": true, "cron-prompt": true,
 		"memory": true, "flashmemory": true, "clear": true,
@@ -2528,12 +2573,12 @@ func collectMCPComponentCustomIDs(components []discordgo.MessageComponent) []str
 }
 
 func TestChannelOnlySlashCommands(t *testing.T) {
-	for _, name := range []string{"start", "cwd", "steering", "agent", "a2a", "cron", "cron-list", "cron-run", "cron-prompt", "remind"} {
+	for _, name := range []string{"start", "cwd", "steering", "agent", "cron", "cron-list", "cron-run", "cron-prompt", "remind"} {
 		if !isChannelOnlySlashCommand(name) {
 			t.Fatalf("expected /%s to be channel-only", name)
 		}
 	}
-	for _, name := range []string{"status", "usage", "reset", "cancel", "interrupt", "compact", "clear", "model", "models", "memory", "flashmemory", "close", "resume", "session"} {
+	for _, name := range []string{"status", "usage", "reset", "cancel", "interrupt", "compact", "clear", "model", "models", "memory", "flashmemory", "close", "resume", "session", "a2a"} {
 		if isChannelOnlySlashCommand(name) {
 			t.Fatalf("did not expect /%s to be channel-only", name)
 		}

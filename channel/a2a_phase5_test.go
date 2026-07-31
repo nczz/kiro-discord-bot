@@ -31,6 +31,8 @@ func newPhase5Harness(t *testing.T, mutate func(*a2a.ChannelA2APolicy, *a2a.Conf
 		GuildID:               "guild-1",
 		ChannelID:             "channel-1",
 		Enabled:               true,
+		RuntimeAgentID:        "adam-n200-backend",
+		BotAgentID:            "adam-n200",
 		ChannelRef:            "backend",
 		AcceptFrom:            []string{"eve-local"},
 		AcceptSkills:          []string{"review"},
@@ -65,6 +67,7 @@ func newPhase5Harness(t *testing.T, mutate func(*a2a.ChannelA2APolicy, *a2a.Conf
 	})
 	agent := &fakeWorkerAgent{}
 	worker := newWorker("channel-1", agent, 2, 1, 0, 60, nil, "")
+	worker.SetUsageStore(m.usage)
 	worker.SetBotToolsTargetStatePath(botToolsTargetStatePath(dataDir, "channel-1"))
 	worker.Start()
 	m.mu.Lock()
@@ -161,6 +164,36 @@ func TestManagerA2APolicyDenied(t *testing.T) {
 	}
 }
 
+func TestManagerA2ARuntimeModeUsesRuntimeTarget(t *testing.T) {
+	h := newPhase5Harness(t, func(p *a2a.ChannelA2APolicy, cfg *a2a.Config) {
+		cfg.RuntimeIDMode = a2a.RuntimeIDModeRuntime
+		p.AcceptFromRuntimes = []string{"eve-local-backend"}
+	})
+	req := phase5Request()
+	req.From = "eve-local-backend"
+	req.To = "adam-n200-backend"
+	res, err := h.manager.AdmitA2ATask(context.Background(), req)
+	if err != nil {
+		t.Fatalf("AdmitA2ATask error: %v", err)
+	}
+	if !res.Accepted || res.ExecutorAgent != "adam-n200-backend" {
+		t.Fatalf("runtime admission = %+v", res)
+	}
+}
+
+func TestManagerA2ARuntimeModeRejectsBotLevelTarget(t *testing.T) {
+	h := newPhase5Harness(t, func(_ *a2a.ChannelA2APolicy, cfg *a2a.Config) {
+		cfg.RuntimeIDMode = a2a.RuntimeIDModeRuntime
+	})
+	res, err := h.manager.AdmitA2ATask(context.Background(), phase5Request())
+	if err != nil {
+		t.Fatalf("AdmitA2ATask error: %v", err)
+	}
+	if res.Accepted || res.Error.Code != a2a.ErrorInvalidEnvelope {
+		t.Fatalf("runtime mode bot target accepted: %+v", res)
+	}
+}
+
 func TestManagerA2AAcceptsOnce(t *testing.T) {
 	h := newPhase5Harness(t, nil)
 	first := admitPhase5(t, h)
@@ -219,6 +252,86 @@ func TestManagerA2AUsesWorker(t *testing.T) {
 	result := runPhase5(t, h, admission.Admission, func(cb acp.AsyncCallbacks) { cb.OnComplete("worker result", nil) })
 	if result.State != a2a.TaskStateCompleted || !strings.Contains(result.Content, "worker result") {
 		t.Fatalf("RunA2ATask result = %#v, want completed worker result", result)
+	}
+}
+
+func TestManagerA2AUsageAttributedToOriginRequester(t *testing.T) {
+	h := newPhase5Harness(t, nil)
+	h.agent.metrics = acp.TurnMetrics{
+		MeteringUsage:  []acp.MeteringItem{{Value: 0.25, Unit: "credit"}},
+		TurnDurationMs: 1234,
+		ContextUsage:   42,
+	}
+	req := phase5Request()
+	req.OriginRequester = a2a.OriginRequester{DiscordUserID: "discord-user-1", DiscordUsername: "alice", DiscordGuildID: "guild-1"}
+	admission, err := h.manager.AdmitA2ATask(context.Background(), req)
+	if err != nil {
+		t.Fatalf("AdmitA2ATask error: %v", err)
+	}
+	if !admission.Accepted {
+		t.Fatalf("AdmitA2ATask rejected: %#v", admission.Error)
+	}
+	result := runPhase5(t, h, admission.Admission, func(cb acp.AsyncCallbacks) { cb.OnComplete("worker result", nil) })
+	if result.State != a2a.TaskStateCompleted {
+		t.Fatalf("RunA2ATask state = %s, want completed", result.State)
+	}
+	page, err := h.manager.usage.QueryHistory(UsageHistoryOptions{
+		GuildID: "guild-1",
+		UserID:  "discord-user-1",
+		From:    time.Now().Add(-time.Hour),
+		To:      time.Now().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("QueryHistory: %v", err)
+	}
+	if len(page.Records) != 1 {
+		t.Fatalf("usage records = %d, want 1", len(page.Records))
+	}
+	rec := page.Records[0]
+	if rec.Username != "alice" || rec.Source != "a2a" || rec.MessageID != "msg_phase5" || rec.ContextUsage != 42 || rec.DurationMs != 1234 {
+		t.Fatalf("usage record = %+v, want origin requester A2A metrics", rec)
+	}
+}
+
+func TestManagerA2AUsageRejectsOriginRequesterGuildMismatch(t *testing.T) {
+	h := newPhase5Harness(t, nil)
+	h.agent.metrics = acp.TurnMetrics{ContextUsage: 7}
+	req := phase5Request()
+	req.OriginRequester = a2a.OriginRequester{DiscordUserID: "discord-user-1", DiscordUsername: "alice", DiscordGuildID: "other-guild"}
+	admission, err := h.manager.AdmitA2ATask(context.Background(), req)
+	if err != nil {
+		t.Fatalf("AdmitA2ATask error: %v", err)
+	}
+	if !admission.Accepted {
+		t.Fatalf("AdmitA2ATask rejected: %#v", admission.Error)
+	}
+	result := runPhase5(t, h, admission.Admission, func(cb acp.AsyncCallbacks) { cb.OnComplete("worker result", nil) })
+	if result.State != a2a.TaskStateCompleted {
+		t.Fatalf("RunA2ATask state = %s, want completed", result.State)
+	}
+	originPage, err := h.manager.usage.QueryHistory(UsageHistoryOptions{
+		GuildID: "guild-1",
+		UserID:  "discord-user-1",
+		From:    time.Now().Add(-time.Hour),
+		To:      time.Now().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("QueryHistory origin: %v", err)
+	}
+	if len(originPage.Records) != 0 {
+		t.Fatalf("origin mismatch records = %d, want 0", len(originPage.Records))
+	}
+	agentPage, err := h.manager.usage.QueryHistory(UsageHistoryOptions{
+		GuildID: "guild-1",
+		UserID:  "eve-local",
+		From:    time.Now().Add(-time.Hour),
+		To:      time.Now().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("QueryHistory agent: %v", err)
+	}
+	if len(agentPage.Records) != 1 || agentPage.Records[0].Username != "A2A eve-local" {
+		t.Fatalf("fallback records = %+v, want sending agent attribution", agentPage.Records)
 	}
 }
 

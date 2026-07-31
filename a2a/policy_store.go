@@ -12,32 +12,45 @@ import (
 )
 
 type ChannelA2APolicy struct {
-	GuildID               string              `json:"guildId"`
-	ChannelID             string              `json:"channelId"`
-	Enabled               bool                `json:"enabled"`
-	ChannelRef            string              `json:"channelRef"`
-	AcceptFrom            []string            `json:"acceptFrom"`
-	AcceptSkills          []string            `json:"acceptSkills"`
-	ExposeSkills          []SkillPolicy       `json:"exposeSkills"`
-	DelegateTo            []string            `json:"delegateTo"`
-	DelegateSkills        []string            `json:"delegateSkills"`
-	DelegateMedia         DelegateMediaPolicy `json:"delegateMedia"`
-	MaxConcurrent         int                 `json:"maxConcurrent"`
-	ResultVisibility      string              `json:"resultVisibility"`
-	DiscordTranscriptMode string              `json:"discordTranscriptMode"`
-	ShareDiscordContext   bool                `json:"shareDiscordContext"`
-	CoPresentFrom         []string            `json:"coPresentFrom"`
-	AutoDelegateEnabled   bool                `json:"autoDelegateEnabled"`
-	RemoteToolPolicy      RemoteToolPolicy    `json:"remoteToolPolicy"`
-	CreatedAt             time.Time           `json:"createdAt"`
-	UpdatedAt             time.Time           `json:"updatedAt"`
-	UpdatedBy             string              `json:"updatedBy"`
+	GuildID               string                 `json:"guildId"`
+	ChannelID             string                 `json:"channelId"`
+	Enabled               bool                   `json:"enabled"`
+	Discoverable          bool                   `json:"discoverable"`
+	RuntimeAgentID        string                 `json:"runtimeAgentId,omitempty"`
+	BotAgentID            string                 `json:"botAgentId,omitempty"`
+	ChannelRef            string                 `json:"channelRef"`
+	AcceptFrom            []string               `json:"acceptFrom"`
+	AcceptFromRuntimes    []string               `json:"acceptFromRuntimes,omitempty"`
+	AcceptSkills          []string               `json:"acceptSkills"`
+	ExposeSkills          []SkillPolicy          `json:"exposeSkills"`
+	DelegateTo            []string               `json:"delegateTo"`
+	DelegateSkills        []string               `json:"delegateSkills"`
+	DelegateMedia         DelegateMediaPolicy    `json:"delegateMedia"`
+	DelegateTargets       []DelegateTargetPolicy `json:"delegateTargets,omitempty"`
+	MaxConcurrent         int                    `json:"maxConcurrent"`
+	ResultVisibility      string                 `json:"resultVisibility"`
+	DiscordTranscriptMode string                 `json:"discordTranscriptMode"`
+	ShareDiscordContext   bool                   `json:"shareDiscordContext"`
+	CoPresentFrom         []string               `json:"coPresentFrom"`
+	CoPresentFromRuntimes []string               `json:"coPresentFromRuntimes,omitempty"`
+	AutoDelegateEnabled   bool                   `json:"autoDelegateEnabled"`
+	RemoteToolPolicy      RemoteToolPolicy       `json:"remoteToolPolicy"`
+	CreatedAt             time.Time              `json:"createdAt"`
+	UpdatedAt             time.Time              `json:"updatedAt"`
+	UpdatedBy             string                 `json:"updatedBy"`
 }
 
 type SkillPolicy struct {
 	ID          string   `json:"id"`
 	InputModes  []string `json:"inputModes,omitempty"`
 	OutputModes []string `json:"outputModes,omitempty"`
+}
+
+type DelegateTargetPolicy struct {
+	RuntimeAgentID string `json:"runtimeAgentId,omitempty"`
+	AgentID        string `json:"agentId,omitempty"`
+	ChannelRef     string `json:"channelRef,omitempty"`
+	SkillID        string `json:"skillId"`
 }
 
 type DelegateMediaPolicy struct {
@@ -89,18 +102,28 @@ func policyStoreMigrations() []string {
 		share_discord_context INTEGER NOT NULL DEFAULT 0,
 		co_present_from_json TEXT NOT NULL DEFAULT '[]',
 		auto_delegate_enabled INTEGER NOT NULL DEFAULT 0,
-		remote_tool_policy_json TEXT NOT NULL DEFAULT '{}',
+		remote_tool_policy_json TEXT NOT NULL DEFAULT '{"allow_memory_write":false}',
 		created_at TEXT NOT NULL,
 		updated_at TEXT NOT NULL,
 		updated_by TEXT NOT NULL,
 		PRIMARY KEY (guild_id, channel_id)
 	)`,
+		`ALTER TABLE channel_a2a_policy ADD COLUMN delegate_targets_json TEXT NOT NULL DEFAULT '[]'`,
+		`ALTER TABLE channel_a2a_policy ADD COLUMN discoverable INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE channel_a2a_policy ADD COLUMN runtime_agent_id TEXT`,
+		`ALTER TABLE channel_a2a_policy ADD COLUMN bot_agent_id TEXT`,
+		`ALTER TABLE channel_a2a_policy ADD COLUMN accept_from_runtimes_json TEXT NOT NULL DEFAULT '[]'`,
+		`ALTER TABLE channel_a2a_policy ADD COLUMN co_present_from_runtimes_json TEXT NOT NULL DEFAULT '[]'`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_channel_a2a_policy_ref ON channel_a2a_policy(channel_ref) WHERE enabled=1 AND channel_ref <> ''`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_channel_a2a_policy_runtime ON channel_a2a_policy(runtime_agent_id) WHERE runtime_agent_id IS NOT NULL AND runtime_agent_id <> ''`,
 	}
 }
 
 func (s *SQLitePolicyStore) Save(ctx context.Context, p ChannelA2APolicy, updatedBy string) error {
 	if err := validateChannelA2APolicy(p); err != nil {
+		return err
+	}
+	if err := s.validatePolicyRuntimeImmutability(ctx, p); err != nil {
 		return err
 	}
 	now := time.Now().UTC()
@@ -113,37 +136,72 @@ func (s *SQLitePolicyStore) Save(ctx context.Context, p ChannelA2APolicy, update
 		return fmt.Errorf("updated_by is required")
 	}
 	acceptFrom, _ := json.Marshal(p.AcceptFrom)
+	acceptFromRuntimes, _ := json.Marshal(p.AcceptFromRuntimes)
 	acceptSkills, _ := json.Marshal(p.AcceptSkills)
 	exposeSkills, _ := json.Marshal(p.ExposeSkills)
 	delegateTo, _ := json.Marshal(p.DelegateTo)
 	delegateSkills, _ := json.Marshal(p.DelegateSkills)
+	delegateTargets, _ := json.Marshal(p.DelegateTargets)
 	delegateMedia, _ := json.Marshal(p.DelegateMedia)
 	coPresent, _ := json.Marshal(p.CoPresentFrom)
+	coPresentRuntimes, _ := json.Marshal(p.CoPresentFromRuntimes)
 	remote, _ := json.Marshal(p.RemoteToolPolicy)
-	_, err := s.db.ExecContext(ctx, `INSERT INTO channel_a2a_policy(guild_id, channel_id, enabled, channel_ref, accept_from_json, accept_skills_json, expose_skills_json, delegate_to_json, delegate_skills_json, delegate_media_json, max_concurrent, result_visibility, discord_transcript_mode, share_discord_context, co_present_from_json, auto_delegate_enabled, remote_tool_policy_json, created_at, updated_at, updated_by)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-		ON CONFLICT(guild_id, channel_id) DO UPDATE SET enabled=excluded.enabled, channel_ref=excluded.channel_ref, accept_from_json=excluded.accept_from_json, accept_skills_json=excluded.accept_skills_json, expose_skills_json=excluded.expose_skills_json, delegate_to_json=excluded.delegate_to_json, delegate_skills_json=excluded.delegate_skills_json, delegate_media_json=excluded.delegate_media_json, max_concurrent=excluded.max_concurrent, result_visibility=excluded.result_visibility, discord_transcript_mode=excluded.discord_transcript_mode, share_discord_context=excluded.share_discord_context, co_present_from_json=excluded.co_present_from_json, auto_delegate_enabled=excluded.auto_delegate_enabled, remote_tool_policy_json=excluded.remote_tool_policy_json, updated_at=excluded.updated_at, updated_by=excluded.updated_by`, p.GuildID, p.ChannelID, boolInt(p.Enabled), p.ChannelRef, string(acceptFrom), string(acceptSkills), string(exposeSkills), string(delegateTo), string(delegateSkills), string(delegateMedia), p.MaxConcurrent, p.ResultVisibility, p.DiscordTranscriptMode, boolInt(p.ShareDiscordContext), string(coPresent), boolInt(p.AutoDelegateEnabled), string(remote), p.CreatedAt.Format(sqliteTimeFormat), p.UpdatedAt.Format(sqliteTimeFormat), p.UpdatedBy)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO channel_a2a_policy(guild_id, channel_id, enabled, discoverable, runtime_agent_id, bot_agent_id, channel_ref, accept_from_json, accept_from_runtimes_json, accept_skills_json, expose_skills_json, delegate_to_json, delegate_skills_json, delegate_targets_json, delegate_media_json, max_concurrent, result_visibility, discord_transcript_mode, share_discord_context, co_present_from_json, co_present_from_runtimes_json, auto_delegate_enabled, remote_tool_policy_json, created_at, updated_at, updated_by)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		ON CONFLICT(guild_id, channel_id) DO UPDATE SET enabled=excluded.enabled, discoverable=excluded.discoverable, runtime_agent_id=CASE WHEN excluded.runtime_agent_id IS NULL OR excluded.runtime_agent_id='' THEN channel_a2a_policy.runtime_agent_id ELSE excluded.runtime_agent_id END, bot_agent_id=CASE WHEN excluded.bot_agent_id IS NULL OR excluded.bot_agent_id='' THEN channel_a2a_policy.bot_agent_id ELSE excluded.bot_agent_id END, channel_ref=excluded.channel_ref, accept_from_json=excluded.accept_from_json, accept_from_runtimes_json=excluded.accept_from_runtimes_json, accept_skills_json=excluded.accept_skills_json, expose_skills_json=excluded.expose_skills_json, delegate_to_json=excluded.delegate_to_json, delegate_skills_json=excluded.delegate_skills_json, delegate_targets_json=excluded.delegate_targets_json, delegate_media_json=excluded.delegate_media_json, max_concurrent=excluded.max_concurrent, result_visibility=excluded.result_visibility, discord_transcript_mode=excluded.discord_transcript_mode, share_discord_context=excluded.share_discord_context, co_present_from_json=excluded.co_present_from_json, co_present_from_runtimes_json=excluded.co_present_from_runtimes_json, auto_delegate_enabled=excluded.auto_delegate_enabled, remote_tool_policy_json=excluded.remote_tool_policy_json, updated_at=excluded.updated_at, updated_by=excluded.updated_by`,
+		p.GuildID, p.ChannelID, boolInt(p.Enabled), boolInt(p.Discoverable), nullEmpty(p.RuntimeAgentID), nullEmpty(p.BotAgentID), p.ChannelRef, string(acceptFrom), string(acceptFromRuntimes), string(acceptSkills), string(exposeSkills), string(delegateTo), string(delegateSkills), string(delegateTargets), string(delegateMedia), p.MaxConcurrent, p.ResultVisibility, p.DiscordTranscriptMode, boolInt(p.ShareDiscordContext), string(coPresent), string(coPresentRuntimes), boolInt(p.AutoDelegateEnabled), string(remote), p.CreatedAt.Format(sqliteTimeFormat), p.UpdatedAt.Format(sqliteTimeFormat), p.UpdatedBy)
 	return err
+}
+
+func (s *SQLitePolicyStore) validatePolicyRuntimeImmutability(ctx context.Context, p ChannelA2APolicy) error {
+	var existing sql.NullString
+	err := s.db.QueryRowContext(ctx, `SELECT runtime_agent_id FROM channel_a2a_policy WHERE guild_id=? AND channel_id=?`, p.GuildID, p.ChannelID).Scan(&existing)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return nil
+		}
+		return err
+	}
+	next := strings.TrimSpace(p.RuntimeAgentID)
+	if existing.Valid && strings.TrimSpace(existing.String) != "" && next != "" && strings.TrimSpace(existing.String) != next {
+		return fmt.Errorf("runtime_agent_id is immutable for enabled runtime policies")
+	}
+	return nil
+}
+
+func nullEmpty(s string) any {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil
+	}
+	return s
 }
 
 func (s *SQLitePolicyStore) Get(ctx context.Context, guildID, channelID string) (ChannelA2APolicy, error) {
 	var p ChannelA2APolicy
-	var enabled, share, auto int
-	var acceptFrom, acceptSkills, exposeSkills, delegateTo, delegateSkills, delegateMedia, coPresent, remote, created, updated string
-	err := s.db.QueryRowContext(ctx, `SELECT guild_id, channel_id, enabled, channel_ref, accept_from_json, accept_skills_json, expose_skills_json, delegate_to_json, delegate_skills_json, delegate_media_json, max_concurrent, result_visibility, discord_transcript_mode, share_discord_context, co_present_from_json, auto_delegate_enabled, remote_tool_policy_json, created_at, updated_at, updated_by FROM channel_a2a_policy WHERE guild_id=? AND channel_id=?`, guildID, channelID).Scan(&p.GuildID, &p.ChannelID, &enabled, &p.ChannelRef, &acceptFrom, &acceptSkills, &exposeSkills, &delegateTo, &delegateSkills, &delegateMedia, &p.MaxConcurrent, &p.ResultVisibility, &p.DiscordTranscriptMode, &share, &coPresent, &auto, &remote, &created, &updated, &p.UpdatedBy)
+	var enabled, discoverable, share, auto int
+	var runtimeID, botID sql.NullString
+	var acceptFrom, acceptFromRuntimes, acceptSkills, exposeSkills, delegateTo, delegateSkills, delegateTargets, delegateMedia, coPresent, coPresentRuntimes, remote, created, updated string
+	err := s.db.QueryRowContext(ctx, `SELECT guild_id, channel_id, enabled, discoverable, runtime_agent_id, bot_agent_id, channel_ref, accept_from_json, accept_from_runtimes_json, accept_skills_json, expose_skills_json, delegate_to_json, delegate_skills_json, delegate_targets_json, delegate_media_json, max_concurrent, result_visibility, discord_transcript_mode, share_discord_context, co_present_from_json, co_present_from_runtimes_json, auto_delegate_enabled, remote_tool_policy_json, created_at, updated_at, updated_by FROM channel_a2a_policy WHERE guild_id=? AND channel_id=?`, guildID, channelID).Scan(&p.GuildID, &p.ChannelID, &enabled, &discoverable, &runtimeID, &botID, &p.ChannelRef, &acceptFrom, &acceptFromRuntimes, &acceptSkills, &exposeSkills, &delegateTo, &delegateSkills, &delegateTargets, &delegateMedia, &p.MaxConcurrent, &p.ResultVisibility, &p.DiscordTranscriptMode, &share, &coPresent, &coPresentRuntimes, &auto, &remote, &created, &updated, &p.UpdatedBy)
 	if err != nil {
 		return ChannelA2APolicy{}, err
 	}
 	p.Enabled = intBool(enabled)
+	p.Discoverable = intBool(discoverable)
+	p.RuntimeAgentID = strings.TrimSpace(runtimeID.String)
+	p.BotAgentID = strings.TrimSpace(botID.String)
 	p.ShareDiscordContext = intBool(share)
 	p.AutoDelegateEnabled = intBool(auto)
 	_ = json.Unmarshal([]byte(acceptFrom), &p.AcceptFrom)
+	_ = json.Unmarshal([]byte(acceptFromRuntimes), &p.AcceptFromRuntimes)
 	_ = json.Unmarshal([]byte(acceptSkills), &p.AcceptSkills)
 	_ = json.Unmarshal([]byte(exposeSkills), &p.ExposeSkills)
 	_ = json.Unmarshal([]byte(delegateTo), &p.DelegateTo)
 	_ = json.Unmarshal([]byte(delegateSkills), &p.DelegateSkills)
+	_ = json.Unmarshal([]byte(delegateTargets), &p.DelegateTargets)
 	_ = json.Unmarshal([]byte(delegateMedia), &p.DelegateMedia)
 	_ = json.Unmarshal([]byte(coPresent), &p.CoPresentFrom)
+	_ = json.Unmarshal([]byte(coPresentRuntimes), &p.CoPresentFromRuntimes)
 	_ = json.Unmarshal([]byte(remote), &p.RemoteToolPolicy)
 	p.CreatedAt, _ = time.Parse(sqliteTimeFormat, created)
 	p.UpdatedAt, _ = time.Parse(sqliteTimeFormat, updated)
@@ -156,6 +214,17 @@ func validateChannelA2APolicy(p ChannelA2APolicy) error {
 	}
 	if p.Enabled && strings.TrimSpace(p.ChannelRef) == "" {
 		return fmt.Errorf("channel_ref is required when enabled")
+	}
+	if p.Enabled {
+		if err := ValidateAgentID(AgentID(strings.TrimSpace(p.RuntimeAgentID))); err != nil {
+			return fmt.Errorf("runtime_agent_id is required when enabled: %w", err)
+		}
+		if err := ValidateAgentID(AgentID(strings.TrimSpace(p.BotAgentID))); err != nil {
+			return fmt.Errorf("bot_agent_id is required when enabled: %w", err)
+		}
+	}
+	if p.Discoverable && !p.Enabled {
+		return fmt.Errorf("discoverable policy must be enabled")
 	}
 	if p.ResultVisibility == "" {
 		p.ResultVisibility = "proxy"
@@ -175,7 +244,7 @@ func validateChannelA2APolicy(p ChannelA2APolicy) error {
 	if p.MaxConcurrent < 0 || p.MaxConcurrent > 64 {
 		return fmt.Errorf("max_concurrent must be 0..64")
 	}
-	for _, list := range [][]string{p.AcceptFrom, p.DelegateTo, p.CoPresentFrom} {
+	for _, list := range [][]string{p.AcceptFrom, p.DelegateTo, p.CoPresentFrom, p.AcceptFromRuntimes, p.CoPresentFromRuntimes} {
 		for _, id := range list {
 			if id == "*" {
 				continue
@@ -193,6 +262,25 @@ func validateChannelA2APolicy(p ChannelA2APolicy) error {
 	for _, skill := range p.DelegateSkills {
 		if !skillPattern.MatchString(skill) {
 			return fmt.Errorf("delegate skill %q is invalid", skill)
+		}
+	}
+	for _, target := range p.DelegateTargets {
+		if strings.TrimSpace(target.RuntimeAgentID) != "" {
+			if err := ValidateAgentID(AgentID(target.RuntimeAgentID)); err != nil {
+				return err
+			}
+		} else {
+			if target.AgentID != "*" {
+				if err := ValidateAgentID(AgentID(target.AgentID)); err != nil {
+					return err
+				}
+			}
+			if strings.TrimSpace(target.ChannelRef) == "" {
+				return fmt.Errorf("delegate target channel_ref is required")
+			}
+		}
+		if !skillPattern.MatchString(target.SkillID) {
+			return fmt.Errorf("delegate target skill %q is invalid", target.SkillID)
 		}
 	}
 	for _, skill := range p.ExposeSkills {
@@ -232,15 +320,44 @@ func (s *SQLitePolicyStore) GetEnabledByChannelRef(ctx context.Context, channelR
 	return s.Get(ctx, guildID, channelID)
 }
 
+func (s *SQLitePolicyStore) ListDiscoverable(ctx context.Context) ([]ChannelA2APolicy, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT guild_id, channel_id FROM channel_a2a_policy WHERE enabled=1 AND discoverable=1 AND runtime_agent_id IS NOT NULL AND runtime_agent_id <> '' ORDER BY runtime_agent_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var policies []ChannelA2APolicy
+	for rows.Next() {
+		var guildID, channelID string
+		if err := rows.Scan(&guildID, &channelID); err != nil {
+			return nil, err
+		}
+		policy, err := s.Get(ctx, guildID, channelID)
+		if err != nil {
+			return nil, err
+		}
+		policies = append(policies, policy)
+	}
+	return policies, rows.Err()
+}
+
 func (p ChannelA2APolicy) ValidateInbound(from AgentID, skillID string) error {
+	return p.ValidateInboundRuntime(from, skillID)
+}
+
+func (p ChannelA2APolicy) ValidateInboundRuntime(fromRuntime AgentID, skillID string) error {
 	if !p.Enabled {
 		return fmt.Errorf("%w: channel is not enabled", errorCodeError(ErrorChannelNotEnabled))
 	}
-	if err := ValidateAgentID(from); err != nil {
+	if err := ValidateAgentID(fromRuntime); err != nil {
 		return fmt.Errorf("%w: %v", errorCodeError(ErrorUnauthorizedSender), err)
 	}
-	if !stringListAllowsAgent(p.AcceptFrom, from) {
-		return fmt.Errorf("%w: sender %s is not accepted", errorCodeError(ErrorSenderNotAllowed), from)
+	allowed := p.AcceptFrom
+	if len(p.AcceptFromRuntimes) > 0 {
+		allowed = p.AcceptFromRuntimes
+	}
+	if !stringListAllowsAgent(allowed, fromRuntime) {
+		return fmt.Errorf("%w: sender %s is not accepted", errorCodeError(ErrorSenderNotAllowed), fromRuntime)
 	}
 	slug := SkillSlug(skillID)
 	if !skillSlugPattern.MatchString(slug) {

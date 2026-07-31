@@ -149,7 +149,28 @@ func TestPolicyStoreValidationAndPersistence(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	policy := ChannelA2APolicy{GuildID: "guild", ChannelID: "channel", Enabled: true, ChannelRef: "backend", AcceptFrom: []string{"eve-local", "*"}, AcceptSkills: []string{"review"}, ExposeSkills: []SkillPolicy{{ID: "review", InputModes: []string{"text/plain"}, OutputModes: []string{"application/json"}}}, DelegateTo: []string{"eve-local"}, DelegateSkills: []string{"backend/review"}, DelegateMedia: DelegateMediaPolicy{AllowedMIMETypes: []string{"image/png"}, MaxBytes: 0, AllowObjectRefs: true}, MaxConcurrent: 0, ResultVisibility: "proxy", DiscordTranscriptMode: "co_present", ShareDiscordContext: true, RemoteToolPolicy: RemoteToolPolicy{}}
+	policy := ChannelA2APolicy{
+		GuildID:               "guild",
+		ChannelID:             "channel",
+		Enabled:               true,
+		Discoverable:          true,
+		RuntimeAgentID:        "adam-n200-backend",
+		BotAgentID:            "adam-n200",
+		ChannelRef:            "backend",
+		AcceptFrom:            []string{"eve-local", "*"},
+		AcceptFromRuntimes:    []string{"eve-local-backend", "*"},
+		AcceptSkills:          []string{"review"},
+		ExposeSkills:          []SkillPolicy{{ID: "review", InputModes: []string{"text/plain"}, OutputModes: []string{"application/json"}}},
+		DelegateTo:            []string{"eve-local"},
+		DelegateSkills:        []string{"backend/review"},
+		DelegateTargets:       []DelegateTargetPolicy{{RuntimeAgentID: "eve-local-backend", SkillID: "backend/review"}},
+		DelegateMedia:         DelegateMediaPolicy{AllowedMIMETypes: []string{"image/png"}, MaxBytes: 0, AllowObjectRefs: true},
+		MaxConcurrent:         0,
+		ResultVisibility:      "proxy",
+		DiscordTranscriptMode: "co_present",
+		ShareDiscordContext:   true,
+		RemoteToolPolicy:      RemoteToolPolicy{},
+	}
 	if err := store.Save(ctx, policy, "manager"); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
@@ -157,7 +178,7 @@ func TestPolicyStoreValidationAndPersistence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if !got.Enabled || got.MaxConcurrent != 0 || got.RemoteToolPolicy.AllowMemoryWrite {
+	if !got.Enabled || !got.Discoverable || got.RuntimeAgentID != "adam-n200-backend" || got.MaxConcurrent != 0 || got.RemoteToolPolicy.AllowMemoryWrite || len(got.DelegateTargets) != 1 || got.DelegateTargets[0].RuntimeAgentID != "eve-local-backend" || len(got.AcceptFromRuntimes) != 2 {
 		t.Fatalf("unexpected policy: %+v", got)
 	}
 	bad := policy

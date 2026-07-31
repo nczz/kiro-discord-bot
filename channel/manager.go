@@ -307,6 +307,7 @@ func NewManager(cfg ManagerConfig) *Manager {
 	}
 	if cfg.A2A.Enabled() && m.a2aNode != nil && m.a2aNode.IsEnabled() && m.a2aTasks != nil {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		runtimeIDs := m.a2aTransportRuntimeIDs(context.Background())
 		if transport, err := a2a.StartTransport(ctx, a2a.TransportConfig{
 			Node:               m.a2aNode,
 			Tasks:              m.a2aTasks,
@@ -314,6 +315,7 @@ func NewManager(cfg ManagerConfig) *Manager {
 			Config:             cfg.A2A,
 			MaxEventRatePerMin: cfg.A2A.MaxEventRatePerMin,
 			EventSink:          m.deliverA2AEvent,
+			RuntimeAgentIDs:    runtimeIDs,
 			Logf:               log.Printf,
 		}); err != nil {
 			log.Printf("[a2a] transport disabled: %v", err)
@@ -2416,6 +2418,46 @@ func (m *Manager) Doctor(ctx context.Context) string {
 	sb.WriteString(m.doctorListenModeConsistency())
 
 	return sb.String()
+}
+
+func (m *Manager) A2ADiscoverablePolicies(ctx context.Context) ([]a2a.ChannelA2APolicy, error) {
+	if m == nil || m.a2aPolicies == nil {
+		return nil, nil
+	}
+	return m.a2aPolicies.ListDiscoverable(ctx)
+}
+
+func (m *Manager) a2aTransportRuntimeIDs(ctx context.Context) []a2a.AgentID {
+	if m == nil || m.a2aPolicies == nil || !m.a2aConfig.RuntimeIDMode.UsesRuntimeIDs() {
+		return nil
+	}
+	policies, err := m.a2aPolicies.ListDiscoverable(ctx)
+	if err != nil {
+		log.Printf("[a2a] list runtime transport ids: %v", err)
+		return nil
+	}
+	out := make([]a2a.AgentID, 0, len(policies))
+	for _, policy := range policies {
+		id := a2a.AgentID(strings.TrimSpace(policy.RuntimeAgentID))
+		if id != "" {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+func (m *Manager) A2ATransportAccepts(runtime a2a.AgentID) bool {
+	if m == nil || m.a2aTransport == nil {
+		return false
+	}
+	return m.a2aTransport.Accepts(runtime)
+}
+
+func (m *Manager) EnsureA2ATransportRuntime(ctx context.Context, runtime a2a.AgentID) error {
+	if m == nil || m.a2aTransport == nil {
+		return nil
+	}
+	return m.a2aTransport.AddAgent(ctx, runtime)
 }
 
 func (m *Manager) A2APeerTrustSummary(ctx context.Context) string {

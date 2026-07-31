@@ -79,7 +79,7 @@ func channelOnly(ctx cmdCtx) bool {
 
 func isChannelOnlySlashCommand(name string) bool {
 	switch name {
-	case "start", "cwd", "steering", "agent", "a2a", "cron", "cron-list", "cron-run", "cron-prompt", "remind":
+	case "start", "cwd", "steering", "agent", "cron", "cron-list", "cron-run", "cron-prompt", "remind":
 		return true
 	default:
 		return false

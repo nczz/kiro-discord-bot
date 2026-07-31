@@ -41,6 +41,7 @@ type TransportConfig struct {
 	Config             Config
 	MaxEventRatePerMin int
 	EventSink          EventDeliverySink
+	RuntimeAgentIDs    []AgentID
 	Logf               func(string, ...any)
 }
 
@@ -53,6 +54,7 @@ type Transport struct {
 	mu       sync.Mutex
 	consumes []jetstream.ConsumeContext
 	started  map[string]struct{}
+	accepts  map[AgentID]struct{}
 }
 
 type eventRateLimiter struct {
@@ -85,29 +87,172 @@ func StartTransport(ctx context.Context, cfg TransportConfig) (*Transport, error
 	if err := EnsureStreams(ctx, cfg.Node); err != nil {
 		return nil, err
 	}
-	if err := EnsureConsumers(ctx, cfg.Node); err != nil {
+	agentIDs, err := transportAgentIDs(cfg, agentID)
+	if err != nil {
 		return nil, err
 	}
-	t := &Transport{Publisher: Publisher{node: cfg.Node, tasks: cfg.Tasks, from: agentID, rate: &eventRateLimiter{limit: cfg.MaxEventRatePerMin}}, executor: cfg.Executor, logf: cfg.Logf, eventSink: cfg.EventSink, started: make(map[string]struct{})}
-	for _, cfg := range consumerConfigs(agentID) {
+	for _, id := range agentIDs {
+		if err := EnsureConsumersForAgent(ctx, cfg.Node, id); err != nil {
+			return nil, err
+		}
+	}
+	t := &Transport{Publisher: Publisher{node: cfg.Node, tasks: cfg.Tasks, from: agentID, rate: &eventRateLimiter{limit: cfg.MaxEventRatePerMin}}, executor: cfg.Executor, logf: cfg.Logf, eventSink: cfg.EventSink, started: make(map[string]struct{}), accepts: agentIDSet(agentIDs)}
+	for _, id := range agentIDs {
+		for _, cfg := range consumerConfigs(id) {
+			stream, err := t.node.JetStream().Stream(ctx, cfg.Stream)
+			if err != nil {
+				t.Stop()
+				return nil, fmt.Errorf("open stream %s: %w", cfg.Stream, err)
+			}
+			consumer, err := stream.Consumer(ctx, cfg.Config.Durable)
+			if err != nil {
+				t.Stop()
+				return nil, fmt.Errorf("open consumer %s: %w", cfg.Config.Durable, err)
+			}
+			consume, err := consumer.Consume(t.handlerForStream(cfg.Stream))
+			if err != nil {
+				t.Stop()
+				return nil, fmt.Errorf("start consumer %s: %w", cfg.Config.Durable, err)
+			}
+			t.consumes = append(t.consumes, consume)
+		}
+	}
+	return t, nil
+}
+func transportAgentIDs(cfg TransportConfig, base AgentID) ([]AgentID, error) {
+	ids := []AgentID{base}
+	if cfg.Config.RuntimeIDMode.UsesRuntimeIDs() {
+		ids = append(ids, cfg.RuntimeAgentIDs...)
+	}
+	seen := make(map[AgentID]struct{}, len(ids))
+	out := make([]AgentID, 0, len(ids))
+	for _, id := range ids {
+		id = AgentID(strings.TrimSpace(string(id)))
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		if err := ValidateAgentID(id); err != nil {
+			return nil, err
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("A2A transport requires at least one agent id")
+	}
+	return out, nil
+}
+
+func agentIDSet(ids []AgentID) map[AgentID]struct{} {
+	out := make(map[AgentID]struct{}, len(ids))
+	for _, id := range ids {
+		out[id] = struct{}{}
+	}
+	return out
+}
+
+func (t *Transport) acceptsAgent(id AgentID) bool {
+	if t == nil {
+		return false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.acceptsAgentLocked(id)
+}
+
+func (t *Transport) acceptsAgentLocked(id AgentID) bool {
+	if len(t.accepts) == 0 {
+		return id == t.from
+	}
+	_, ok := t.accepts[id]
+	return ok
+}
+func (t *Transport) Accepts(id AgentID) bool {
+	return t.acceptsAgent(id)
+}
+
+func (p *Publisher) WithFrom(from AgentID) *Publisher {
+	if p == nil {
+		return nil
+	}
+	copy := *p
+	copy.from = from
+	return &copy
+}
+
+func (t *Transport) publisherFrom(from AgentID) *Publisher {
+	return t.Publisher.WithFrom(from)
+}
+
+func (t *Transport) AddAgent(ctx context.Context, id AgentID) error {
+	id = AgentID(strings.TrimSpace(string(id)))
+	if id == "" {
+		return nil
+	}
+	if err := ValidateAgentID(id); err != nil {
+		return err
+	}
+	if t.acceptsAgent(id) {
+		return nil
+	}
+	if t.node == nil || !t.node.IsEnabled() {
+		return nil
+	}
+	if err := EnsureConsumersForAgent(ctx, t.node, id); err != nil {
+		return err
+	}
+	t.mu.Lock()
+	if t.accepts == nil {
+		t.accepts = map[AgentID]struct{}{t.from: {}}
+	}
+	if _, ok := t.accepts[id]; ok {
+		t.mu.Unlock()
+		return nil
+	}
+	t.accepts[id] = struct{}{}
+	t.mu.Unlock()
+
+	var consumes []jetstream.ConsumeContext
+	for _, cfg := range consumerConfigs(id) {
 		stream, err := t.node.JetStream().Stream(ctx, cfg.Stream)
 		if err != nil {
-			t.Stop()
-			return nil, fmt.Errorf("open stream %s: %w", cfg.Stream, err)
+			t.removeAcceptedAgent(id)
+			for _, consume := range consumes {
+				consume.Stop()
+			}
+			return fmt.Errorf("open stream %s: %w", cfg.Stream, err)
 		}
 		consumer, err := stream.Consumer(ctx, cfg.Config.Durable)
 		if err != nil {
-			t.Stop()
-			return nil, fmt.Errorf("open consumer %s: %w", cfg.Config.Durable, err)
+			t.removeAcceptedAgent(id)
+			for _, consume := range consumes {
+				consume.Stop()
+			}
+			return fmt.Errorf("open consumer %s: %w", cfg.Config.Durable, err)
 		}
 		consume, err := consumer.Consume(t.handlerForStream(cfg.Stream))
 		if err != nil {
-			t.Stop()
-			return nil, fmt.Errorf("start consumer %s: %w", cfg.Config.Durable, err)
+			t.removeAcceptedAgent(id)
+			for _, consume := range consumes {
+				consume.Stop()
+			}
+			return fmt.Errorf("start consumer %s: %w", cfg.Config.Durable, err)
 		}
-		t.consumes = append(t.consumes, consume)
+		consumes = append(consumes, consume)
 	}
-	return t, nil
+	t.mu.Lock()
+	t.consumes = append(t.consumes, consumes...)
+	t.mu.Unlock()
+	return nil
+}
+
+func (t *Transport) removeAcceptedAgent(id AgentID) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	delete(t.accepts, id)
 }
 
 func (t *Transport) Stop() {
@@ -164,7 +309,7 @@ func (p *Publisher) SendTask(ctx context.Context, req TaskExecutionRequest) (Tas
 	if err := ValidateMessageID(req.MessageID); err != nil {
 		return TaskRow{}, err
 	}
-	payload := SendMessagePayload{A2A: req.Payload, ChannelRef: req.ChannelRef, SkillID: req.SkillID, UserVisibleSummary: req.UserVisibleSummary, ClientTaskRef: req.ClientTaskRef, ContextID: req.ContextID, AuditMetadata: req.AuditMetadata}
+	payload := SendMessagePayload{A2A: req.Payload, ChannelRef: req.ChannelRef, SkillID: req.SkillID, UserVisibleSummary: req.UserVisibleSummary, ClientTaskRef: req.ClientTaskRef, ContextID: req.ContextID, AuditMetadata: req.AuditMetadata, OriginRequester: req.OriginRequester}
 	payload.Delivery = TransportDelivery{TimeoutSec: req.Delivery.TimeoutSec, RequiresConfirmation: req.Delivery.RequiresConfirmation, DiscordContext: req.Delivery.DiscordContext, DiscordReplyChannelID: req.Delivery.DiscordReplyChannelID, DiscordReplyThreadID: req.Delivery.DiscordReplyThreadID, ShareDiscordContext: req.Delivery.ShareDiscordContext, CoPresentFrom: req.Delivery.CoPresentFrom, MaxDelegationDepth: req.Delivery.MaxDelegationDepth, ResultVisibility: req.ResultVisibility, DiscordTranscriptMode: req.DiscordTranscriptMode}
 	raw, err := json.Marshal(payload)
 	if err != nil {
@@ -177,7 +322,7 @@ func (p *Publisher) SendTask(ctx context.Context, req TaskExecutionRequest) (Tas
 	}
 	row := TaskRow{}
 	if p.tasks != nil {
-		row, err = p.tasks.CreateOutbound(ctx, TaskRow{ClientTaskRef: req.ClientTaskRef, MessageID: req.MessageID, ContextID: req.ContextID, FromAgent: req.From, ToAgent: req.To, ChannelID: req.ChannelID, GuildID: req.GuildID, ChannelRef: req.ChannelRef, SkillID: req.SkillID, State: TaskStateSubmitted, ResultVisibility: firstNonEmpty(req.ResultVisibility, "proxy"), DiscordTranscriptMode: firstNonEmpty(req.DiscordTranscriptMode, "delegator")})
+		row, err = p.tasks.CreateOutbound(ctx, TaskRow{ClientTaskRef: req.ClientTaskRef, MessageID: req.MessageID, ContextID: req.ContextID, FromAgent: req.From, ToAgent: req.To, ChannelID: req.ChannelID, GuildID: req.GuildID, ChannelRef: req.ChannelRef, SkillID: req.SkillID, State: TaskStateSubmitted, ResultVisibility: firstNonEmpty(req.ResultVisibility, "proxy"), DiscordTranscriptMode: firstNonEmpty(req.DiscordTranscriptMode, "delegator"), OriginRequester: req.OriginRequester})
 		if err != nil {
 			return TaskRow{}, err
 		}
@@ -280,16 +425,16 @@ func (t *Transport) handleTaskMessage(ctx context.Context, msg jetstream.Msg) er
 		_ = msg.TermWithReason(err.Error())
 		return err
 	}
-	if subject.Kind != SubjectKindTask || subject.To != t.from {
+	if subject.Kind != SubjectKindTask || !t.acceptsAgent(subject.To) {
 		_ = msg.TermWithReason("task subject target mismatch")
 		return fmt.Errorf("task subject target mismatch")
 	}
 	if row, err := t.tasks.GetByDirectionMessage(ctx, "inbound", subject.MessageID); err == nil && row.LocalID != "" {
 		if row.Terminal {
 			if row.State == TaskStateRejected {
-				_ = t.PublishRejected(ctx, row.FromAgent, row.MessageID, row.ClientTaskRef, row.Error)
+				_ = t.publisherFrom(row.ExecutorAgent).PublishRejected(ctx, row.FromAgent, row.MessageID, row.ClientTaskRef, row.Error)
 			} else {
-				_ = t.PublishResult(ctx, row.FromAgent, TaskExecutionResult{TaskID: row.TaskID, State: row.State, Revision: row.Revision, Error: row.Error}, row.MessageID)
+				_ = t.publisherFrom(row.ExecutorAgent).PublishResult(ctx, row.FromAgent, TaskExecutionResult{TaskID: row.TaskID, State: row.State, Revision: row.Revision, Error: row.Error}, row.MessageID)
 			}
 		} else if t.markStarted(row.LocalID) {
 			admission := A2AAdmission{AdmissionKey: row.LocalID, TaskID: row.TaskID, State: row.State, Revision: row.Revision, Request: taskRequestFromRow(row)}
@@ -321,7 +466,7 @@ func (t *Transport) handleTaskMessage(ctx context.Context, msg jetstream.Msg) er
 		}
 		return msg.DoubleAck(ctx)
 	}
-	if err := t.PublishAccepted(ctx, subject.From, subject.MessageID, admission.TaskID, admission.Revision); err != nil {
+	if err := t.publisherFrom(subject.To).PublishAccepted(ctx, subject.From, subject.MessageID, admission.TaskID, admission.Revision); err != nil {
 		_ = msg.Nak()
 		return err
 	}
@@ -340,7 +485,7 @@ func (t *Transport) handleControlMessage(ctx context.Context, msg jetstream.Msg)
 		_ = msg.TermWithReason(err.Error())
 		return err
 	}
-	if subject.Kind != SubjectKindControl || subject.Executor != t.from {
+	if subject.Kind != SubjectKindControl || !t.acceptsAgent(subject.Executor) {
 		_ = msg.TermWithReason("control subject target mismatch")
 		return fmt.Errorf("control subject target mismatch")
 	}
@@ -349,7 +494,7 @@ func (t *Transport) handleControlMessage(ctx context.Context, msg jetstream.Msg)
 		_ = msg.TermWithReason("control task ownership not found")
 		return err
 	}
-	if row.FromAgent != subject.From || row.ExecutorAgent != t.from {
+	if row.FromAgent != subject.From || row.ExecutorAgent != subject.Executor {
 		_ = msg.TermWithReason("control ownership mismatch")
 		return fmt.Errorf("control ownership mismatch")
 	}
@@ -367,13 +512,13 @@ func (t *Transport) handleControlMessage(ctx context.Context, msg jetstream.Msg)
 			_ = msg.Nak()
 			return err
 		}
-		if err := t.PublishStatus(ctx, row.FromAgent, row.TaskID, applied.Revision, TaskStateCanceled, "", taskErr); err != nil {
+		if err := t.publisherFrom(row.ExecutorAgent).PublishStatus(ctx, row.FromAgent, row.TaskID, applied.Revision, TaskStateCanceled, "", taskErr); err != nil {
 			_ = msg.Nak()
 			return err
 		}
 	case ControlKindStatusRequest, ControlKindInputReply, ControlKindAuthReply:
 		if subject.Control == ControlKindStatusRequest {
-			if err := t.PublishStatus(ctx, row.FromAgent, row.TaskID, row.Revision, row.State, "", row.Error); err != nil {
+			if err := t.publisherFrom(row.ExecutorAgent).PublishStatus(ctx, row.FromAgent, row.TaskID, row.Revision, row.State, "", row.Error); err != nil {
 				_ = msg.Nak()
 				return err
 			}
@@ -395,7 +540,7 @@ func (t *Transport) handleEventMessage(ctx context.Context, msg jetstream.Msg) e
 		_ = msg.TermWithReason(err.Error())
 		return err
 	}
-	if subject.Kind != SubjectKindEvent || subject.Delegator != t.from {
+	if subject.Kind != SubjectKindEvent || !t.acceptsAgent(subject.Delegator) {
 		_ = msg.TermWithReason("event subject target mismatch")
 		return fmt.Errorf("event subject target mismatch")
 	}
@@ -476,11 +621,11 @@ func (t *Transport) recordAndPublishRejected(ctx context.Context, req TaskExecut
 	if taskErr.Code == "" {
 		taskErr.Code = ErrorPolicyDenied
 	}
-	row := TaskRow{TaskID: TaskID("msg_" + string(subject.MessageID)), ClientTaskRef: req.ClientTaskRef, MessageID: subject.MessageID, ContextID: req.ContextID, FromAgent: subject.From, ToAgent: subject.To, ExecutorAgent: t.from, ChannelRef: req.ChannelRef, SkillID: req.SkillID, State: TaskStateRejected, Revision: 1, Error: taskErr}
+	row := TaskRow{TaskID: TaskID("msg_" + string(subject.MessageID)), ClientTaskRef: req.ClientTaskRef, MessageID: subject.MessageID, ContextID: req.ContextID, FromAgent: subject.From, ToAgent: subject.To, ExecutorAgent: subject.To, ChannelRef: req.ChannelRef, SkillID: req.SkillID, State: TaskStateRejected, Revision: 1, Error: taskErr}
 	if _, err := t.tasks.RejectInbound(ctx, row, taskErr); err != nil {
 		return err
 	}
-	return t.PublishRejected(ctx, subject.From, env.MessageID, req.ClientTaskRef, taskErr)
+	return t.publisherFrom(subject.To).PublishRejected(ctx, subject.From, env.MessageID, req.ClientTaskRef, taskErr)
 }
 
 func (t *Transport) runAccepted(admission A2AAdmission) {
@@ -500,19 +645,20 @@ func (t *Transport) runAccepted(admission A2AAdmission) {
 	if result.Revision <= 0 {
 		result.Revision = admission.Revision + 1
 	}
+	pub := t.publisherFrom(admission.Request.To)
 	for i, artifact := range result.Artifacts {
 		if artifact.ID == "" {
 			artifact.ID = fmt.Sprintf("artifact-%d", i+1)
 		}
-		if err := t.PublishArtifact(context.Background(), admission.Request.From, result.TaskID, result.Revision+int64(i), artifact); err != nil {
+		if err := pub.PublishArtifact(context.Background(), admission.Request.From, result.TaskID, result.Revision+int64(i), artifact); err != nil {
 			t.log("[a2a] publish artifact task=%s artifact=%s: %v", result.TaskID, artifact.ID, err)
 		}
 	}
 	var pubErr error
 	if IsTerminalState(result.State) {
-		pubErr = t.PublishResult(context.Background(), admission.Request.From, result, admission.Request.MessageID)
+		pubErr = pub.PublishResult(context.Background(), admission.Request.From, result, admission.Request.MessageID)
 	} else {
-		pubErr = t.PublishStatus(context.Background(), admission.Request.From, result.TaskID, result.Revision, result.State, result.Content, result.Error)
+		pubErr = pub.PublishStatus(context.Background(), admission.Request.From, result.TaskID, result.Revision, result.State, result.Content, result.Error)
 	}
 	if pubErr != nil {
 		t.log("[a2a] publish result task=%s: %v", result.TaskID, pubErr)
@@ -534,7 +680,7 @@ func (t *Transport) markStarted(key string) bool {
 }
 
 func taskRequestFromRow(row TaskRow) TaskExecutionRequest {
-	return TaskExecutionRequest{MessageID: row.MessageID, ClientTaskRef: row.ClientTaskRef, ContextID: row.ContextID, From: row.FromAgent, To: row.ToAgent, ChannelID: row.ChannelID, GuildID: row.GuildID, ChannelRef: row.ChannelRef, SkillID: row.SkillID, ResultVisibility: row.ResultVisibility, DiscordTranscriptMode: row.DiscordTranscriptMode, Delivery: DeliveryOptions{DiscordContextJSON: json.RawMessage(row.DiscordContextJSON)}}
+	return TaskExecutionRequest{MessageID: row.MessageID, ClientTaskRef: row.ClientTaskRef, ContextID: row.ContextID, From: row.FromAgent, To: row.ToAgent, ChannelID: row.ChannelID, GuildID: row.GuildID, ChannelRef: row.ChannelRef, SkillID: row.SkillID, ResultVisibility: row.ResultVisibility, DiscordTranscriptMode: row.DiscordTranscriptMode, Delivery: DeliveryOptions{DiscordContextJSON: json.RawMessage(row.DiscordContextJSON)}, OriginRequester: row.OriginRequester}
 }
 
 func (p *Publisher) checkEventRate(now time.Time) error {

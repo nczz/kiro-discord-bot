@@ -7,6 +7,12 @@ import (
 	"time"
 )
 
+type OriginRequester struct {
+	DiscordUserID   string `json:"discordUserId,omitempty"`
+	DiscordUsername string `json:"discordUsername,omitempty"`
+	DiscordGuildID  string `json:"discordGuildId,omitempty"`
+}
+
 type TaskExecutionRequest struct {
 	MessageID             MessageID
 	ClientTaskRef         string
@@ -25,6 +31,7 @@ type TaskExecutionRequest struct {
 	CreatedAt             time.Time
 	ExpiresAt             time.Time
 	AuditMetadata         map[string]string
+	OriginRequester       OriginRequester
 }
 
 type DeliveryOptions struct {

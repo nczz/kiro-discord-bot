@@ -51,6 +51,7 @@ type Job struct {
 	DisableBotEgress       bool
 	RemoteA2A              bool
 	AllowRemoteMemoryWrite bool
+	A2ADelegationDepth     int
 	A2AResult              chan<- a2a.TaskExecutionResult
 	A2ATaskID              a2a.TaskID
 	A2ARevision            int64
@@ -606,7 +607,7 @@ func (w *Worker) execute(job *Job) {
 	w.cancelMu.Lock()
 	w.currentThreadID = threadID
 	w.cancelMu.Unlock()
-	if err := writeBotToolsTargetStateWithRefs(w.botToolsTargetStatePath, threadID, false, job.MentionRefs); err != nil {
+	if err := writeBotToolsTargetStateWithRequester(w.botToolsTargetStatePath, threadID, false, job.MentionRefs, false, false, job.UserID, job.Username, 0); err != nil {
 		log.Printf("[worker %s] write bot-tools target state: %v", w.channelID, err)
 	}
 
@@ -1133,7 +1134,7 @@ func (w *Worker) executeInline(job *Job) {
 		})
 	}
 	targetID := job.inlineBotToolsTargetID()
-	if err := writeBotToolsTargetStateWithPolicy(w.botToolsTargetStatePath, targetID, job.DisableBotEgress, job.MentionRefs, job.RemoteA2A, job.AllowRemoteMemoryWrite); err != nil {
+	if err := writeBotToolsTargetStateWithRequester(w.botToolsTargetStatePath, targetID, job.DisableBotEgress, job.MentionRefs, job.RemoteA2A, job.AllowRemoteMemoryWrite, job.UserID, job.Username, job.A2ADelegationDepth); err != nil {
 		log.Printf("[worker %s] write inline bot-tools target state: %v", w.channelID, err)
 	}
 
@@ -1215,6 +1216,7 @@ func (w *Worker) executeInline(job *Job) {
 				log.Printf("[worker %s] inline job error | user=%s msg=%s elapsed=%s ctxErr=%v err=%v",
 					w.channelID, job.Username, job.MessageID, time.Since(startTime).Round(time.Millisecond), ctxErr, askErr)
 				errorContent := "❌ " + errMsg
+				errorWithMetrics := AppendMetricsFooter(errorContent, MetricsWithElapsed(w.agent.TurnMetrics(), startTime))
 				delivered := 0
 				if !job.DisableBotEgress {
 					delivered = w.drainBeforeFinal(targetID)
@@ -1239,7 +1241,7 @@ func (w *Worker) executeInline(job *Job) {
 					Error:   a2aErrorForInline(ctxErr, errMsg),
 					Metrics: a2aMetrics(w.agent.TurnMetrics(), startTime),
 				})
-				if sendErr := job.sendInlineFinalReply(ds, AppendMetricsFooter(errorContent, MetricsWithElapsed(w.agent.TurnMetrics(), startTime))); sendErr != nil {
+				if sendErr := job.sendInlineFinalReply(ds, errorWithMetrics); sendErr != nil {
 					log.Printf("[worker %s] inline error reply failed | user=%s msg=%s err=%v",
 						w.channelID, job.Username, job.MessageID, sendErr)
 				}
@@ -1738,7 +1740,7 @@ func (w *Worker) executeFallback(job *Job) {
 		w.cancelMu.Unlock()
 		w.signalIdle()
 	}()
-	if err := writeBotToolsTargetStateWithRefs(w.botToolsTargetStatePath, job.ChannelID, false, job.MentionRefs); err != nil {
+	if err := writeBotToolsTargetStateWithRequester(w.botToolsTargetStatePath, job.ChannelID, false, job.MentionRefs, false, false, job.UserID, job.Username, 0); err != nil {
 		log.Printf("[worker %s] write fallback bot-tools target state: %v", w.channelID, err)
 	}
 
