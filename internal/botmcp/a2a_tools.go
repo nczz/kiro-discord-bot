@@ -140,6 +140,10 @@ type A2APeerSummary struct {
 	Runtime           string   `json:"runtime,omitempty"`
 	ChannelRef        string   `json:"channelRef,omitempty"`
 	Wakeable          bool     `json:"wakeable"`
+	DisplayName       string   `json:"displayName,omitempty"`
+	DiscordGuildID    string   `json:"discordGuildId,omitempty"`
+	DiscordChannelID  string   `json:"discordChannelId,omitempty"`
+	DiscordThreadID   string   `json:"discordThreadId,omitempty"`
 }
 
 type A2ATaskSummary struct {
@@ -250,9 +254,19 @@ func (s *A2AService) Peers(ctx context.Context, req A2AToolRequest) (A2AToolResp
 		}
 		visibleSkills := visiblePeerSkills(policy, string(row.AgentID), row.SkillIDs, s.cfg.Config.RuntimeIDMode)
 		delegationAllowed := len(visibleSkills) > 0
-		peers = append(peers, A2APeerSummary{AgentID: string(row.AgentID), Name: row.Name, Trusted: row.Trusted, Online: row.Online, Stale: row.Stale, Skills: visibleSkills, HiddenSkillCount: len(row.SkillIDs) - len(visibleSkills), DelegationAllowed: delegationAllowed, Runtime: row.Runtime, ChannelRef: row.ChannelRef, Wakeable: delegationAllowed && row.Runtime == "channel" && !row.Stale, ProtocolBinding: row.SupportedBinding, ProtocolVersion: row.ProtocolVersion, SignatureStatus: row.SignatureStatus})
+		peers = append(peers, A2APeerSummary{AgentID: string(row.AgentID), Name: row.Name, Trusted: row.Trusted, Online: row.Online, Stale: row.Stale, Skills: visibleSkills, HiddenSkillCount: len(row.SkillIDs) - len(visibleSkills), DelegationAllowed: delegationAllowed, Runtime: row.Runtime, ChannelRef: row.ChannelRef, DisplayName: peerDisplayName(row), DiscordGuildID: row.DiscordGuildID, DiscordChannelID: row.DiscordChannelID, DiscordThreadID: row.DiscordThreadID, Wakeable: delegationAllowed && row.Runtime == "channel" && !row.Stale, ProtocolBinding: row.SupportedBinding, ProtocolVersion: row.ProtocolVersion, SignatureStatus: row.SignatureStatus})
 	}
 	return A2AToolResponse{OK: true, Message: "A2A peers listed", Peers: peers}, nil
+}
+
+func peerDisplayName(peer a2a.PeerTrustDisplay) string {
+	if strings.TrimSpace(peer.ChannelRef) != "" {
+		return peer.ChannelRef
+	}
+	if strings.TrimSpace(peer.Description) != "" {
+		return peer.Description
+	}
+	return peer.Name
 }
 
 func visiblePeerSkills(policy a2a.ChannelA2APolicy, agent string, skills []string, mode a2a.RuntimeIDMode) []string {
@@ -406,7 +420,7 @@ func (s *A2AService) PolicyApply(ctx context.Context, req A2AToolRequest) (A2ATo
 	if err := s.policies.Save(ctx, planned, req.RequestedByID); err != nil {
 		return responseError(fmt.Errorf("%w: %v", errorCode(a2a.ErrorStoreError), err)), nil
 	}
-	s.trustDelegatedPeers(ctx, planned.DelegateTo)
+	s.trustDelegatedPeers(ctx, delegatedPeerAgents(planned))
 	_ = s.recordAudit(ctx, a2a.AuditPolicyChangeApplied, req, "applied", "", map[string]any{"change_id": changeID})
 	return A2AToolResponse{OK: true, Message: "A2A policy applied", ChangeID: changeID, Policy: &planned}, nil
 }
@@ -430,9 +444,6 @@ func (s *A2AService) Delegate(ctx context.Context, req A2AToolRequest) (A2AToolR
 	if err != nil {
 		return responseError(fmt.Errorf("%w: target peer is unknown", errorCode(a2a.ErrorUnknownAgent))), nil
 	}
-	if !peer.Trusted {
-		return responseError(fmt.Errorf("%w: target peer is not trusted", errorCode(a2a.ErrorPolicyDenied))), nil
-	}
 	targetChannelRef := req.targetRuntimeRef(policy.ChannelRef)
 	effectiveSkill := canonicalPeerSkill(peer, req.SkillID, targetChannelRef)
 	if effectiveSkill == "" {
@@ -445,6 +456,9 @@ func (s *A2AService) Delegate(ctx context.Context, req A2AToolRequest) (A2AToolR
 	}
 	if !policyDelegatesRuntime(policy, string(target), effectiveSkill, targetChannelRef) {
 		return responseError(fmt.Errorf("%w: target runtime is not delegated by channel policy", errorCode(a2a.ErrorUnauthorizedTarget))), nil
+	}
+	if !peer.Trusted && !policyDelegatesExactRuntime(policy, string(target), effectiveSkill) {
+		return responseError(fmt.Errorf("%w: target peer is not trusted", errorCode(a2a.ErrorPolicyDenied))), nil
 	}
 	req.SkillID = effectiveSkill
 	message := strings.TrimSpace(req.Message)
@@ -603,6 +617,16 @@ func (s *A2AService) trustDelegatedPeers(ctx context.Context, agents []string) {
 			log.Printf("[a2a] trust delegated peer %s failed: %v", agent, err)
 		}
 	}
+}
+
+func delegatedPeerAgents(policy a2a.ChannelA2APolicy) []string {
+	agents := append([]string{}, policy.DelegateTo...)
+	for _, target := range policy.DelegateTargets {
+		if runtimeID := strings.TrimSpace(target.RuntimeAgentID); runtimeID != "" {
+			agents = append(agents, runtimeID)
+		}
+	}
+	return agents
 }
 
 func (s *A2AService) currentPolicy(ctx context.Context, req A2AToolRequest) (a2a.ChannelA2APolicy, error) {

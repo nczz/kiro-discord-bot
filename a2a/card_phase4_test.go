@@ -42,6 +42,31 @@ func TestExtendedCard(t *testing.T) {
 	}
 }
 
+func TestBuildRuntimeAgentCardIncludesDiscordIdentifiers(t *testing.T) {
+	runtime := RuntimeRecord{
+		RuntimeAgentID: "adam-n200-main",
+		BotAgentID:     "adam-n200",
+		GuildID:        "1495737767827865620",
+		ChannelID:      "1495737768905670719",
+		ThreadID:       "1532710952477261854",
+		ChannelRef:     "main",
+		DisplayName:    "Main",
+		RuntimeKind:    "channel",
+		Enabled:        true,
+		Discoverable:   true,
+	}
+	card, ext, err := BuildRuntimeAgentCard(Config{NATSURL: "nats://nats.example.internal:4222", AgentID: "adam-n200"}, runtime, "2.30.0", []AgentSkill{{ID: "task", Name: "Task", Description: "task"}})
+	if err != nil {
+		t.Fatalf("BuildRuntimeAgentCard: %v", err)
+	}
+	if card.Name != "adam-n200-main" || card.Description != "Main" || len(card.Skills) != 1 || card.Skills[0].ID != "main/task" {
+		t.Fatalf("runtime card = %+v, want runtime-scoped identity and skill", card)
+	}
+	if ext.ChannelRef != "main" || ext.Runtime != "channel" || ext.DiscordGuildID != "1495737767827865620" || ext.DiscordChannelID != "1495737768905670719" || ext.DiscordThreadID != "1532710952477261854" {
+		t.Fatalf("extended runtime card = %+v, want Discord identifiers", ext)
+	}
+}
+
 func TestPeerKV(t *testing.T) {
 	node := connectedTestNode(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

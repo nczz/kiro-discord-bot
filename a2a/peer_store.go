@@ -76,6 +76,9 @@ type PeerTrustDisplay struct {
 	Compatibility         PeerCompatibility
 	Runtime               string
 	ChannelRef            string
+	DiscordGuildID        string
+	DiscordChannelID      string
+	DiscordThreadID       string
 }
 
 type SQLitePeerStore struct{ db *sql.DB }
@@ -256,6 +259,9 @@ func (s *SQLitePeerStore) TrustSummary(ctx context.Context, staleAfter time.Dura
 			Compatibility:         CheckVersionCompatibility(peer.Card),
 			Runtime:               peer.ExtendedCard.Runtime,
 			ChannelRef:            peer.ExtendedCard.ChannelRef,
+			DiscordGuildID:        peer.ExtendedCard.DiscordGuildID,
+			DiscordChannelID:      peer.ExtendedCard.DiscordChannelID,
+			DiscordThreadID:       peer.ExtendedCard.DiscordThreadID,
 		}
 		for _, skill := range peer.Card.Skills {
 			display.SkillIDs = append(display.SkillIDs, skill.ID)
@@ -326,6 +332,17 @@ func sanitizePublicText(s string) string {
 	s = secretWordPattern.ReplaceAllString(s, "[REDACTED]")
 	s = discordIDPattern.ReplaceAllString(s, "[REDACTED]")
 	return strings.TrimSpace(s)
+}
+
+func sanitizeDiscordID(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	if !discordIDPattern.MatchString(s) || discordIDPattern.ReplaceAllString(s, "") != "" {
+		return ""
+	}
+	return s
 }
 func sanitizeInterfaceURL(s string) string {
 	if internalURLPattern.MatchString(s) {

@@ -515,6 +515,24 @@ Append one subsection per completed phase.
 - Rollback boundary: restore `/Users/chun/Projects/kiro-discord-bot-local/bin/kiro-discord-bot.pre-a2a-default-20260731185317` locally or `/opt/kiro-discord-bot/kiro-discord-bot.pre-a2a-default-20260731185403` on d80; A2A remains usable, but default channel setup would no longer expose the full MCP lifecycle surface.
 - Next phase: monitor live A2A MCP usage; no additional code phase is open.
 
+### R11 runtime peer identity and exact-policy trust
+
+- Status: code-ready; current worktree.
+- Decision: runtime-mode delegation must trust exact `delegate_targets.runtime_agent_id` policy entries even when the peer-store row is not globally trusted. Global `trusted` remains required for legacy `delegate_to` rows so explicit revocation still blocks broad bot-host delegation.
+- Changed files: `a2a/card.go`, `a2a/peer_store.go`, `a2a/card_phase4_test.go`, `internal/botmcp/a2a_tools.go`, `internal/botmcp/a2a_tools_test.go`, and this progress ledger.
+- Validation:
+  - `go test ./a2a ./internal/botmcp -run 'Test(BuildRuntimeAgentCardIncludesDiscordIdentifiers|ExtendedCard|A2AToolsDelegateAllowsUntrustedExactRuntimePolicy|A2AToolsDelegateRejectsRevokedPeerBeforePublishing|A2AToolsPeersRuntimeModeListsWakeableRuntimeAndHidesLegacyBot|DefaultSafeToolNames|A2AToolsAnnotations)'` passed.
+  - `go test ./...` passed.
+  - `git diff --check` passed.
+- Done criteria evidence:
+  - Runtime peer cards now include sanitized Discord guild/channel/thread identifiers in the extended card and expose them through `bot_a2a_peers`.
+  - `bot_a2a_peers` preserves runtime/channel metadata, advertises `displayName`, and keeps stale bot-host rows non-callable in runtime mode.
+  - `bot_a2a_delegate` allows untrusted runtime peer rows only when the bound policy has an exact runtime target; revoked legacy bot-host delegation still returns `policy_denied: target peer is not trusted`.
+- Runtime settings touched: no.
+- Deployment hosts touched: pending.
+- Rollback boundary: revert this code/docs commit; runtime rollout remains usable, but `bot_a2a_peers` would again risk showing stale bot-host cards as callable and exact runtime target policies would still depend on global peer trust.
+- Next phase: deploy this peer identity/trust fix to local M5 and remote d80 binaries, then rerun `bot_a2a_peers` and exact runtime delegation from live MCP context.
+
 ## Master goal prompt
 
 Use this prompt when starting or resuming the full implementation program:

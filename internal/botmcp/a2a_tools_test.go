@@ -112,7 +112,7 @@ func TestA2AToolsPeersRuntimeModeListsWakeableRuntimeAndHidesLegacyBot(t *testin
 		t.Fatalf("Upsert base card: %v", err)
 	}
 	runtimeCard := a2a.AgentCard{Name: "peer-n100-support", Description: "support runtime", Version: "1.0.0", SupportedInterfaces: []a2a.A2AInterface{{URL: "nats://nats.example.internal:4222", ProtocolBinding: a2a.ProtocolBindingNATS, ProtocolVersion: a2a.ProtocolVersion}}, Skills: []a2a.AgentSkill{{ID: "support/task", Name: "Task", Description: "task"}}}
-	if _, err := svc.peers.UpsertExtendedCard(ctx, "peer-n100-support", runtimeCard, a2a.ExtendedAgentCard{Runtime: "channel", ChannelRef: "support"}, false, "peer-host-peer-n100-support", "online", time.Now().Add(time.Hour)); err != nil {
+	if _, err := svc.peers.UpsertExtendedCard(ctx, "peer-n100-support", runtimeCard, a2a.ExtendedAgentCard{Runtime: "channel", ChannelRef: "support", DiscordGuildID: "1495737767827865620", DiscordChannelID: "1495737768905670719", DiscordThreadID: "1532710952477261854"}, false, "peer-host-peer-n100-support", "online", time.Now().Add(time.Hour)); err != nil {
 		t.Fatalf("Upsert runtime card: %v", err)
 	}
 
@@ -130,6 +130,9 @@ func TestA2AToolsPeersRuntimeModeListsWakeableRuntimeAndHidesLegacyBot(t *testin
 	runtime := byAgent["peer-n100-support"]
 	if !runtime.DelegationAllowed || !runtime.Wakeable || runtime.Runtime != "channel" || runtime.ChannelRef != "support" {
 		t.Fatalf("runtime peer = %+v, want wakeable callable channel runtime", runtime)
+	}
+	if runtime.DisplayName != "support" || runtime.DiscordGuildID != "1495737767827865620" || runtime.DiscordChannelID != "1495737768905670719" || runtime.DiscordThreadID != "1532710952477261854" {
+		t.Fatalf("runtime identity = %+v, want Discord identifiers and display name", runtime)
 	}
 	if len(runtime.Skills) != 1 || runtime.Skills[0] != "support/task" {
 		t.Fatalf("runtime skills = %v, want canonical runtime skill", runtime.Skills)
@@ -292,6 +295,50 @@ func TestA2AToolsDelegateRejectsRevokedPeerBeforePublishing(t *testing.T) {
 	}
 	if got.OK || got.ErrorCode != a2a.ErrorPolicyDenied || !strings.Contains(got.Message, "not trusted") {
 		t.Fatalf("Delegate after peer revocation = %+v, want policy_denied not trusted", got)
+	}
+}
+
+func TestA2AToolsDelegateAllowsUntrustedExactRuntimePolicy(t *testing.T) {
+	ctx := context.Background()
+	svc, err := NewA2AService(A2AServiceConfig{
+		DataDir:            t.TempDir(),
+		Config:             a2a.Config{AgentID: "adam-n200", NATSURL: "nats://a2a.example.internal:4222", TaskTimeoutSec: 60, MaxDelegationDepth: 1, RequireConfirmationForRemote: true},
+		BoundGuildID:       "guild-1",
+		BoundChannelID:     "channel-1",
+		ConfirmationSecret: "test-secret",
+		ConnectNATS:        false,
+	})
+	if err != nil {
+		t.Fatalf("NewA2AService: %v", err)
+	}
+	defer svc.Close()
+	if err := svc.policies.Save(ctx, a2a.ChannelA2APolicy{
+		GuildID:        "guild-1",
+		ChannelID:      "channel-1",
+		Enabled:        true,
+		RuntimeAgentID: "adam-n200-m5-main",
+		BotAgentID:     "adam-n200",
+		ChannelRef:     "m5-main",
+		DelegateTargets: []a2a.DelegateTargetPolicy{{
+			RuntimeAgentID: "peer-n100-support",
+			AgentID:        "peer-n100",
+			ChannelRef:     "support",
+			SkillID:        "task",
+		}},
+	}, "manager-1"); err != nil {
+		t.Fatalf("Save policy: %v", err)
+	}
+	card := a2a.AgentCard{Name: "peer-n100-support", Description: "support runtime", Version: "1.0.0", SupportedInterfaces: []a2a.A2AInterface{{URL: "nats://nats.example.internal:4222", ProtocolBinding: a2a.ProtocolBindingNATS, ProtocolVersion: a2a.ProtocolVersion}}, Skills: []a2a.AgentSkill{{ID: "support/task", Name: "Task", Description: "task"}}}
+	if _, err := svc.peers.UpsertExtendedCard(ctx, "peer-n100-support", card, a2a.ExtendedAgentCard{Runtime: "channel", ChannelRef: "support"}, false, "peer-host-peer-n100-support", "online", time.Now().Add(time.Hour)); err != nil {
+		t.Fatalf("Upsert runtime peer: %v", err)
+	}
+
+	got, err := svc.Delegate(ctx, A2AToolRequest{GuildID: "guild-1", ChannelID: "channel-1", RequestedBy: "alice", RequestedByID: "user-1", TargetAgent: "peer-n100-support", TargetChannelRef: "support", SkillID: "task", Message: "ping"})
+	if err != nil {
+		t.Fatalf("Delegate: %v", err)
+	}
+	if !got.OK || !got.RequiresConfirmation || got.ErrorCode != "" || got.ConfirmationToken == "" {
+		t.Fatalf("Delegate exact runtime policy = %+v, want confirmation instead of trust denial", got)
 	}
 }
 

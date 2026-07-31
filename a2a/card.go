@@ -15,6 +15,9 @@ const (
 type ExtendedAgentCard struct {
 	ChannelRef              string   `json:"channel_ref,omitempty"`
 	Runtime                 string   `json:"runtime,omitempty"`
+	DiscordGuildID          string   `json:"discord_guild_id,omitempty"`
+	DiscordChannelID        string   `json:"discord_channel_id,omitempty"`
+	DiscordThreadID         string   `json:"discord_thread_id,omitempty"`
 	TriggerGuidance         string   `json:"trigger_guidance,omitempty"`
 	ResultVisibilitySupport []string `json:"result_visibility_support,omitempty"`
 	MaxTaskDurationClass    string   `json:"max_task_duration_class,omitempty"`
@@ -91,6 +94,9 @@ func BuildRuntimeAgentCard(cfg Config, runtime RuntimeRecord, version string, sk
 	ext, err := BuildExtendedAgentCard(card, ExtendedAgentCard{
 		ChannelRef:              runtime.ChannelRef,
 		Runtime:                 runtime.RuntimeKind,
+		DiscordGuildID:          runtime.GuildID,
+		DiscordChannelID:        runtime.ChannelID,
+		DiscordThreadID:         runtime.ThreadID,
 		ResultVisibilitySupport: []string{"proxy", "transparent"},
 	})
 	if err != nil {
@@ -115,6 +121,9 @@ func BuildExtendedAgentCard(public AgentCard, ext ExtendedAgentCard) (ExtendedAg
 	out := ExtendedAgentCard{
 		ChannelRef:              sanitizeSkillID(ext.ChannelRef),
 		Runtime:                 sanitizePublicText(ext.Runtime),
+		DiscordGuildID:          sanitizeDiscordID(ext.DiscordGuildID),
+		DiscordChannelID:        sanitizeDiscordID(ext.DiscordChannelID),
+		DiscordThreadID:         sanitizeDiscordID(ext.DiscordThreadID),
 		TriggerGuidance:         sanitizePublicText(ext.TriggerGuidance),
 		ResultVisibilitySupport: sanitizeStringList(ext.ResultVisibilitySupport),
 		MaxTaskDurationClass:    sanitizePublicText(ext.MaxTaskDurationClass),
