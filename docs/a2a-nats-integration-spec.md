@@ -1242,6 +1242,41 @@ Examples users should be able to type：
 
 The local agent translates these requests into structured bot-tools calls。The tool layer, not the LLM, enforces Discord permissions, channel scope, A2A policy, confirmation, and audit。
 
+#### Natural-language implementation contract
+
+The Discord happy path is conversational:
+
+1. A user asks in the project channel/thread using ordinary language.
+2. The local channel agent resolves peer/runtime names, skills, policy state, and task status through `bot_a2a_*` MCP tools.
+3. The bot-tools service returns structured data plus user-facing summaries; the agent explains the outcome in Discord language.
+4. Server-side tool code enforces guild/channel binding, requester identity, Discord permissions, A2A policy, confirmation, idempotency, and audit. The LLM may choose and explain tools, but cannot grant capability by wording.
+
+User-facing copy must prefer localized product terms from Section 26 over protocol field names. Raw identifiers such as `runtime_agent_id`, `accept_from_runtimes`, `delegate_targets`, `result_visibility`, and `discord_transcript_mode` may appear in diagnostic/details blocks for managers, but not as the primary label in normal conversation or confirmation prompts.
+
+Policy setup flow:
+
+```text
+natural-language request
+→ bot_a2a_policy_plan
+→ human-readable preview with risk/egress labels
+→ signed Discord button/modal confirmation by a ManageChannels user
+→ bot_a2a_policy_apply
+→ localized audit/status summary
+```
+
+Delegation flow:
+
+```text
+natural-language request
+→ bot_a2a_peers / bot_a2a_policy_get as needed
+→ bot_a2a_delegate
+→ confirmation challenge when remote egress, attachments, sensitive skills, transparent delivery, or co-present transcript sharing require it
+→ proxy result delivery by default
+```
+
+Slash commands are not the primary UX. They remain explicit bootstrap, troubleshooting, and admin fallbacks that call the same bot-tools-backed service methods. They must not introduce a slash-only policy path or require users to learn NATS/A2A protocol fields before normal collaboration works.
+
+
 ### 18.2 A2A bot-tools contract
 
 Add A2A tools to the built-in `bot-tools` MCP server。They follow existing bot-tools scope rules: every call is bound to current guild/channel/thread context, validates `requested_by_id`, and returns structured JSON for the agent to explain to the user。

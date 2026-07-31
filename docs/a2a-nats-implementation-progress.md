@@ -48,8 +48,8 @@ At the start of each continuation:
 
 - Program state: Original bot-level A2A NATS implementation completed through Phase 9 (`21e4173`) and deployed for runtime smoke. Current worktree adds a runtime-scoped A2A smoke path and deployed it to the local/d80 dual-mode test bots, but it is not yet spec-complete against the R1 runtime registry contract.
 - Current phase: R1 runtime identity registry remains in progress from code-observed evidence; the current implementation uses `channel_a2a_policy.runtime_agent_id` as the operational runtime authority and does not yet open or enforce `a2a_runtime_registry`.
-- Latest execution target: align this ledger to the code-observed completion level, then commit implementation and documentation changes separately.
-- Known implementation state: runtime mode parsing, deterministic runtime ID generation, policy runtime fields, runtime peer cards from discoverable policies, runtime transport consumers, runtime source identity, granular `/a2a` slash fallback, requester-scoped status, and dual-mode deployment are present. Gaps: `RuntimeStore` is dead code with no callsites/tests; there is no standalone `/a2a policy` slash command; production `runtime` cutover remains unproven.
+- Latest source target: decide whether R1 completion wires `a2a_runtime_registry` or revises the spec to make policy rows authoritative, while preserving the natural-language Discord UX contract documented below.
+- Known implementation state: runtime mode parsing, deterministic runtime ID generation, policy runtime fields, runtime peer cards from discoverable policies, runtime transport consumers, runtime source identity, granular `/a2a` slash fallback, requester-scoped status, and dual-mode deployment are present. Gaps: `RuntimeStore` is dead code with no callsites/tests; there is no standalone `/a2a policy` slash command; production `runtime` cutover remains unproven. Documentation now makes normal Discord natural language plus `bot_a2a_*` MCP tools the primary UX contract, with slash commands limited to fallback/bootstrap/admin paths.
 
 ## Phase ledger
 
@@ -346,6 +346,20 @@ Append one subsection per completed phase.
 - Deployment hosts touched: local test bot and d80 test bot only.
 - Rollback boundary: set `A2A_RUNTIME_ID_MODE=legacy` or `NATS_URL=""`, restart/drain the bots, restore `kiro-discord-bot.pre-runtime-deploy` binaries if needed, then revert this smoke-path implementation.
 - Next phase: complete R1 by either wiring `a2a_runtime_registry` as the runtime authority with tests and startup checks, or explicitly revising the spec/guide to make `channel_a2a_policy.runtime_agent_id` the runtime authority before claiming R2-R6 spec completion.
+
+### Natural-language Discord UX contract alignment
+
+- Status: documentation-only alignment.
+- Changed files: `docs/a2a-nats-integration-spec.md`, `docs/a2a-nats-implementation-guide.md`, and this progress ledger.
+- Evidence:
+  - Source spec now states the Discord happy path as normal channel/thread language handled by the local channel agent through `bot_a2a_*` MCP tools.
+  - Source spec and guide both define slash commands as fallback/bootstrap/admin controls that call the same service methods and must not create a slash-only policy path.
+  - User-facing copy must prefer localized collaboration terms over raw protocol fields; raw runtime/policy IDs are limited to manager diagnostics/details.
+  - Policy setup and delegation flows are documented as natural-language request → bot-tools plan/delegate → human-readable risk/egress preview → signed Discord confirmation when required → audited service apply/publish.
+- Runtime settings touched: no.
+- Deployment hosts touched: no.
+- Rollback boundary: revert this UX documentation-only section; no code behavior changes.
+- Next phase: apply this contract when implementing either registry authority or policy-row authority for R1.
 
 ## Master goal prompt
 

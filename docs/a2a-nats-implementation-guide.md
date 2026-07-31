@@ -48,6 +48,10 @@ The guide must preserve these decisions without reinterpretation:
 - All A2A ingress runs through channel runtime and `channel.Manager` boundaries.
 - Proxy result delivery is default; remote Discord egress is disabled unless channel policy opts in.
 - Natural-language Discord UX drives bot-tools; slash commands are fallback/bootstrap/admin shortcuts.
+- Product UX contract: normal Discord language is the happy path; `bot_a2a_*` MCP tools are the execution boundary; slash commands are explicit fallback/bootstrap/admin controls only.
+- User-facing copy must prefer localized product terms over raw protocol fields; raw runtime/policy IDs belong in manager diagnostics, not primary prompts.
+- Policy setup must flow through natural-language plan, human-readable risk/egress preview, signed Discord confirmation, server-side ManageChannels validation, idempotent apply, and audit.
+- Delegation must flow through peer/policy lookup, policy-gated `bot_a2a_delegate`, confirmation when remote egress or sensitive sharing requires it, and proxy result delivery by default.
 - `TASK_STATE_INPUT_REQUIRED` and `TASK_STATE_AUTH_REQUIRED` require explicit continuation flows.
 - Safe egress, audit, AllowedMentions, secret redaction, channel permissions, and MCP policy proxy remain mandatory.
 
@@ -731,6 +735,15 @@ go test ./a2a -run 'TestA2AIntegration(TargetedDelegation|DuplicateDelivery|Canc
 ### Phase 7: Bot-tools and natural-language UX
 
 **Intent**: expose A2A operations to the local agent through safe bot-tools and fallback slash/buttons without granting policy bypasses.
+
+**UX implementation contract**:
+
+- The happy path is a user asking in normal Discord language, the local agent calling `bot_a2a_*` tools, and the bot replying with localized collaboration terms.
+- Slash commands are fallback/bootstrap/admin shortcuts only; they call the same internal service as bot-tools and must not become a separate policy surface.
+- Confirmation previews must use human-readable peer/channel/skill names, risk labels, egress labels, and expiration, with raw runtime IDs relegated to manager diagnostics.
+- The MCP tool layer, not prompt wording, enforces guild/channel binding, requester identity, Discord permissions, A2A policy, idempotency, and audit.
+- Tests should cover both safe natural-language tool flows and slash fallback parity, without asserting slash-only behavior as the main product path.
+
 
 **Touched files/symbols**:
 
