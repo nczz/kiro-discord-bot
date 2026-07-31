@@ -85,6 +85,7 @@ type Manager struct {
 	channelLastActivity map[string]time.Time
 	channelAgentIdleSec int
 	safeEgressDrain     func(targetChannelID string) int
+	discord             *discordgo.Session
 }
 
 // threadAgentEntry tracks a per-thread agent and its metadata.
@@ -174,6 +175,7 @@ func (e *ThreadAgentLimitError) Error() string {
 
 // ManagerConfig holds configuration for creating a Manager.
 type ManagerConfig struct {
+	DiscordSession       *discordgo.Session
 	Store                *SessionStore // set by bot.go after creation
 	KiroCLIPath          string
 	OMPPath              string
@@ -219,6 +221,7 @@ func NewManager(cfg ManagerConfig) *Manager {
 		threadListen:        make(map[string]string),
 		silent:              make(map[string]bool),
 		threadAgents:        make(map[string]*threadAgentEntry),
+		discord:             cfg.DiscordSession,
 		store:               cfg.Store,
 		kiroCLI:             cfg.KiroCLIPath,
 		ompPath:             cfg.OMPPath,

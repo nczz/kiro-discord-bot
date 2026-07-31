@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -180,19 +181,25 @@ func (m *Manager) RunA2ATask(ctx context.Context, admitted a2a.A2AAdmission) (a2
 	if ok {
 		defer m.releaseA2AAdmission(admitted)
 	}
+	if m.discord == nil {
+		return m.recordA2ATerminal(ctx, admitted, a2a.TaskExecutionResult{TaskID: admitted.TaskID, State: a2a.TaskStateFailed, Error: a2a.TaskError{Code: a2a.ErrorInternal, Message: "Discord session is unavailable for A2A executor conversation"}}), nil
+	}
 
 	requesterID, requesterName := a2aRequesterIdentity(admitted.Request)
 
 	resultCh := make(chan a2a.TaskExecutionResult, 1)
+	threadID := a2aConversationThreadID(admitted)
 	job := &Job{
 		ChannelID:              admitted.Request.ChannelID,
 		GuildID:                admitted.Request.GuildID,
 		Prompt:                 buildA2APrompt(admitted),
+		Session:                m.discord,
 		UserID:                 requesterID,
 		Username:               requesterName,
 		MessageID:              string(admitted.Request.MessageID),
+		ThreadID:               threadID,
 		Source:                 "a2a",
-		DeliveryMode:           DeliveryInline,
+		DeliveryMode:           DeliveryThread,
 		DisableBotEgress:       admitted.Request.ResultVisibility == "" || admitted.Request.ResultVisibility == "proxy",
 		RemoteA2A:              true,
 		AllowRemoteMemoryWrite: m.remoteMemoryWriteAllowed(admitted.Request.ChannelID),
@@ -200,7 +207,9 @@ func (m *Manager) RunA2ATask(ctx context.Context, admitted a2a.A2AAdmission) (a2
 		A2AResult:              resultCh,
 		A2ATaskID:              admitted.TaskID,
 		A2ARevision:            admitted.Revision + 1,
-		BotToolsTargetID:       admitted.Request.Delivery.DiscordReplyThreadID,
+		OnThreadReady: func(threadID string) {
+			m.bindA2AConversationThread(ctx, admitted, threadID)
+		},
 	}
 	if err := m.enqueueA2AJob(job); err != nil {
 		return m.recordA2ATerminal(ctx, admitted, a2a.TaskExecutionResult{TaskID: admitted.TaskID, State: a2a.TaskStateFailed, Error: a2a.TaskError{Code: a2a.ErrorOverloaded, Message: err.Error()}}), nil
@@ -264,6 +273,40 @@ func (m *Manager) remoteMemoryWriteAllowed(channelID string) bool {
 		return false
 	}
 	return policy.RemoteToolPolicy.AllowMemoryWrite
+}
+
+func a2aConversationThreadID(admitted a2a.A2AAdmission) string {
+	if admitted.Continuation == nil || len(admitted.Request.Delivery.DiscordContextJSON) == 0 {
+		return ""
+	}
+	var dc a2a.DiscordContext
+	if err := json.Unmarshal(admitted.Request.Delivery.DiscordContextJSON, &dc); err != nil {
+		return ""
+	}
+	if strings.TrimSpace(dc.GuildID) != strings.TrimSpace(admitted.Request.GuildID) {
+		return ""
+	}
+	if strings.TrimSpace(dc.ChannelID) != strings.TrimSpace(admitted.Request.ChannelID) {
+		return ""
+	}
+	return strings.TrimSpace(dc.ThreadID)
+}
+
+func (m *Manager) bindA2AConversationThread(ctx context.Context, admitted a2a.A2AAdmission, threadID string) {
+	if m == nil || m.a2aTasks == nil || strings.TrimSpace(threadID) == "" {
+		return
+	}
+	raw, err := json.Marshal(a2a.DiscordContext{
+		GuildID:   admitted.Request.GuildID,
+		ChannelID: admitted.Request.ChannelID,
+		ThreadID:  threadID,
+	})
+	if err != nil {
+		return
+	}
+	if _, err := m.a2aTasks.SetDiscordContext(ctx, admitted.AdmissionKey, string(raw)); err != nil {
+		log.Printf("[a2a] bind conversation thread failed task=%s thread=%s err=%v", admitted.TaskID, threadID, err)
+	}
 }
 
 func (m *Manager) recordA2AResult(ctx context.Context, admitted a2a.A2AAdmission, result a2a.TaskExecutionResult) a2a.TaskExecutionResult {
@@ -460,7 +503,7 @@ func buildA2APrompt(admitted a2a.A2AAdmission) string {
 	sb.WriteString("channel_ref=" + admitted.Request.ChannelRef + "\n")
 	sb.WriteString("skill_id=" + admitted.Request.SkillID + "\n")
 	sb.WriteString("result_visibility=" + admitted.Request.ResultVisibility + "\n")
-	sb.WriteString("Discord egress is disabled unless this channel policy explicitly permits transparent result delivery. Return the final result as text; do not ask bot-tools to post to Discord.\n\n")
+	sb.WriteString("This executor bot owns the Discord conversation for this delegated task. Return ordinary replies as final text; do not call bot-tools for the final answer or duplicate Discord posts. Separate bot-tools egress remains policy-gated.\n\n")
 	if admitted.Continuation != nil {
 		sb.WriteString("[A2A continuation]\n")
 		sb.WriteString("control_kind=" + admitted.Continuation.Kind + "\n")
@@ -564,10 +607,16 @@ func a2aResultMetrics(metrics map[string]float64) acp.TurnMetrics {
 	if len(metrics) == 0 {
 		return acp.TurnMetrics{}
 	}
-	return acp.TurnMetrics{
+	out := acp.TurnMetrics{
 		ContextUsage:   metrics["context_usage"],
 		TurnDurationMs: int64(metrics["turn_duration"]),
 	}
+	if credits := metrics["credits"]; credits > 0 {
+		out.MeteringUsage = append(out.MeteringUsage, acp.MeteringItem{Value: credits, Unit: "credit"})
+	} else if usd := metrics["usd"]; usd > 0 {
+		out.MeteringUsage = append(out.MeteringUsage, acp.MeteringItem{Value: usd, Unit: "USD"})
+	}
+	return out
 }
 
 func a2aArtifactsForDelivery(kind string, payload a2a.TaskEventPayload) []a2a.TaskExecutionArtifact {

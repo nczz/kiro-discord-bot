@@ -46,12 +46,12 @@ The guide must preserve these decisions without reinterpretation:
 - No standalone cross-agent `error` envelope. Failures route through `rejected`, `task_status_update`, or `task_result` with `error_code`.
 - Durable TaskStore and `Nats-Msg-Id` idempotency are correctness boundaries.
 - All A2A ingress runs through channel runtime and `channel.Manager` boundaries.
-- Proxy result delivery is default; remote Discord egress is disabled unless channel policy opts in.
+- Executor-owned Discord conversation is the default for accepted delegation; separate bot-tools egress remains disabled unless channel policy opts in.
 - Natural-language Discord UX drives bot-tools; slash commands are fallback/bootstrap/admin shortcuts.
 - Product UX contract: normal Discord language is the happy path; `bot_a2a_*` MCP tools are the execution boundary; slash commands are explicit fallback/bootstrap/admin controls only.
 - User-facing copy must prefer localized product terms over raw protocol fields; raw runtime/policy IDs belong in manager diagnostics, not primary prompts.
 - Policy setup must flow through natural-language plan, human-readable risk/egress preview, signed Discord confirmation, server-side ManageChannels validation, idempotent apply, and audit.
-- Delegation must flow through peer/policy lookup, policy-gated `bot_a2a_delegate`, confirmation when remote egress or sensitive sharing requires it, and proxy result delivery by default.
+- Delegation must flow through peer/policy lookup, policy-gated `bot_a2a_delegate`, confirmation when sensitive sharing requires it, and executor-owned Discord conversation delivery with durable result/status returned to the delegator.
 - `TASK_STATE_INPUT_REQUIRED` and `TASK_STATE_AUTH_REQUIRED` require explicit continuation flows.
 - Safe egress, audit, AllowedMentions, secret redaction, channel permissions, and MCP policy proxy remain mandatory.
 
@@ -285,7 +285,7 @@ Every runtime migration phase below is a coding boundary. Do not start the next 
 2. Attribute inbound usage to verified local requester only when origin guild matches admitted context; otherwise use remote runtime fallback.
 3. Return usage/task metadata to the requester/delegator, not the executor bot identity.
 4. Show stale/offline state per runtime; one stale runtime must not hide other live runtimes on the same bot.
-5. Keep proxy delivery as the cross-runtime default.
+5. Keep durable result/status proxying across runtimes, but executor bot owns the Discord conversation and final response in its configured channel/thread.
 
 **Validation**: `go test ./internal/botmcp ./bot ./channel ./audit ./locale -run 'Test.*A2A.*(Status|Requester|Usage|Audit|Permission|Delivery|Runtime)'`.
 **Expected result**: `/a2a status`, usage, audit, and result labels are scoped to requester/manager and current runtime.

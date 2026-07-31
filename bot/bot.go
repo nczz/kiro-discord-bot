@@ -117,6 +117,7 @@ func NewFromConfig(cfg BotConfig) (*Bot, error) {
 		log.Printf("[audit] sqlite recorder enabled")
 	}
 
+	cfg.ManagerConfig.DiscordSession = ds
 	cfg.ManagerConfig.Store = store
 	manager := channel.NewManager(cfg.ManagerConfig)
 	if err := manager.UsageInitError(); err != nil {

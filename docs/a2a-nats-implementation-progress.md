@@ -647,6 +647,25 @@ Append one subsection per completed phase.
 - Rollback boundary: restore `/Users/chun/Projects/kiro-discord-bot-local/bin/kiro-discord-bot.pre-continuation-fix-20260731220901` locally or `/opt/kiro-discord-bot/kiro-discord-bot.pre-continuation-fix-20260731220948` on d80, then revert the R17 files; continuation controls would again not have a real executor resume path.
 - Next phase: Discord UI smoke only when a real Discord-issued task naturally reaches input/auth-required; protocol-level live continuation verification is complete.
 
+### R18 executor-owned Discord conversation
+
+- Status: deployed.
+- Decision: accepted remote A2A tasks now use the executor bot's normal Discord worker path instead of inline/proxy-only execution. The executor starts an unbound public thread in its configured channel for the initial task, stores that thread in durable `DiscordContextJSON`, reuses it for `input_reply`/`auth_reply` continuations, posts progress/final output with the normal metrics footer, and still records durable A2A status/result back to the delegator. Separate bot-tools egress remains policy-gated.
+- Changed files: `a2a/task_store.go`, `bot/bot.go`, `channel/a2a.go`, `channel/manager.go`, `channel/worker.go`, `channel/a2a_phase5_test.go`, `docs/a2a-nats-implementation-guide.md`, `docs/a2a-nats-integration-spec.md`, and this progress ledger.
+- Validation:
+  - Strict review found two blockers: fresh executor conversations must not use the A2A message ID as a Discord message anchor, and A2A thread-creation failure must release the worker. Both are fixed: A2A jobs now create standalone executor channel threads and `TestManagerA2AThreadCreationFailureReleasesWorker` covers cleanup.
+  - `go test ./channel -run 'TestManagerA2A(ThreadCreationFailureReleasesWorker|StartsDiscordConversationWithMetrics|ContinuationReusesExecutorConversationThread)|TestA2APrompt'` passed.
+  - `env -u NATS_URL -u NATS_CREDS_FILE -u NATS_TOKEN -u NATS_TLS_CA_FILE -u A2A_AGENT_ID -u A2A_RUNTIME_ID_MODE -u A2A_AGENT_NAME -u A2A_AGENT_DESCRIPTION -u A2A_REQUIRE_CONFIRMATION_FOR_REMOTE go test ./...` passed.
+  - `git diff --check` passed.
+  - Built `/tmp/kiro-discord-bot-darwin-a2a-ux` (`f170dd67e2d0f6037357f60b7e6dd5ef589c7e6adacff6e5dcce19ae762c72c8`) and `/tmp/kiro-discord-bot-linux-a2a-ux` (`dbc3e25571f91ab9cb3d03af7f83fb77900e093a7ea442b22d22bb08d5a49a93`).
+  - Local M5 bot restarted and logged `NATS node enabled`, `transport consumers started`, and `Bot running as M5Bot#8313`.
+  - Remote d80 bot service is `active` and logged `NATS node enabled`, `transport consumers started`, and `Bot running as ChunBot#4533`.
+  - Live A2A UX smoke `msg_a2a_ux_a6929a1a` from `m5bot-local-m5-main` to `d80-chunbot-d80-main` completed: remote task `task_0ab8fa183d2ac7e73ae36cc5` reached `TASK_STATE_COMPLETED` revision 2, stored executor thread `1532767178611491016`, and audit recorded `agent_response_sent` success in that thread with content `A2A UX smoke OK a6929a1a`.
+- Runtime settings touched: no.
+- Deployment hosts touched: local M5 bot binary/service and remote d80 bot binary/service only.
+- Rollback boundary: restore `/Users/chun/Projects/kiro-discord-bot-local/bin/kiro-discord-bot.pre-a2a-ux-fix-20260731230551` locally or `/opt/kiro-discord-bot/kiro-discord-bot.pre-a2a-ux-fix-20260731230636` on d80, then revert the R18 files above. Remote tasks would return to durable/proxy-only delivery instead of executor-owned Discord transcript creation.
+- Next phase: monitor a natural Discord-issued A2A task that reaches input/auth-required; protocol continuation and executor-owned initial transcript smoke are complete.
+
 ## Master goal prompt
 
 Use this prompt when starting or resuming the full implementation program:

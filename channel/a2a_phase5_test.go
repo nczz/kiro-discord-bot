@@ -21,6 +21,7 @@ type phase5Harness struct {
 	policy  *a2a.SQLitePolicyStore
 	tasks   *a2a.SQLiteTaskStore
 	dataDir string
+	rt      *recordingRoundTripper
 }
 
 func newPhase5Harness(t *testing.T, mutate func(*a2a.ChannelA2APolicy, *a2a.Config)) *phase5Harness {
@@ -57,7 +58,9 @@ func newPhase5Harness(t *testing.T, mutate func(*a2a.ChannelA2APolicy, *a2a.Conf
 	if err != nil {
 		t.Fatalf("OpenTaskStore: %v", err)
 	}
+	rt := &recordingRoundTripper{}
 	m := NewManager(ManagerConfig{
+		DiscordSession:  testDiscordSession(rt),
 		DataDir:         dataDir,
 		GuildID:         "guild-1",
 		QueueBufferSize: 2,
@@ -75,7 +78,7 @@ func newPhase5Harness(t *testing.T, mutate func(*a2a.ChannelA2APolicy, *a2a.Conf
 	m.workers["channel-1"] = worker
 	m.mu.Unlock()
 	t.Cleanup(m.StopAll)
-	return &phase5Harness{manager: m, agent: agent, policy: policyStore, tasks: taskStore, dataDir: dataDir}
+	return &phase5Harness{manager: m, agent: agent, policy: policyStore, tasks: taskStore, dataDir: dataDir, rt: rt}
 }
 
 func phase5Request() a2a.TaskExecutionRequest {
@@ -287,6 +290,113 @@ func TestManagerA2AUsesWorker(t *testing.T) {
 	result := runPhase5(t, h, admission.Admission, func(cb acp.AsyncCallbacks) { cb.OnComplete("worker result", nil) })
 	if result.State != a2a.TaskStateCompleted || !strings.Contains(result.Content, "worker result") {
 		t.Fatalf("RunA2ATask result = %#v, want completed worker result", result)
+	}
+}
+
+func TestManagerA2AStartsDiscordConversationWithMetrics(t *testing.T) {
+	h := newPhase5Harness(t, nil)
+	h.agent.metrics = acp.TurnMetrics{
+		MeteringUsage:  []acp.MeteringItem{{Value: 0.25, Unit: "credit"}},
+		TurnDurationMs: 1234,
+		ContextUsage:   42,
+	}
+	admission := admitPhase5(t, h)
+	result := runPhase5(t, h, admission.Admission, func(cb acp.AsyncCallbacks) { cb.OnComplete("worker result", nil) })
+	if result.State != a2a.TaskStateCompleted || result.Content != "worker result" {
+		t.Fatalf("RunA2ATask result = %#v, want completed pure worker result", result)
+	}
+	reqs, bodies := h.rt.Snapshot()
+	var createdThread, finalInThread bool
+	for i, req := range reqs {
+		if strings.HasPrefix(req, "POST ") && strings.Contains(req, "/channels/channel-1/threads") && !strings.Contains(req, "/messages/") {
+			createdThread = true
+		}
+		if strings.HasPrefix(req, "POST ") && strings.Contains(req, "/channels/thread-1/messages") && strings.Contains(bodies[i], "worker result") {
+			finalInThread = true
+			for _, want := range []string{"worker result", "⚡ 0.25 credit · 1.2s · ctx 42%"} {
+				if !strings.Contains(bodies[i], want) {
+					t.Fatalf("A2A executor conversation body missing %q: %s", want, bodies[i])
+				}
+			}
+		}
+	}
+	if !createdThread || !finalInThread {
+		t.Fatalf("createdThread=%v finalInThread=%v reqs=%v bodies=%v", createdThread, finalInThread, reqs, bodies)
+	}
+}
+
+func TestManagerA2AContinuationReusesExecutorConversationThread(t *testing.T) {
+	h := newPhase5Harness(t, nil)
+	admission := admitPhase5(t, h)
+	h.agent.mu.Lock()
+	h.agent.stopReason = "input_required"
+	h.agent.mu.Unlock()
+	first := runPhase5(t, h, admission.Admission, func(cb acp.AsyncCallbacks) { cb.OnComplete("need input", nil) })
+	if first.State != a2a.TaskStateInputRequired {
+		t.Fatalf("first result state = %s, want input_required", first.State)
+	}
+	row, err := h.tasks.GetByLocalID(context.Background(), admission.AdmissionKey)
+	if err != nil {
+		t.Fatalf("GetByLocalID: %v", err)
+	}
+	if !strings.Contains(row.DiscordContextJSON, `"threadId":"thread-1"`) {
+		t.Fatalf("stored Discord context = %s, want executor thread", row.DiscordContextJSON)
+	}
+	h.agent.mu.Lock()
+	h.agent.callbacks = acp.AsyncCallbacks{}
+	h.agent.stopReason = ""
+	h.agent.mu.Unlock()
+	continued := admission.Admission
+	continued.Revision = first.Revision
+	continued.Request.Delivery.DiscordContextJSON = json.RawMessage(row.DiscordContextJSON)
+	continued.Continuation = &a2a.A2AContinuation{Kind: a2a.ControlKindInputReply, Payload: json.RawMessage(`{"input":"more"}`)}
+	second := runPhase5(t, h, continued, func(cb acp.AsyncCallbacks) { cb.OnComplete("continued result", nil) })
+	if second.State != a2a.TaskStateCompleted || second.Content != "continued result" {
+		t.Fatalf("second result = %#v, want completed continuation", second)
+	}
+	reqs, _ := h.rt.Snapshot()
+	threadCreates := 0
+	for _, req := range reqs {
+		if strings.HasPrefix(req, "POST ") && strings.Contains(req, "/threads") {
+			threadCreates++
+		}
+	}
+	if threadCreates != 1 {
+		t.Fatalf("thread creates = %d, want one reused executor conversation; reqs=%v", threadCreates, reqs)
+	}
+}
+
+func TestManagerA2AThreadCreationFailureReleasesWorker(t *testing.T) {
+	h := newPhase5Harness(t, nil)
+	h.manager.discord = testDiscordSession(failingRoundTripper{})
+
+	admission := admitPhase5(t, h)
+	resultCh := make(chan a2a.TaskExecutionResult, 1)
+	go func() {
+		result, err := h.manager.RunA2ATask(context.Background(), admission.Admission)
+		if err != nil {
+			t.Errorf("RunA2ATask error: %v", err)
+		}
+		resultCh <- result
+	}()
+
+	select {
+	case result := <-resultCh:
+		if result.State != a2a.TaskStateFailed || result.Error.Code != a2a.ErrorInternal {
+			t.Fatalf("thread creation result = %#v, want failed internal", result)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("RunA2ATask did not return after thread creation failure")
+	}
+
+	h.manager.mu.Lock()
+	worker := h.manager.workers["channel-1"]
+	h.manager.mu.Unlock()
+	if worker == nil {
+		t.Fatal("A2A worker was not created")
+	}
+	if worker.IsActive() {
+		t.Fatal("worker stayed active after A2A thread creation failure")
 	}
 }
 
@@ -516,11 +626,11 @@ func TestWorkerA2AInlineResultSuppressesDiscordReply(t *testing.T) {
 	}
 }
 
-func TestA2APromptContainsPayloadWithoutDiscordEgress(t *testing.T) {
+func TestA2APromptDescribesExecutorOwnedConversation(t *testing.T) {
 	admission := a2a.A2AAdmission{TaskID: "task_abc", Request: phase5Request()}
 	admission.Request.ResultVisibility = "proxy"
 	prompt := buildA2APrompt(admission)
-	for _, want := range []string{"[A2A remote task]", "from_agent=eve-local", "Discord egress is disabled", "Canonical A2A payload JSON"} {
+	for _, want := range []string{"[A2A remote task]", "from_agent=eve-local", "executor bot owns the Discord conversation", "Separate bot-tools egress remains policy-gated", "Canonical A2A payload JSON"} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("prompt missing %q:\n%s", want, prompt)
 		}

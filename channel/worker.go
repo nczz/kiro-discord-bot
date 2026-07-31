@@ -58,6 +58,7 @@ type Job struct {
 	DisplayCWD             string // cwd prefix to remove from progress-only location displays
 	FinalReply             func(string)
 	MentionRefs            []discordmention.Ref
+	OnThreadReady          func(string)
 }
 
 type DeliveryMode string
@@ -593,8 +594,17 @@ func (w *Worker) execute(job *Job) {
 
 		thread, err := w.threadForMessage(ds, job, threadName)
 		if err != nil {
-			log.Printf("[worker %s] get/create thread: %v, falling back to sync", w.channelID, err)
 			w.auditJobEvent("agent_thread_create_failed", job, "", "error", map[string]any{"error": err.Error()})
+			if job.A2AResult != nil {
+				job.emitA2AResult(a2a.TaskExecutionResult{
+					State:   a2a.TaskStateFailed,
+					Content: "❌ " + err.Error(),
+					Error:   a2a.TaskError{Code: a2a.ErrorInternal, Message: err.Error()},
+				})
+				finishJob()
+				return
+			}
+			log.Printf("[worker %s] get/create thread: %v, falling back to sync", w.channelID, err)
 			w.executeFallback(job)
 			return
 		}
@@ -607,7 +617,10 @@ func (w *Worker) execute(job *Job) {
 	w.cancelMu.Lock()
 	w.currentThreadID = threadID
 	w.cancelMu.Unlock()
-	if err := writeBotToolsTargetStateWithRequester(w.botToolsTargetStatePath, threadID, false, job.MentionRefs, false, false, job.UserID, job.Username, 0); err != nil {
+	if job.OnThreadReady != nil {
+		job.OnThreadReady(threadID)
+	}
+	if err := writeBotToolsTargetStateWithRequester(w.botToolsTargetStatePath, threadID, job.DisableBotEgress, job.MentionRefs, job.RemoteA2A, job.AllowRemoteMemoryWrite, job.UserID, job.Username, job.A2ADelegationDepth); err != nil {
 		log.Printf("[worker %s] write bot-tools target state: %v", w.channelID, err)
 	}
 
@@ -770,6 +783,12 @@ func (w *Worker) execute(job *Job) {
 					log.Printf("[worker %s] thread error reply failed | user=%s msg=%s thread=%s err=%v",
 						w.channelID, job.Username, job.MessageID, threadID, sendErr)
 				}
+				job.emitA2AResult(a2a.TaskExecutionResult{
+					State:   a2aStateForInlineError(ctxErr),
+					Content: errorContent,
+					Error:   a2aErrorForInline(ctxErr, errMsg),
+					Metrics: a2aMetrics(w.agent.TurnMetrics(), startTime),
+				})
 				swapReaction(ds, job.ChannelID, job.MessageID, "🔄", emoji)
 				swapReaction(ds, job.ChannelID, job.MessageID, "⚙️", emoji)
 				if w.logger != nil {
@@ -809,6 +828,12 @@ func (w *Worker) execute(job *Job) {
 				})
 				w.auditResponseEvent(job, threadID, "error", response)
 				w.recordUsage(job, threadID, "error", startTime)
+				job.emitA2AResult(a2a.TaskExecutionResult{
+					State:   a2a.TaskStateFailed,
+					Content: response,
+					Error:   a2a.TaskError{Code: a2a.ErrorInternal, Message: sendErr.Error()},
+					Metrics: a2aMetrics(w.agent.TurnMetrics(), startTime),
+				})
 				finishJob()
 				return
 			}
@@ -824,6 +849,11 @@ func (w *Worker) execute(job *Job) {
 			}
 
 			w.recordUsage(job, threadID, "success", startTime)
+			job.emitA2AResult(a2a.TaskExecutionResult{
+				State:   a2aStateForStopReason(stopReason),
+				Content: response,
+				Metrics: a2aMetrics(w.agent.TurnMetrics(), startTime),
+			})
 			completedMeta := map[string]any{
 				"elapsed_ms":   time.Since(startTime).Milliseconds(),
 				"response_len": len(response),
@@ -1039,11 +1069,18 @@ func (job *Job) emitA2AResult(result a2a.TaskExecutionResult) {
 }
 
 func a2aMetrics(metrics acp.TurnMetrics, started time.Time) map[string]float64 {
+	metrics = MetricsWithElapsed(metrics, started)
 	out := map[string]float64{
 		"elapsed_ms":     float64(time.Since(started).Milliseconds()),
 		"context_usage":  metrics.ContextUsage,
 		"turn_duration":  float64(metrics.TurnDurationMs),
 		"metering_items": float64(len(metrics.MeteringUsage)),
+	}
+	if credits := CreditsFromMetrics(metrics); credits > 0 {
+		out["credits"] = credits
+	}
+	if item := firstNonZeroMeteringItem(metrics.MeteringUsage); item.Value > 0 && strings.EqualFold(strings.TrimSpace(item.Unit), "USD") {
+		out["usd"] = item.Value
 	}
 	return out
 }
@@ -1644,6 +1681,13 @@ func (w *Worker) threadForMessage(ds *discordgo.Session, job *Job, threadName st
 	archiveDur := w.threadArchive
 	if archiveDur <= 0 {
 		archiveDur = 1440
+	}
+	if job.RemoteA2A {
+		thread, err := ds.ThreadStart(job.ChannelID, threadName, discordgo.ChannelTypeGuildPublicThread, archiveDur)
+		if err == nil {
+			return thread, nil
+		}
+		return nil, err
 	}
 	thread, err := ds.MessageThreadStart(job.ChannelID, job.MessageID, threadName, archiveDur)
 	if err == nil {

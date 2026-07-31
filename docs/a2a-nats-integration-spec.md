@@ -53,7 +53,7 @@ m5bot-main
 3. 將 task durable 委派給另一個 bot 的特定 channel runtime。
 4. 由接收方在正確 channel runtime 內執行，沿用該 channel 的 CWD、MCP policy、agent profile、queue、安全邊界。
 5. 將 status/result durable 回傳給委派方。
-6. 由委派方負責 Discord user-facing delivery，除非接收方 channel 明確 opt in `transparent` delivery。
+6. 接收方 executor bot 必須在自己的對應 channel/thread 發起 Discord 對話並輸出完整 worker transcript/final footer；status/result 仍 durable 回傳給委派方供查詢與 proxy summary。
 7. 對 task lifecycle、auth/input-required、cancel、retry、audit、idempotency 有明確可驗收行為。
 
 ### 1.2 非目標
@@ -85,8 +85,8 @@ m5bot-main
 5. **At-least-once + durable idempotency**  
    不宣稱 exactly-once。所有 side effects 必須可重放或可去重。
 
-6. **Result proxy by default**  
-   接收方預設不直接發 Discord；委派方做 user-facing delivery。
+6. **Executor-owned Discord conversation by default**
+   委派條件通過後，接收方以自己的 channel runtime 正常啟動 worker 對話；委派方保留 task/status/result 查詢與 proxy summary，但不是唯一 user-facing transcript。
 
 7. **Remote task 不獲得額外 Discord 權限**  
    A2A policy 只決定 remote task 是否可進入 channel runtime；MCP policy 仍決定 tool visibility/call permission。
@@ -747,7 +747,7 @@ Validation：
 - `result_visibility in ('proxy','transparent')`。
 - `discord_transcript_mode in ('delegator','mirror','co_present')`。
 - `share_discord_context` may be true only when `discord_transcript_mode='co_present'`。
-- `co_present_from_runtimes` entries are runtime IDs or explicit wildcard `*`; default empty means no executor-side direct transcript posting。
+- `co_present_from_runtimes` entries are runtime IDs or explicit wildcard `*`; default empty means the executor still owns its task conversation, but does not receive shared delegator Discord context or additional bot-tools egress rights。
 - `max_concurrent` range: 0..64; `0` means unlimited。
 - `accept_from_runtimes` entries are runtime IDs or explicit wildcard `*`。
 - `accept_skills` entries are skill slugs, not arbitrary text。

@@ -51,6 +51,25 @@ func OpenTaskStore(dataDir string) (*SQLiteTaskStore, error) {
 
 func (s *SQLiteTaskStore) Close() error { return closeSQL(s.db) }
 
+func (s *SQLiteTaskStore) SetDiscordContext(ctx context.Context, localID string, discordContextJSON string) (TaskRow, error) {
+	if s == nil || s.db == nil {
+		return TaskRow{}, fmt.Errorf("task store is not available")
+	}
+	localID = strings.TrimSpace(localID)
+	if localID == "" {
+		return TaskRow{}, fmt.Errorf("local_id is required")
+	}
+	now := time.Now().UTC().Format(sqliteTimeFormat)
+	res, err := s.db.ExecContext(ctx, `UPDATE a2a_tasks SET discord_context_json=?, updated_at=? WHERE local_id=? AND terminal=0`, nullString(strings.TrimSpace(discordContextJSON)), now, localID)
+	if err != nil {
+		return TaskRow{}, err
+	}
+	if n, err := res.RowsAffected(); err == nil && n == 0 {
+		return TaskRow{}, errNoTask
+	}
+	return s.GetByLocalID(ctx, localID)
+}
+
 func taskStoreMigrations() []string {
 	return []string{
 		`CREATE TABLE IF NOT EXISTS a2a_tasks (
