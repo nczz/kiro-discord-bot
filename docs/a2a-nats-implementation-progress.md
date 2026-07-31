@@ -797,6 +797,25 @@ Append one subsection per completed phase.
 - Rollback boundary: restore `/opt/kiro-discord-bot/kiro-discord-bot.pre-r23-peers-20260801011749` on d80 and restart `kiro-discord-bot.service`.
 - Next phase: observe one natural Discord `/a2a peers` or delegated peer-selection interaction from the user side and confirm the visible Discord response matches the smoke output: runtime rows only, channel context present, no bot host cards.
 
+### R26 channel metadata runtime registration fix
+
+- Status: deployed locally and to d80.
+- Trigger: real `/a2a peers` output still showed `m5bot-local-m5-main` for the same Discord channel where `d80-chunbot` showed `隨口問`, and other Discord channels were absent unless they already had enabled A2A policy rows.
+- Decision: make Discord channel metadata authoritative for runtime mode. Existing enabled policies are normalized from channel metadata at startup, metadata-only top-level Discord channels publish runtime cards with no skills, malformed local channel metadata with one trailing brace is tolerated/repaired, and `/a2a peers` hides superseded old channel aliases when a canonical metadata alias exists. Same-channel old delegate targets continue to authorize the new runtime alias during migration.
+- Changed files: `bot/a2a_discovery.go`, `channel/manager.go`, `internal/botmcp/a2a_tools.go`, `internal/channelmeta/store.go`, tests, `docs/a2a-nats-integration-spec.md`, `docs/a2a-nats-implementation-guide.md`, and this progress ledger.
+- Validation:
+  - `go test ./internal/channelmeta ./channel ./bot ./internal/botmcp -run 'TestReadToleratesSingleTrailingBrace|TestA2AKnownRuntimePoliciesNormalizeMetadataAndIncludeInactiveChannels|TestRuntimePeerCardForInactiveMetadataChannelHasNoSkills|TestRuntimePeerCardUsesRuntimeIDAndPolicySkills|TestA2APeersFormatterShowsRuntimeContext|TestA2AToolsPeersRuntimeModeListsWakeableRuntimeAndHidesLegacyBot'` passed.
+  - `env -u NATS_URL -u NATS_CREDS_FILE -u NATS_TOKEN -u NATS_TLS_CA_FILE -u A2A_AGENT_ID -u A2A_RUNTIME_ID_MODE -u A2A_AGENT_NAME -u A2A_AGENT_DESCRIPTION -u A2A_REQUIRE_CONFIRMATION_FOR_REMOTE go test ./...` passed.
+  - Local channel metadata file was repaired from backup `/Users/chun/Projects/kiro-discord-bot-local/data/channel_metadata.pre-r26-runtime-metadata-20260801013157.json`.
+  - Final local binary `/tmp/kiro-discord-bot-darwin-r26-final` SHA-256 `815d41ef6400ffe0bf7660176c85c9a627a6af4c9710f29ae1dc6efe3610db98` was installed and `local-kiro-bot` restarted.
+  - Final d80 binary `/tmp/kiro-discord-bot-linux-amd64-r26-final` SHA-256 `c3a23938803f3ad68ca72c31430ef929b1da1594a956b543592f2493c63a93bb` was installed to `/opt/kiro-discord-bot/kiro-discord-bot`; service restarted active and logged `NATS node enabled`, `transport consumers started`, and `Bot running as ChunBot#4533`.
+  - Final local smoke returned runtime rows for both bots across known channels; old `d80-main`/`m5-main` rows were hidden. Same-channel rows are `d80-chunbot-ch-2cbaf623` and `m5bot-local-ch-2cbaf623`, both display `隨口問`.
+  - Final d80 smoke returned the same metadata-normalized runtime rows; `m5bot-local-ch-2cbaf623` is allowed with skill `ch-2cbaf623/task`, and old bot host / old alias rows are absent.
+- Runtime settings touched: no env changes. Policy rows for the active `隨口問` channel were normalized to `channel_ref=ch-2cbaf623` and runtime IDs `m5bot-local-ch-2cbaf623` / `d80-chunbot-ch-2cbaf623`; old cross-bot delegate references remain readable and are migration-compatible at runtime.
+- Deployment hosts touched: local M5 bot binary/service and remote d80 bot binary/service.
+- Rollback boundary: restore local `/Users/chun/Projects/kiro-discord-bot-local/bin/kiro-discord-bot.pre-r26-final-20260801013922` and d80 `/opt/kiro-discord-bot/kiro-discord-bot.pre-r26-final-20260801014013`, then restart both services. If needed, restore local metadata from `/Users/chun/Projects/kiro-discord-bot-local/data/channel_metadata.pre-r26-runtime-metadata-20260801013157.json`.
+- Next phase: ask the user to rerun Discord `/a2a peers`; expected visible rows should include both `d80-chunbot-ch-2cbaf623` and `m5bot-local-ch-2cbaf623` under `隨口問`, plus other known channel runtimes such as `大廳`, `測試`, `idempiere-erp`, and `kanboard`, with no `m5-main` or `d80-main` rows.
+
 ## Master goal prompt
 
 Use this prompt when starting or resuming the full implementation program:

@@ -197,7 +197,7 @@ Every runtime migration phase below is a coding boundary. Do not start the next 
 
 **Change steps**:
 1. Add `a2a.RuntimeIDMode` with `legacy|dual|runtime` parsing and doctor redaction.
-2. Add runtime ID generation from `bot_agent_id` prefix + public channel alias. Manager-provided `channel_ref` can be used directly if safe; Discord metadata names get a stable short hash suffix; unsafe/non-ASCII/snowflake-like aliases use `ch-<hash>`/`rt-<hash>` fallback without raw Discord IDs.
+2. Add runtime ID generation from `bot_agent_id` prefix + public channel alias. In runtime mode, Discord channel metadata is authoritative when present so every bot in the same channel converges on the same `channel_ref`; manager-provided `channel_ref` is fallback/migration input only. Metadata names get a stable short hash suffix; unsafe/non-ASCII/snowflake-like aliases use `ch-<hash>`/`rt-<hash>` fallback without raw Discord IDs.
 3. Do not add a separate `a2a_runtime_registry` table in v1; derive `RuntimeRecord` DTOs from policy rows so policy remains the single local ownership authority.
 4. In the pre-release test line, allow forced runtime ID recalculation when channel aliases are corrected and cascade old runtime references in policy JSON; restore immutable/drain semantics only at release cutover.
 5. Add canonical policy fields `accept_from_runtimes`, `delegate_targets`, `co_present_from_runtimes`, and runtime-scoped `remote_tool_policy_json` with `allow_memory_write=false` by default.

@@ -283,8 +283,8 @@ instanceID = <runtime_agent_id>-<startUnixNano>-<random6>
 
 產生順序：
 
-1. manager 明確指定的 public `channel_ref`。
-2. Discord channel metadata name 轉為 ASCII slug 並附加短 hash，例如 `support-a1b2c3d4`。
+1. Discord channel metadata name 轉為 ASCII slug 並附加短 hash，例如 `support-a1b2c3d4`。runtime mode 中,同一個 Discord channel 上不同 bot 必須收斂到相同 `channel_ref` suffix。
+2. manager 明確指定的 public `channel_ref`,僅在缺少 Discord channel metadata 時作為 fallback。
 3. `ch-<short_hash(guild_id + channel_id + thread_id + alias)>`。
 
 限制：
