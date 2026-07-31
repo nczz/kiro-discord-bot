@@ -194,6 +194,40 @@ func TestManagerA2ARuntimeModeRejectsBotLevelTarget(t *testing.T) {
 	}
 }
 
+func TestManagerA2ADualModeAcceptsBotAndRuntimeTargets(t *testing.T) {
+	t.Run("bot level target drains to runtime executor", func(t *testing.T) {
+		h := newPhase5Harness(t, func(_ *a2a.ChannelA2APolicy, cfg *a2a.Config) {
+			cfg.RuntimeIDMode = a2a.RuntimeIDModeDual
+		})
+		req := phase5Request()
+		req.To = "adam-n200"
+		res, err := h.manager.AdmitA2ATask(context.Background(), req)
+		if err != nil {
+			t.Fatalf("AdmitA2ATask error: %v", err)
+		}
+		if !res.Accepted || res.ExecutorAgent != "adam-n200-backend" {
+			t.Fatalf("dual legacy target admission = %+v, want runtime executor", res)
+		}
+	})
+	t.Run("runtime target remains accepted", func(t *testing.T) {
+		h := newPhase5Harness(t, func(p *a2a.ChannelA2APolicy, cfg *a2a.Config) {
+			cfg.RuntimeIDMode = a2a.RuntimeIDModeDual
+			p.AcceptFromRuntimes = []string{"eve-local-backend"}
+		})
+		req := phase5Request()
+		req.MessageID = "msg_phase5_runtime_dual"
+		req.From = "eve-local-backend"
+		req.To = "adam-n200-backend"
+		res, err := h.manager.AdmitA2ATask(context.Background(), req)
+		if err != nil {
+			t.Fatalf("AdmitA2ATask error: %v", err)
+		}
+		if !res.Accepted || res.ExecutorAgent != "adam-n200-backend" {
+			t.Fatalf("dual runtime target admission = %+v, want runtime executor", res)
+		}
+	})
+}
+
 func TestManagerA2AAcceptsOnce(t *testing.T) {
 	h := newPhase5Harness(t, nil)
 	first := admitPhase5(t, h)
