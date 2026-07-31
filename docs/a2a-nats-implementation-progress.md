@@ -573,6 +573,25 @@ Append one subsection per completed phase.
 - Rollback boundary: restore `/Users/chun/Projects/kiro-discord-bot-local/bin/kiro-discord-bot.pre-explicitref-fix-20260731210859` locally or `/opt/kiro-discord-bot/kiro-discord-bot.pre-explicitref-fix-20260731210943` on d80; Discord-agent tool calls that pass stale/derived target channel refs would again bypass the policy target channel ref and be rejected by the executor.
 - Next phase: monitor normal Discord-issued M5→d80 delegation; no additional code phase is open.
 
+### R14 A2A task status source-of-truth guidance
+
+- Status: deployed; current commit.
+- Decision: A2A progress/status answers must use `bot_a2a_task_status` / TaskStore as the authoritative source. Audit timeline rows are historical evidence only and can show an earlier `queued` send event after the TaskStore has already reached terminal `rejected` or `completed`.
+- Changed files: `internal/botmcp/a2a_tools.go`, `internal/botmcp/a2a_tool_register.go`, `internal/botmcp/a2a_tools_test.go`, `bot/handler.go`, and this progress ledger.
+- Validation:
+  - `go test ./internal/botmcp -run 'TestA2AToolsTaskStatusRequiresOwnerOrManager|TestA2AToolsDelegateAllowsUntrustedExactRuntimePolicy'` passed.
+  - `go test ./bot -run 'TestBuildPrompt|TestSafeToolNamesIncludeA2A'` passed.
+  - `env -u NATS_URL -u NATS_CREDS_FILE -u NATS_TOKEN -u NATS_TLS_CA_FILE -u A2A_AGENT_ID -u A2A_RUNTIME_ID_MODE -u A2A_AGENT_NAME -u A2A_AGENT_DESCRIPTION -u A2A_REQUIRE_CONFIRMATION_FOR_REMOTE go test ./...` passed.
+  - `git diff --check` passed.
+  - Source probe against local TaskStore returned `TASK_STATE_REJECTED`, `terminal=true`, `errorCode=channel_not_enabled`, `errorMessage=channel_ref is not enabled`, and `channelRef=discord-1495737768905670719` for `local_7a45f3132c345a71727a989509cbcfa8`.
+  - Source probe against local TaskStore returned `TASK_STATE_COMPLETED`, `terminal=true`, and `channelRef=d80-main` for deployed smoke task `local_c509145f0b59061c079ff30c33319e6c`.
+  - Local M5 bot restarted and logged `NATS node enabled`, `transport consumers started`, and `Bot running as M5Bot#8313`.
+  - Remote d80 bot service is `active` and logged `NATS node enabled`, `transport consumers started`, and `Bot running as ChunBot#4533`.
+- Runtime settings touched: no.
+- Deployment hosts touched: local M5 bot binary/service and remote d80 bot binary/service only.
+- Rollback boundary: restore `/Users/chun/Projects/kiro-discord-bot-local/bin/kiro-discord-bot.pre-statusfix-20260731211808` locally or `/opt/kiro-discord-bot/kiro-discord-bot.pre-statusfix-20260731211853` on d80; agent prompt/tool descriptions would again be less explicit that audit rows are not authoritative for A2A task progress, and status summaries would omit `channelRef`.
+- Next phase: monitor Discord-issued A2A status/progress questions; no additional code phase is open.
+
 ## Master goal prompt
 
 Use this prompt when starting or resuming the full implementation program:

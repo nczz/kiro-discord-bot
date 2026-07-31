@@ -21,7 +21,7 @@ func registerA2ATools(s *server.MCPServer) {
 		{a2aRuntimePreflightTool(), func(ctx context.Context, svc *A2AService, req A2AToolRequest) (A2AToolResponse, error) {
 			return svc.RuntimePreflight(ctx, req)
 		}},
-		{a2aReadTool(ToolA2ATaskStatus, "Show one A2A task or recent outbound A2A tasks for the bound Discord channel."), func(ctx context.Context, svc *A2AService, req A2AToolRequest) (A2AToolResponse, error) {
+		{a2aReadTool(ToolA2ATaskStatus, "Authoritative A2A progress source: read TaskStore state for one task or recent outbound tasks in the bound Discord channel. Use this for delegation status/progress; audit rows are only historical timeline evidence and may lag terminal state."), func(ctx context.Context, svc *A2AService, req A2AToolRequest) (A2AToolResponse, error) {
 			return svc.TaskStatus(ctx, req)
 		}},
 		{a2aPolicyPlanTool(), func(ctx context.Context, svc *A2AService, req A2AToolRequest) (A2AToolResponse, error) {

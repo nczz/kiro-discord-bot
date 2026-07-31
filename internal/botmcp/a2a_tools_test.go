@@ -480,7 +480,7 @@ func TestA2AToolsTaskStatusRequiresOwnerOrManager(t *testing.T) {
 		t.Fatalf("NewA2AService: %v", err)
 	}
 	defer svc.Close()
-	row, err := svc.tasks.CreateOutbound(ctx, a2a.TaskRow{MessageID: "msg_status", ClientTaskRef: "owner-1", FromAgent: "adam-n200", ToAgent: "peer-n100", ChannelID: "channel-1", GuildID: "guild-1", State: a2a.TaskStateSubmitted})
+	row, err := svc.tasks.CreateOutbound(ctx, a2a.TaskRow{MessageID: "msg_status", ClientTaskRef: "owner-1", FromAgent: "adam-n200", ToAgent: "peer-n100", ChannelID: "channel-1", GuildID: "guild-1", ChannelRef: "d80-main", SkillID: "d80-main/task", State: a2a.TaskStateRejected, Terminal: true, Error: a2a.TaskError{Code: a2a.ErrorChannelNotEnabled, Message: "channel_ref is not enabled"}})
 	if err != nil {
 		t.Fatalf("CreateOutbound: %v", err)
 	}
@@ -497,7 +497,7 @@ func TestA2AToolsTaskStatusRequiresOwnerOrManager(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TaskStatus manager: %v", err)
 	}
-	if !got.OK || got.Task == nil || got.Task.TaskID != string(row.TaskID) {
+	if !got.OK || got.Task == nil || got.Task.TaskID != string(row.TaskID) || !got.Task.Terminal || got.Task.State != a2a.TaskStateRejected || got.Task.ChannelRef != "d80-main" || got.Task.ErrorCode != a2a.ErrorChannelNotEnabled {
 		t.Fatalf("TaskStatus manager = %+v, want task", got)
 	}
 	ownerReq := A2AToolRequest{GuildID: "guild-1", ChannelID: "channel-1", RequestedBy: "owner", RequestedByID: "owner-1"}
@@ -505,8 +505,8 @@ func TestA2AToolsTaskStatusRequiresOwnerOrManager(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TaskStatus owner list: %v", err)
 	}
-	if !listed.OK || len(listed.Tasks) != 1 || listed.Tasks[0].LocalID != row.LocalID {
-		t.Fatalf("TaskStatus owner list = %+v, want only owned task", listed)
+	if !listed.OK || len(listed.Tasks) != 1 || listed.Tasks[0].LocalID != row.LocalID || listed.Tasks[0].ChannelRef != "d80-main" || listed.Tasks[0].ErrorMessage != "channel_ref is not enabled" {
+		t.Fatalf("TaskStatus owner list = %+v, want authoritative terminal task state", listed)
 	}
 }
 

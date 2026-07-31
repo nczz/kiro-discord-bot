@@ -154,6 +154,7 @@ type A2ATaskSummary struct {
 	ToAgent       string        `json:"toAgent"`
 	ExecutorAgent string        `json:"executorAgent,omitempty"`
 	ChannelID     string        `json:"channelId,omitempty"`
+	ChannelRef    string        `json:"channelRef,omitempty"`
 	SkillID       string        `json:"skillId,omitempty"`
 	State         a2a.TaskState `json:"state"`
 	Revision      int64         `json:"revision"`
@@ -1089,7 +1090,7 @@ func taskLookupError(err error) error {
 }
 
 func summarizeTask(row a2a.TaskRow) A2ATaskSummary {
-	return A2ATaskSummary{LocalID: row.LocalID, TaskID: string(row.TaskID), Direction: row.Direction, FromAgent: string(row.FromAgent), ToAgent: string(row.ToAgent), ExecutorAgent: string(row.ExecutorAgent), ChannelID: row.ChannelID, SkillID: row.SkillID, State: row.State, Revision: row.Revision, Terminal: row.Terminal, ErrorCode: row.Error.Code, ErrorMessage: row.Error.Message, UpdatedAt: row.UpdatedAt.Format(time.RFC3339)}
+	return A2ATaskSummary{LocalID: row.LocalID, TaskID: string(row.TaskID), Direction: row.Direction, FromAgent: string(row.FromAgent), ToAgent: string(row.ToAgent), ExecutorAgent: string(row.ExecutorAgent), ChannelID: row.ChannelID, ChannelRef: row.ChannelRef, SkillID: row.SkillID, State: row.State, Revision: row.Revision, Terminal: row.Terminal, ErrorCode: row.Error.Code, ErrorMessage: row.Error.Message, UpdatedAt: row.UpdatedAt.Format(time.RFC3339)}
 }
 func stringListAllows(list []string, value string) bool {
 	value = strings.TrimSpace(value)
