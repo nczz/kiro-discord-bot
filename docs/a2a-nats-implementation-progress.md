@@ -537,20 +537,22 @@ Append one subsection per completed phase.
 
 ### R12 exact runtime target channel_ref delivery fix
 
-- Status: code-ready; current worktree.
+- Status: deployed smoke passed; current commit.
 - Decision: when a delegation policy has an exact `delegate_targets.runtime_agent_id`, the outbound `TaskExecutionRequest.ChannelRef` must use that target row's `channelRef`, not the delegator channel policy's local `channel_ref`. Exact runtime policy authorization is not enough; the executor bot admits inbound work by `req.ChannelRef`.
 - Changed files: `internal/botmcp/a2a_tools.go`, `internal/botmcp/a2a_tools_test.go`, and this progress ledger.
 - Validation:
   - `go test ./internal/botmcp -run 'TestA2AToolsDelegateAllowsUntrustedExactRuntimePolicy|TestA2AToolsDelegateRejectsRevokedPeerBeforePublishing|TestA2AToolsDelegateConfirmationBindsDeliveryMode'` passed.
   - `env -u NATS_URL -u NATS_CREDS_FILE -u NATS_TOKEN -u NATS_TLS_CA_FILE -u A2A_AGENT_ID -u A2A_RUNTIME_ID_MODE -u A2A_AGENT_NAME -u A2A_AGENT_DESCRIPTION -u A2A_REQUIRE_CONFIRMATION_FOR_REMOTE go test ./...` passed.
   - `git diff --check` passed.
+  - Live no-`TargetChannelRef` MCP delegate smoke from local M5 to `d80-chunbot-d80-main` produced outbound `channel_ref=d80-main`, reached executor `d80-chunbot-d80-main`, and completed `TASK_STATE_COMPLETED`.
 - Done criteria evidence:
   - Existing stuck row `local_c3a48e79afafd4fa375e35887a98d609` was already terminal rejected with `channel_not_enabled: channel_ref is not enabled`; it had `to_agent=d80-chunbot-d80-main`, `skill_id=d80-main/task`, but wrong outbound `channel_ref=m5-main`.
   - Regression coverage now omits `TargetChannelRef` in an exact-runtime policy and verifies the confirmation summary resolves to `peer-n100-support@support/support/task`, proving delivery uses the target policy channel ref.
+  - Deployed smoke proves the previously wrong `channel_ref=m5-main` is now `channel_ref=d80-main` for the same M5→d80 exact runtime target path.
 - Runtime settings touched: no.
-- Deployment hosts touched: pending.
-- Rollback boundary: revert this code/docs commit; exact-runtime delegation without explicit target channel ref would again publish with the local delegator channel ref and be rejected by the executor as `channel_not_enabled`.
-- Next phase: deploy to local M5 and d80, then rerun M5→d80 delegation without explicit target channel ref.
+- Deployment hosts touched: local M5 bot binary/service and remote d80 bot binary/service only.
+- Rollback boundary: restore `/Users/chun/Projects/kiro-discord-bot-local/bin/kiro-discord-bot.pre-channelref-fix-20260731205757` locally or `/opt/kiro-discord-bot/kiro-discord-bot.pre-channelref-fix-20260731205840` on d80; exact-runtime delegation without explicit target channel ref would again publish with the local delegator channel ref and be rejected by the executor as `channel_not_enabled`.
+- Next phase: monitor normal Discord-issued M5→d80 delegation; no additional code phase is open.
 
 ## Master goal prompt
 
