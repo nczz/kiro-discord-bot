@@ -116,6 +116,10 @@ func TestA2AToolsPeersRuntimeModeListsWakeableRuntimeAndHidesLegacyBot(t *testin
 	if _, err := svc.peers.UpsertExtendedCard(ctx, "peer-n100-support", runtimeCard, a2a.ExtendedAgentCard{Runtime: "channel", BotAgentID: "peer-n100", ChannelRef: "support", DisplayName: "Support Room", DiscordGuildID: "1495737767827865620", DiscordChannelID: "1495737768905670719", DiscordThreadID: "1532710952477261854"}, false, "peer-host-peer-n100-support", "online", time.Now().Add(time.Hour)); err != nil {
 		t.Fatalf("Upsert runtime card: %v", err)
 	}
+	migratedCard := a2a.AgentCard{Name: "peer-n100-ch-abcd1234", Description: "support runtime renamed", Version: "1.0.0", SupportedInterfaces: []a2a.A2AInterface{{URL: "nats://nats.example.internal:4222", ProtocolBinding: a2a.ProtocolBindingNATS, ProtocolVersion: a2a.ProtocolVersion}}, Skills: []a2a.AgentSkill{{ID: "ch-abcd1234/task", Name: "Task", Description: "task"}}}
+	if _, err := svc.peers.UpsertExtendedCard(ctx, "peer-n100-ch-abcd1234", migratedCard, a2a.ExtendedAgentCard{Runtime: "channel", BotAgentID: "peer-n100", ChannelRef: "ch-abcd1234", DisplayName: "Support Room", DiscordGuildID: "1495737767827865620", DiscordChannelID: "1495737768905670719"}, false, "peer-host-peer-n100-ch-abcd1234", "online", time.Now().Add(time.Hour)); err != nil {
+		t.Fatalf("Upsert migrated runtime card: %v", err)
+	}
 	resp, err := svc.Peers(ctx, A2AToolRequest{GuildID: "1495737767827865620", ChannelID: "1495737768905670719", RequestedBy: "alice", RequestedByID: "user-1"})
 	if err != nil {
 		t.Fatalf("Peers: %v", err)
@@ -136,6 +140,10 @@ func TestA2AToolsPeersRuntimeModeListsWakeableRuntimeAndHidesLegacyBot(t *testin
 	}
 	if len(runtime.Skills) != 1 || runtime.Skills[0] != "support/task" {
 		t.Fatalf("runtime skills = %v, want canonical runtime skill", runtime.Skills)
+	}
+	migrated := byAgent["peer-n100-ch-abcd1234"]
+	if !migrated.DelegationAllowed || migrated.DelegationReason != "allowed" || len(migrated.Skills) != 1 || migrated.Skills[0] != "ch-abcd1234/task" {
+		t.Fatalf("migrated runtime peer = %+v, want same-channel legacy delegation to remain allowed", migrated)
 	}
 }
 

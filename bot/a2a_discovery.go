@@ -137,18 +137,20 @@ func (b *Bot) a2aPeerCardRecords(now time.Time) ([]a2a.PeerCardRecord, error) {
 		return records, nil
 	}
 	if mode.UsesRuntimeIDs() {
-		policies, err := b.manager.A2ADiscoverablePolicies(context.Background())
+		policies, err := b.manager.A2AKnownRuntimePolicies(context.Background())
 		if err != nil {
 			return nil, err
 		}
 		for _, policy := range policies {
 			runtimeID := a2a.AgentID(policy.RuntimeAgentID)
-			if err := b.manager.EnsureA2ATransportRuntime(context.Background(), runtimeID); err != nil {
-				log.Printf("[a2a] start runtime transport %s failed: %v", runtimeID, err)
-				continue
-			}
-			if !b.manager.A2ATransportAccepts(runtimeID) {
-				continue
+			if policy.Enabled {
+				if err := b.manager.EnsureA2ATransportRuntime(context.Background(), runtimeID); err != nil {
+					log.Printf("[a2a] start runtime transport %s failed: %v", runtimeID, err)
+					continue
+				}
+				if !b.manager.A2ATransportAccepts(runtimeID) {
+					continue
+				}
 			}
 			record, err := b.a2aRuntimePeerCardRecord(now, policy)
 			if err != nil {
@@ -172,7 +174,11 @@ func (b *Bot) a2aRuntimePeerCardRecord(now time.Time, policy a2a.ChannelA2APolic
 		Enabled:        policy.Enabled,
 		Discoverable:   policy.Discoverable,
 	}
-	card, ext, err := a2a.BuildRuntimeAgentCard(b.a2aConfig, runtime, b.version, agentSkillsFromPolicy(policy))
+	skills := []a2a.AgentSkill(nil)
+	if policy.Enabled {
+		skills = agentSkillsFromPolicy(policy)
+	}
+	card, ext, err := a2a.BuildRuntimeAgentCard(b.a2aConfig, runtime, b.version, skills)
 	if err != nil {
 		return a2a.PeerCardRecord{}, err
 	}

@@ -281,7 +281,7 @@ func (s *A2AService) Peers(ctx context.Context, req A2AToolRequest) (A2AToolResp
 				continue
 			}
 		}
-		visibleSkills := visiblePeerSkills(policy, string(row.AgentID), row.SkillIDs, s.cfg.Config.RuntimeIDMode)
+		visibleSkills := visiblePeerSkills(policy, row, row.SkillIDs, s.cfg.Config.RuntimeIDMode)
 		delegationAllowed := len(visibleSkills) > 0
 		reason := peerDelegationReason(row, policy, visibleSkills, runtimeOnly)
 		peers = append(peers, A2APeerSummary{AgentID: string(row.AgentID), Name: row.Name, BotAgentID: row.BotAgentID, Trusted: row.Trusted, Online: row.Online, Stale: row.Stale, Skills: visibleSkills, HiddenSkillCount: len(row.SkillIDs) - len(visibleSkills), DelegationAllowed: delegationAllowed, DelegationReason: reason, Runtime: row.Runtime, ChannelRef: row.ChannelRef, DisplayName: peerDisplayName(row), DiscordGuildID: row.DiscordGuildID, DiscordChannelID: row.DiscordChannelID, DiscordThreadID: row.DiscordThreadID, Wakeable: delegationAllowed && row.Runtime == "channel" && !row.Stale, ProtocolBinding: row.SupportedBinding, ProtocolVersion: row.ProtocolVersion, SignatureStatus: row.SignatureStatus})
@@ -302,15 +302,16 @@ func peerDisplayName(peer a2a.PeerTrustDisplay) string {
 	return peer.Name
 }
 
-func visiblePeerSkills(policy a2a.ChannelA2APolicy, agent string, skills []string, mode a2a.RuntimeIDMode) []string {
+func visiblePeerSkills(policy a2a.ChannelA2APolicy, peer a2a.PeerTrustDisplay, skills []string, mode a2a.RuntimeIDMode) []string {
 	if !policy.Enabled {
 		return nil
 	}
 	runtimeOnly := mode == a2a.RuntimeIDModeRuntime
 	out := make([]string, 0, len(skills))
 	for _, skill := range skills {
+		agent := string(peer.AgentID)
 		if runtimeOnly {
-			if policyDelegatesExactRuntime(policy, agent, skill) {
+			if policyDelegatesExactRuntime(policy, agent, skill) || policyDelegatesSameDiscordChannelRuntime(policy, peer, skill) {
 				out = append(out, skill)
 			}
 			continue
@@ -320,6 +321,21 @@ func visiblePeerSkills(policy a2a.ChannelA2APolicy, agent string, skills []strin
 		}
 	}
 	return out
+}
+
+func policyDelegatesSameDiscordChannelRuntime(policy a2a.ChannelA2APolicy, peer a2a.PeerTrustDisplay, skill string) bool {
+	if strings.TrimSpace(peer.BotAgentID) == "" || strings.TrimSpace(peer.DiscordChannelID) == "" || strings.TrimSpace(peer.DiscordChannelID) != strings.TrimSpace(policy.ChannelID) {
+		return false
+	}
+	for _, target := range policy.DelegateTargets {
+		if strings.TrimSpace(target.RuntimeAgentID) == "" || !strings.HasPrefix(strings.TrimSpace(target.RuntimeAgentID), strings.TrimSpace(peer.BotAgentID)+"-") {
+			continue
+		}
+		if skillListAllows([]string{target.SkillID}, skill) {
+			return true
+		}
+	}
+	return false
 }
 
 func peerDelegationReason(peer a2a.PeerTrustDisplay, policy a2a.ChannelA2APolicy, visibleSkills []string, runtimeOnly bool) string {

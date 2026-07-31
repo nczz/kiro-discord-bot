@@ -59,4 +59,33 @@ func TestRuntimePeerCardUsesRuntimeIDAndPolicySkills(t *testing.T) {
 	}
 }
 
+func TestRuntimePeerCardForInactiveMetadataChannelHasNoSkills(t *testing.T) {
+	b := &Bot{
+		a2aConfig: a2a.Config{NATSURL: "nats://nats.example.internal:4222", AgentID: "m5bot-local"},
+		version:   "2.29.1-test",
+		startedAt: nowForA2ATest(),
+		dataDir:   t.TempDir(),
+	}
+	if err := channelmeta.Upsert(b.dataDir, channelmeta.Entry{ID: "channel-2", GuildID: "guild-1", Name: "大廳", Type: "channel"}); err != nil {
+		t.Fatalf("channel metadata: %v", err)
+	}
+	record, err := b.a2aRuntimePeerCardRecord(nowForA2ATest(), a2a.ChannelA2APolicy{
+		GuildID:               "guild-1",
+		ChannelID:             "channel-2",
+		Enabled:               false,
+		Discoverable:          false,
+		RuntimeAgentID:        "m5bot-local-ch-1234abcd",
+		BotAgentID:            "m5bot-local",
+		ChannelRef:            "ch-1234abcd",
+		ResultVisibility:      "proxy",
+		DiscordTranscriptMode: "delegator",
+	})
+	if err != nil {
+		t.Fatalf("a2aRuntimePeerCardRecord: %v", err)
+	}
+	if len(record.Card.Skills) != 0 || record.ExtendedCard.DisplayName != "大廳" {
+		t.Fatalf("inactive runtime card = %+v", record)
+	}
+}
+
 func nowForA2ATest() time.Time { return time.Unix(1700000000, 0).UTC() }

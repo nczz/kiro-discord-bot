@@ -19,6 +19,7 @@ import (
 	"github.com/nczz/kiro-discord-bot/acp"
 	"github.com/nczz/kiro-discord-bot/audit"
 	"github.com/nczz/kiro-discord-bot/internal/botmcp"
+	"github.com/nczz/kiro-discord-bot/internal/channelmeta"
 	"github.com/nczz/kiro-discord-bot/internal/discordmention"
 	"github.com/nczz/kiro-discord-bot/internal/kirosettings"
 	"github.com/nczz/kiro-discord-bot/internal/textutil"
@@ -2427,14 +2428,145 @@ func (m *Manager) A2ADiscoverablePolicies(ctx context.Context) ([]a2a.ChannelA2A
 	if m == nil || m.a2aPolicies == nil {
 		return nil, nil
 	}
+	if m.a2aConfig.RuntimeIDMode.UsesRuntimeIDs() {
+		if err := m.syncA2APoliciesWithChannelMetadata(ctx); err != nil {
+			log.Printf("[a2a] sync runtime policy metadata: %v", err)
+		}
+	}
 	return m.a2aPolicies.ListDiscoverable(ctx)
+}
+
+func (m *Manager) A2AKnownRuntimePolicies(ctx context.Context) ([]a2a.ChannelA2APolicy, error) {
+	policies, err := m.A2ADiscoverablePolicies(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if m == nil || !m.a2aConfig.RuntimeIDMode.UsesRuntimeIDs() {
+		return policies, nil
+	}
+	entries, err := channelmeta.List(m.dataDir)
+	if err != nil {
+		log.Printf("[a2a] list channel metadata runtimes: %v", err)
+		return policies, nil
+	}
+	seen := make(map[string]bool, len(policies))
+	for _, policy := range policies {
+		seen[strings.TrimSpace(policy.GuildID)+"\x00"+strings.TrimSpace(policy.ChannelID)] = true
+	}
+	for _, entry := range entries {
+		if strings.TrimSpace(entry.Type) != "channel" {
+			continue
+		}
+		key := strings.TrimSpace(entry.GuildID) + "\x00" + strings.TrimSpace(entry.ID)
+		if seen[key] {
+			continue
+		}
+		policy, ok := m.metadataRuntimePolicy(entry)
+		if !ok {
+			continue
+		}
+		policies = append(policies, policy)
+	}
+	sort.Slice(policies, func(i, j int) bool {
+		if policies[i].GuildID != policies[j].GuildID {
+			return policies[i].GuildID < policies[j].GuildID
+		}
+		if policies[i].ChannelRef != policies[j].ChannelRef {
+			return policies[i].ChannelRef < policies[j].ChannelRef
+		}
+		return policies[i].RuntimeAgentID < policies[j].RuntimeAgentID
+	})
+	return policies, nil
+}
+
+func (m *Manager) syncA2APoliciesWithChannelMetadata(ctx context.Context) error {
+	if m == nil || m.a2aPolicies == nil {
+		return nil
+	}
+	entries, err := channelmeta.Read(m.dataDir)
+	if err != nil {
+		return err
+	}
+	policies, err := m.a2aPolicies.ListDiscoverable(ctx)
+	if err != nil {
+		return err
+	}
+	for _, policy := range policies {
+		entry, ok := entries[strings.TrimSpace(policy.ChannelID)]
+		if !ok {
+			continue
+		}
+		next, changed, err := m.normalizePolicyWithChannelMetadata(policy, entry)
+		if err != nil {
+			return err
+		}
+		if changed {
+			if err := m.a2aPolicies.Save(ctx, next, "runtime-metadata-sync"); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (m *Manager) normalizePolicyWithChannelMetadata(policy a2a.ChannelA2APolicy, entry channelmeta.Entry) (a2a.ChannelA2APolicy, bool, error) {
+	if strings.TrimSpace(entry.ID) == "" || strings.TrimSpace(entry.GuildID) == "" || strings.TrimSpace(entry.Type) != "channel" {
+		return policy, false, nil
+	}
+	alias := a2a.RuntimeAlias(entry.Name, a2aRuntimeStableKey(entry.GuildID, entry.ID, "", entry.Name))
+	if alias == "" {
+		return policy, false, nil
+	}
+	next := policy
+	changed := false
+	if strings.TrimSpace(next.GuildID) != strings.TrimSpace(entry.GuildID) {
+		next.GuildID = strings.TrimSpace(entry.GuildID)
+		changed = true
+	}
+	if strings.TrimSpace(next.ChannelRef) != alias {
+		next.ChannelRef = alias
+		changed = true
+	}
+	if strings.TrimSpace(next.BotAgentID) != string(m.a2aConfig.AgentID) {
+		next.BotAgentID = string(m.a2aConfig.AgentID)
+		changed = true
+	}
+	stableKey := a2aRuntimeStableKey(next.GuildID, next.ChannelID, "", next.ChannelRef)
+	runtime, err := a2a.GenerateRuntimeAgentIDFromAlias(m.a2aConfig.AgentID, next.ChannelRef, stableKey)
+	if err != nil {
+		return policy, false, err
+	}
+	if strings.TrimSpace(next.RuntimeAgentID) != string(runtime) {
+		next.RuntimeAgentID = string(runtime)
+		changed = true
+	}
+	return next, changed, nil
+}
+
+func (m *Manager) metadataRuntimePolicy(entry channelmeta.Entry) (a2a.ChannelA2APolicy, bool) {
+	policy := a2a.ChannelA2APolicy{
+		GuildID:               strings.TrimSpace(entry.GuildID),
+		ChannelID:             strings.TrimSpace(entry.ID),
+		BotAgentID:            string(m.a2aConfig.AgentID),
+		ResultVisibility:      "proxy",
+		DiscordTranscriptMode: "delegator",
+	}
+	next, _, err := m.normalizePolicyWithChannelMetadata(policy, entry)
+	if err != nil || strings.TrimSpace(next.RuntimeAgentID) == "" || strings.TrimSpace(next.ChannelRef) == "" {
+		return a2a.ChannelA2APolicy{}, false
+	}
+	return next, true
+}
+
+func a2aRuntimeStableKey(guildID, channelID, threadID, alias string) string {
+	return strings.Join([]string{strings.TrimSpace(guildID), strings.TrimSpace(channelID), strings.TrimSpace(threadID), strings.TrimSpace(alias)}, "\x00")
 }
 
 func (m *Manager) a2aTransportRuntimeIDs(ctx context.Context) []a2a.AgentID {
 	if m == nil || m.a2aPolicies == nil || !m.a2aConfig.RuntimeIDMode.UsesRuntimeIDs() {
 		return nil
 	}
-	policies, err := m.a2aPolicies.ListDiscoverable(ctx)
+	policies, err := m.A2ADiscoverablePolicies(ctx)
 	if err != nil {
 		log.Printf("[a2a] list runtime transport ids: %v", err)
 		return nil

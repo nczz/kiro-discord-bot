@@ -8,6 +8,7 @@ import (
 
 	"github.com/nczz/kiro-discord-bot/a2a"
 	"github.com/nczz/kiro-discord-bot/internal/botegress"
+	"github.com/nczz/kiro-discord-bot/internal/channelmeta"
 )
 
 func TestA2ATransparentResultQueuesSafeEgressAndAudit(t *testing.T) {
@@ -46,6 +47,64 @@ func TestA2AProxyDelegatorResultDoesNotDuplicateExecutorTranscript(t *testing.T)
 	actions, _ := botegress.ReadPending(dir)
 	if len(actions) != 0 {
 		t.Fatalf("proxy delegator result duplicated executor transcript: %+v", actions)
+	}
+}
+
+func TestA2AKnownRuntimePoliciesNormalizeMetadataAndIncludeInactiveChannels(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	store, err := a2a.OpenPolicyStore(dir, "m5bot-local")
+	if err != nil {
+		t.Fatalf("OpenPolicyStore: %v", err)
+	}
+	defer store.Close()
+	if err := channelmeta.Upsert(dir, channelmeta.Entry{ID: "channel-1", GuildID: "guild-1", Name: "隨口問", Type: "channel"}); err != nil {
+		t.Fatalf("metadata channel-1: %v", err)
+	}
+	if err := channelmeta.Upsert(dir, channelmeta.Entry{ID: "channel-2", GuildID: "guild-1", Name: "大廳", Type: "channel"}); err != nil {
+		t.Fatalf("metadata channel-2: %v", err)
+	}
+	if err := store.Save(ctx, a2a.ChannelA2APolicy{
+		GuildID:               "guild-1",
+		ChannelID:             "channel-1",
+		Enabled:               true,
+		Discoverable:          true,
+		RuntimeAgentID:        "m5bot-local-m5-main",
+		BotAgentID:            "m5bot-local",
+		ChannelRef:            "m5-main",
+		AcceptSkills:          []string{"task"},
+		ExposeSkills:          []a2a.SkillPolicy{{ID: "task", InputModes: []string{"text/plain"}, OutputModes: []string{"text/plain"}}},
+		ResultVisibility:      "proxy",
+		DiscordTranscriptMode: "delegator",
+	}, "manager"); err != nil {
+		t.Fatalf("Save policy: %v", err)
+	}
+	m := &Manager{dataDir: dir, a2aConfig: a2a.Config{AgentID: "m5bot-local", RuntimeIDMode: a2a.RuntimeIDModeRuntime}, a2aPolicies: store}
+	policies, err := m.A2AKnownRuntimePolicies(ctx)
+	if err != nil {
+		t.Fatalf("A2AKnownRuntimePolicies: %v", err)
+	}
+	if len(policies) != 2 {
+		t.Fatalf("policies = %+v, want active plus inactive metadata channel", policies)
+	}
+	active, err := store.Get(ctx, "guild-1", "channel-1")
+	if err != nil {
+		t.Fatalf("Get active: %v", err)
+	}
+	if active.ChannelRef == "m5-main" || active.RuntimeAgentID == "m5bot-local-m5-main" || !strings.HasPrefix(active.ChannelRef, "ch-") || !strings.HasPrefix(active.RuntimeAgentID, "m5bot-local-ch-") {
+		t.Fatalf("active policy was not normalized from metadata: %+v", active)
+	}
+	foundInactive := false
+	for _, policy := range policies {
+		if policy.ChannelID == "channel-2" {
+			foundInactive = true
+			if policy.Enabled || len(policy.ExposeSkills) != 0 || !strings.HasPrefix(policy.ChannelRef, "ch-") || !strings.HasPrefix(policy.RuntimeAgentID, "m5bot-local-ch-") {
+				t.Fatalf("inactive metadata policy = %+v", policy)
+			}
+		}
+	}
+	if !foundInactive {
+		t.Fatalf("inactive metadata channel missing: %+v", policies)
 	}
 }
 

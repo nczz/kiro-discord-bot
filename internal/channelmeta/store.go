@@ -1,6 +1,7 @@
 package channelmeta
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -72,14 +73,29 @@ func Read(dataDir string) (map[string]Entry, error) {
 	if err != nil {
 		return nil, err
 	}
-	var entries map[string]Entry
-	if err := json.Unmarshal(raw, &entries); err != nil {
+	entries, err := decodeEntries(raw)
+	if err != nil {
 		return nil, fmt.Errorf("read channel metadata: %w", err)
 	}
 	if entries == nil {
 		entries = map[string]Entry{}
 	}
 	return entries, nil
+}
+
+func decodeEntries(raw []byte) (map[string]Entry, error) {
+	var entries map[string]Entry
+	if err := json.Unmarshal(raw, &entries); err == nil {
+		return entries, nil
+	}
+	trimmed := bytes.TrimSpace(raw)
+	for i := 0; i < 3 && len(trimmed) > 0 && trimmed[len(trimmed)-1] == '}'; i++ {
+		trimmed = bytes.TrimSpace(trimmed[:len(trimmed)-1])
+		if err := json.Unmarshal(trimmed, &entries); err == nil {
+			return entries, nil
+		}
+	}
+	return nil, json.Unmarshal(raw, &entries)
 }
 
 func List(dataDir string) ([]Entry, error) {
