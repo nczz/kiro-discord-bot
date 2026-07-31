@@ -18,6 +18,9 @@ func registerA2ATools(s *server.MCPServer) {
 		{a2aReadTool(ToolA2APolicyGet, "Show the current bound channel A2A policy in structured, user-friendly terms."), func(ctx context.Context, svc *A2AService, req A2AToolRequest) (A2AToolResponse, error) {
 			return svc.PolicyGet(ctx, req)
 		}},
+		{a2aRuntimePreflightTool(), func(ctx context.Context, svc *A2AService, req A2AToolRequest) (A2AToolResponse, error) {
+			return svc.RuntimePreflight(ctx, req)
+		}},
 		{a2aReadTool(ToolA2ATaskStatus, "Show one A2A task or recent outbound A2A tasks for the bound Discord channel."), func(ctx context.Context, svc *A2AService, req A2AToolRequest) (A2AToolResponse, error) {
 			return svc.TaskStatus(ctx, req)
 		}},
@@ -71,6 +74,12 @@ func a2aReadTool(name, description string) mcp.Tool {
 func a2aPolicyPlanTool() mcp.Tool {
 	t := a2aReadTool(ToolA2APolicyPlan, "Plan an A2A policy change for the current bound Discord channel and return a confirmation challenge; applies nothing.")
 	addA2APolicyFields(&t)
+	mcp.WithBoolean("manage_channels", mcp.Required(), mcp.Description("Server-provided ManageChannels permission result for the requester."))(&t)
+	return t
+}
+
+func a2aRuntimePreflightTool() mcp.Tool {
+	t := a2aReadTool(ToolA2ARuntimePreflight, "Check guild-scoped A2A runtime cutover readiness without applying policy or service changes.")
 	mcp.WithBoolean("manage_channels", mcp.Required(), mcp.Description("Server-provided ManageChannels permission result for the requester."))(&t)
 	return t
 }

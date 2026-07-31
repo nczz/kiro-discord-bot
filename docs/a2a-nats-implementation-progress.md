@@ -403,6 +403,24 @@ Append one subsection per completed phase.
 - Rollback boundary: set `A2A_RUNTIME_ID_MODE=dual` or `legacy`, restore the `*.pre-runtime-smoke-*` binary/env backups on each test host if needed, and revert this commit for the `ListDiscoverable` cursor fix/test/progress entry.
 - Next phase: R7 live cutover decision for production runtime mode, or continue code-only hardening if production rollout is not authorized.
 
+### R7 runtime cutover preflight checker
+
+- Status: code-ready; current commit.
+- Changed files: `a2a/runtime_cutover.go`, `a2a/runtime_cutover_test.go`, `internal/botmcp/a2a_tools.go`, `internal/botmcp/a2a_tool_register.go`, `internal/botmcp/server.go`, `internal/botmcp/a2a_tools_test.go`, `internal/botmcp/server_test.go`, and this progress ledger.
+- Validation:
+  - `go test ./a2a ./internal/botmcp -run 'Test(RuntimeCutover|A2AToolsRuntimePreflight|A2AToolsAnnotations|DefaultSafeToolNames)'` passed.
+  - `go test ./...` passed.
+  - `git diff --check` passed.
+- Done criteria evidence:
+  - `SQLitePolicyStore.RuntimeCutoverReadiness` and pure `a2a.RuntimeCutoverReadiness` produce a read-only guild-scoped report with `ready`, blocker/warning counts, runtime IDs, channel refs, and issue codes.
+  - The checker blocks production cutover risks: missing/invalid runtime IDs, foreign bot ownership, runtime ID equal to bot ID, missing explicit `accept_from_runtimes`, missing accepted skills, legacy `delegate_to`/`delegate_skills`, and legacy `delegate_targets` using `agent_id`/`channel_ref`.
+  - The checker warns but does not block dual-mode drain, preserved legacy `accept_from`, disabled discoverable rows, legacy co-present lists without runtime equivalents, and remote memory write being enabled.
+  - `bot_a2a_runtime_preflight` exposes the report as a read-only, idempotent, ManageChannels-gated MCP tool; it applies no policy, NATS, service, or filesystem changes.
+- Runtime settings touched: no.
+- Deployment hosts touched: no.
+- Rollback boundary: revert this code/docs commit; no runtime data migration or live service change is involved.
+- Next phase: run the preflight against each intended production guild/bot data dir, fix any blockers in policy rows through existing confirmation flow, then decide whether to authorize R7 production runtime cutover.
+
 ## Master goal prompt
 
 Use this prompt when starting or resuming the full implementation program:

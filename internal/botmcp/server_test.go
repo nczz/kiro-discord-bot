@@ -131,6 +131,9 @@ func TestDefaultSafeToolNamesExcludeDestructiveTools(t *testing.T) {
 	if !seen[ToolA2ADelegate] {
 		t.Fatalf("A2A delegate should be default-enabled after requester binding: %+v", tools)
 	}
+	if !seen[ToolA2ARuntimePreflight] {
+		t.Fatalf("A2A runtime preflight should be default-enabled for read-only cutover checks: %+v", tools)
+	}
 	if seen[ToolQueryAudit] {
 		t.Fatalf("audit query tool must not be default-enabled outside manager-authorized /audit prompt jobs: %+v", tools)
 	}

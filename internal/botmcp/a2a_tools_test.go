@@ -388,6 +388,55 @@ func TestA2AToolsTaskStatusRequiresOwnerOrManager(t *testing.T) {
 	}
 }
 
+func TestA2AToolsRuntimePreflightRequiresManagerAndReportsBlockers(t *testing.T) {
+	ctx := context.Background()
+	svc, err := NewA2AService(A2AServiceConfig{
+		DataDir:        t.TempDir(),
+		Config:         a2a.Config{AgentID: "adam-n200", RuntimeIDMode: a2a.RuntimeIDModeRuntime},
+		BoundGuildID:   "guild-1",
+		BoundChannelID: "channel-1",
+		ConnectNATS:    false,
+	})
+	if err != nil {
+		t.Fatalf("NewA2AService: %v", err)
+	}
+	defer svc.Close()
+
+	unauthorized, err := svc.RuntimePreflight(ctx, A2AToolRequest{GuildID: "guild-1", ChannelID: "channel-1", RequestedBy: "user", RequestedByID: "user-1"})
+	if err != nil {
+		t.Fatalf("RuntimePreflight unauthorized err: %v", err)
+	}
+	if unauthorized.OK || unauthorized.ErrorCode != a2a.ErrorPolicyDenied {
+		t.Fatalf("RuntimePreflight unauthorized = %+v, want policy denied", unauthorized)
+	}
+	if err := svc.policies.Save(ctx, a2a.ChannelA2APolicy{
+		GuildID:             "guild-1",
+		ChannelID:           "channel-1",
+		Enabled:             true,
+		Discoverable:        true,
+		RuntimeAgentID:      "adam-n200-main",
+		BotAgentID:          "adam-n200",
+		ChannelRef:          "main",
+		AcceptFrom:          []string{"eve-local"},
+		AcceptSkills:        []string{"task"},
+		DelegateTargets:     []a2a.DelegateTargetPolicy{{AgentID: "eve-local", ChannelRef: "support", SkillID: "general/task"}},
+		ResultVisibility:    "proxy",
+		DelegateMedia:       a2a.DelegateMediaPolicy{},
+		RemoteToolPolicy:    a2a.RemoteToolPolicy{},
+		MaxConcurrent:       0,
+		ShareDiscordContext: false,
+	}, "manager"); err != nil {
+		t.Fatalf("Save policy: %v", err)
+	}
+	resp, err := svc.RuntimePreflight(ctx, A2AToolRequest{GuildID: "guild-1", ChannelID: "channel-1", RequestedBy: "manager", RequestedByID: "manager-1", ManageChannels: true})
+	if err != nil {
+		t.Fatalf("RuntimePreflight: %v", err)
+	}
+	if !resp.OK || resp.RuntimePreflight == nil || resp.RuntimePreflight.Ready || resp.RuntimePreflight.BlockerCount == 0 {
+		t.Fatalf("RuntimePreflight = %+v, want blocker report", resp)
+	}
+}
+
 func TestA2AToolsAnnotations(t *testing.T) {
 	readTool := a2aReadTool(ToolA2APeers, "peers")
 	if readTool.Annotations.ReadOnlyHint == nil || !*readTool.Annotations.ReadOnlyHint {

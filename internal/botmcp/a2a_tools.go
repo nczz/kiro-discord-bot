@@ -24,15 +24,16 @@ import (
 )
 
 const (
-	ToolA2APeers       = "bot_a2a_peers"
-	ToolA2APolicyGet   = "bot_a2a_policy_get"
-	ToolA2ATaskStatus  = "bot_a2a_task_status"
-	ToolA2APolicyPlan  = "bot_a2a_policy_plan"
-	ToolA2APolicyApply = "bot_a2a_policy_apply"
-	ToolA2ADelegate    = "bot_a2a_delegate"
-	ToolA2ACancel      = "bot_a2a_cancel"
-	ToolA2AInputReply  = "bot_a2a_input_reply"
-	ToolA2AAuthReply   = "bot_a2a_auth_reply"
+	ToolA2APeers            = "bot_a2a_peers"
+	ToolA2APolicyGet        = "bot_a2a_policy_get"
+	ToolA2ATaskStatus       = "bot_a2a_task_status"
+	ToolA2ARuntimePreflight = "bot_a2a_runtime_preflight"
+	ToolA2APolicyPlan       = "bot_a2a_policy_plan"
+	ToolA2APolicyApply      = "bot_a2a_policy_apply"
+	ToolA2ADelegate         = "bot_a2a_delegate"
+	ToolA2ACancel           = "bot_a2a_cancel"
+	ToolA2AInputReply       = "bot_a2a_input_reply"
+	ToolA2AAuthReply        = "bot_a2a_auth_reply"
 )
 
 type A2AServiceConfig struct {
@@ -107,20 +108,21 @@ type A2AToolRequest struct {
 }
 
 type A2AToolResponse struct {
-	OK                   bool                   `json:"ok"`
-	Message              string                 `json:"message"`
-	ErrorCode            a2a.ErrorCode          `json:"errorCode,omitempty"`
-	RequiresConfirmation bool                   `json:"requiresConfirmation"`
-	ConfirmationSummary  string                 `json:"confirmationSummary,omitempty"`
-	RiskLabels           []string               `json:"riskLabels,omitempty"`
-	ExpiresAt            string                 `json:"expiresAt,omitempty"`
-	ChangeID             string                 `json:"changeId,omitempty"`
-	ConfirmationToken    string                 `json:"confirmationToken,omitempty"`
-	Policy               *a2a.ChannelA2APolicy  `json:"policy,omitempty"`
-	Peers                []A2APeerSummary       `json:"peers,omitempty"`
-	Tasks                []A2ATaskSummary       `json:"tasks,omitempty"`
-	Task                 *A2ATaskSummary        `json:"task,omitempty"`
-	Metadata             map[string]interface{} `json:"metadata,omitempty"`
+	OK                   bool                      `json:"ok"`
+	Message              string                    `json:"message"`
+	ErrorCode            a2a.ErrorCode             `json:"errorCode,omitempty"`
+	RequiresConfirmation bool                      `json:"requiresConfirmation"`
+	ConfirmationSummary  string                    `json:"confirmationSummary,omitempty"`
+	RiskLabels           []string                  `json:"riskLabels,omitempty"`
+	ExpiresAt            string                    `json:"expiresAt,omitempty"`
+	ChangeID             string                    `json:"changeId,omitempty"`
+	ConfirmationToken    string                    `json:"confirmationToken,omitempty"`
+	Policy               *a2a.ChannelA2APolicy     `json:"policy,omitempty"`
+	RuntimePreflight     *a2a.RuntimeCutoverReport `json:"runtimePreflight,omitempty"`
+	Peers                []A2APeerSummary          `json:"peers,omitempty"`
+	Tasks                []A2ATaskSummary          `json:"tasks,omitempty"`
+	Task                 *A2ATaskSummary           `json:"task,omitempty"`
+	Metadata             map[string]interface{}    `json:"metadata,omitempty"`
 }
 
 type A2APeerSummary struct {
@@ -271,6 +273,21 @@ func (s *A2AService) PolicyGet(ctx context.Context, req A2AToolRequest) (A2ATool
 		return responseError(err), nil
 	}
 	return A2AToolResponse{OK: true, Message: "A2A policy loaded", Policy: &policy}, nil
+}
+
+func (s *A2AService) RuntimePreflight(ctx context.Context, req A2AToolRequest) (A2AToolResponse, error) {
+	if err := s.validateContext(req, true); err != nil {
+		return responseError(err), nil
+	}
+	report, err := s.policies.RuntimeCutoverReadiness(ctx, s.cfg.Config, strings.TrimSpace(req.GuildID))
+	if err != nil {
+		return responseError(fmt.Errorf("%w: %v", errorCode(a2a.ErrorStoreError), err)), nil
+	}
+	message := "A2A runtime cutover preflight passed"
+	if !report.Ready {
+		message = "A2A runtime cutover preflight blocked"
+	}
+	return A2AToolResponse{OK: true, Message: message, RuntimePreflight: &report}, nil
 }
 
 func (s *A2AService) TaskStatus(ctx context.Context, req A2AToolRequest) (A2AToolResponse, error) {

@@ -68,6 +68,7 @@ func DefaultSafeToolNames() []string {
 		ToolA2APeers,
 		ToolA2APolicyGet,
 		ToolA2ATaskStatus,
+		ToolA2ARuntimePreflight,
 		ToolA2APolicyPlan,
 		ToolA2ADelegate,
 		ToolCreateCron,
