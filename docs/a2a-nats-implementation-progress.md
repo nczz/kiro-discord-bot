@@ -46,10 +46,10 @@ At the start of each continuation:
 
 ## Current state
 
-- Program state: Phase 0 readiness guard and Phase 1 foundation package/config completed in commit `0d720d2`; Phase 2 NATS node and JetStream topology completed in commit `823a998`; Phase 3 durable stores completed in implementation commit `6d3809f`; Phase 4 peer card and discovery completed in implementation commit `ef892e4`; Phase 5 channel ingress and executor completed in implementation commit `9c0683f`; Phase 6 transport integration completed in implementation commit `6e3e31d`; Phase 7 bot-tools and Discord UX completed in implementation commits `f0dbe99` and `8a17e88`; Phase 8 artifacts, delivery, and audit completed in implementation commit `d73e8b2`; Phase 9 production hardening and rollout completed in implementation commits `bbdc70d` and `21e4173`.
-- Current phase: A2A NATS implementation program is complete; production rollout smokes remain environment-specific operator gates.
-- Latest execution target: completed Phase 9 production hardening and rollout.
-- Known pre-implementation issue: resolved by splitting the self-referential forbidden-string checks in `docs/a2a-nats-implementation-guide.md`.
+- Program state: Original bot-level A2A NATS implementation completed through Phase 9 (`21e4173`) and deployed for runtime smoke. Current worktree adds a runtime-scoped A2A smoke path and deployed it to the local/d80 dual-mode test bots, but it is not yet spec-complete against the R1 runtime registry contract.
+- Current phase: R1 runtime identity registry remains in progress from code-observed evidence; the current implementation uses `channel_a2a_policy.runtime_agent_id` as the operational runtime authority and does not yet open or enforce `a2a_runtime_registry`.
+- Latest execution target: align this ledger to the code-observed completion level, then commit implementation and documentation changes separately.
+- Known implementation state: runtime mode parsing, deterministic runtime ID generation, policy runtime fields, runtime peer cards from discoverable policies, runtime transport consumers, runtime source identity, granular `/a2a` slash fallback, requester-scoped status, and dual-mode deployment are present. Gaps: `RuntimeStore` is dead code with no callsites/tests; there is no standalone `/a2a policy` slash command; production `runtime` cutover remains unproven.
 
 ## Phase ledger
 
@@ -65,6 +65,13 @@ At the start of each continuation:
 | 7 | Bot-tools and Discord UX | done | `f0dbe99`, `8a17e88` | `go test ./internal/botmcp -run 'TestA2ATools(Annotations|BoundContext|PolicyPlan|PolicyApply|Delegate|DelegateQuota|Cancel|InputReply|AuthReply)'` passed; `go test ./bot ./locale -run 'TestA2A(Slash|Buttons|Confirmation|Locale|Permission)'` passed; `go test ./a2a -run 'TestSubject|TestEnvelope|TestTaskState|TestTransport'` passed. | Bot-tools A2A service/tool registration, `/a2a` slash fallback, signed confirmation button custom IDs, requester/manager checks, confirmation tokens, and locale-covered confirmation output. |
 | 8 | Artifacts, delivery, audit | done | `d73e8b2` | `go test ./a2a -run 'TestObject(Store|Digest|Retention|MediaPolicy)'` passed; `go test ./bot ./internal/botegress ./channel ./audit -run 'TestA2A(Egress|Artifact|ProxyDelivery|MirrorTranscript|CoPresent|TransparentResult|AuditMetadata)|TestStoreRecordsA2AAuditMetadata'` passed; `go test ./...` passed. | JetStream Object Store backend, generated object refs, proxy/mirror/transparent safe-egress delivery, media policy checks, and A2A audit metadata. |
 | 9 | Production hardening and rollout | done | `bbdc70d`, `21e4173` | `go test ./a2a ./channel ./internal/botmcp ./bot ./audit ./locale -run 'Test.*A2A|TestDoctor.*A2A'` passed; rollout guide check printed `a2a-rollout-guide-ok`; Workspace LSP diagnostics reported no issues; strict reviewer follow-up reported no remaining prior Critical/High ACL blocker. | Env docs, ACL templates, dev NATS config, smokes, rollback guide, doctor auth-mode summary, credential revocation regression, and review-finding fixes. |
+| R0 | Runtime-first planning document correction | done | pending commit | Guide sanity printed `a2a-runtime-guide-ready`; runtime docs sanity printed `a2a-runtime-docs-ok`; strict docs follow-up reported no High/Medium blockers. | Source spec, guide, rollout, and env example aligned around runtime-scoped identity as the target design. |
+| R1 | Runtime identity registry and local runtime cutover seams | in_progress | `ad06e6a` | Code-observed tests pass for runtime ID mode/config, policy fields, doctor display, and remote memory guard; no `RuntimeStore` callsite or registry test exists. | Implemented operational runtime IDs in policy rows; spec-required registry authority is not wired. Next source decision: wire `a2a_runtime_registry` into manager/startup or revise the spec to make policy rows authoritative. |
+| R2 | Runtime peer cards and discovery | smoke_ready | `ad06e6a` | `go test ./bot -run 'Test(RuntimePeerCard|BuildBotA2APeerCard)'` passed; included in combined runtime A2A selector. | Runtime cards publish from discoverable policy rows after transport accepts the runtime, not from registry records. |
+| R3 | Runtime policy canonicalization | smoke_ready | `ad06e6a` | Included in combined runtime A2A selector; `go test ./...` passed. | Delegation can be scoped by runtime ID when `target_agent` is a runtime ID, and legacy `agent + target_channel_ref` remains migration input. |
+| R4 | Runtime NATS routing | smoke_ready | `ad06e6a` | Included in combined runtime A2A selector; `go test ./...` passed. | Transport can consume and publish task/control/event traffic for accepted runtime IDs derived from discoverable policy rows. |
+| R5 | Runtime UX, status authorization, and attribution | smoke_ready | `ad06e6a` | Included in combined runtime A2A selector; `go test ./...` passed. | `/doctor`, granular `/a2a` setup/mutation previews, requester status authorization, and usage attribution are implemented; there is no standalone `/a2a policy` slash command. |
+| R6 | Cutover readiness and strict review | not_started | pending commit | Runtime docs/runbook exist, but code-observed deployment is `dual` smoke only; production `runtime` cutover and registry authority are not proven. | Operator rollout remains external; do not claim production cutover readiness until R1 registry authority and runtime-mode negative smokes are complete. |
 
 ## Evidence log
 
@@ -237,7 +244,7 @@ Append one subsection per completed phase.
 - Done criteria evidence:
   - `internal/botmcp.NewServer` now registers `bot_a2a_*` read/write/destructive tools with closed-world annotations; default safe exposure includes read-only A2A peer/policy/status/plan tools only.
   - `internal/botmcp.A2AService` enforces bound guild/channel context, requester identity, manager-only policy mutation, HMAC confirmation tokens, outbound quota checks, policy-allowed peer/skill delegation, durable task/status lookup, input/auth replies, cancel control publication, and audit events for policy/task operations.
-  - `/a2a` is guild-only, channel-only, ManageChannels-gated at Discord command policy, and exposes peer/status/delegate/cancel/reply/authorize/policy subcommands. Policy mutation without a token returns a localized confirmation message instead of applying state.
+  - `/a2a` is guild-scoped and exposes concrete fallback subcommands: `peers`, `setup`, `ask`, `status`, `delegate`, `cancel`, `reply`, `authorize`, plus granular manager policy mutations (`enable`, `disable`, `ref`, `expose`, `unexpose`, `accept-from`, `deny-from`, `delegate-to`, `undelegate-to`, `max-concurrent`, `transcript-mode`, `transcript-from`). There is no standalone `/a2a policy` slash subcommand; structured policy reads are provided by `bot_a2a_policy_get`, and slash policy mutations return localized confirmation before applying.
   - A2A confirmation button custom IDs are HMAC-bound to action/channel/change and stay within Discord's 100-character custom_id limit; tests reject wrong-channel replay.
   - `a2a.Publisher.SendTask` now persists outbound task rows with Discord channel/guild metadata so bot-tools task status can list channel-scoped outbound work.
   - Confirmation output has English and zh-TW locale keys and focused locale tests.
@@ -290,12 +297,62 @@ Append one subsection per completed phase.
 - Rollback boundary: set `NATS_URL=""`, drain/restart the bot, keep `DATA_DIR` A2A stores and audit rows for postmortem; code/doc rollback is limited to Phase 9 docs/config/doctor/test additions because Phases 1-8 remain inert while A2A is disabled.
 - Next phase: none; A2A NATS implementation program is complete, pending operator rollout in target environments.
 
+### Phase R0 — Runtime-first planning document correction
+
+- Status: done; commit pending.
+- Changed files: `.env.example`, `docs/a2a-nats-integration-spec.md`, `docs/a2a-nats-implementation-guide.md`, `docs/a2a-nats-implementation-progress.md`, `docs/a2a-nats-rollout.md`.
+- Validation:
+  - `python3 - <<'PY' ...` guide sanity printed `a2a-runtime-guide-ready`.
+  - `python3 - <<'PY' ...` runtime docs sanity printed `a2a-runtime-docs-ok`.
+  - Strict docs follow-up review reported: no High/Medium blockers remain.
+- Done criteria evidence:
+  - Spec now defines bot base identity, `runtime_agent_id`, runtime registry, runtime subjects, runtime peer cards, runtime policy fields, runtime-scoped auth, confused-deputy checks, and runtime test cases.
+  - Guide now declares R1-R6 runtime migration phases and marks old Phase 0-9 sections as archived bot-level context only.
+  - Rollout guide and `.env.example` now document `A2A_RUNTIME_ID_MODE` and runtime ACL/smoke expectations.
+- Runtime settings touched: no live `.env`, `DATA_DIR`, Docker volume, deployment host, or live service was touched.
+- Deployment hosts touched: no.
+- Rollback boundary: revert only the runtime-first planning doc/env-example changes; no implementation behavior changed.
+- Next phase: Phase R1 runtime identity registry.
+
+
+### Runtime-first code-observed audit — dual-mode smoke path
+
+- Status: smoke-ready implementation; implementation commit `ad06e6a`; documentation alignment recorded here.
+- Scope: runtime-scoped A2A behavior present in the current worktree and deployed to the local/d80 test bots with `A2A_RUNTIME_ID_MODE=dual`.
+- Changed files: `a2a/runtime.go`, `a2a/policy_store.go`, `a2a/card.go`, `a2a/types.go`, `a2a/streams.go`, `a2a/transport.go`, `a2a/task_store.go`, `a2a/admission.go`, `a2a/executor.go`, `a2a/store.go`, `config.go`, `channel/a2a.go`, `channel/doctor_env.go`, `channel/manager.go`, `channel/worker.go`, `channel/bot_tools_target.go`, `bot/a2a_discovery.go`, `bot/a2a_commands.go`, `bot/commands.go`, `bot/interaction_policy.go`, `internal/botmcp/a2a_tools.go`, `internal/botmcp/a2a_tool_register.go`, `internal/botmcp/server.go`, locale files, targeted tests, docs, and `.env.example`.
+- Validation:
+  - `go test ./a2a ./channel ./internal/botmcp ./bot -run 'Test(RuntimeID|RuntimeRegistry|PolicyStore|Doctor.*A2A|RemoteMemoryWriteDenied|RemoteMemoryWriteAllowed|RuntimePeerCard|BuildBotA2APeerCard|A2ATools|ManagerA2A)'` passed. Note: despite the selector text, no actual `RuntimeRegistry` test is present in the codebase.
+  - `go test ./...` passed.
+  - Local bot deployment: `Bot running as M5Bot#8313`, A2A NATS node enabled for `m5bot-local`, transport consumers started, `/a2a` registered, NATS and Discord TCP sessions established.
+  - d80 deployment: systemd active for PID `967010`, `Bot running as ChunBot#4533`, A2A NATS node enabled for `d80-chunbot`, transport consumers started, `/a2a` registered, NATS and Discord TCP sessions established.
+- Code-observed done criteria:
+  - `A2A_RUNTIME_ID_MODE` parses as `legacy|dual|runtime`; both test bots are deployed in `dual`.
+  - Runtime IDs are generated by `GenerateRuntimeAgentID` from bot base ID plus sanitized channel label, with hash fallback for unsafe/too-long labels.
+  - `channel_a2a_policy` persists `runtime_agent_id`, `bot_agent_id`, `discoverable`, runtime accept/co-present lists, delegate targets, and fail-closed `remote_tool_policy_json`.
+  - Discoverable policies can publish runtime peer cards keyed by `runtime_agent_id`; `runtime` mode suppresses the legacy bot card path.
+  - Transport can create per-runtime task/control/event consumers through `EnsureConsumersForAgent`, can add runtime consumers dynamically, and publishes accepted/status/result/artifact events from the runtime source identity.
+  - Runtime mode admission rejects bot-level targets and requires the exact channel runtime target; dual mode accepts bot-level and runtime targets for bounded migration.
+  - Bot-tools and slash setup/delegation can scope work by exact runtime ID or by legacy `agent + target_channel_ref` migration input.
+  - `/doctor` reports `A2A_RUNTIME_ID_MODE` without exposing credentials.
+  - `/a2a` exposes granular fallback subcommands only; there is no standalone `/a2a policy` slash command. Structured policy reads remain `bot_a2a_policy_get`.
+  - A2A task status is requester-or-manager scoped; origin requester usage attribution is accepted only when the origin guild matches the admitted context.
+- Code-observed gaps against the R1-R6 target design:
+  - `a2a.RuntimeStore` and `a2a_runtime_registry` exist in source but are not opened by startup/manager/bot-tools and have no tests; registry authority is therefore not implemented.
+  - Enabled/discoverable runtime ownership is currently derived from `channel_a2a_policy`, not from `a2a_runtime_registry`.
+  - Startup does not fail in `dual`/`runtime` mode because an enabled policy lacks a registry row; there is no registry-row confused-deputy check.
+  - `bot_a2a_policy_get` exists, but Discord slash has no `/a2a policy` read command.
+  - Production `A2A_RUNTIME_ID_MODE=runtime` cutover and negative legacy-addressed smokes are not yet proven.
+- Runtime settings touched: test deployment `.env` files were updated to `A2A_RUNTIME_ID_MODE=dual`; no `DATA_DIR`, Docker volume, deployment host state beyond bot binary/env/service restart, or production service was changed.
+- Deployment hosts touched: local test bot and d80 test bot only.
+- Rollback boundary: set `A2A_RUNTIME_ID_MODE=legacy` or `NATS_URL=""`, restart/drain the bots, restore `kiro-discord-bot.pre-runtime-deploy` binaries if needed, then revert this smoke-path implementation.
+- Next phase: complete R1 by either wiring `a2a_runtime_registry` as the runtime authority with tests and startup checks, or explicitly revising the spec/guide to make `channel_a2a_policy.runtime_agent_id` the runtime authority before claiming R2-R6 spec completion.
+
 ## Master goal prompt
 
 Use this prompt when starting or resuming the full implementation program:
 
 ```text
-Resume A2A implementation from repository state, not chat memory.
+Resume A2A runtime-first implementation from repository state, not chat memory.
 
 Authoritative files:
 1. docs/a2a-nats-integration-spec.md
@@ -305,26 +362,25 @@ Authoritative files:
 Rules:
 - Read all three files before editing.
 - Check git status before editing.
-- Determine the single next phase from docs/a2a-nats-implementation-progress.md.
-- Verify the previous completed phase has commit hash and validation evidence.
-- Implement exactly one phase.
-- Do not start the next phase.
+- Determine the single next runtime phase from docs/a2a-nats-implementation-progress.md.
+- Verify the previous completed phase has validation evidence.
+- Implement exactly one R phase.
+- Do not start the next R phase until validation passes and the ledger is updated.
 - Preserve source spec decisions exactly.
 - Keep A2A disabled by default until rollout.
 - Do not touch runtime .env files, DATA_DIR, Docker volumes, deployment hosts, or live services.
 - Do not implement pool dispatch, public HTTP A2A endpoint, SSE streaming, HTTP push notification config, or gateway adapter.
 - Run the current phase validation commands and targeted regressions required by touched seams.
 - Update docs/a2a-nats-implementation-progress.md with status, validation evidence, notes, rollback boundary, and next phase.
-- Commit the phase and ledger update together.
-- Final response must include changed files, commit hash, validation evidence, rollback boundary, and next phase.
+- Final response must include changed files, validation evidence, rollback boundary, and next phase.
 ```
 
-## First execution prompt
+## First runtime execution prompt
 
-Use this prompt for the first implementation execution:
+Use this prompt for the first runtime-first implementation execution:
 
 ```text
-Start A2A implementation PR1 only.
+Start A2A runtime migration Phase R1 only.
 
 Read:
 1. docs/a2a-nats-integration-spec.md
@@ -332,26 +388,20 @@ Read:
 3. docs/a2a-nats-implementation-progress.md
 
 Implement exactly:
-- Phase 0 readiness guard fix.
-- Phase 1 foundation package and config.
+- Phase R1 runtime identity registry.
 
-Do not implement Phase 2 or any NATS connection code.
+Do not implement runtime peer publication, transport routing, UX cutover, or rollout/deploy changes.
 Do not touch runtime .env files, DATA_DIR, deployment hosts, or live services.
-Do not add MCP tools or Discord visible output.
+Do not remove legacy compatibility fields yet.
 
-Required Phase 0 validation:
-- Phase 0 guide snippet prints `a2a-guide-readiness-ok`.
-- Section 7 guide-only verification prints `a2a-implementation-guide-ready`.
-
-Required Phase 1 validation:
-- `go test ./a2a -run 'Test(Subject|Envelope|TaskState|ErrorCode|NatsMsgID)'`
-- `go test ./channel -run 'TestDoctor.*A2A|TestDoctorRuntimeOverviewDoesNotLeakRawEnvironmentValues'`
+Required R1 validation:
+- `go test ./a2a ./channel -run 'Test(RuntimeID|RuntimeRegistry|PolicyStore|Doctor.*A2A|RemoteMemoryWriteDenied|RemoteMemoryWriteAllowed)'`
 
 Done criteria:
-- A2A disabled path is behaviorally no-op.
-- All A2A envs parse deterministically.
-- Token-only production mode is rejected when `A2A_PRODUCTION_SECURITY=true`.
-- Doctor output does not leak token, creds contents, or TLS material.
-- Subject/envelope/idempotency tests include positive and negative cases.
-- `docs/a2a-nats-implementation-progress.md` records the completed phases, validation evidence, commit hash, rollback boundary, and next phase.
+- Runtime IDs are deterministic, immutable, subject-safe, <=64 chars, and do not expose raw Discord snowflakes.
+- Runtime registry can represent multiple channel/thread runtimes for one bot process.
+- Disabled legacy policy rows migrate without forced runtime IDs; enabled/discoverable rows enforce non-empty runtime identity.
+- Policy store persists canonical runtime fields and fail-closed `remote_tool_policy_json` while preserving legacy fields as migration input.
+- Doctor/config display `A2A_RUNTIME_ID_MODE` without exposing secrets.
+- `docs/a2a-nats-implementation-progress.md` records completed R1 evidence, rollback boundary, and next phase R2.
 ```

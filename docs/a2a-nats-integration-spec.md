@@ -1,7 +1,7 @@
 # kiro-discord-bot × NATS A2A-like Custom Binding 整合開發規格
 
-> 版本: 2.0 | 日期: 2026-07-29 | 狀態: 規劃修正版，待實作  
-> 目的: 先不開發；將原本 A2A/NATS 概念文件修正為可落地、可驗收、可逐步實作的工程規格。
+> 版本: 2.1 | 日期: 2026-07-31 | 狀態: runtime-first 規劃修正版，待實作
+> 目的: 將 A2A/NATS binding 從 bot-level discovery 修正為 **bot + Discord channel/thread runtime = NATS 可發現 agent** 的模型，保留可逐步遷移與可驗收工程規格。
 
 ## 0. 決策摘要
 
@@ -21,6 +21,26 @@
 - **定位**: `urn:kiro-discord-bot:a2a:nats:v1` custom binding
 - **不實作**: 公開 HTTP A2A endpoint、SSE streaming、HTTP push notification server
 - **保留**: 未來可加 read-only `.well-known/agent-card.json` 或 A2A gateway adapter
+
+### 0.1 Runtime-first 修正
+
+本規格的 routing/discovery 單位是 **runtime agent**，不是 Discord bot process。
+
+```text
+Discord bot process/account = transport host / runtime container
+Discord bot + guild + channel/thread + A2A policy = runtime agent
+NATS AgentID = runtime_agent_id
+```
+
+同一個 bot process 可發布多個 runtime cards，例如：
+
+```text
+d80-chunbot-erp-support
+d80-chunbot-backend
+m5bot-main
+```
+
+`A2A_AGENT_ID` 只作 bot/process base identity 與 runtime ID namespace。Task/control/event/card/heartbeat subjects 使用 runtime ID。`channel_ref` 是 runtime alias/display/migration metadata，不是主要路由 key。
 
 ## 1. 設計目標與非目標
 
@@ -53,11 +73,11 @@
 1. **Bot 不等於 Agent**  
    Discord bot account 是 process identity；真正的 agent runtime 是 channel/thread runtime。
 
-2. **A2A policy 屬於 channel runtime**  
+2. **A2A policy 屬於 channel runtime**
    每個 channel 可獨立 enable、expose skill、accept remote sender、限制 concurrency。
 
-3. **NATS identity 必須穩定**  
-   durable subject / durable consumer 使用 stable logical agent ID；restart 後不能變。
+3. **NATS identity 必須是 runtime 且穩定**
+   durable subject / durable consumer 使用 runtime agent ID；restart 後不能變。
 
 4. **JetStream 是 correctness boundary**  
    task/control/event/result 不走 Core NATS fire-and-forget。
@@ -189,40 +209,65 @@ channel.Manager.ExecuteA2ATask(ctx, req)
 
 ## 4. Identity model
 
-### 4.1 Stable logical agent ID
+### 4.1 Bot base identity
 
-Subject 與 durable consumer 使用 stable logical ID：
+`A2A_AGENT_ID` 是 bot process/base identity。它用來：
+
+- 產生 runtime ID namespace。
+- 綁定 process-level credential owner。
+- 在 audit/doctor 中顯示 bot host identity。
+
+它 **不再是 task/control/event/card/heartbeat 的主要 routing identity**。
 
 ```text
-A2A_AGENT_ID=adam-n200
+A2A_AGENT_ID=d80-chunbot
 ```
 
-格式：
+格式仍為：
 
 ```text
 [A-Za-z0-9_-]{1,64}
 ```
 
-必須穩定：
+### 4.2 Runtime agent ID
 
-- 不含 PID。
-- 不含 boot timestamp。
-- 不含 random suffix。
+每個 Discord bot + guild + channel/thread + A2A policy 組合都必須有穩定 runtime agent ID。Runtime ID 是 NATS-visible AgentID：
+
+```text
+runtime_agent_id = <bot_base_slug>-<channel_ref_slug>
+```
+
+例：
+
+```text
+d80-chunbot-erp-support
+d80-chunbot-backend
+m5bot-main
+```
+
+限制：
+
+- 格式為 `[A-Za-z0-9_-]{1,64}`。
+- 不含 PID、boot timestamp、random suffix。
 - restart 後不變。
+- 不直接包含 raw Discord guild/channel/thread snowflake。
+- 不包含 private channel name，除非 manager 明確用該名稱作 public alias。
+- 太長時使用 `<bot_base_slug>-rt-<short_hash(channel_ref)>`。
+- 首次 enable/discoverable 時產生後 immutable；`channel_ref` 後續若改名，只更新 alias/display metadata，不改變既有 `runtime_agent_id`。如果部署者需要換 runtime ID，必須建立新 runtime、重新授權 trust/ACL，並 drain 舊 runtime。
 
-### 4.2 Ephemeral instance ID
+### 4.3 Ephemeral instance ID
 
 Heartbeat 使用 instance ID：
 
 ```text
-instanceID = <hostname>-<pid>-<startUnixNano>-<random6>
+instanceID = <runtime_agent_id>-<startUnixNano>-<random6>
 ```
 
 只用於 observability，不用於 durable routing。
 
-### 4.3 Channel reference
+### 4.4 Channel reference
 
-`channel_ref` 是 channel 對外 skill namespace。
+`channel_ref` 是 runtime alias、display、migration metadata。它不再是主要 routing key。
 
 格式：
 
@@ -232,11 +277,37 @@ instanceID = <hostname>-<pid>-<startUnixNano>-<random6>
 
 限制：
 
-- 同一 logical agent 內唯一。
-- 不可直接使用 Discord channel ID/name。
+- 同一 bot base identity 內唯一。
+- 不可直接使用 Discord channel ID/name，除非部署者接受它被其他 A2A peers 看見。
 - 不可含 `.`, `*`, `>`, `/`, space。
+- 必須可由 manager 在 Discord UX 中理解。
 
-### 4.4 Skill slug
+### 4.5 Runtime registry
+
+本地必須保存 runtime registry：
+
+```go
+type RuntimeRecord struct {
+    RuntimeAgentID string
+    BotAgentID     string
+    GuildID        string
+    ChannelID      string
+    ThreadID       string
+    ChannelRef     string
+    DisplayName    string
+    RuntimeKind    string // channel|thread
+    Enabled        bool
+    Discoverable   bool
+    CreatedAt      time.Time
+    UpdatedAt      time.Time
+}
+```
+
+Runtime registry 是 Discord private state。Public peer card 只能輸出 sanitized runtime label、`runtime_agent_id`、`bot_agent_id`、`channel_ref` 與 capability summary。
+
+Storage location: SQLite table `a2a_runtime_registry` under `DATA_DIR/a2a/`, migrated together with A2A policy/task stores. Policy rows may duplicate `runtime_agent_id` for lookup, but the registry is the ownership authority.
+
+### 4.6 Skill slug
 
 `skill_slug` 格式：
 
@@ -247,16 +318,10 @@ instanceID = <hostname>-<pid>-<startUnixNano>-<random6>
 Canonical skill ID：
 
 ```text
-<channel_ref>/<skill_slug>
+<skill_slug>
 ```
 
-NATS subject token 使用：
-
-```text
-<channel_ref>.<skill_slug>
-```
-
-但 raw `channel_ref/skill_slug` 不直接放 subject token。
+Legacy `channel_ref/skill_slug` 可讀取與 migration，但 runtime-first routing 下 runtime ID 已經代表 channel scope，新寫入 policy 不再依賴 skill ID prefix 來分辨 channel。
 
 ## 5. NATS subject schema
 
@@ -272,11 +337,11 @@ a2a.v1
 
 | Subject | Stream | Publisher | Consumer | 用途 |
 |---|---|---|---|---|
-| `a2a.v1.task.<from>.<to>.<messageId>` | `A2A_TASKS` | delegator | target agent durable | 指名委派 |
-| `a2a.v1.control.<from>.<executor>.<taskId>.<kind>` | `A2A_CONTROLS` | delegator | executor durable | cancel/input/auth/status controls after accepted |
-| `a2a.v1.event.<executor>.<delegator>.<taskKey>.<kind>` | `A2A_EVENTS` | executor | delegator durable | accepted/rejected/status/result/artifact events |
-| `a2a.v1.card.<agent>` | KV or stream | self | peers | AgentCard update |
-| `a2a.v1.heartbeat.<agent>.<instance>` | Core or KV | self | peers/monitor | ephemeral liveness |
+| `a2a.v1.task.<from_runtime>.<to_runtime>.<messageId>` | `A2A_TASKS` | source runtime | target runtime durable | 指名委派 |
+| `a2a.v1.control.<from_runtime>.<executor_runtime>.<taskId>.<kind>` | `A2A_CONTROLS` | delegator runtime | executor runtime durable | cancel/input/auth/status controls after accepted |
+| `a2a.v1.event.<executor_runtime>.<delegator_runtime>.<taskKey>.<kind>` | `A2A_EVENTS` | executor runtime | delegator runtime durable | accepted/rejected/status/result/artifact events |
+| `a2a.v1.card.<runtime_agent_id>` | KV or stream | runtime self | peers | Runtime AgentCard update |
+| `a2a.v1.heartbeat.<runtime_agent_id>.<instance>` | Core or KV | runtime self | peers/monitor | ephemeral runtime liveness |
 
 `taskKey` is `taskId` after acceptance。For pre-accept `rejected` events, use `msg_<messageId>` where `messageId` is already subject-safe。The payload still carries canonical fields and `messageId` for correlation。
 
@@ -355,11 +420,11 @@ Production cluster：
 
 ### 6.2 Targeted task consumer
 
-Per logical agent durable consumer：
+Per runtime durable consumer（runtime-first production mode）：
 
 ```bash
-nats consumer add A2A_TASKS a2a_tasks_adam-n200 \
-  --filter "a2a.v1.task.*.adam-n200.>" \
+nats consumer add A2A_TASKS a2a_tasks_d80-chunbot-erp-support \
+  --filter "a2a.v1.task.*.d80-chunbot-erp-support.>" \
   --deliver all \
   --ack explicit \
   --max-deliver 5 \
@@ -367,11 +432,13 @@ nats consumer add A2A_TASKS a2a_tasks_adam-n200 \
   --max-ack-pending 10
 ```
 
+同一 bot process 可管理多個 runtime consumers。早期 `dual` rollout 可用 process-level wildcard consumer 加 app-level runtime ownership validation，但 runtime mode 的規格驗收以 per-runtime consumer/filter 為 canonical。
+
 ### 6.3 Control consumer
 
 ```bash
-nats consumer add A2A_CONTROLS a2a_controls_adam-n200 \
-  --filter "a2a.v1.control.*.adam-n200.>" \
+nats consumer add A2A_CONTROLS a2a_controls_d80-chunbot-erp-support \
+  --filter "a2a.v1.control.*.d80-chunbot-erp-support.>" \
   --deliver all \
   --ack explicit \
   --max-deliver 10 \
@@ -381,8 +448,8 @@ nats consumer add A2A_CONTROLS a2a_controls_adam-n200 \
 ### 6.4 Event consumer
 
 ```bash
-nats consumer add A2A_EVENTS a2a_events_adam-n200 \
-  --filter "a2a.v1.event.*.adam-n200.>" \
+nats consumer add A2A_EVENTS a2a_events_d80-chunbot-erp-support \
+  --filter "a2a.v1.event.*.d80-chunbot-erp-support.>" \
   --deliver all \
   --ack explicit \
   --max-deliver 10 \
@@ -532,18 +599,18 @@ Parser requirements：
 
 | A2A operation | NATS binding behavior | Durable subject | Response/event |
 |---|---|---|---|
-| `SendMessage` targeted | delegator publishes `send_message` envelope to a specific logical agent | `a2a.v1.task.<from>.<to>.<messageId>` | executor publishes `accepted` with `taskKey=<taskId>` or pre-accept `rejected` with `taskKey=msg_<messageId>`, then status/artifact/result events after acceptance |
-| `SendMessage` pool | not implemented in NATS binding v1; caller must select a concrete peer from the peer store | none | return `unsupported_operation` with `unknown_skill` or `channel_not_enabled` context when applicable |
+| `SendMessage` targeted | delegator runtime publishes `send_message` envelope to a specific target runtime | `a2a.v1.task.<from_runtime>.<to_runtime>.<messageId>` | executor runtime publishes `accepted` with `taskKey=<taskId>` or pre-accept `rejected` with `taskKey=msg_<messageId>`, then status/artifact/result events after acceptance |
+| `SendMessage` pool | not implemented in NATS binding v1; caller must select a concrete runtime from the peer store | none | return `unsupported_operation` with `unknown_skill` or `channel_not_enabled` context when applicable |
 | `SendStreamingMessage` | not implemented as an A2A streaming binding; use durable events instead | none | return `unsupported_operation` |
-| `GetTask` | delegator reads local outbound TaskStore; if stale, it may request refresh through control message | `a2a.v1.control.<from>.<executor>.<taskId>.status` with `status_request` | executor replies by publishing latest `task_status_update` event |
-| `ListTasks` | local-only query over TaskStore scoped to requesting Discord user/channel unless admin | none | local Discord response |
-| `CancelTask` | delegator publishes cancel control after executor is known | `a2a.v1.control.<from>.<executor>.<taskId>.cancel` with `cancel_task` | executor publishes `task_status_update` with `TASK_STATE_CANCELED`, or current/failed state plus `error_code=cancel_not_allowed` |
-| `SubscribeToTask` | not implemented as a streaming subscription; delegator maintains durable event consumer | `a2a.v1.event.<executor>.<delegator>.<taskId>.*` via consumer filter | status/artifact/result events are replayable from `A2A_EVENTS` |
+| `GetTask` | delegator reads local outbound TaskStore; if stale, it may request refresh through control message | `a2a.v1.control.<from_runtime>.<executor_runtime>.<taskId>.status` with `status_request` | executor replies by publishing latest `task_status_update` event |
+| `ListTasks` | local-only query over TaskStore scoped to requesting Discord user/channel/runtime unless manager | none | local Discord response |
+| `CancelTask` | delegator publishes cancel control after executor runtime is known | `a2a.v1.control.<from_runtime>.<executor_runtime>.<taskId>.cancel` with `cancel_task` | executor publishes `task_status_update` with `TASK_STATE_CANCELED`, or current/failed state plus `error_code=cancel_not_allowed` |
+| `SubscribeToTask` | not implemented as a streaming subscription; delegator runtime maintains durable event consumer | `a2a.v1.event.<executor_runtime>.<delegator_runtime>.<taskId>.*` via consumer filter | status/artifact/result events are replayable from `A2A_EVENTS` |
 | `CreateTaskPushNotificationConfig` | not implemented in NATS binding v1 | none | return `unsupported_operation` |
 | `GetTaskPushNotificationConfig` | not implemented in NATS binding v1 | none | return `unsupported_operation` |
 | `ListTaskPushNotificationConfig` | not implemented in NATS binding v1 | none | return `unsupported_operation` |
 | `DeleteTaskPushNotificationConfig` | not implemented in NATS binding v1 | none | return `unsupported_operation` |
-| `GetExtendedAgentCard` | authenticated peers may read the sanitized extended card from peer store | `a2a.v1.card.<agent>` or KV lookup | return extended AgentCard, or `unsupported_operation` if extended cards are disabled |
+| `GetExtendedAgentCard` | authenticated peers may read the sanitized extended card from peer store | `a2a.v1.card.<runtime_agent_id>` or KV lookup | return extended AgentCard, or `unsupported_operation` if extended cards are disabled |
 
 No operation may require a direct network connection from one bot to another bot. All cross-agent traffic goes through NATS subjects plus JetStream persistence.
 
@@ -557,8 +624,8 @@ Fields：
 
 ```json
 {
-  "name": "adam-n200",
-  "description": "Kiro Discord Bot A2A runtime",
+  "name": "d80-chunbot-erp-support",
+  "description": "ERP support runtime",
   "version": "2.30.0",
   "supportedInterfaces": [
     {
@@ -583,16 +650,16 @@ Fields：
 Canonical skill ID：
 
 ```text
-<channel_ref>/<skill_slug>
+<skill_slug>
 ```
 
 Skill fields：
 
 ```json
 {
-  "id": "backend/code-review",
-  "name": "Backend Code Review",
-  "description": "Review backend Go changes for correctness and maintainability.",
+  "id": "general/task",
+  "name": "General task",
+  "description": "General task execution inside this runtime.",
   "tags": ["code-review", "go", "backend"],
   "inputModes": ["text/plain", "text/x-go", "application/json"],
   "outputModes": ["text/plain", "application/json"],
@@ -606,8 +673,11 @@ Trigger guidance for local LLM prompt is not part of public canonical card. Stor
 
 Extended card is optional and only for authenticated peers。It MAY include：
 
+- `runtime_agent_id`
+- `bot_agent_id`
 - `channel_ref`
-- coarse runtime description
+- sanitized runtime display label
+- runtime kind (`channel` or `thread`)
 - trigger guidance
 - result visibility support
 - max task duration class
@@ -639,56 +709,65 @@ CREATE TABLE IF NOT EXISTS channel_a2a_policy (
   guild_id TEXT NOT NULL,
   channel_id TEXT NOT NULL,
   enabled INTEGER NOT NULL DEFAULT 0,
-  channel_ref TEXT NOT NULL,
-  accept_from_json TEXT NOT NULL DEFAULT '[]',
+  discoverable INTEGER NOT NULL DEFAULT 0,
+  runtime_agent_id TEXT,
+  bot_agent_id TEXT,
+  channel_ref TEXT,
+  accept_from_runtimes_json TEXT NOT NULL DEFAULT '[]',
   accept_skills_json TEXT NOT NULL DEFAULT '[]',
   expose_skills_json TEXT NOT NULL DEFAULT '[]',
-  delegate_to_json TEXT NOT NULL DEFAULT '[]',
-  delegate_skills_json TEXT NOT NULL DEFAULT '[]',
+  delegate_targets_json TEXT NOT NULL DEFAULT '[]',
   delegate_media_json TEXT NOT NULL DEFAULT '{}',
   max_concurrent INTEGER NOT NULL DEFAULT 0,
   result_visibility TEXT NOT NULL DEFAULT 'proxy',
   discord_transcript_mode TEXT NOT NULL DEFAULT 'delegator',
   share_discord_context INTEGER NOT NULL DEFAULT 0,
-  co_present_from_json TEXT NOT NULL DEFAULT '[]',
+  co_present_from_runtimes_json TEXT NOT NULL DEFAULT '[]',
   auto_delegate_enabled INTEGER NOT NULL DEFAULT 0,
+  remote_tool_policy_json TEXT NOT NULL DEFAULT '{"allow_memory_write":false}',
+  legacy_accept_from_json TEXT NOT NULL DEFAULT '[]',
+  legacy_delegate_to_json TEXT NOT NULL DEFAULT '[]',
+  legacy_delegate_skills_json TEXT NOT NULL DEFAULT '[]',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   updated_by TEXT NOT NULL,
-  PRIMARY KEY (guild_id, channel_id)
+  PRIMARY KEY (guild_id, channel_id),
+  UNIQUE (runtime_agent_id)
 );
 ```
 
 Validation：
 
-- `channel_ref` required when enabled。
-- `channel_ref` unique per `A2A_AGENT_ID`。
+- `runtime_agent_id` is nullable for disabled pre-migration rows, but required, immutable, and globally unique before `enabled=1` or `discoverable=1` can be saved。
+- `bot_agent_id` is nullable for disabled pre-migration rows, but must equal local `A2A_AGENT_ID` for enabled local runtime records。
+- `channel_ref` is nullable for disabled pre-migration rows, but required when enabled and unique per `bot_agent_id`。
+- `discoverable` must be explicitly enabled before publishing a runtime card。
 - `result_visibility in ('proxy','transparent')`。
 - `discord_transcript_mode in ('delegator','mirror','co_present')`。
 - `share_discord_context` may be true only when `discord_transcript_mode='co_present'`。
-- `co_present_from` entries are stable agent IDs or explicit wildcard `*`; default empty means no executor-side direct transcript posting。
+- `co_present_from_runtimes` entries are runtime IDs or explicit wildcard `*`; default empty means no executor-side direct transcript posting。
 - `max_concurrent` range: 0..64; `0` means unlimited。
-- `accept_from` entries are stable agent IDs or explicit wildcard `*`。
+- `accept_from_runtimes` entries are runtime IDs or explicit wildcard `*`。
 - `accept_skills` entries are skill slugs, not arbitrary text。
-- `delegate_to` entries are stable agent IDs or explicit wildcard `*`; default empty means outbound delegation denied。
-- `delegate_skills` entries are full peer skill IDs or skill slug patterns explicitly chosen by manager。
-- `delegate_media` defines allowed outbound attachment media types, max bytes, and whether object references are permitted。
+- `delegate_targets` entries are `{runtime_agent_id, skill_id}` pairs chosen by manager。
+- `remote_tool_policy_json.allow_memory_write` defaults false and is the only policy field that may enable remote A2A jobs to use memory-write bot tools。
+- legacy `accept_from`/`delegate_to`/`delegate_skills` are read for compatibility only; new setup writes canonical runtime fields。
 - `expose_skills[].id` subject-safe skill slug。
 - `inputModes/outputModes` must be MIME types。
 
 ## 11. Configuration
 
 ### 11.1 Environment variables
-
 | Variable | Default | Required | Description |
 |---|---|---:|---|
 | `NATS_URL` | empty | no | Empty disables A2A completely |
 | `NATS_CREDS_FILE` | empty | prod yes | NATS NKey/JWT creds file |
 | `NATS_TOKEN` | empty | dev only | Shared token; forbidden in production mode |
 | `NATS_TLS_CA_FILE` | empty | prod yes if private CA | CA bundle for server verification |
-| `A2A_AGENT_ID` | empty | if enabled yes | Stable logical agent ID |
-| `A2A_AGENT_NAME` | Discord bot username | no | Human display name |
-| `A2A_AGENT_DESCRIPTION` | empty | no | Public card description |
+| `A2A_AGENT_ID` | empty | if enabled yes | Bot/process base identity; not a runtime route by itself |
+| `A2A_RUNTIME_ID_MODE` | `legacy` | no | `legacy`, `dual`, or `runtime`; production cutover target is `runtime` |
+| `A2A_AGENT_NAME` | Discord bot username | no | Bot display name; runtime cards may override with sanitized runtime display label |
+| `A2A_AGENT_DESCRIPTION` | empty | no | Public card description default |
 | `A2A_TASK_TIMEOUT_SEC` | 300 | no | Per task execution timeout |
 | `A2A_MAX_DELEGATION_DEPTH` | 3 | no | Loop prevention |
 | `A2A_AUTO_DELEGATE_ENABLED` | false | no | Allow LLM-initiated delegation tool |
@@ -696,10 +775,10 @@ Validation：
 | `A2A_PRODUCTION_SECURITY` | false | no | If true, reject token-only auth |
 | `A2A_TASK_RETENTION_DAYS` | 0 | no | Task/event retention in days; 0 means permanent until manual purge |
 | `A2A_OBJECT_RETENTION_DAYS` | 0 | no | A2A object/artifact retention in days; 0 means permanent until manual purge |
-| `A2A_MAX_PENDING_TASKS` | 0 | no | Per-agent pending task cap; 0 means unlimited |
+| `A2A_MAX_PENDING_TASKS` | 0 | no | Per-runtime pending task cap; 0 means unlimited |
 | `A2A_MAX_OUTBOUND_TASKS_PER_CHANNEL` | 0 | no | Per-channel outbound pending cap; 0 means unlimited |
 | `A2A_MAX_INBOUND_TASKS_PER_CHANNEL` | 0 | no | Per-channel inbound pending cap; 0 means unlimited |
-| `A2A_MAX_EVENT_RATE_PER_MIN` | 0 | no | Per-agent A2A event rate cap; 0 means unlimited |
+| `A2A_MAX_EVENT_RATE_PER_MIN` | 0 | no | Per-runtime A2A event rate cap; 0 means unlimited |
 
 ### 11.2 Enabled rule
 
@@ -709,7 +788,7 @@ A2A enabled iff：
 NATS_URL != "" && A2A_AGENT_ID != ""
 ```
 
-If `NATS_URL != ""` but `A2A_AGENT_ID == ""`，startup fails with actionable error。
+If `NATS_URL != ""` but `A2A_AGENT_ID == ""`，startup fails with actionable error。If runtime mode is `dual` or `runtime`, at least one enabled local runtime policy must resolve to a runtime registry record before publishing cards or accepting tasks.
 
 If `A2A_PRODUCTION_SECURITY=true` and only `NATS_TOKEN` is set，startup fails。
 
@@ -730,24 +809,24 @@ Dev-only：
 
 NATS subject permissions must enforce sender identity at subject level。
 
-For agent `adam-n200`：
+For runtime `d80-chunbot-erp-support`：
 
 Publish allow：
 
 ```text
-a2a.v1.task.adam-n200.>
-a2a.v1.control.adam-n200.>
-a2a.v1.event.adam-n200.>
-a2a.v1.card.adam-n200
-a2a.v1.heartbeat.adam-n200.>
+a2a.v1.task.d80-chunbot-erp-support.>
+a2a.v1.control.d80-chunbot-erp-support.>
+a2a.v1.event.d80-chunbot-erp-support.>
+a2a.v1.card.d80-chunbot-erp-support
+a2a.v1.heartbeat.d80-chunbot-erp-support.>
 ```
 
 Subscribe allow：
 
 ```text
-a2a.v1.task.*.adam-n200.>
-a2a.v1.control.*.adam-n200.>
-a2a.v1.event.*.adam-n200.>
+a2a.v1.task.*.d80-chunbot-erp-support.>
+a2a.v1.control.*.d80-chunbot-erp-support.>
+a2a.v1.event.*.d80-chunbot-erp-support.>
 a2a.v1.card.>
 a2a.v1.heartbeat.>
 ```
@@ -759,10 +838,11 @@ Response/inbox permissions must be narrow. Avoid blanket `_INBOX.>` in productio
 On receive：
 
 ```text
-authenticatedPrincipal -> allowedAgentID
-subject token from/to -> expected from/to
-envelope.From -> must equal allowedAgentID
-envelope.To -> must equal subject target where present
+authenticatedPrincipal -> allowed runtime IDs
+subject token from/to -> expected runtime IDs
+envelope.From -> must equal subject source runtime and an allowed runtime for this credential
+envelope.To -> must equal subject target runtime where present
+payload channelRef -> must match the local runtime registry for envelope.To when present
 ```
 
 Reject if any mismatch。
@@ -774,9 +854,9 @@ Subject/envelope checks are necessary but not sufficient。Every control/event r
 Control receive rule：
 
 ```text
-local agent == subject <executor>
-subject <from> == stored inbound task.from_agent
-subject <executor> == stored inbound task.executor_agent or local A2A_AGENT_ID
+local runtime == subject <executor_runtime>
+subject <from_runtime> == stored inbound task.from_agent
+subject <executor_runtime> == stored inbound task.executor_agent or local runtime_agent_id
 subject <taskId> == stored inbound task.task_id
 task is nonterminal unless the control is an idempotent status refresh
 ```
@@ -784,9 +864,9 @@ task is nonterminal unless the control is an idempotent status refresh
 Event receive rule：
 
 ```text
-local agent == subject <delegator>
-subject <executor> == stored outbound task.executor_agent, except accepted bootstrap may bind to stored to_agent first
-subject <delegator> == stored outbound task.from_agent or local A2A_AGENT_ID
+local runtime == subject <delegator_runtime>
+subject <executor_runtime> == stored outbound task.executor_agent, except accepted bootstrap may bind to stored to_agent first
+subject <delegator_runtime> == stored outbound task.from_agent or local runtime_agent_id
 subject <taskKey> == stored outbound task.task_id, except `msg_<message_id>` for pre-accept rejected events and accepted bootstrap below
 event revision > stored revision unless it is an idempotent replay
 ```
@@ -796,8 +876,8 @@ Accepted bootstrap rule：
 ```text
 if kind == accepted and stored outbound task.task_id is empty:
   bind by direction='outbound' and message_id from payload/envelope
-  require subject <executor> == stored outbound task.to_agent or stored outbound task.executor_agent
-  require subject <delegator> == local A2A_AGENT_ID
+  require subject <executor_runtime> == stored outbound task.to_agent or stored outbound task.executor_agent
+  require subject <delegator_runtime> == local runtime_agent_id
   require payload Task.id == subject <taskKey>
   require payload Task.id matches subject-safe TaskID grammar
   atomically set stored task_id and executor_agent before applying the accepted state
@@ -959,9 +1039,10 @@ type A2ATaskRequest struct {
     ClientTaskRef    string
     MessageID        string
     ContextID        string
-    FromAgent        string
-    ToAgent          string
-    ChannelRef       string
+    FromRuntime      string
+    ToRuntime        string
+    BotAgentID       string
+    ChannelRef       string // metadata; must match ToRuntime registry when present
     SkillID          string
     Parts            []A2APart
     ResultVisibility string
@@ -984,17 +1065,18 @@ func (m *Manager) ExecuteA2ATask(ctx context.Context, req A2ATaskRequest) (A2ATa
 
 `ExecuteA2ATask` must：
 
-1. Resolve `channel_ref -> channel_id` using A2A policy store。
-2. Validate policy enabled。
-3. Validate `accept_from`。
-4. Validate `accept_skills` and exposed/accepted skill mapping。
-5. Reject or drop non-nil `DiscordContext` unless `TranscriptMode=co_present`, executor policy has `discord_transcript_mode='co_present'`, `co_present_from` allows `FromAgent`, the referenced guild/channel/thread resolves to the executor's own channel runtime, and Discord view/send permissions pass。
-6. Enforce channel-level `max_concurrent` for inbound A2A tasks。
-7. Build a normal `channel.Job` using existing Worker queue。
-8. Set `DeliveryInline` / final reply capture。
-9. Set `DisableBotEgress=true` for proxy mode。
-10. Preserve channel CWD/MCP/profile/session behavior。
-11. Return captured final response as text artifact。
+1. Resolve `ToRuntime -> RuntimeRecord` using runtime registry。
+2. Validate runtime policy enabled。
+3. Validate subject/envelope/runtime registry consistency。
+4. Validate `AcceptFromRuntimes`。
+5. Validate `accept_skills` and exposed/accepted skill mapping。
+6. Reject or drop non-nil `DiscordContext` unless `TranscriptMode=co_present`, executor policy has `discord_transcript_mode='co_present'`, `co_present_from_runtimes` allows `FromRuntime`, the referenced guild/channel/thread resolves to the executor's own channel runtime, and Discord view/send permissions pass。
+7. Enforce channel-level `max_concurrent` for inbound A2A tasks。
+8. Build a normal `channel.Job` using existing Worker queue。
+9. Set `DeliveryInline` / final reply capture。
+10. Set `DisableBotEgress=true` for proxy mode。
+11. Preserve channel CWD/MCP/profile/session behavior。
+12. Return captured final response as text artifact。
 
 ### 14.3 Bot-tools policy inside A2A job
 
@@ -1042,8 +1124,8 @@ The tool implementation validates：
 
 - target exists in peer store。
 - skill exists and input modes match。
-- current channel policy `delegate_to` allows the target agent。
-- current channel policy `delegate_skills` allows the target skill。
+- current channel policy `delegate_targets` allows the target runtime + skill pair。
+- legacy `delegate_to`/`delegate_skills` may populate a migration preview, but cannot authorize a different runtime on the same bot。
 - attachment/media use matches `delegate_media`。
 - channel policy allows outbound delegation from this Discord channel。
 - max delegation depth not exceeded。
@@ -1109,8 +1191,8 @@ Use JetStream KV bucket when available：
 
 ```text
 bucket: A2A_PEERS
-key: <agentID>
-value: public AgentCard + instance metadata + expiresAt
+key: <runtime_agent_id>
+value: public runtime AgentCard + instance metadata + expiresAt
 TTL: heartbeat interval * 3
 ```
 
@@ -1128,8 +1210,8 @@ Heartbeat payload：
 
 ```json
 {
-  "agentId": "adam-n200",
-  "instanceId": "host-1234-...",
+  "agentId": "d80-chunbot-erp-support",
+  "instanceId": "d80-chunbot-erp-support-1234-...",
   "status": "online",
   "activeTasks": 2,
   "startedAt": "2026-07-29T00:00:00Z",
@@ -1180,7 +1262,7 @@ Tool safety rules：
 
 1. Tools require explicit `guild_id`, `channel_id`, `requested_by`, and `requested_by_id` from Discord context; user-supplied IDs are rejected if they do not match bound context。
 2. `bot_a2a_policy_apply` requires ManageChannels and a fresh confirmation token generated by `bot_a2a_policy_plan`。
-3. `bot_a2a_delegate` requires outbound `delegate_to`/`delegate_skills` policy and may require confirmation for remote data egress, attachments, sensitive skills, or transparent/co-present delivery。
+3. `bot_a2a_delegate` requires outbound `delegate_targets` policy and may require confirmation for remote data egress, attachments, sensitive skills, or transparent/co-present delivery。
 4. `bot_a2a_cancel` accepts requester or manager only。
 5. `bot_a2a_input_reply` accepts requester or manager only, requires the task to be in `TASK_STATE_INPUT_REQUIRED`, redacts/logs metadata under the same egress policy, and publishes one idempotent `input_reply` control。
 6. `bot_a2a_auth_reply` accepts requester or manager only, requires the task to be in `TASK_STATE_AUTH_REQUIRED`, never carries raw long-lived credentials, and publishes one idempotent `auth_reply` control with approve/deny plus scoped confirmation metadata。
@@ -1282,7 +1364,7 @@ Default is `delegator`。
 Co-present mode requirements：
 
 1. Delegator channel policy sets `discord_transcript_mode='co_present'` and `share_discord_context=true`。
-2. Executor inbound channel policy sets `discord_transcript_mode='co_present'` and `co_present_from` allows the delegator agent。
+2. Executor inbound channel policy sets `discord_transcript_mode='co_present'` and `co_present_from_runtimes` allows the delegator runtime。
 3. Both bot accounts are members of the same guild and can resolve the same channel/thread。
 4. Both bot accounts have Discord permission to view and send in the target location。
 5. Delegator includes `DiscordContext` only after user action originates from that Discord location。
@@ -1414,16 +1496,18 @@ Error copy should distinguish bot-local failures, peer-agent failures, setup/pol
 2. If A2A disabled, continue no-op。
 3. Validate `A2A_AGENT_ID` slug。
 4. Validate security mode。
-5. Connect NATS with creds/TLS。
-6. Create JetStream context。
-7. Ensure streams/consumers exist, or verify externally managed mode。
-8. Open A2A policy store。
-9. Open A2A TaskStore。
-10. Build public AgentCard from enabled channel policies。
-11. Start task/control/event consumers。
-12. Start peer KV watch / discovery。
-13. Publish card and heartbeat。
-14. Continue bot startup。
+5. Open A2A policy store and runtime registry。
+6. Resolve enabled local runtime records; in `dual`/`runtime` mode fail startup if an enabled policy cannot resolve to an owned runtime record。
+7. Connect NATS with creds/TLS。
+8. Create JetStream context。
+9. Ensure global streams exist, or verify externally managed mode。
+10. Ensure per-runtime task/control/event consumers for resolved local runtimes。
+11. Open A2A TaskStore。
+12. Build public AgentCards from enabled + discoverable runtime records。
+13. Start task/control/event consumers。
+14. Start peer KV watch / discovery。
+15. Publish runtime cards and runtime heartbeats。
+16. Continue bot startup。
 
 ### 21.2 Shutdown
 
@@ -1440,17 +1524,19 @@ Error copy should distinguish bot-local failures, peer-agent failures, setup/pol
 
 ### 22.1 Unit tests
 
-- subject slug validation。
-- subject parser for task/control/event and explicit rejection of deferred pool subjects。
-- envelope validation。
+- runtime ID generation: subject-safe, stable, <=64 chars, no raw Discord snowflake。
+- runtime registry CRUD and disabled/private runtime non-publication。
+- subject parser for task/control/event with runtime IDs and explicit rejection of deferred pool subjects。
+- envelope validation including `subject.to == envelope.To` and runtime/channel_ref consistency。
 - A2A state mapping。
-- AgentCard adapter emits required canonical fields。
-- policy store CRUD and validation。
-- TaskStore state transitions。
+- AgentCard adapter emits one card per discoverable runtime and includes sanitized extended runtime metadata。
+- policy store CRUD and validation for `AcceptFromRuntimes` and `DelegateTargets`。
+- migration reads legacy bot-level policy without automatically trusting all runtimes on that bot。
+- TaskStore state transitions with source/target runtime columns。
 - idempotent redelivery handling。
 - object reference validation。
 - button custom ID signing/validation。
-- audit metadata redaction。
+- audit metadata redaction and requester attribution source。
 
 ### 22.2 Integration tests
 
@@ -1458,18 +1544,21 @@ Use embedded `nats-server/v2/server` with JetStream。
 
 Scenarios：
 
-1. two nodes connect and discover peer card。
-2. targeted delegation admitted once under duplicate publish。
-3. duplicate JetStream delivery does not execute ACP twice。
-4. cancel routes to executor。
-5. result routes to delegator after delegator reconnect。
-6. pool delegation returns `unsupported_operation` without publishing a pool subject。
-7. unauthorized sender rejected。
-8. token-only production mode fails startup。
-9. large attachment uses object reference。
-10. A2A disabled leaves existing bot behavior unchanged。
-11. input-required task resumes through `input_reply` after requester/manager validation。
-12. auth-required task resumes or is denied through `auth_reply` without sending raw long-lived credentials。
+1. same bot publishes two discoverable runtime cards for two enabled channels。
+2. disabled/private channel policy does not publish a peer card。
+3. targeted runtime delegation admitted once under duplicate publish。
+4. duplicate JetStream delivery does not execute ACP twice。
+5. cancel routes to executor runtime。
+6. result routes to delegator runtime after delegator reconnect。
+7. pool delegation returns `unsupported_operation` without publishing a pool subject。
+8. unauthorized sender runtime rejected。
+9. runtime/channel_ref confused deputy rejected。
+10. token-only production mode fails startup。
+11. large attachment uses object reference。
+12. A2A disabled leaves existing bot behavior unchanged。
+13. input-required task resumes through `input_reply` after requester/manager validation。
+14. auth-required task resumes or is denied through `auth_reply` without sending raw long-lived credentials。
+15. same-bot cross-channel runtime setup only trusts the selected runtime。
 
 ### 22.3 Manual smoke test
 
@@ -1618,8 +1707,8 @@ Implementation may start only when this checklist is accepted：
 - [ ] Cancel routing contains executor identity。
 - [ ] Status/result are durable。
 - [ ] Idempotency uses `Nats-Msg-Id` + durable TaskStore。
-- [ ] Stable logical agent ID is separated from ephemeral instance ID。
-- [ ] Per-agent auth/authorization is required for production。
+- [ ] Stable runtime agent ID is separated from bot base identity and ephemeral instance ID。
+- [ ] Per-runtime auth/authorization is required for production。
 - [ ] A2A ingress goes through `channel.Manager`。
 - [ ] Proxy result delivery disables remote Discord egress by default。
 - [ ] Audit events are listed。
@@ -1635,7 +1724,7 @@ Implementation may start only when this checklist is accepted：
 The following product decisions are accepted for the first implementation：
 
 1. **Onboarding default**: first-run A2A setup uses a manager-only button wizard。Natural language may initiate it; confirmation requires ManageChannels。
-2. **Peer trust model**: admin review displays peer display name, signature status, credential issuer, and credential/public-key fingerprint before adding a peer to `accept_from` or `delegate_to`。
+2. **Peer trust model**: admin review displays runtime display name, bot base identity, signature status, credential issuer, and credential/public-key fingerprint before adding a runtime to `accept_from_runtimes` or `delegate_targets`。
 3. **Credential lifecycle**: credential issuance, rotation, and revocation are manual operations for v1。The bot documents current credential identity and fails closed when credentials are missing or revoked。
 4. **Data egress labels**: every confirmation shows explicit labels for prompt text, attachments, Discord context sharing, transparent delivery, and co-present transcript posting。
 5. **Retention policy**: default retention is permanent。Retention is configurable in days; `0` means keep until manual purge。
@@ -1651,12 +1740,13 @@ Localized naming terms：
 
 | Protocol term | zh-TW user-facing term | en user-facing term |
 |---|---|---|
-| agent / peer agent | 協作者 | Collaborator |
+| runtime / peer runtime | 協作執行環境 | Collaborator runtime |
+| bot_agent_id | Bot 身分 | Bot identity |
 | skill | 能力 | Capability |
 | channel_ref | 頻道協作名稱 | Channel collaboration name |
-| accept_from | 允許誰請本頻道協作 | Who may ask this channel for help |
-| delegate_to | 本頻道可請誰協作 | Who this channel may ask for help |
-| delegate_skills | 可委派的能力 | Allowed remote capabilities |
+| accept_from_runtimes | 允許哪些協作執行環境請本頻道協作 | Which runtimes may ask this channel for help |
+| delegate_targets | 本頻道可請哪些協作執行環境 | Which runtimes this channel may ask for help |
+| skill_id | 可委派的能力 | Allowed remote capability |
 | result_visibility=proxy | 由發起方播報結果 | Report result through requester bot |
 | result_visibility=transparent | 由執行方直接回覆結果 | Let executor bot reply directly |
 | transcript delegator | 發起方簡要播報 | Requester bot summary |
