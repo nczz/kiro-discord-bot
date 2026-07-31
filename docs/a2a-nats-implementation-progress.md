@@ -666,6 +666,24 @@ Append one subsection per completed phase.
 - Rollback boundary: restore `/Users/chun/Projects/kiro-discord-bot-local/bin/kiro-discord-bot.pre-a2a-ux-fix-20260731230551` locally or `/opt/kiro-discord-bot/kiro-discord-bot.pre-a2a-ux-fix-20260731230636` on d80, then revert the R18 files above. Remote tasks would return to durable/proxy-only delivery instead of executor-owned Discord transcript creation.
 - Next phase: monitor a natural Discord-issued A2A task that reaches input/auth-required; protocol continuation and executor-owned initial transcript smoke are complete.
 
+### R19 proxy result duplicate suppression
+
+- Status: deployed.
+- Decision: executor-owned A2A conversations make the executor thread the only user-facing final transcript for `result_visibility=proxy` and `discord_transcript_mode=delegator`. The delegator still stores durable status/result for queries, but must not enqueue a second full `A2A result from ...` channel message. `transparent`, `mirror`, and `co_present` text delivery semantics remain available for explicit egress/mirroring modes.
+- Changed files: `channel/a2a.go`, `channel/a2a_phase8_test.go`, and this progress ledger.
+- Validation:
+  - `go test ./channel -run 'TestA2A(ProxyDelegatorResultDoesNotDuplicateExecutorTranscript|TransparentResultQueuesSafeEgressAndAudit|MirrorTranscriptQueuesStatusLabel)'` passed.
+  - `env -u NATS_URL -u NATS_CREDS_FILE -u NATS_TOKEN -u NATS_TLS_CA_FILE -u A2A_AGENT_ID -u A2A_RUNTIME_ID_MODE -u A2A_AGENT_NAME -u A2A_AGENT_DESCRIPTION -u A2A_REQUIRE_CONFIRMATION_FOR_REMOTE go test ./...` passed.
+  - `git diff --check` passed.
+  - Built `/tmp/kiro-discord-bot-darwin-a2a-dedupe` (`2a45123bb8da4b702a2c46f5695f7aefe8b54426375c9a05ed530f8d5c846c0f`) and `/tmp/kiro-discord-bot-linux-a2a-dedupe` (`c886d5d2a2b29b1f83baba40c37f567ca7132ba259d0226939b03db6b29c5ee5`).
+  - Local M5 bot restarted and logged `NATS node enabled`, `transport consumers started`, and `Bot running as M5Bot#8313`.
+  - Remote d80 bot service is `active` and logged `NATS node enabled`, `transport consumers started`, and `Bot running as ChunBot#4533`.
+  - Live delegated dedupe smoke `msg_a2a_dedupe_7346d00c` completed from `m5bot-local-m5-main` to `d80-chunbot-d80-main`: local outbound and remote inbound rows reached `TASK_STATE_COMPLETED` revision 2; remote executor thread `1532771856149512292` recorded `agent_response_sent` success with content `A2A dedupe OK 7346d00c`; local M5 audit had zero delivery events for that message, confirming no duplicate delegator channel post.
+- Runtime settings touched: no.
+- Deployment hosts touched: local M5 bot binary/service and remote d80 bot binary/service only.
+- Rollback boundary: restore `/Users/chun/Projects/kiro-discord-bot-local/bin/kiro-discord-bot.pre-a2a-dedupe-fix-20260731232516` locally or `/opt/kiro-discord-bot/kiro-discord-bot.pre-a2a-dedupe-fix-20260731232602` on d80, then revert the R19 files above. Delegator proxy result messages would again be emitted for executor-owned tasks.
+- Next phase: observe the original joke-review flow once more from Discord; automated and live delegated smoke now cover the duplicate channel-post regression.
+
 ## Master goal prompt
 
 Use this prompt when starting or resuming the full implementation program:

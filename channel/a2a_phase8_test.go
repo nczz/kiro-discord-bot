@@ -33,7 +33,7 @@ func TestA2ATransparentResultQueuesSafeEgressAndAudit(t *testing.T) {
 	}
 }
 
-func TestA2AProxyDeliveryQueuesDelegatorResult(t *testing.T) {
+func TestA2AProxyDelegatorResultDoesNotDuplicateExecutorTranscript(t *testing.T) {
 	dir := t.TempDir()
 	m := &Manager{dataDir: dir}
 	row := phase8TaskRow()
@@ -44,8 +44,8 @@ func TestA2AProxyDeliveryQueuesDelegatorResult(t *testing.T) {
 		t.Fatalf("deliverA2AEvent: %v", err)
 	}
 	actions, _ := botegress.ReadPending(dir)
-	if len(actions) != 1 || !strings.Contains(actions[0].Content, "proxy done") {
-		t.Fatalf("proxy result was not queued: %+v", actions)
+	if len(actions) != 0 {
+		t.Fatalf("proxy delegator result duplicated executor transcript: %+v", actions)
 	}
 }
 
