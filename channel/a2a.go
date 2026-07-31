@@ -545,7 +545,7 @@ func (m *Manager) deliverA2AEvent(ctx context.Context, row a2a.TaskRow, kind str
 	if mode == "" {
 		mode = "delegator"
 	}
-	deliverText := mode == "mirror" || mode == "co_present" || (kind == a2a.EventKindResult && strings.TrimSpace(row.ResultVisibility) != "" && row.ResultVisibility != "proxy")
+	deliverText := mode == "mirror" || (kind == a2a.EventKindResult && mode != "co_present" && strings.TrimSpace(row.ResultVisibility) != "" && row.ResultVisibility != "proxy")
 	if deliverText {
 		content := a2aDeliveryContent(row, kind, payload)
 		if strings.TrimSpace(content) != "" {

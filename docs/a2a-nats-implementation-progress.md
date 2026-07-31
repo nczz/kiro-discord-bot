@@ -704,6 +704,25 @@ Append one subsection per completed phase.
 - Rollback boundary: restore `/Users/chun/Projects/kiro-discord-bot-local/bin/kiro-discord-bot.pre-a2a-copresent-json-fix-20260731235306` locally or `/opt/kiro-discord-bot/kiro-discord-bot.pre-a2a-copresent-json-fix-20260731235352` on d80, revert the R20 files above, and set both live policies back to `result_visibility=proxy`, `discord_transcript_mode=delegator`, `share_discord_context=0`. Co-present same-thread final replies and status-result redaction would be disabled.
 - Next phase: run one natural Discord-issued ChunBot→M5 delegation in the shared thread to confirm the model-facing MCP path no longer restates the executor result after `bot_a2a_task_status`.
 
+### R21 co-present delegator result post suppression
+
+- Status: deployed.
+- Trigger: natural Discord-issued ChunBot→M5 joke review used `result_visibility=transparent` and `discord_transcript_mode=co_present`; M5 posted the review in the thread, but d80 still emitted a channel-level `A2A result from m5bot-local-m5-main ...` because `channel.deliverA2AEvent` treated `co_present` as an explicit delegator text-delivery mode.
+- Decision: `co_present` means the executor owns the shared Discord transcript. Delegator transport consumers still persist outbound task status/result, but must not enqueue result text to bot egress. `mirror` remains the explicit delegator transcript mode; transparent non-co-present results still use safe egress.
+- Changed files: `channel/a2a.go`, `channel/a2a_phase8_test.go`, and this progress ledger.
+- Validation:
+  - `go test ./channel -run 'TestA2A(CoPresentTransparentResultDoesNotDuplicateExecutorTranscript|ProxyDelegatorResultDoesNotDuplicateExecutorTranscript|TransparentResultQueuesSafeEgressAndAudit|MirrorTranscriptQueuesStatusLabel)'` passed.
+  - `env -u NATS_URL -u NATS_CREDS_FILE -u NATS_TOKEN -u NATS_TLS_CA_FILE -u A2A_AGENT_ID -u A2A_RUNTIME_ID_MODE -u A2A_AGENT_NAME -u A2A_AGENT_DESCRIPTION -u A2A_REQUIRE_CONFIRMATION_FOR_REMOTE go test ./...` passed.
+  - `git diff --check` passed.
+  - Built `/tmp/kiro-discord-bot-darwin-a2a-copresent-dedupe` (`1b645a35f65afe8e6570c185f1118c7c8543c6cef0057c4eb91f34bfe15e14da` before local codesign) and `/tmp/kiro-discord-bot-linux-amd64-a2a-copresent-dedupe` (`629e1aaa29477228aced31a25455b4a7debb7ed70f39d81dee87ba798f9be49f`).
+  - Local M5 bot restarted and logged `NATS node enabled`, `transport consumers started`, and `Bot running as M5Bot#8313`.
+  - Remote d80 bot service is `active` and logged `NATS node enabled`, `transport consumers started`, and `Bot running as ChunBot#4533`.
+  - Live remote-delegator smoke `msg_a2a_copresent_dedupe_56083689` created a real d80 outbound task row and m5 inbound task row; both reached `TASK_STATE_COMPLETED` revision 2. Local M5 audit recorded one executor `agent_response_sent` in thread `1532779483545862414` with content `A2A co-present dedupe OK 56083689`; remote d80 audit recorded zero `a2a_transcript_posted`/`a2a_result_delivered` rows for that message.
+- Runtime settings touched: no additional policy changes beyond R20.
+- Deployment hosts touched: local M5 bot binary/service and remote d80 bot binary/service.
+- Rollback boundary: restore `/Users/chun/Projects/kiro-discord-bot-local/bin/kiro-discord-bot.pre-a2a-copresent-dedupe-fix-20260801000414` locally or `/opt/kiro-discord-bot/kiro-discord-bot.pre-a2a-copresent-dedupe-fix-20260801000454` on d80, then revert the R21 files above. Co-present executor replies would again risk duplicate delegator channel result posts.
+- Next phase: rerun the original Discord joke-review interaction once from the user side; expected observable result is one M5 review in the shared thread and no `A2A result from ...` ChunBot channel post.
+
 ## Master goal prompt
 
 Use this prompt when starting or resuming the full implementation program:

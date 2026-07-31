@@ -49,6 +49,22 @@ func TestA2AProxyDelegatorResultDoesNotDuplicateExecutorTranscript(t *testing.T)
 	}
 }
 
+func TestA2ACoPresentTransparentResultDoesNotDuplicateExecutorTranscript(t *testing.T) {
+	dir := t.TempDir()
+	m := &Manager{dataDir: dir}
+	row := phase8TaskRow()
+	row.ResultVisibility = "transparent"
+	row.DiscordTranscriptMode = "co_present"
+	payload := a2a.TaskEventPayload{Revision: 3, Result: &a2a.TaskExecutionResult{State: a2a.TaskStateCompleted, Content: "co-present done"}}
+	if err := m.deliverA2AEvent(context.Background(), row, a2a.EventKindResult, payload); err != nil {
+		t.Fatalf("deliverA2AEvent: %v", err)
+	}
+	actions, _ := botegress.ReadPending(dir)
+	if len(actions) != 0 {
+		t.Fatalf("co-present transparent result duplicated executor transcript: %+v", actions)
+	}
+}
+
 func TestA2AMirrorTranscriptQueuesStatusLabel(t *testing.T) {
 	dir := t.TempDir()
 	m := &Manager{dataDir: dir}
