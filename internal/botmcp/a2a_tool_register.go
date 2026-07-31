@@ -76,7 +76,7 @@ func a2aReadTool(name, description string) mcp.Tool {
 }
 
 func a2aTaskStatusTool() mcp.Tool {
-	t := a2aReadTool(ToolA2ATaskStatus, "Authoritative A2A progress source: read TaskStore state and event history for one task or recent outbound tasks in the bound Discord channel. Use this for delegation status/progress; audit rows are only historical timeline evidence and may lag terminal state.")
+	t := a2aReadTool(ToolA2ATaskStatus, "Authoritative A2A progress source: read TaskStore state and event history for one task or recent outbound tasks in the bound Discord channel. Use this for delegation status/progress; audit rows are only historical timeline evidence and may lag terminal state. For transparent/co_present tasks, the executor already posts the user-visible result in the shared Discord thread, so this tool omits result text and callers must not repost or paraphrase it.")
 	for _, opt := range []mcp.ToolOption{
 		mcp.WithString("task_id", mcp.Description("Remote A2A task ID. If no task matches, the value is also tried as a NATS message_id/Discord correlation ID.")),
 		mcp.WithString("local_id", mcp.Description("Local durable task ID returned by bot_a2a_delegate.")),

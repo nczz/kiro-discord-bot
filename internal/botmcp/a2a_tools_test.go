@@ -529,6 +529,63 @@ func TestA2AToolsTaskStatusRequiresOwnerOrManager(t *testing.T) {
 	}
 }
 
+func TestA2AToolsTaskStatusOmitsCoPresentResultText(t *testing.T) {
+	ctx := context.Background()
+	svc, err := NewA2AService(A2AServiceConfig{
+		DataDir:        t.TempDir(),
+		Config:         a2a.Config{AgentID: "adam-n200", TaskTimeoutSec: 60},
+		BoundGuildID:   "guild-1",
+		BoundChannelID: "channel-1",
+		ConnectNATS:    false,
+	})
+	if err != nil {
+		t.Fatalf("NewA2AService: %v", err)
+	}
+	defer svc.Close()
+	row, err := svc.tasks.CreateOutbound(ctx, a2a.TaskRow{
+		TaskID:                "task_copresent",
+		MessageID:             "msg_copresent",
+		ClientTaskRef:         "owner-1",
+		FromAgent:             "adam-n200",
+		ToAgent:               "peer-n100",
+		ChannelID:             "channel-1",
+		GuildID:               "guild-1",
+		State:                 a2a.TaskStateCompleted,
+		ResultVisibility:      "transparent",
+		DiscordTranscriptMode: "co_present",
+		Terminal:              true,
+	})
+	if err != nil {
+		t.Fatalf("CreateOutbound: %v", err)
+	}
+	if err := svc.tasks.AppendEvent(ctx, a2a.EventRow{TaskID: row.TaskID, Revision: 1, EventType: a2a.EventKindResult, State: a2a.TaskStateCompleted, PayloadJSON: `{"taskId":"task_copresent","state":"TASK_STATE_COMPLETED","content":"executor posted final text","revision":1}`}); err != nil {
+		t.Fatalf("AppendEvent: %v", err)
+	}
+	got, err := svc.TaskStatus(ctx, A2AToolRequest{GuildID: "guild-1", ChannelID: "channel-1", RequestedBy: "owner", RequestedByID: "owner-1", LocalID: row.LocalID})
+	if err != nil {
+		t.Fatalf("TaskStatus: %v", err)
+	}
+	if !got.OK || got.Task == nil || len(got.Task.Events) != 1 {
+		t.Fatalf("TaskStatus = %+v, want task event", got)
+	}
+	if got.Task.Events[0].Content != "" || !strings.Contains(got.Message, "omitted") {
+		t.Fatalf("TaskStatus co-present result = %+v message=%q, want omitted content", got.Task.Events[0], got.Message)
+	}
+}
+
+func TestA2AToolsAutoDeliveryUsesCoPresentForSameDiscordRuntime(t *testing.T) {
+	req := A2AToolRequest{GuildID: "guild-1", ChannelID: "channel-1"}
+	peer := a2a.PeerRow{ExtendedCard: a2a.ExtendedAgentCard{DiscordGuildID: "guild-1", DiscordChannelID: "channel-1"}}
+	visibility, mode := runtimeDeliveryDefaultsForPeer("m5-main", "d80-main", req, peer)
+	if visibility != "transparent" || mode != "co_present" {
+		t.Fatalf("runtimeDeliveryDefaultsForPeer = %s/%s, want transparent/co_present", visibility, mode)
+	}
+	delivery := deliveryOptionsForDelegate(req, visibility, mode, "m5bot-local-m5-main", 60, 1)
+	if !delivery.ShareDiscordContext || delivery.CoPresentFrom != "m5bot-local-m5-main" || delivery.DiscordContext == nil || len(delivery.DiscordContextJSON) == 0 {
+		t.Fatalf("deliveryOptionsForDelegate = %+v, want shared Discord context from runtime", delivery)
+	}
+}
+
 func TestA2AToolsTaskStatusManagerCannotCrossGuild(t *testing.T) {
 	err := authorizeTaskStatus(a2a.TaskRow{GuildID: "guild-1", ChannelID: "channel-1", ClientTaskRef: "owner-1"}, A2AToolRequest{GuildID: "guild-2", ChannelID: "channel-2", RequestedByID: "manager-1", ManageChannels: true})
 	if err == nil || !strings.Contains(err.Error(), string(a2a.ErrorPolicyDenied)) {

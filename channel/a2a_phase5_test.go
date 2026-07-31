@@ -325,6 +325,50 @@ func TestManagerA2AStartsDiscordConversationWithMetrics(t *testing.T) {
 	}
 }
 
+func TestManagerA2ACoPresentInitialTaskUsesSharedDiscordThread(t *testing.T) {
+	h := newPhase5Harness(t, func(policy *a2a.ChannelA2APolicy, cfg *a2a.Config) {
+		policy.ResultVisibility = "transparent"
+		policy.DiscordTranscriptMode = "co_present"
+		policy.ShareDiscordContext = true
+		policy.CoPresentFrom = []string{"eve-local"}
+	})
+	dc := a2a.DiscordContext{GuildID: "guild-1", ChannelID: "channel-1", ThreadID: "thread-shared"}
+	raw, _ := json.Marshal(dc)
+	req := phase5Request()
+	req.GuildID = "guild-1"
+	req.ChannelID = "channel-1"
+	req.ResultVisibility = "transparent"
+	req.DiscordTranscriptMode = "co_present"
+	req.Delivery.ShareDiscordContext = true
+	req.Delivery.CoPresentFrom = "eve-local"
+	req.Delivery.DiscordContext = &dc
+	req.Delivery.DiscordContextJSON = raw
+	res, err := h.manager.AdmitA2ATask(context.Background(), req)
+	if err != nil {
+		t.Fatalf("AdmitA2ATask error: %v", err)
+	}
+	if !res.Accepted {
+		t.Fatalf("AdmitA2ATask rejected: %#v", res.Error)
+	}
+	result := runPhase5(t, h, res.Admission, func(cb acp.AsyncCallbacks) { cb.OnComplete("worker result", nil) })
+	if result.State != a2a.TaskStateCompleted {
+		t.Fatalf("RunA2ATask result = %#v, want completed", result)
+	}
+	reqs, bodies := h.rt.Snapshot()
+	var createdThread, finalInSharedThread bool
+	for i, req := range reqs {
+		if strings.HasPrefix(req, "POST ") && strings.Contains(req, "/channels/channel-1/threads") && !strings.Contains(req, "/messages/") {
+			createdThread = true
+		}
+		if strings.HasPrefix(req, "POST ") && strings.Contains(req, "/channels/thread-shared/messages") && strings.Contains(bodies[i], "worker result") {
+			finalInSharedThread = true
+		}
+	}
+	if createdThread || !finalInSharedThread {
+		t.Fatalf("createdThread=%v finalInSharedThread=%v reqs=%v bodies=%v", createdThread, finalInSharedThread, reqs, bodies)
+	}
+}
+
 func TestManagerA2AContinuationReusesExecutorConversationThread(t *testing.T) {
 	h := newPhase5Harness(t, nil)
 	admission := admitPhase5(t, h)

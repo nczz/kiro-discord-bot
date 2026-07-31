@@ -379,7 +379,7 @@ func (s *A2AService) TaskStatus(ctx context.Context, req A2AToolRequest) (A2AToo
 			return responseError(err), nil
 		}
 		sum := s.summarizeTaskWithEvents(ctx, row)
-		return A2AToolResponse{OK: true, Message: "A2A task loaded", Task: &sum}, nil
+		return A2AToolResponse{OK: true, Message: taskStatusMessage(row), Task: &sum}, nil
 	}
 	if strings.TrimSpace(req.TaskID) != "" {
 		row, err := s.lookupOutboundTaskOrMessage(ctx, strings.TrimSpace(req.TaskID))
@@ -390,7 +390,7 @@ func (s *A2AService) TaskStatus(ctx context.Context, req A2AToolRequest) (A2AToo
 			return responseError(err), nil
 		}
 		sum := s.summarizeTaskWithEvents(ctx, row)
-		return A2AToolResponse{OK: true, Message: "A2A task loaded", Task: &sum}, nil
+		return A2AToolResponse{OK: true, Message: taskStatusMessage(row), Task: &sum}, nil
 	}
 	if strings.TrimSpace(req.MessageID) != "" {
 		row, err := s.tasks.GetByDirectionMessage(ctx, "outbound", a2a.MessageID(strings.TrimSpace(req.MessageID)))
@@ -401,7 +401,7 @@ func (s *A2AService) TaskStatus(ctx context.Context, req A2AToolRequest) (A2AToo
 			return responseError(err), nil
 		}
 		sum := s.summarizeTaskWithEvents(ctx, row)
-		return A2AToolResponse{OK: true, Message: "A2A task loaded", Task: &sum}, nil
+		return A2AToolResponse{OK: true, Message: taskStatusMessage(row), Task: &sum}, nil
 	}
 	rows, err := s.tasks.ListByChannel(ctx, "outbound", strings.TrimSpace(req.ChannelID), req.Limit)
 	if err != nil {
@@ -532,7 +532,7 @@ func (s *A2AService) Delegate(ctx context.Context, req A2AToolRequest) (A2AToolR
 	case "safe":
 		resultVisibility, transcriptMode = "proxy", "delegator"
 	case "auto":
-		resultVisibility, transcriptMode = runtimeDeliveryDefaults(policy.ChannelRef, targetChannelRef)
+		resultVisibility, transcriptMode = runtimeDeliveryDefaultsForPeer(policy.ChannelRef, targetChannelRef, req, peer)
 	}
 	changeID := hashString("delegate:" + req.GuildID + ":" + req.ChannelID + ":" + targetChannelRef + ":" + string(target) + ":" + req.SkillID + ":" + resultVisibility + ":" + transcriptMode + ":" + message)
 	needsConfirmation := req.RequiresConfirmation || s.cfg.Config.RequireConfirmationForRemote
@@ -552,7 +552,28 @@ func (s *A2AService) Delegate(ctx context.Context, req A2AToolRequest) (A2AToolR
 	payload, _ := json.Marshal(map[string]string{"kind": "text", "text": message})
 	msgID := a2a.MessageID("msg_" + randomToken(12))
 	source := sourceAgentForRuntimeMode(s.cfg.Config, policy)
-	taskReq := a2a.TaskExecutionRequest{MessageID: msgID, ClientTaskRef: req.RequestedByID, ContextID: "discord:" + req.ChannelID + ":" + string(msgID), From: source, To: target, ChannelID: req.ChannelID, GuildID: req.GuildID, ChannelRef: targetChannelRef, SkillID: req.SkillID, UserVisibleSummary: truncateForSummary(message), Payload: payload, Delivery: a2a.DeliveryOptions{TimeoutSec: s.cfg.Config.TaskTimeoutSec, DiscordReplyChannelID: req.ChannelID, DiscordReplyThreadID: deliveryChannelID(req.ChannelID), MaxDelegationDepth: delegationDepth}, ResultVisibility: resultVisibility, DiscordTranscriptMode: transcriptMode, OriginRequester: a2a.OriginRequester{DiscordUserID: strings.TrimSpace(req.RequestedByID), DiscordUsername: strings.TrimSpace(req.RequestedBy), DiscordGuildID: strings.TrimSpace(req.GuildID)}}
+	delivery := deliveryOptionsForDelegate(req, resultVisibility, transcriptMode, source, s.cfg.Config.TaskTimeoutSec, delegationDepth)
+	taskReq := a2a.TaskExecutionRequest{
+		MessageID:             msgID,
+		ClientTaskRef:         req.RequestedByID,
+		ContextID:             "discord:" + req.ChannelID + ":" + string(msgID),
+		From:                  source,
+		To:                    target,
+		ChannelID:             req.ChannelID,
+		GuildID:               req.GuildID,
+		ChannelRef:            targetChannelRef,
+		SkillID:               req.SkillID,
+		UserVisibleSummary:    truncateForSummary(message),
+		Payload:               payload,
+		Delivery:              delivery,
+		ResultVisibility:      resultVisibility,
+		DiscordTranscriptMode: transcriptMode,
+		OriginRequester: a2a.OriginRequester{
+			DiscordUserID:   strings.TrimSpace(req.RequestedByID),
+			DiscordUsername: strings.TrimSpace(req.RequestedBy),
+			DiscordGuildID:  strings.TrimSpace(req.GuildID),
+		},
+	}
 	row, err := pub.SendTask(ctx, taskReq)
 	if err != nil {
 		meta := a2a.AuditMetadata(a2a.AuditMetadataInput{MessageID: msgID, ClientTaskRef: req.RequestedByID, ContextID: taskReq.ContextID, FromAgent: taskReq.From, ToAgent: taskReq.To, ChannelID: req.ChannelID, GuildID: req.GuildID, ChannelRef: targetChannelRef, SkillID: req.SkillID, ResultVisibility: taskReq.ResultVisibility, DiscordTranscriptMode: taskReq.DiscordTranscriptMode, ActorAgentID: s.cfg.Config.AgentID, ActorDiscordUserID: req.RequestedByID, ErrorCode: a2a.ErrorNATSPublishFailed, PayloadSize: len(payload)})
@@ -863,6 +884,46 @@ func runtimeDeliveryDefaults(sourceChannelRef, targetChannelRef string) (string,
 	return "proxy", "delegator"
 }
 
+func runtimeDeliveryDefaultsForPeer(sourceChannelRef, targetChannelRef string, req A2AToolRequest, peer a2a.PeerRow) (string, string) {
+	if sameDiscordConversation(req, peer) {
+		return "transparent", "co_present"
+	}
+	return runtimeDeliveryDefaults(sourceChannelRef, targetChannelRef)
+}
+
+func sameDiscordConversation(req A2AToolRequest, peer a2a.PeerRow) bool {
+	card := peer.ExtendedCard
+	guildID := strings.TrimSpace(req.GuildID)
+	channelID := strings.TrimSpace(req.ChannelID)
+	return guildID != "" &&
+		channelID != "" &&
+		strings.TrimSpace(card.DiscordGuildID) == guildID &&
+		strings.TrimSpace(card.DiscordChannelID) == channelID
+}
+
+func deliveryOptionsForDelegate(req A2AToolRequest, resultVisibility, transcriptMode string, source a2a.AgentID, timeoutSec, delegationDepth int) a2a.DeliveryOptions {
+	delivery := a2a.DeliveryOptions{
+		TimeoutSec:            timeoutSec,
+		DiscordReplyChannelID: req.ChannelID,
+		DiscordReplyThreadID:  deliveryChannelID(req.ChannelID),
+		MaxDelegationDepth:    delegationDepth,
+	}
+	if resultVisibility == "transparent" && transcriptMode == "co_present" && strings.TrimSpace(req.GuildID) != "" && strings.TrimSpace(req.ChannelID) != "" {
+		delivery.ShareDiscordContext = true
+		delivery.CoPresentFrom = source
+		ctx := a2a.DiscordContext{
+			GuildID:   strings.TrimSpace(req.GuildID),
+			ChannelID: strings.TrimSpace(req.ChannelID),
+			ThreadID:  delivery.DiscordReplyThreadID,
+		}
+		delivery.DiscordContext = &ctx
+		if raw, err := json.Marshal(ctx); err == nil {
+			delivery.DiscordContextJSON = raw
+		}
+	}
+	return delivery
+}
+
 func policyDelegatesRuntime(policy a2a.ChannelA2APolicy, agent, skill, targetChannelRef string) bool {
 	for _, target := range policy.DelegateTargets {
 		targetAgent := strings.TrimSpace(target.RuntimeAgentID)
@@ -1155,6 +1216,17 @@ func summarizeTask(row a2a.TaskRow) A2ATaskSummary {
 	return A2ATaskSummary{LocalID: row.LocalID, TaskID: string(row.TaskID), MessageID: string(row.MessageID), Direction: row.Direction, FromAgent: string(row.FromAgent), ToAgent: string(row.ToAgent), ExecutorAgent: string(row.ExecutorAgent), ChannelID: row.ChannelID, ChannelRef: row.ChannelRef, SkillID: row.SkillID, ResultVisibility: row.ResultVisibility, DiscordTranscriptMode: row.DiscordTranscriptMode, State: row.State, Revision: row.Revision, Terminal: row.Terminal, ErrorCode: row.Error.Code, ErrorMessage: row.Error.Message, CreatedAt: row.CreatedAt.Format(time.RFC3339), UpdatedAt: row.UpdatedAt.Format(time.RFC3339)}
 }
 
+func taskStatusMessage(row a2a.TaskRow) string {
+	if suppressTaskStatusResultContent(row) {
+		return "A2A task loaded; executor already owns the shared Discord transcript, so result text is omitted here"
+	}
+	return "A2A task loaded"
+}
+
+func suppressTaskStatusResultContent(row a2a.TaskRow) bool {
+	return strings.TrimSpace(row.ResultVisibility) == "transparent" && strings.TrimSpace(row.DiscordTranscriptMode) == "co_present"
+}
+
 func (s *A2AService) summarizeTaskWithEvents(ctx context.Context, row a2a.TaskRow) A2ATaskSummary {
 	sum := summarizeTask(row)
 	if row.TaskID == "" {
@@ -1165,8 +1237,13 @@ func (s *A2AService) summarizeTaskWithEvents(ctx context.Context, row a2a.TaskRo
 		return sum
 	}
 	sum.Events = make([]A2ATaskEventSummary, 0, len(events))
+	suppressResultContent := suppressTaskStatusResultContent(row)
 	for _, event := range events {
-		sum.Events = append(sum.Events, summarizeTaskEvent(event))
+		eventSum := summarizeTaskEvent(event)
+		if suppressResultContent && event.EventType == a2a.EventKindResult {
+			eventSum.Content = ""
+		}
+		sum.Events = append(sum.Events, eventSum)
 	}
 	return sum
 }

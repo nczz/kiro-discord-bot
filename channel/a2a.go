@@ -276,7 +276,10 @@ func (m *Manager) remoteMemoryWriteAllowed(channelID string) bool {
 }
 
 func a2aConversationThreadID(admitted a2a.A2AAdmission) string {
-	if admitted.Continuation == nil || len(admitted.Request.Delivery.DiscordContextJSON) == 0 {
+	if len(admitted.Request.Delivery.DiscordContextJSON) == 0 {
+		return ""
+	}
+	if admitted.Continuation == nil && (admitted.Request.DiscordTranscriptMode != "co_present" || !admitted.Request.Delivery.ShareDiscordContext) {
 		return ""
 	}
 	var dc a2a.DiscordContext
@@ -430,7 +433,9 @@ func validateA2ADeliveryAgainstPolicy(req a2a.TaskExecutionRequest, policy a2a.C
 			return fmt.Errorf("Discord context channel %s is not allowed by channel policy", dc.ChannelID)
 		}
 	}
-	if req.Delivery.CoPresentFrom != "" && !agentAllowed(policy.CoPresentFrom, req.Delivery.CoPresentFrom) {
+	if req.Delivery.CoPresentFrom != "" &&
+		!agentAllowed(policy.CoPresentFrom, req.Delivery.CoPresentFrom) &&
+		!agentAllowed(policy.CoPresentFromRuntimes, req.Delivery.CoPresentFrom) {
 		return fmt.Errorf("co-present sender %s is not allowed", req.Delivery.CoPresentFrom)
 	}
 	return nil

@@ -684,6 +684,26 @@ Append one subsection per completed phase.
 - Rollback boundary: restore `/Users/chun/Projects/kiro-discord-bot-local/bin/kiro-discord-bot.pre-a2a-dedupe-fix-20260731232516` locally or `/opt/kiro-discord-bot/kiro-discord-bot.pre-a2a-dedupe-fix-20260731232602` on d80, then revert the R19 files above. Delegator proxy result messages would again be emitted for executor-owned tasks.
 - Next phase: observe the original joke-review flow once more from Discord; automated and live delegated smoke now cover the duplicate channel-post regression.
 
+
+### R20 co-present shared-thread delivery
+
+- Status: deployed.
+- Decision: when a delegated runtime card resolves to the same Discord guild/channel as the caller, `bot_a2a_delegate` now selects `result_visibility=transparent` + `discord_transcript_mode=co_present`, attaches verified Discord context to the transport envelope, and lets the executor bot post the final answer in the existing shared Discord thread. `bot_a2a_task_status` remains authoritative for state, but omits result text for transparent/co-present tasks so the delegator MCP caller cannot duplicate the executor's user-facing final.
+- Changed files: `internal/botmcp/a2a_tools.go`, `internal/botmcp/a2a_tool_register.go`, `internal/botmcp/a2a_tools_test.go`, `channel/a2a.go`, `channel/a2a_phase5_test.go`, and this progress ledger.
+- Validation:
+  - `go test ./channel ./internal/botmcp -run 'TestManagerA2ACoPresentInitialTaskUsesSharedDiscordThread|TestManagerA2AContinuationReusesExecutorConversationThread|TestManagerA2AThreadCreationFailureReleasesWorker|TestA2AToolsTaskStatusOmitsCoPresentResultText|TestA2AToolsAutoDeliveryUsesCoPresentForSameDiscordRuntime|TestA2AToolsTaskStatusRequiresOwnerOrManager'` passed.
+  - `env -u NATS_URL -u NATS_CREDS_FILE -u NATS_TOKEN -u NATS_TLS_CA_FILE -u A2A_AGENT_ID -u A2A_RUNTIME_ID_MODE -u A2A_AGENT_NAME -u A2A_AGENT_DESCRIPTION -u A2A_REQUIRE_CONFIRMATION_FOR_REMOTE go test ./a2a ./channel ./bot ./internal/botmcp -run 'Test.*A2A|TestA2ATools|TestManagerA2A|TestBuildA2APrompt'` passed.
+  - `env -u NATS_URL -u NATS_CREDS_FILE -u NATS_TOKEN -u NATS_TLS_CA_FILE -u A2A_AGENT_ID -u A2A_RUNTIME_ID_MODE -u A2A_AGENT_NAME -u A2A_AGENT_DESCRIPTION -u A2A_REQUIRE_CONFIRMATION_FOR_REMOTE go test ./...` passed.
+  - `git diff --check` passed.
+  - Built `/tmp/kiro-discord-bot-darwin-a2a-copresent` (`411bf96d944b6e5a062ec95b339373e33212d8b284d8c02f46d342d2acf6cbd3` before local codesign) and `/tmp/kiro-discord-bot-linux-amd64-a2a-copresent` (`82f9ee12ff90a00cbc884927013b6c1abb635e04e2a6eaa4177d8ca6da9ae204`).
+  - Local M5 bot restarted and logged `NATS node enabled`, `transport consumers started`, and `Bot running as M5Bot#8313`.
+  - Remote d80 bot service is `active` and logged `NATS node enabled`, `transport consumers started`, and `Bot running as ChunBot#4533`.
+  - Live co-present smoke `msg_a2a_copresent_cc226e3e` from `d80-chunbot-d80-main` to `m5bot-local-m5-main` reached `TASK_STATE_COMPLETED` revision 2; local inbound `discord_context_json` preserved the supplied shared thread `1532771856149512292`; local audit recorded exactly one `agent_response_sent` in that thread with content `A2A co-present OK cc226e3e`.
+- Runtime settings touched: local `m5-main` and remote `d80-main` A2A policies were set to `result_visibility=transparent`, `discord_transcript_mode=co_present`, and `share_discord_context=1`.
+- Deployment hosts touched: local M5 bot binary/service and remote d80 bot binary/service. A transient remote deploy used a Linux arm64 binary on x86_64 and failed with systemd `203/EXEC`; it was immediately replaced by the amd64 build above and the service is active.
+- Rollback boundary: restore `/Users/chun/Projects/kiro-discord-bot-local/bin/kiro-discord-bot.pre-a2a-copresent-json-fix-20260731235306` locally or `/opt/kiro-discord-bot/kiro-discord-bot.pre-a2a-copresent-json-fix-20260731235352` on d80, revert the R20 files above, and set both live policies back to `result_visibility=proxy`, `discord_transcript_mode=delegator`, `share_discord_context=0`. Co-present same-thread final replies and status-result redaction would be disabled.
+- Next phase: run one natural Discord-issued ChunBot→M5 delegation in the shared thread to confirm the model-facing MCP path no longer restates the executor result after `bot_a2a_task_status`.
+
 ## Master goal prompt
 
 Use this prompt when starting or resuming the full implementation program:
