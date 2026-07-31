@@ -763,6 +763,22 @@ Append one subsection per completed phase.
 - Rollback boundary: revert the R23 files above. Runtime mode would again show bot host rows in peers output and default runtime IDs would derive from manual `channel_ref`/`discord-<channel_id>` rather than channel-name aliases/hash fallback.
 - Next phase: commit the reviewed pre-release runtime peer identity refactor, then run a local `/a2a peers` UX smoke before any deployment.
 
+### R24 local peers UX smoke
+
+- Status: local smoke passed; not remotely deployed.
+- Trigger: follow R23 next phase before deployment.
+- Decision: install the R23 commit binary locally only and smoke the live local A2A peer data through `A2AService.Peers`, matching `/a2a peers` runtime-mode filtering rules without mutating live policy DB rows.
+- Changed files: this progress ledger only.
+- Validation:
+  - Built `/tmp/kiro-discord-bot-darwin-r23-peers-smoke` with SHA-256 `ed707ff21287b04ca5b976e3c9a2e03245d1ddea2a1f831eb3d30924c4f58850`.
+  - Local M5 bot restarted from `/Users/chun/Projects/kiro-discord-bot-local/bin/kiro-discord-bot` and logged `NATS node enabled`, `transport consumers started`, and `Bot running as M5Bot#8313`.
+  - Live peer DB before the smoke contained bot host rows `m5bot-local`/`d80-chunbot` plus runtime rows `m5bot-local-m5-main`/`d80-chunbot-d80-main`.
+  - Temporary live smoke test `TestLivePeersUXSmoke` passed. Returned peers were only Discord `channel` runtime rows in guild `1495737767827865620`: `d80-chunbot-d80-main` with `delegationAllowed=true` and skill `d80-main/task`, plus `m5bot-local-m5-main` with one hidden skill and `delegationAllowed=false`; bot host rows did not appear.
+- Runtime settings touched: no env/policy DB changes.
+- Deployment hosts touched: local M5 bot binary/service only.
+- Rollback boundary: restore `/Users/chun/Projects/kiro-discord-bot-local/bin/kiro-discord-bot.pre-r23-peers-smoke-20260801011249` and restart `local-kiro-bot`.
+- Next phase: if acceptable, build the linux-amd64 R23 binary for d80, backup remote binary, deploy, restart, then repeat the same `/a2a peers` runtime-only smoke against d80.
+
 ## Master goal prompt
 
 Use this prompt when starting or resuming the full implementation program:
