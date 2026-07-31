@@ -107,7 +107,7 @@ Response/inbox rule: production must avoid blanket `_INBOX.>` unless account iso
 - Each NATS credential identity maps to one allowed runtime ID or an explicit set of runtime IDs owned by the same bot process.
 - Inbound subject `from` and `Envelope.From` must equal an allowed source runtime for that credential.
 - Subject `to` must match `Envelope.To` when `Envelope.To` is present.
-- Payload `channelRef`, when present, must match the target runtime registry record; mismatches are confused-deputy failures.
+- Payload `channelRef`, when present, must match the target policy-derived runtime record; mismatches are confused-deputy failures.
 - Credential rotation must preserve the same stable runtime IDs; do not mint PID, boot timestamp, or host-ephemeral IDs.
 
 ## Negative ACL smokes

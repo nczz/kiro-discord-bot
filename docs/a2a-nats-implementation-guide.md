@@ -107,7 +107,7 @@ Grounded code seams identified from the current repository:
 
 | Phase | Intent | Primary files | Required validation |
 |---:|---|---|---|
-| R1 | Add runtime identity registry and config mode without changing transport | `a2a/runtime.go`, `a2a/policy_store.go`, `config.go`, `.env.example`, `channel/doctor_env.go` | `go test ./a2a ./channel -run 'Test(RuntimeID|RuntimeRegistry|PolicyStore|Doctor.*A2A)'` |
+| R1 | Add policy-derived runtime authority and config mode without changing transport | `a2a/runtime.go`, `a2a/policy_store.go`, `config.go`, `.env.example`, `channel/doctor_env.go` | `go test ./a2a ./channel -run 'Test(RuntimeID|PolicyStore|Doctor.*A2A)'` |
 | R2 | Publish one peer card and heartbeat per discoverable runtime | `a2a/card.go`, `a2a/discovery.go`, `a2a/peer_store.go`, `channel/a2a_peer.go` | `go test ./a2a ./channel -run 'Test(AgentCard|Peer|Heartbeat|StalePeer|Runtime)'` |
 | R3 | Canonicalize policy to runtime targets | `a2a/policy_store.go`, `internal/botmcp/a2a_tools.go`, `bot/a2a_commands.go`, `locale/lang/*.json` | `go test ./a2a ./internal/botmcp ./bot ./locale -run 'Test.*A2A.*(Policy|Delegate|Setup|Locale|Runtime)'` |
 | R4 | Route task/control/event subjects by runtime ID with dual-mode compatibility | `a2a/subject.go`, `a2a/transport.go`, `a2a/task_store.go`, `channel/a2a.go`, `channel/worker.go` | `go test ./a2a ./channel -run 'Test.*A2A.*(Runtime|Transport|Integration|ConfusedDeputy|Duplicate|Cancel|Replay)'` |
@@ -188,37 +188,37 @@ Slash fallback commands MUST call the same internal service methods; no separate
 
 Every runtime migration phase below is a coding boundary. Do not start the next phase until its validation command passes and the progress ledger records evidence.
 
-### Phase R1: Runtime identity registry
+### Phase R1: Policy-derived runtime authority
 
-**Intent**: introduce stable runtime IDs and runtime registry while leaving current bot-level transport inert unless `A2A_RUNTIME_ID_MODE` enables compatibility.
+**Intent**: introduce stable runtime IDs and make `channel_a2a_policy` the single local runtime authority while leaving current bot-level transport inert unless `A2A_RUNTIME_ID_MODE` enables compatibility.
 
 **Touched files/symbols**: `a2a/runtime.go`, `a2a/policy_store.go`, `config.go`, `.env.example`, `channel/doctor_env.go`, `channel/doctor_env_test.go`, runtime/policy tests.
 **Preconditions**: R0 docs are validated; no runtime `.env`, `DATA_DIR`, deployment host, or live service state is changed.
 
 **Change steps**:
 1. Add `a2a.RuntimeIDMode` with `legacy|dual|runtime` parsing and doctor redaction.
-2. Add runtime ID generation from `bot_agent_id + channel_ref` for first enable only; persist `runtime_agent_id` immutably and treat later `channel_ref` changes as alias/display changes.
-3. Add a local SQLite `a2a_runtime_registry` table under `DATA_DIR/a2a/` with schema matching spec `RuntimeRecord`.
+2. Add runtime ID generation from `bot_agent_id + channel_ref` for first enable only; persist `runtime_agent_id` immutably in `channel_a2a_policy` and treat later `channel_ref` changes as alias/display changes.
+3. Do not add a separate `a2a_runtime_registry` table in v1; derive `RuntimeRecord` DTOs from policy rows so policy remains the single local ownership authority.
 4. Add migratable policy fields `runtime_agent_id`, `bot_agent_id`, `channel_ref` as nullable for disabled legacy rows; enforce non-empty/immutable only before `enabled=1` or `discoverable=1`.
 5. Add canonical policy fields `accept_from_runtimes`, `delegate_targets`, `co_present_from_runtimes`, and runtime-scoped `remote_tool_policy_json` with `allow_memory_write=false` by default.
 6. Preserve legacy fields as migration input only.
 
-**Expected result**: config/doctor can show the selected runtime mode and policy store can load/save multiple runtime records for one bot base ID.
-**Validation**: `go test ./a2a ./channel -run 'Test(RuntimeID|RuntimeRegistry|PolicyStore|Doctor.*A2A|RemoteMemoryWriteDenied|RemoteMemoryWriteAllowed)'`.
-**Bugs caught**: unstable runtime ID generation, Discord snowflake leakage, accidental memory-write enablement, and missing legacy-field migration reads.
+**Expected result**: config/doctor can show the selected runtime mode and the policy store can load/save multiple policy-derived runtime records for one bot base ID.
+**Validation**: `go test ./a2a ./channel -run 'Test(RuntimeID|PolicyStore|Doctor.*A2A|RemoteMemoryWriteDenied|RemoteMemoryWriteAllowed)'`.
+**Bugs caught**: unstable runtime ID generation, Discord snowflake leakage, duplicate runtime authority tables, accidental memory-write enablement, and missing legacy-field migration reads.
 **Rollback boundary**: revert R1 config/runtime/policy migrations only; existing bot-level A2A behavior remains the fallback while `A2A_RUNTIME_ID_MODE=legacy`.
-**Cross-phase contract**: R2-R6 consume `RuntimeRecord`, `RuntimeIDMode`, canonical runtime policy fields, and fail-closed remote tool policy.
-**Done criteria**: runtime IDs are deterministic, immutable, and subject-safe; registry rows are durable; disabled legacy policy rows migrate without forced runtime IDs; legacy fields remain readable but cannot grant new runtime trust by themselves.
+**Cross-phase contract**: R2-R6 consume policy-derived `RuntimeRecord`, `RuntimeIDMode`, canonical runtime policy fields, and fail-closed remote tool policy.
+**Done criteria**: runtime IDs are deterministic, immutable, and subject-safe; enabled/discoverable policy rows can derive durable runtime records; disabled legacy policy rows migrate without forced runtime IDs; legacy fields remain readable but cannot grant new runtime trust by themselves.
 
 ### Phase R2: Runtime peer cards and discovery
 
 **Intent**: publish/discover runtime cards, not bot cards, for every enabled + discoverable runtime.
 
 **Touched files/symbols**: `a2a/card.go`, `a2a/discovery.go`, `a2a/peer_store.go`, `channel/a2a_peer.go`, peer/card/discovery tests.
-**Preconditions**: R1 `RuntimeRecord` and runtime policy fields are present and validated.
+**Preconditions**: R1 policy-derived `RuntimeRecord` and runtime policy fields are present and validated.
 
 **Change steps**:
-1. Build one public AgentCard per `RuntimeRecord`.
+1. Build one public AgentCard per policy-derived `RuntimeRecord`.
 2. Add sanitized extended metadata: `runtime_agent_id`, `bot_agent_id`, `channel_ref`, runtime kind, display label.
 3. Store trust/stale/heartbeat state by runtime ID.
 4. Keep legacy bot-level card publication only in `dual` mode and mark it `legacy=true`.
@@ -227,7 +227,7 @@ Every runtime migration phase below is a coding boundary. Do not start the next 
 **Validation**: `go test ./a2a ./channel ./internal/botmcp ./bot -run 'Test.*A2A.*(Peer|Card|Heartbeat|Runtime|Discovery)'`.
 **Expected result**: peer discovery surfaces one row per discoverable runtime and stale/heartbeat state is independent per runtime.
 **Bugs caught**: collapsed same-bot runtimes, private channel discovery leaks, and skill exposure before delegation.
-**Rollback boundary**: revert runtime card/discovery publication while keeping R1 registry/policy data.
+**Rollback boundary**: revert runtime card/discovery publication while keeping R1 runtime policy data.
 **Cross-phase contract**: R3-R5 use peer rows keyed by `runtime_agent_id` with sanitized extended metadata.
 **Done criteria**: disabled/private policies publish no card; two channels on one bot publish two distinct runtime cards; legacy card appears only in dual mode.
 

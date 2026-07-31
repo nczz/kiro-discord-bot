@@ -282,9 +282,9 @@ instanceID = <runtime_agent_id>-<startUnixNano>-<random6>
 - 不可含 `.`, `*`, `>`, `/`, space。
 - 必須可由 manager 在 Discord UX 中理解。
 
-### 4.5 Runtime registry
+### 4.5 Runtime authority record
 
-本地必須保存 runtime registry：
+The local authority for a runtime is the channel A2A policy row. There is no separate runtime registry database in v1. A runtime authority record is derived from `channel_a2a_policy` fields:
 
 ```go
 type RuntimeRecord struct {
@@ -303,9 +303,11 @@ type RuntimeRecord struct {
 }
 ```
 
-Runtime registry 是 Discord private state。Public peer card 只能輸出 sanitized runtime label、`runtime_agent_id`、`bot_agent_id`、`channel_ref` 與 capability summary。
+`RuntimeRecord` is an in-memory DTO used to build cards, status, and validation context from the policy store. The persisted authority remains `channel_a2a_policy`; enabled or discoverable policy rows must have stable non-empty `runtime_agent_id`, `bot_agent_id`, and `channel_ref`.
 
-Storage location: SQLite table `a2a_runtime_registry` under `DATA_DIR/a2a/`, migrated together with A2A policy/task stores. Policy rows may duplicate `runtime_agent_id` for lookup, but the registry is the ownership authority.
+Runtime policy data is Discord private state. Public peer cards may output only sanitized runtime label, `runtime_agent_id`, `bot_agent_id`, `channel_ref`, and capability summary.
+
+Do not introduce a second persisted ownership table unless a later migration defines conflict resolution between policy and registry state. One authoritative policy row per guild/channel/thread prevents duplicate source-of-truth drift.
 
 ### 4.6 Skill slug
 
@@ -788,7 +790,7 @@ A2A enabled iff：
 NATS_URL != "" && A2A_AGENT_ID != ""
 ```
 
-If `NATS_URL != ""` but `A2A_AGENT_ID == ""`，startup fails with actionable error。If runtime mode is `dual` or `runtime`, at least one enabled local runtime policy must resolve to a runtime registry record before publishing cards or accepting tasks.
+If `NATS_URL != ""` but `A2A_AGENT_ID == ""`，startup fails with actionable error。If runtime mode is `dual` or `runtime`, enabled local runtime policies must resolve to valid runtime authority records before publishing cards or accepting tasks.
 
 If `A2A_PRODUCTION_SECURITY=true` and only `NATS_TOKEN` is set，startup fails。
 
@@ -842,7 +844,7 @@ authenticatedPrincipal -> allowed runtime IDs
 subject token from/to -> expected runtime IDs
 envelope.From -> must equal subject source runtime and an allowed runtime for this credential
 envelope.To -> must equal subject target runtime where present
-payload channelRef -> must match the local runtime registry for envelope.To when present
+payload channelRef -> must match the local policy-derived runtime record for envelope.To when present
 ```
 
 Reject if any mismatch。
@@ -1042,7 +1044,7 @@ type A2ATaskRequest struct {
     FromRuntime      string
     ToRuntime        string
     BotAgentID       string
-    ChannelRef       string // metadata; must match ToRuntime registry when present
+    ChannelRef       string // metadata; must match ToRuntime policy-derived record when present
     SkillID          string
     Parts            []A2APart
     ResultVisibility string
@@ -1065,9 +1067,9 @@ func (m *Manager) ExecuteA2ATask(ctx context.Context, req A2ATaskRequest) (A2ATa
 
 `ExecuteA2ATask` must：
 
-1. Resolve `ToRuntime -> RuntimeRecord` using runtime registry。
-2. Validate runtime policy enabled。
-3. Validate subject/envelope/runtime registry consistency。
+1. Resolve `ToRuntime -> RuntimeRecord` from the channel A2A policy store.
+2. Validate runtime policy enabled.
+3. Validate subject/envelope/policy-derived runtime consistency.
 4. Validate `AcceptFromRuntimes`。
 5. Validate `accept_skills` and exposed/accepted skill mapping。
 6. Reject or drop non-nil `DiscordContext` unless `TranscriptMode=co_present`, executor policy has `discord_transcript_mode='co_present'`, `co_present_from_runtimes` allows `FromRuntime`, the referenced guild/channel/thread resolves to the executor's own channel runtime, and Discord view/send permissions pass。
@@ -1531,14 +1533,14 @@ Error copy should distinguish bot-local failures, peer-agent failures, setup/pol
 2. If A2A disabled, continue no-op。
 3. Validate `A2A_AGENT_ID` slug。
 4. Validate security mode。
-5. Open A2A policy store and runtime registry。
-6. Resolve enabled local runtime records; in `dual`/`runtime` mode fail startup if an enabled policy cannot resolve to an owned runtime record。
+5. Open A2A policy store.
+6. Resolve enabled local runtime records from `channel_a2a_policy`; in `dual`/`runtime` mode fail startup if an enabled policy cannot produce a valid owned runtime record.
 7. Connect NATS with creds/TLS。
 8. Create JetStream context。
 9. Ensure global streams exist, or verify externally managed mode。
 10. Ensure per-runtime task/control/event consumers for resolved local runtimes。
 11. Open A2A TaskStore。
-12. Build public AgentCards from enabled + discoverable runtime records。
+12. Build public AgentCards from enabled + discoverable policy-derived runtime records。
 13. Start task/control/event consumers。
 14. Start peer KV watch / discovery。
 15. Publish runtime cards and runtime heartbeats。
@@ -1560,7 +1562,7 @@ Error copy should distinguish bot-local failures, peer-agent failures, setup/pol
 ### 22.1 Unit tests
 
 - runtime ID generation: subject-safe, stable, <=64 chars, no raw Discord snowflake。
-- runtime registry CRUD and disabled/private runtime non-publication。
+- policy-derived runtime record validation and disabled/private runtime non-publication。
 - subject parser for task/control/event with runtime IDs and explicit rejection of deferred pool subjects。
 - envelope validation including `subject.to == envelope.To` and runtime/channel_ref consistency。
 - A2A state mapping。
