@@ -343,6 +343,13 @@ func TestA2AToolsDelegateAllowsUntrustedExactRuntimePolicy(t *testing.T) {
 	if !strings.Contains(got.ConfirmationSummary, "peer-n100-support@support/support/task") {
 		t.Fatalf("Delegate confirmation summary = %q, want policy target channel_ref", got.ConfirmationSummary)
 	}
+	explicitWrong, err := svc.Delegate(ctx, A2AToolRequest{GuildID: "guild-1", ChannelID: "channel-1", RequestedBy: "alice", RequestedByID: "user-1", TargetAgent: "peer-n100-support", TargetChannelRef: "discord-channel-1", SkillID: "task", Message: "ping"})
+	if err != nil {
+		t.Fatalf("Delegate explicit wrong target ref: %v", err)
+	}
+	if !strings.Contains(explicitWrong.ConfirmationSummary, "peer-n100-support@support/support/task") {
+		t.Fatalf("Delegate explicit wrong target ref summary = %q, want policy target channel_ref", explicitWrong.ConfirmationSummary)
+	}
 }
 
 func TestA2AToolsPeersFiltersLocalAgent(t *testing.T) {

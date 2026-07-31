@@ -468,13 +468,11 @@ func (s *A2AService) Delegate(ctx context.Context, req A2AToolRequest) (A2AToolR
 	if effectiveSkill == "" {
 		return responseError(fmt.Errorf("%w: target peer does not expose skill", errorCode(a2a.ErrorUnknownSkill))), nil
 	}
-	if !req.hasExplicitTargetRuntimeRef() {
-		if ref := policyRuntimeTargetChannelRef(policy, string(target), effectiveSkill); ref != "" {
-			targetChannelRef = ref
-		} else if !policyDelegatesRuntime(policy, string(target), effectiveSkill, targetChannelRef) {
-			if inferred := skillChannelRef(effectiveSkill); inferred != "" {
-				targetChannelRef = inferred
-			}
+	if ref := policyRuntimeTargetChannelRef(policy, string(target), effectiveSkill); ref != "" {
+		targetChannelRef = ref
+	} else if !req.hasExplicitTargetRuntimeRef() && !policyDelegatesRuntime(policy, string(target), effectiveSkill, targetChannelRef) {
+		if inferred := skillChannelRef(effectiveSkill); inferred != "" {
+			targetChannelRef = inferred
 		}
 	}
 	if !policyDelegatesRuntime(policy, string(target), effectiveSkill, targetChannelRef) {

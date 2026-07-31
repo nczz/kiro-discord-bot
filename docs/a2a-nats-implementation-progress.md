@@ -554,6 +554,23 @@ Append one subsection per completed phase.
 - Rollback boundary: restore `/Users/chun/Projects/kiro-discord-bot-local/bin/kiro-discord-bot.pre-channelref-fix-20260731205757` locally or `/opt/kiro-discord-bot/kiro-discord-bot.pre-channelref-fix-20260731205840` on d80; exact-runtime delegation without explicit target channel ref would again publish with the local delegator channel ref and be rejected by the executor as `channel_not_enabled`.
 - Next phase: monitor normal Discord-issued M5→d80 delegation; no additional code phase is open.
 
+### R13 exact runtime target channel_ref normalization
+
+- Status: code-ready; current worktree.
+- Decision: exact runtime target policy rows own the delivery channel ref even when the caller supplies a stale or Discord-derived `TargetChannelRef`. A concrete `runtimeAgentId` identifies one runtime authority; preserving a mismatched explicit channel ref produces executor-side `channel_not_enabled`.
+- Changed files: `internal/botmcp/a2a_tools.go`, `internal/botmcp/a2a_tools_test.go`, and this progress ledger.
+- Validation:
+  - `go test ./internal/botmcp -run 'TestA2AToolsDelegateAllowsUntrustedExactRuntimePolicy|TestA2AToolsDelegateRejectsRevokedPeerBeforePublishing|TestA2AToolsDelegateConfirmationBindsDeliveryMode'` passed.
+  - `env -u NATS_URL -u NATS_CREDS_FILE -u NATS_TOKEN -u NATS_TLS_CA_FILE -u A2A_AGENT_ID -u A2A_RUNTIME_ID_MODE -u A2A_AGENT_NAME -u A2A_AGENT_DESCRIPTION -u A2A_REQUIRE_CONFIRMATION_FOR_REMOTE go test ./...` passed.
+  - `git diff --check` passed.
+- Done criteria evidence:
+  - Latest Discord-issued task `local_7a45f3132c345a71727a989509cbcfa8` was terminal rejected with `channel_not_enabled` because the tool call supplied/saved `channel_ref=discord-1495737768905670719` while targeting `d80-chunbot-d80-main`.
+  - Regression coverage now supplies `TargetChannelRef=discord-channel-1` for an exact runtime target and verifies the resolved confirmation summary still uses the policy target `support`.
+- Runtime settings touched: no.
+- Deployment hosts touched: pending.
+- Rollback boundary: revert this code/docs commit; Discord-agent tool calls that pass stale/derived target channel refs would again bypass the policy target channel ref and be rejected by the executor.
+- Next phase: deploy to local M5 and d80, then rerun Discord-issued M5→d80 delegation.
+
 ## Master goal prompt
 
 Use this prompt when starting or resuming the full implementation program:
