@@ -496,6 +496,23 @@ Append one subsection per completed phase.
 - Rollback boundary: restore `/Users/chun/Projects/kiro-discord-bot-local/bin/kiro-discord-bot.pre-peers-fix-20260731184705` locally or `/opt/kiro-discord-bot/kiro-discord-bot.pre-peers-fix-20260731184757` on d80; runtime rollout remains usable, but `bot_a2a_peers` would again risk showing legacy bot host cards as callable in runtime mode.
 - Next phase: monitor live MCP peer output during normal delegation; no additional code phase is open.
 
+### R10 default-enabled A2A MCP tool surface
+
+- Status: code-ready; current commit.
+- Decision: all A2A MCP tools should be present in the default bot-tools allowlist, with safety enforced by each tool's bound Discord context, requester/manager checks, confirmation tokens, task ownership checks, and policy gates rather than by making lifecycle tools unavailable.
+- Changed files: `internal/botmcp/server.go`, `internal/botmcp/server_test.go`, and this progress ledger.
+- Validation:
+  - `go test ./internal/botmcp -run 'TestDefaultSafeToolNames'` passed.
+  - `go test ./...` passed.
+  - `git diff --check` passed.
+- Done criteria evidence:
+  - Default A2A MCP allowlist includes `bot_a2a_peers`, `bot_a2a_policy_get`, `bot_a2a_task_status`, `bot_a2a_runtime_preflight`, `bot_a2a_policy_plan`, `bot_a2a_delegate`, `bot_a2a_policy_apply`, `bot_a2a_cancel`, `bot_a2a_input_reply`, and `bot_a2a_auth_reply`.
+  - Destructive/open operations still keep their internal gates: `bot_a2a_policy_apply` requires ManageChannels plus fresh confirmation; cancel/input/auth continuation validate requester or manager/task state before publishing.
+- Runtime settings touched: no.
+- Deployment hosts touched: no.
+- Rollback boundary: revert this code/docs commit; A2A remains usable, but default channel setup would no longer expose the full MCP lifecycle surface.
+- Next phase: deploy the default allowlist change to local M5 and d80 binaries.
+
 ## Master goal prompt
 
 Use this prompt when starting or resuming the full implementation program:
