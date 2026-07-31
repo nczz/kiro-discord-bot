@@ -345,6 +345,14 @@ func policyDelegatesSameDiscordChannelRuntime(policy a2a.ChannelA2APolicy, peer 
 	return false
 }
 
+func policyDelegatesSameDiscordChannelPeerRow(policy a2a.ChannelA2APolicy, peer a2a.PeerRow, skill string) bool {
+	return policyDelegatesSameDiscordChannelRuntime(policy, a2a.PeerTrustDisplay{
+		AgentID:          peer.AgentID,
+		BotAgentID:       peer.ExtendedCard.BotAgentID,
+		DiscordChannelID: peer.ExtendedCard.DiscordChannelID,
+	}, skill)
+}
+
 func peerDelegationReason(peer a2a.PeerTrustDisplay, policy a2a.ChannelA2APolicy, visibleSkills []string, runtimeOnly bool) string {
 	if len(visibleSkills) > 0 {
 		return "allowed"
@@ -559,15 +567,16 @@ func (s *A2AService) Delegate(ctx context.Context, req A2AToolRequest) (A2AToolR
 	}
 	if ref := policyRuntimeTargetChannelRef(policy, string(target), effectiveSkill); ref != "" {
 		targetChannelRef = ref
-	} else if !req.hasExplicitTargetRuntimeRef() && !policyDelegatesRuntime(policy, string(target), effectiveSkill, targetChannelRef) {
+	} else if !req.hasExplicitTargetRuntimeRef() && !policyDelegatesRuntime(policy, string(target), effectiveSkill, targetChannelRef) && !policyDelegatesSameDiscordChannelPeerRow(policy, peer, effectiveSkill) {
 		if inferred := skillChannelRef(effectiveSkill); inferred != "" {
 			targetChannelRef = inferred
 		}
 	}
-	if !policyDelegatesRuntime(policy, string(target), effectiveSkill, targetChannelRef) {
+	delegated := policyDelegatesRuntime(policy, string(target), effectiveSkill, targetChannelRef) || policyDelegatesSameDiscordChannelPeerRow(policy, peer, effectiveSkill)
+	if !delegated {
 		return responseError(fmt.Errorf("%w: target runtime is not delegated by channel policy", errorCode(a2a.ErrorUnauthorizedTarget))), nil
 	}
-	if !peer.Trusted && !policyDelegatesExactRuntime(policy, string(target), effectiveSkill) {
+	if !peer.Trusted && !policyDelegatesExactRuntime(policy, string(target), effectiveSkill) && !policyDelegatesSameDiscordChannelPeerRow(policy, peer, effectiveSkill) {
 		return responseError(fmt.Errorf("%w: target peer is not trusted", errorCode(a2a.ErrorPolicyDenied))), nil
 	}
 	req.SkillID = effectiveSkill
