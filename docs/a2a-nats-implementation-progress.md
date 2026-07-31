@@ -288,7 +288,7 @@ Append one subsection per completed phase.
 - Done criteria evidence:
   - A2A remains disabled while `NATS_URL` is unset; `.env.example`, `/doctor`, and rollout rollback instructions describe `NATS_URL=""` as the inert/no-op path for existing Discord behavior, while `NATS_URL` set without `A2A_AGENT_ID` remains a startup validation error.
   - `a2a.Config.ValidateStartup` now requires `NATS_CREDS_FILE` when `A2A_PRODUCTION_SECURITY=true`; `NATS_TOKEN` and `NATS_TLS_CA_FILE` are not treated as production client credentials. `/doctor` reports A2A auth mode, production guard state, startup validation, TLS-CA-only/token-only warnings, and no raw token or credential paths.
-  - `docs/a2a-nats-rollout.md` and docs-site copy document development single-node NATS, production three-node JetStream, per-agent ACL template including `$JS.API.INFO`, stream, durable consumer, and KV permissions, response/inbox constraints, authenticated principal binding, negative ACL smokes, credential issue/rotation/revocation, startup/shutdown ordering, rollout gates, rollback, and final validation matrix.
+  - `docs/a2a-nats-rollout.md` and docs-site copy document development single-node NATS, internal lightweight single-node JetStream production, optional HA three-node JetStream, per-agent ACL template including `$JS.API.INFO`, stream, durable consumer, and KV permissions, response/inbox constraints, authenticated principal binding, negative ACL smokes, credential issue/rotation/revocation, startup/shutdown ordering, rollout gates, rollback, and final validation matrix.
   - `dev/nats.conf` supplies a non-secret local JetStream config for two-bot smoke testing.
   - `TestA2AToolsDelegateRejectsRevokedPeerBeforePublishing` proves an untrusted/revoked peer is denied before any new delegated work can publish.
 - Runtime settings touched: no live `.env`, `DATA_DIR`, Docker volume, deployment host, or live service was touched.
@@ -438,6 +438,29 @@ Append one subsection per completed phase.
 - Deployment hosts touched: no service restart; remote d80 policy DB was copied for read-only preflight evidence.
 - Rollback boundary: revert this docs/code commit; no runtime data migration or live service change is involved.
 - Next phase: operator-authorized production runtime cutover decision for the same current M5/d80 contexts, or continue code-only hardening if production rollout is not authorized.
+
+### R8 internal lightweight production rollout plan
+
+- Status: planned; current commit.
+- Decision: user requested internal/lightweight production instead of mandatory three-node NATS. The accepted production profile is one private single-node NATS/JetStream server with persistent storage, TLS server validation, token authentication, localhost-only monitoring, and firewall/VPN host restrictions. This intentionally trades NATS HA for lower operational load.
+- Observed current topology:
+  - NATS server: `mxp2`, `nats-server.service` active, single node, config path `/etc/nats-server.conf`, listener `tls://89.233.104.250:4222`, HTTP monitoring `127.0.0.1:8222`, JetStream store `/var/lib/nats/jetstream`.
+  - Local M5 bot: `A2A_AGENT_ID=m5bot-local`, `A2A_RUNTIME_ID_MODE=runtime`, `A2A_PRODUCTION_SECURITY=false`, `NATS_TOKEN` set, TLS CA file set.
+  - Remote d80 bot: `A2A_AGENT_ID=d80-chunbot`, `A2A_RUNTIME_ID_MODE=runtime`, `A2A_PRODUCTION_SECURITY=false`, `NATS_TOKEN` set, TLS CA file set.
+- Rollout sequence:
+  1. Keep the existing single-node NATS profile; do not introduce a three-node cluster.
+  2. Build current binaries from the committed repository state.
+  3. Replace the local M5 and remote d80 binaries with current builds, preserving env and DATA_DIR.
+  4. Restart/drain each bot one at a time and verify `/doctor`/logs show A2A enabled and runtime transport consumers started.
+  5. Run exact runtime delegation smoke from `m5bot-local-m5-main` to `d80-chunbot-d80-main`.
+  6. Run legacy bot-level negative smoke and require rejection in `runtime` mode.
+  7. Record evidence and leave rollback as binary/env restore or `NATS_URL=""`.
+- Required safety constraints:
+  - Do not enable `A2A_PRODUCTION_SECURITY=true` while using only `NATS_TOKEN`; that guard intentionally requires `NATS_CREDS_FILE`.
+  - Do not expose NATS monitoring outside localhost.
+  - Do not delete or reset DATA_DIR, JetStream store, or policy DBs during rollout.
+  - If the single NATS node is down, pause new remote work and recover/restart NATS; do not force task DB cleanup.
+- Next phase: execute the authorized lightweight rollout on the current M5/d80 contexts.
 
 ## Master goal prompt
 

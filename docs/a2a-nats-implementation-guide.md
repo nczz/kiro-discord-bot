@@ -848,11 +848,11 @@ go test ./bot ./internal/botegress ./channel ./audit -run 'TestA2A(Egress|Artifa
 **Preconditions**:
 
 - Phases 1-8 validation commands pass.
-- Production security decision remains NKey/JWT credentials for client authentication in this implementation; `NATS_TLS_CA_FILE` is server CA validation only, not client mTLS auth.
+- Production security decision defaults to NKey/JWT credentials for hardened deployments; the internal lightweight profile may use TLS plus `NATS_TOKEN` only with `A2A_PRODUCTION_SECURITY=false` and a private/firewalled NATS listener.
 
 **Change steps**:
 
-1. Document dev single-node NATS setup and production three-node JetStream recommendation.
+1. Document dev single-node NATS setup, internal lightweight single-node production, and optional HA three-node JetStream.
 2. Document one-agent ACL template exactly:
 
 ```text

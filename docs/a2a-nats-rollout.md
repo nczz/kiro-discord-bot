@@ -5,9 +5,10 @@ This runbook covers production rollout of the optional A2A NATS custom binding. 
 ## Deployment model
 
 - Development: one local NATS server with JetStream enabled is enough for two-bot smokes.
-- Production: run a three-node NATS cluster with JetStream enabled, persistent storage, TLS, and monitored stream/consumer health.
+- Internal lightweight production: one private single-node NATS server with JetStream enabled, persistent storage, TLS, token authentication, localhost-only monitoring, and host/network firewalling is the default deployment model for this project. This trades HA for simple operations; bot-side durable stores and rollback gates remain mandatory.
+- HA production remains optional: use a three-node JetStream cluster only when service availability requirements justify the operational cost.
 - The A2A binding is disabled by default. `NATS_URL=""` leaves existing Discord behavior unchanged and should be the first rollback step.
-- Production security decision: use NKey/JWT credentials (`NATS_CREDS_FILE`) for client authentication; `NATS_TLS_CA_FILE` is server CA validation only. Shared token-only or unauthenticated production A2A is rejected when `A2A_PRODUCTION_SECURITY=true`.
+- Production security decision: the lightweight internal profile may use `NATS_TOKEN` with TLS only when `A2A_PRODUCTION_SECURITY=false` and the NATS listener is restricted to trusted hosts. If `A2A_PRODUCTION_SECURITY=true`, use NKey/JWT credentials (`NATS_CREDS_FILE`) for client authentication; `NATS_TLS_CA_FILE` is server CA validation only, and shared token-only or unauthenticated A2A is rejected.
 
 ## Local development setup
 
@@ -35,9 +36,9 @@ A second bot must use a different `A2A_AGENT_ID`, Discord bot token, `DATA_DIR`,
 Required or recommended values:
 
 ```bash
-NATS_URL=tls://nats-1.example.internal:4222,tls://nats-2.example.internal:4222,tls://nats-3.example.internal:4222
-NATS_CREDS_FILE=/etc/kiro-discord-bot/nats/adam-n200.creds
-NATS_TOKEN=
+NATS_URL=tls://nats.example.internal:4222
+NATS_CREDS_FILE=
+NATS_TOKEN=<internal-shared-token-or-empty-when-using-creds>
 NATS_TLS_CA_FILE=/etc/kiro-discord-bot/nats/ca.pem
 A2A_AGENT_ID=adam-n200
 A2A_RUNTIME_ID_MODE=runtime
@@ -61,6 +62,8 @@ Use `A2A_RUNTIME_ID_MODE=dual` only during a bounded legacy drain window. Before
 `NATS_TLS_CA_FILE` validates the NATS server certificate. It is not client mTLS authentication by itself; this implementation's production client credential is `NATS_CREDS_FILE`.
 
 Do not put raw credentials, tokens, private paths, or internal topology in `A2A_AGENT_DESCRIPTION`; peer cards are discoverable by other A2A participants.
+
+For the internal lightweight profile, document the single-node tradeoff before rollout: NATS outage pauses new remote work, but JetStream/persistent bot stores must preserve accepted task state across restart. Do not expose the NATS listener broadly; prefer private IP/VPN/firewall allowlists plus TLS server validation.
 
 ## Runtime ACL template
 

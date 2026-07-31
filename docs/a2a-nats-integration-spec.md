@@ -413,12 +413,12 @@ nats stream add A2A_EVENTS \
   --dupe-window 72h
 ```
 
-Production cluster：
+Production topology：
 
-- 3-node JetStream cluster recommended。
-- stream replicas: 3。
-- single-node only for local/dev。
-- account resource limits must be configured before production。
+- Internal lightweight production uses one private JetStream node with persistent storage, TLS, token authentication, localhost-only monitoring, and firewall/VPN allowlisting.
+- HA production may use a three-node JetStream cluster when the operator accepts the extra operational cost.
+- stream replicas: `1` for the internal lightweight profile; `3` only for HA clusters.
+- account resource limits must be configured before production.
 
 ### 6.2 Targeted task consumer
 
@@ -1701,7 +1701,7 @@ Acceptance：
 
 - NKey/JWT or mTLS deployment docs。
 - subject ACL templates。
-- 3-node JetStream notes。
+- internal single-node JetStream notes, plus optional HA cluster notes。
 - advisories/dead-letter monitoring。
 - release/deploy smoke matrix。
 
