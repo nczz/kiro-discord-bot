@@ -181,6 +181,15 @@ func TestPolicyStoreValidationAndPersistence(t *testing.T) {
 	if !got.Enabled || !got.Discoverable || got.RuntimeAgentID != "adam-n200-backend" || got.MaxConcurrent != 0 || got.RemoteToolPolicy.AllowMemoryWrite || len(got.DelegateTargets) != 1 || got.DelegateTargets[0].RuntimeAgentID != "eve-local-backend" || len(got.AcceptFromRuntimes) != 2 {
 		t.Fatalf("unexpected policy: %+v", got)
 	}
+	listCtx, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	discoverable, err := store.ListDiscoverable(listCtx)
+	if err != nil {
+		t.Fatalf("ListDiscoverable: %v", err)
+	}
+	if len(discoverable) != 1 || discoverable[0].RuntimeAgentID != "adam-n200-backend" {
+		t.Fatalf("unexpected discoverable policies: %+v", discoverable)
+	}
 	bad := policy
 	bad.ChannelID = "other"
 	bad.ShareDiscordContext = true

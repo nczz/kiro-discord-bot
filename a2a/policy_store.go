@@ -325,20 +325,37 @@ func (s *SQLitePolicyStore) ListDiscoverable(ctx context.Context) ([]ChannelA2AP
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var policies []ChannelA2APolicy
+	var keys []struct {
+		guildID   string
+		channelID string
+	}
 	for rows.Next() {
-		var guildID, channelID string
-		if err := rows.Scan(&guildID, &channelID); err != nil {
+		var key struct {
+			guildID   string
+			channelID string
+		}
+		if err := rows.Scan(&key.guildID, &key.channelID); err != nil {
+			_ = rows.Close()
 			return nil, err
 		}
-		policy, err := s.Get(ctx, guildID, channelID)
+		keys = append(keys, key)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	policies := make([]ChannelA2APolicy, 0, len(keys))
+	for _, key := range keys {
+		policy, err := s.Get(ctx, key.guildID, key.channelID)
 		if err != nil {
 			return nil, err
 		}
 		policies = append(policies, policy)
 	}
-	return policies, rows.Err()
+	return policies, nil
 }
 
 func (p ChannelA2APolicy) ValidateInbound(from AgentID, skillID string) error {

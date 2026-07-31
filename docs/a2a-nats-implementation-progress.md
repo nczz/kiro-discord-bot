@@ -380,20 +380,28 @@ Append one subsection per completed phase.
 
 ### R6 cutover readiness unit validation
 
-- Status: unit-ready; current commit; deployment smoke pending operator authorization.
-- Changed files: `channel/a2a_phase5_test.go` and this progress ledger.
+- Status: deployed smoke passed; current commit.
+- Changed files: `a2a/policy_store.go`, `a2a/store_phase3_test.go`, `channel/a2a_phase5_test.go`, and this progress ledger.
 - Validation:
+  - `go test ./a2a -run TestPolicyStoreValidationAndPersistence` passed.
   - `go test ./channel -run 'TestManagerA2A(RuntimeModeUsesRuntimeTarget|RuntimeModeRejectsBotLevelTarget|DualModeAcceptsBotAndRuntimeTargets)'` passed.
   - `go test ./a2a ./channel ./internal/botmcp ./bot -run 'Test(RuntimeID|PolicyStore|Doctor.*A2A|RemoteMemoryWriteDenied|RemoteMemoryWriteAllowed|RuntimePeerCard|BuildBotA2APeerCard|A2ATools|ManagerA2A)'` passed.
   - `go test ./...` passed.
   - `git diff --check` passed.
+- Deployment smoke:
+  - Local M5 bot: `A2A_RUNTIME_ID_MODE=runtime`, runtime policy `m5bot-local-m5-main`, fixed darwin binary sha256 `923c1efd99b29e33ea2e2377ecadfe77a7e98a476058744c56135ad02ef8335e`, `Bot running as M5Bot#8313`, and `[a2a] transport consumers started agent=m5bot-local`.
+  - Remote d80 bot: `A2A_RUNTIME_ID_MODE=runtime`, runtime policy `d80-chunbot-d80-main`, fixed linux amd64 binary sha256 `0524a838185f931ac22aba5ea4b71f23fa071c41eb5859e65866a14fe899df47`, `Bot running as ChunBot#4533`, and `[a2a] transport consumers started agent=d80-chunbot`.
+  - Exact runtime path smoke: `m5bot-local-m5-main -> d80-chunbot-d80-main`, `channel_ref=d80-main`, `skill_id=general/task`, message `smoke_exact_1785481758`, terminal `TASK_STATE_COMPLETED`, executor `d80-chunbot-d80-main`, task `task_a37179372902282d2767af0b`.
+  - Legacy negative smoke: `m5bot-local-m5-main -> d80-chunbot`, `channel_ref=d80-main`, message `smoke_legacy_1785481734`, terminal `TASK_STATE_REJECTED`, executor `d80-chunbot`, error `invalid_envelope: request target d80-chunbot does not match runtime d80-chunbot-d80-main`.
 - Done criteria evidence:
-  - Runtime mode accepts exact runtime-addressed inbound tasks and rejects new legacy bot-level targets.
+  - Runtime mode accepts exact runtime-addressed inbound tasks and rejects new legacy bot-level targets in unit tests and in the local-to-d80 live runtime smoke.
   - Dual mode accepts legacy bot-level targets for migration drain and exact runtime targets.
   - Accepted dual-mode legacy tasks still execute under the runtime executor identity when the policy has `runtime_agent_id`.
-  - No live `.env`, `DATA_DIR`, deployment hosts, Docker volumes, or services were touched.
-- Rollback boundary: revert the R6 test/progress changes; no behavior or deployment state changed.
-- Next phase: operator-authorized runtime deployment smoke for `A2A_RUNTIME_ID_MODE=runtime`, or continue code-only hardening if deployment is not authorized.
+  - `SQLitePolicyStore.ListDiscoverable` no longer re-enters `Get` while its discovery cursor is open; this fixes the single-connection SQLite startup deadlock observed before deployment smoke.
+- Runtime settings touched: local test bot and d80 test bot only.
+- Deployment hosts touched: local test bot and d80 test bot only.
+- Rollback boundary: set `A2A_RUNTIME_ID_MODE=dual` or `legacy`, restore the `*.pre-runtime-smoke-*` binary/env backups on each test host if needed, and revert this commit for the `ListDiscoverable` cursor fix/test/progress entry.
+- Next phase: R7 live cutover decision for production runtime mode, or continue code-only hardening if production rollout is not authorized.
 
 ## Master goal prompt
 
