@@ -1672,7 +1672,7 @@ func TestA2ASetupSlashDefaultsHumanFlow(t *testing.T) {
 	}
 }
 
-func TestA2ATrustSlashDefaultsGeneralTaskSafeBidirectional(t *testing.T) {
+func TestA2ATrustSlashDefaultsGeneralTaskAutoBidirectional(t *testing.T) {
 	raw := a2aArgsFromSlashOptions([]*discordgo.ApplicationCommandInteractionDataOption{{
 		Name: "trust",
 		Options: []*discordgo.ApplicationCommandInteractionDataOption{
@@ -1686,7 +1686,7 @@ func TestA2ATrustSlashDefaultsGeneralTaskSafeBidirectional(t *testing.T) {
 	if payload.Subcommand != "trust" || payload.Request.TargetAgent != "d80-chunbot-ch-2cbaf623" {
 		t.Fatalf("trust payload target = %+v", payload)
 	}
-	if payload.Request.SkillID != "task" || payload.Request.TrustRelationship != "bidirectional" || payload.Request.SetupMode != "safe" {
+	if payload.Request.SkillID != "task" || payload.Request.TrustRelationship != "bidirectional" || payload.Request.SetupMode != "auto" {
 		t.Fatalf("trust defaults = %+v", payload.Request)
 	}
 }
@@ -1762,7 +1762,7 @@ func TestA2ATranscriptModeSafeClearsContextSharing(t *testing.T) {
 func TestA2APolicyFormatterIncludesPolicyMutationFields(t *testing.T) {
 	L.Load("en")
 	got := formatA2APolicy("Preview", a2a.ChannelA2APolicy{Enabled: true, ChannelRef: "d80-test", ResultVisibility: "transparent", DiscordTranscriptMode: "co_present", ShareDiscordContext: true, AcceptFrom: []string{"d80-chunbot"}, AcceptFromRuntimes: []string{"d80-chunbot-main"}, AcceptSkills: []string{"task"}, ExposeSkills: []a2a.SkillPolicy{{ID: "task"}}, DelegateTo: []string{"d80-chunbot"}, DelegateSkills: []string{"task"}, DelegateTargets: []a2a.DelegateTargetPolicy{{RuntimeAgentID: "d80-chunbot-main", SkillID: "task"}}, CoPresentFromRuntimes: []string{"d80-chunbot-main"}, CoPresentTargetChannels: []string{"1495737768905670719"}, MaxConcurrent: 3})
-	for _, want := range []string{"Result visibility", "Trusted general-task runtimes", "`d80-chunbot-main inbound default_task`", "`d80-chunbot-main outbound default_task`", "Local capabilities exposed", "`task`", "Max concurrent inbound tasks: 3", "Same-thread co-present readiness: ready", "Co-present runtime allowlist: `d80-chunbot-main`", "Same-server co-present target channels: `1495737768905670719`"} {
+	for _, want := range []string{"Result visibility", "Trusted general-task runtimes", "`d80-chunbot-main inbound default_task`", "`d80-chunbot-main outbound default_task`", "Local capabilities exposed", "`task`", "Max concurrent inbound tasks: 3", "Local co-present policy gates: configured locally", "Co-present runtime allowlist: `d80-chunbot-main`", "Additional same-guild co-present targets: `1495737768905670719`"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("formatA2APolicy = %q, missing %q", got, want)
 		}

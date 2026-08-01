@@ -79,7 +79,7 @@ func a2aReadTool(name, description string) mcp.Tool {
 }
 
 func a2aTaskStatusTool() mcp.Tool {
-	t := a2aReadTool(ToolA2ATaskStatus, "Authoritative A2A progress source: read TaskStore state and event history for one task or recent outbound tasks in the bound Discord channel. Use this for delegation status/progress; audit rows are only historical timeline evidence and may lag terminal state. For transparent/co_present tasks, the executor already posts the user-visible result in the shared Discord thread, so this tool omits result text and callers must not repost, summarize, paraphrase, or send a follow-up unless the user explicitly asks.")
+	t := a2aReadTool(ToolA2ATaskStatus, "Authoritative A2A progress source: read TaskStore state and event history for one task or recent outbound tasks in the bound Discord channel. Use this for delegation status/progress; audit rows are only historical timeline evidence and may lag terminal state. For tasks admitted/completed as transparent/co_present, result text may be omitted because the executor-owned shared Discord transcript is authoritative; confirm accepted/rejected/completed state before reporting outcome, and do not repost omitted result text unless the user explicitly asks.")
 	for _, opt := range []mcp.ToolOption{
 		mcp.WithString("task_id", mcp.Description("Remote A2A task ID. If no task matches, the value is also tried as a NATS message_id/Discord correlation ID.")),
 		mcp.WithString("local_id", mcp.Description("Local durable task ID returned by bot_a2a_delegate.")),
@@ -98,14 +98,14 @@ func a2aPolicyPlanTool() mcp.Tool {
 }
 
 func a2aTrustPeerTool() mcp.Tool {
-	t := a2aWriteTool(ToolA2ATrustPeer, "High-level trust grant for one peer runtime. Plans by default and applies only with a fresh confirmation_token. Defaults to bidirectional general_task in safe/delegator mode, so agents do not hand-edit accept_skills, delegate_skills, or delegate_targets for normal text delegation.", false, true)
+	t := a2aWriteTool(ToolA2ATrustPeer, "High-level trust grant for one peer runtime. Plans by default and applies only with a fresh confirmation_token. Defaults to bidirectional general_task with auto setup: same Discord guild/channel peers use transparent/co_present, otherwise safe/delegator/proxy. Agents must not hand-edit accept_skills, delegate_skills, or delegate_targets for normal text delegation.", false, true)
 	for _, opt := range []mcp.ToolOption{
 		mcp.WithString("target_agent", mcp.Required(), mcp.Description("Peer runtime agent ID to trust for general text A2A tasks.")),
 		mcp.WithString("relationship", mcp.Description("bidirectional, inbound, or outbound. Default bidirectional.")),
 		mcp.WithString("capability", mcp.Description("Only general_task/default_task/task is supported by this high-level tool. Use bot_a2a_policy_plan for strict skill ACLs.")),
 		mcp.WithString("skill_id", mcp.Description("Optional task skill alias; defaults to task and canonicalizes */task as general_task.")),
 		mcp.WithString("target_channel_ref", mcp.Description("Optional target runtime channel_ref retained for display/routing compatibility.")),
-		mcp.WithString("setup_mode", mcp.Description("safe or co_present. Default safe/delegator/proxy.")),
+		mcp.WithString("setup_mode", mcp.Description("auto, safe, or co_present. Default auto; same Discord guild/channel peer cards use transparent/co_present, otherwise safe/delegator/proxy.")),
 	} {
 		opt(&t)
 	}
@@ -128,7 +128,7 @@ func a2aDelegateTool() mcp.Tool {
 		mcp.WithString("target_channel_ref", mcp.Description("Optional target runtime channel_ref; defaults to the current channel runtime.")),
 		mcp.WithString("target_channel_id", mcp.Description("Optional Discord target channel ID used to derive channel_ref as discord-<id>.")),
 		mcp.WithString("target_thread_id", mcp.Description("Optional Discord target thread ID used to derive channel_ref as discord-<id>.")),
-		mcp.WithString("setup_mode", mcp.Description("auto, safe, or co_present. Default auto; verified same Discord channel uses transparent/co_present, same runtime channel_ref uses co_present, otherwise proxy/delegator.")),
+		mcp.WithString("setup_mode", mcp.Description("auto, safe, or co_present. Default uses the channel policy; explicit auto may choose transparent/co_present for verified same Discord channel peers.")),
 		mcp.WithBoolean("requires_confirmation", mcp.Description("Set true when remote data egress or sensitive skill confirmation is needed.")),
 		mcp.WithString("confirmation_token", mcp.Description("Fresh token returned by a prior confirmation challenge.")),
 	} {

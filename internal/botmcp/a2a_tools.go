@@ -1061,9 +1061,6 @@ func applyA2APolicyRequestDefaults(req A2AToolRequest, policy a2a.ChannelA2APoli
 	req.ExposeSkills = appendUnique(req.ExposeSkills, localSkill)
 	req.DelegateSkills = appendUnique(req.DelegateSkills, req.SkillID)
 	mode := normalizeSetupMode(req.SetupMode)
-	if strings.TrimSpace(req.SetupMode) == "" {
-		mode = "safe"
-	}
 	req.SetupMode = mode
 	if mode == "co_present" || (mode == "auto" && req.targetRuntimeRef(policy.ChannelRef) == policy.ChannelRef) {
 		req.TranscriptMode = "co_present"
@@ -1149,7 +1146,10 @@ func (s *A2AService) applyTrustPeerDiff(ctx context.Context, policy a2a.ChannelA
 			SkillID:        "task",
 		})
 	}
-	if mode == "" || mode == "auto" || mode == "safe" {
+	if mode == "auto" {
+		mode = s.autoTrustPeerSetupMode(ctx, req, peer, targetChannelRef)
+	}
+	if mode == "" || mode == "safe" {
 		policy.DiscordTranscriptMode = "delegator"
 		policy.ResultVisibility = "proxy"
 		policy.ShareDiscordContext = false
@@ -1161,6 +1161,17 @@ func (s *A2AService) applyTrustPeerDiff(ctx context.Context, policy a2a.ChannelA
 		policy.CoPresentFromRuntimes = appendUnique(policy.CoPresentFromRuntimes, peer)
 	}
 	return policy, nil
+}
+
+func (s *A2AService) autoTrustPeerSetupMode(ctx context.Context, req A2AToolRequest, peer, targetChannelRef string) string {
+	row, err := s.peers.Get(ctx, a2a.AgentID(peer))
+	if err == nil && sameDiscordConversation(req, row) {
+		return "co_present"
+	}
+	if strings.TrimSpace(targetChannelRef) != "" && strings.TrimSpace(targetChannelRef) == strings.TrimSpace(req.ChannelRef) && strings.TrimSpace(req.GuildID) != "" && strings.TrimSpace(req.ChannelID) != "" {
+		return "co_present"
+	}
+	return "safe"
 }
 
 func (s *A2AService) trustPeerTargetChannelRef(ctx context.Context, req A2AToolRequest, peer string, skill string) (string, error) {

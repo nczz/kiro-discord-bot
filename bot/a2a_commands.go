@@ -278,7 +278,7 @@ func applyA2ASubcommandDefaults(payload *a2aSlashPayload) {
 			payload.Request.TrustRelationship = "bidirectional"
 		}
 		if strings.TrimSpace(payload.Request.SetupMode) == "" {
-			payload.Request.SetupMode = "safe"
+			payload.Request.SetupMode = "auto"
 		}
 	case "transcript-mode":
 		if mode := normalizeA2ATranscriptMode(payload.Request.TranscriptMode); mode != "" {
