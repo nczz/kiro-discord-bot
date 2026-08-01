@@ -1,9 +1,12 @@
 package heartbeat
 
 import (
+	"encoding/json"
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"time"
 )
 
@@ -12,6 +15,10 @@ type CleanupTask struct {
 	dataDir    string
 	retainDays int
 	lastRun    time.Time
+}
+
+type cleanupSession struct {
+	CWD string `json:"cwd"`
 }
 
 func NewCleanupTask(dataDir string, retainDays int) *CleanupTask {
@@ -32,7 +39,6 @@ func (c *CleanupTask) Run() error {
 	cutoff := time.Now().AddDate(0, 0, -c.retainDays)
 	count := 0
 
-	// Walk all ch-*/attachments/ directories
 	entries, err := os.ReadDir(c.dataDir)
 	if err != nil {
 		return err
@@ -41,32 +47,70 @@ func (c *CleanupTask) Run() error {
 		if !e.IsDir() {
 			continue
 		}
-		attDir := filepath.Join(c.dataDir, e.Name(), "attachments")
-		files, err := os.ReadDir(attDir)
-		if err != nil {
-			continue
-		}
-		for _, f := range files {
-			if f.IsDir() {
-				continue
-			}
-			info, err := f.Info()
-			if err != nil {
-				continue
-			}
-			if info.ModTime().Before(cutoff) {
-				_ = os.Remove(filepath.Join(attDir, f.Name()))
-				count++
-			}
-		}
-		// Remove empty dir
-		remaining, _ := os.ReadDir(attDir)
-		if len(remaining) == 0 {
-			_ = os.Remove(attDir)
-		}
+		count += cleanupAttachmentTree(filepath.Join(c.dataDir, e.Name(), "attachments"), cutoff)
+	}
+	for _, root := range c.projectAttachmentRoots() {
+		count += cleanupAttachmentTree(root, cutoff)
 	}
 	if count > 0 {
 		log.Printf("[cleanup] removed %d expired attachments (retain=%d days)", count, c.retainDays)
 	}
 	return nil
+}
+
+func (c *CleanupTask) projectAttachmentRoots() []string {
+	raw, err := os.ReadFile(filepath.Join(c.dataDir, "sessions.json"))
+	if err != nil {
+		return nil
+	}
+	var sessions map[string]cleanupSession
+	if err := json.Unmarshal(raw, &sessions); err != nil {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	var roots []string
+	for _, sess := range sessions {
+		cwd := strings.TrimSpace(sess.CWD)
+		if cwd == "" {
+			continue
+		}
+		root := filepath.Join(filepath.Clean(cwd), ".kiro-bot", "attachments")
+		if _, ok := seen[root]; ok {
+			continue
+		}
+		seen[root] = struct{}{}
+		roots = append(roots, root)
+	}
+	return roots
+}
+
+func cleanupAttachmentTree(root string, cutoff time.Time) int {
+	var count int
+	var dirs []string
+	if err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			dirs = append(dirs, path)
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return nil
+		}
+		if info.ModTime().Before(cutoff) {
+			if os.Remove(path) == nil {
+				count++
+			}
+		}
+		return nil
+	}); err != nil {
+		return 0
+	}
+	slices.Reverse(dirs)
+	for _, dir := range dirs {
+		_ = os.Remove(dir)
+	}
+	return count
 }

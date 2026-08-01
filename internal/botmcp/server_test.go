@@ -76,6 +76,13 @@ func TestDataSummaryAndChannelListAreMetadataOnly(t *testing.T) {
 	if !s.SessionsFile || !s.CronStore || s.ChannelDirs != 1 || !s.KiroAgentRuntimeDir || !s.LegacyKiroRuntimeDir || !s.RuntimeMCPConfig || !s.RuntimeCLISettingsFile {
 		t.Fatalf("unexpected summary: %+v", s)
 	}
+	rawSummary, err := json.Marshal(s)
+	if err != nil {
+		t.Fatalf("marshal summary: %v", err)
+	}
+	if strings.Contains(string(rawSummary), dir) || strings.Contains(string(rawSummary), "data_dir") {
+		t.Fatalf("summary exposed data directory path: %s", rawSummary)
+	}
 
 	rows, err := listChannelData(dir)
 	if err != nil {

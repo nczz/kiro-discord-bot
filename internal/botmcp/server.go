@@ -93,7 +93,7 @@ func NewServer() *server.MCPServer {
 	s := server.NewMCPServer("bot-tools", "1.0.0", server.WithToolCapabilities(false))
 	cronTZ := cronpolicy.TimezoneName(os.Getenv("CRON_TIMEZONE"))
 	s.AddTool(
-		readOnlyTool(ToolDataSummary, "Summarize the bot data directory without returning message content"),
+		readOnlyTool(ToolDataSummary, "Summarize bot state availability without returning host paths or message content"),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			summary, err := dataSummary(dataDir())
 			if err != nil {
@@ -104,7 +104,7 @@ func NewServer() *server.MCPServer {
 		},
 	)
 	s.AddTool(
-		readOnlyTool(ToolListChannelData, "List channel data directories and metadata file presence without returning message content"),
+		readOnlyTool(ToolListChannelData, "List channel metadata and state-file presence without returning host paths or message content"),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			rows, err := listChannelData(dataDir())
 			if err != nil {
@@ -780,16 +780,15 @@ func queryChannelHistoryTool() mcp.Tool {
 }
 
 type summary struct {
-	DataDir                string `json:"data_dir"`
-	SessionsFile           bool   `json:"sessions_file"`
-	ChannelDirs            int    `json:"channel_dirs"`
-	CronStore              bool   `json:"cron_store"`
-	AuditDB                bool   `json:"audit_db"`
-	MCPPolicyDB            bool   `json:"mcp_policy_db"`
-	KiroAgentRuntimeDir    bool   `json:"kiro_agent_runtime_dir"`
-	LegacyKiroRuntimeDir   bool   `json:"legacy_kiro_runtime_dir"`
-	RuntimeMCPConfig       bool   `json:"runtime_mcp_config"`
-	RuntimeCLISettingsFile bool   `json:"runtime_cli_settings_file"`
+	SessionsFile           bool `json:"sessions_file"`
+	ChannelDirs            int  `json:"channel_dirs"`
+	CronStore              bool `json:"cron_store"`
+	AuditDB                bool `json:"audit_db"`
+	MCPPolicyDB            bool `json:"mcp_policy_db"`
+	KiroAgentRuntimeDir    bool `json:"kiro_agent_runtime_dir"`
+	LegacyKiroRuntimeDir   bool `json:"legacy_kiro_runtime_dir"`
+	RuntimeMCPConfig       bool `json:"runtime_mcp_config"`
+	RuntimeCLISettingsFile bool `json:"runtime_cli_settings_file"`
 }
 
 type channelData struct {
@@ -1304,7 +1303,6 @@ func dataSummary(root string) (summary, error) {
 	}
 	agentRuntimeDir := filepath.Join(root, "kiro-agent-runtime")
 	return summary{
-		DataDir:                root,
 		SessionsFile:           fileExists(filepath.Join(root, "sessions.json")),
 		ChannelDirs:            len(rows),
 		CronStore:              fileExists(filepath.Join(root, "cron", "cron.json")),

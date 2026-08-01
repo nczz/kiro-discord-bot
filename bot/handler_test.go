@@ -2502,7 +2502,7 @@ func TestBuildPromptInjectsCurrentDatetimeGuidance(t *testing.T) {
 		"下個月第二週 => range_type=month_week offset=1 week_index=2",
 		"過去7天 => range_type=relative_days days=7 direction=past",
 		"Do not calculate weekdays, month boundaries, or relative ranges from model memory",
-		"Do not inspect or mutate raw bot databases",
+		"Do not inspect or mutate raw bot state files or databases",
 		"Use the exposed bot MCP tools",
 		"bot_a2a_task_status",
 	} {
@@ -2583,6 +2583,24 @@ func TestBuildPromptIncludesAttachmentManifestMetadata(t *testing.T) {
 	}
 	if !strings.Contains(got, "Do not infer image contents from filenames or metadata alone") {
 		t.Fatalf("prompt missing attachment manifest handling guidance:\n%s", got)
+	}
+}
+
+func TestBuildPromptDoesNotNameRawBotStateFiles(t *testing.T) {
+	got := buildPromptThread("hello", nil, "channel-1", "thread-1", "guild-1", "alice", "")
+	for _, forbidden := range []string{
+		"data/a2a/policy.sqlite",
+		"data/mcp/policy.sqlite",
+		"data/audit/discord.sqlite",
+		"sessions.json",
+		"channel_metadata.json",
+	} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("prompt exposed raw bot state path %q:\n%s", forbidden, got)
+		}
+	}
+	if !strings.Contains(got, "Do not inspect or mutate raw bot state files or databases") {
+		t.Fatalf("prompt missing generic raw bot state guidance:\n%s", got)
 	}
 }
 

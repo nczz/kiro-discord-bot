@@ -341,13 +341,16 @@ func (b *Bot) transcribeAudioFiles(paths []string, attachments []*discordgo.Mess
 	return strings.Join(transcripts, "\n"), remaining
 }
 
-// downloadAttachments saves message attachments to DATA_DIR/ch-<channelID>/attachments/ and returns local paths.
-func (b *Bot) downloadAttachments(channelID string, attachments []*discordgo.MessageAttachment) []string {
+// downloadAttachments saves message attachments under the active project CWD and returns local paths.
+func (b *Bot) downloadAttachments(projectCWD, messageID string, attachments []*discordgo.MessageAttachment) []string {
 	if len(attachments) == 0 {
 		return nil
 	}
-	attDir := filepath.Join(b.dataDir, "ch-"+channelID, "attachments")
-	_ = os.MkdirAll(attDir, 0755)
+	attDir := filepath.Join(projectCWD, ".kiro-bot", "attachments", safeAttachmentFilename(messageID))
+	if err := os.MkdirAll(attDir, 0755); err != nil {
+		log.Printf("[attach] create attachment dir %s: %v", attDir, err)
+		return nil
+	}
 
 	ts := time.Now().Format("20060102-150405")
 	var paths []string
@@ -496,7 +499,7 @@ func buildPromptThreadWithMentions(text string, attachments []string, channelID,
 	var sb strings.Builder
 	sb.WriteString("[Discord bot environment] Your responses are automatically forwarded to a Discord thread. Each message is split at 2000 chars. Tool execution details are also shown.\n")
 	sb.WriteString("Do not call bot_send_message for ordinary replies or final answers; write the reply normally and the bot will redact, split, and deliver it. bot_send_message is not default-enabled; if it is available, use it only when the user explicitly asks you to send a separate extra Discord message, notify another target, or hand off to another bot.\n")
-	sb.WriteString("Do not inspect or mutate raw bot databases such as data/a2a/policy.sqlite, data/mcp/policy.sqlite, data/audit/discord.sqlite, sessions.json, or channel_metadata.json to answer ordinary user requests. Use the exposed bot MCP tools such as bot_a2a_policy_get, bot_a2a_policy_plan, bot_a2a_policy_apply, bot_a2a_peers, bot_a2a_delegate, and bot_a2a_task_status; if the required tool is unavailable, report that the channel MCP policy must be updated instead of editing database files directly.\n")
+	sb.WriteString("Do not inspect or mutate raw bot state files or databases to answer ordinary user requests. Use the exposed bot MCP tools such as bot_a2a_policy_get, bot_a2a_policy_plan, bot_a2a_policy_apply, bot_a2a_peers, bot_a2a_delegate, and bot_a2a_task_status; if the required tool is unavailable, report that the channel MCP policy must be updated instead of editing database files directly.\n")
 	sb.WriteString("Do not write raw Discord angle-bracket mention strings or guess Discord IDs. To mention a user, use one of the exact Discord mention reference placeholders listed below; unlisted users cannot be mentioned. If the user asks to tag, mention, notify, or ping a named person who is not listed and discord_resolve_mentions is available, call it once with the extracted names first, then use only the returned placeholders. Do not use discord_list_members or message history to infer mention IDs.\n")
 	sb.WriteString("For cron management tools, use channel_id as the owning parent channel ID; use thread_id only for thread-targeted Discord messages.\n")
 	sb.WriteString("When users say 本頻道, 這個頻道, 目前頻道, this channel, here, or current session, interpret that as the current Discord target from this context. In a thread, 本討論串/this thread means thread_id; parent channel or whole-channel history means channel_id and includes child threads. If users ask about prior discussion, use bot_query_channel_history when available instead of claiming Discord history is inaccessible. For broad or exhaustive history requests, keep paginating bot_query_channel_history with offset=next_offset until has_more=false before synthesizing the answer.\n")
@@ -785,8 +788,8 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 		// Immediate feedback
 		_ = ds.MessageReactionAdd(m.ChannelID, m.ID, "⏳")
 
-		// Download attachments if any
-		localPaths := b.downloadAttachments(m.ChannelID, m.Attachments)
+		projectCWD := b.manager.CWDPath(m.ChannelID)
+		localPaths := b.downloadAttachments(projectCWD, m.ID, m.Attachments)
 		b.warnIfAttachmentsLarge(ds, m.ChannelID, localPaths)
 
 		// Transcribe audio files (voice messages + audio attachments)
@@ -1011,8 +1014,7 @@ func (b *Bot) handleThreadMessage(ds *discordgo.Session, m *discordgo.MessageCre
 	// Immediate feedback
 	_ = ds.MessageReactionAdd(threadID, m.ID, "⏳")
 
-	// Build prompt and enqueue to thread agent
-	localPaths := b.downloadAttachments(threadID, m.Attachments)
+	localPaths := b.downloadAttachments(b.manager.TargetCWDPath(threadID, parentChannelID), m.ID, m.Attachments)
 	b.warnIfAttachmentsLarge(ds, threadID, localPaths)
 
 	// Transcribe audio files

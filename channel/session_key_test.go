@@ -137,6 +137,25 @@ func TestMentionRefsPersistInScopedSessions(t *testing.T) {
 	}
 }
 
+func TestTargetCWDPathUsesParentChannelUnlessThreadOverrides(t *testing.T) {
+	m := newSessionKeyTestManager(t)
+	if err := m.setChannelSession("channel-1", &Session{SessionID: "channel-session", CWD: "/project-parent"}); err != nil {
+		t.Fatalf("set channel session: %v", err)
+	}
+	if got := m.TargetCWDPath("thread-1", "channel-1"); got != "/project-parent" {
+		t.Fatalf("thread inherited cwd = %q, want parent cwd", got)
+	}
+	if err := m.setThreadSession("thread-1", "channel-1", &Session{SessionID: "thread-session", CWD: "/project-thread"}); err != nil {
+		t.Fatalf("set thread session: %v", err)
+	}
+	if got := m.TargetCWDPath("thread-1", "channel-1"); got != "/project-thread" {
+		t.Fatalf("thread override cwd = %q, want thread cwd", got)
+	}
+	if got := m.TargetCWDPath("channel-1", ""); got != "/project-parent" {
+		t.Fatalf("channel cwd = %q, want channel cwd", got)
+	}
+}
+
 func TestResumeWithoutStoredSessionReturnsTypedError(t *testing.T) {
 	m := newSessionKeyTestManager(t)
 	if _, err := m.Resume("channel-missing"); !errors.Is(err, ErrNoSavedSession) {

@@ -1763,6 +1763,18 @@ func (m *Manager) CWDPath(channelID string) string {
 	return m.defaultCWD
 }
 
+// TargetCWDPath returns the effective working directory for a Discord target.
+// Threads inherit their parent channel CWD unless a saved thread session has an override.
+func (m *Manager) TargetCWDPath(targetID, parentChannelID string) string {
+	if strings.TrimSpace(parentChannelID) != "" {
+		if sess, ok := m.getThreadSession(targetID); ok && strings.TrimSpace(sess.CWD) != "" {
+			return sess.CWD
+		}
+		return m.CWDPath(parentChannelID)
+	}
+	return m.CWDPath(targetID)
+}
+
 // SetCWD updates the working directory for a channel (takes effect on next reset).
 func (m *Manager) SetCWD(channelID, cwd string) error {
 	cwd, err := m.ValidateCWD(cwd)
