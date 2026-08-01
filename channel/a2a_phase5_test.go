@@ -369,6 +369,53 @@ func TestManagerA2ACoPresentInitialTaskUsesSharedDiscordThread(t *testing.T) {
 	}
 }
 
+func TestManagerA2AThreadRefInheritsParentChannelPolicy(t *testing.T) {
+	h := newPhase5Harness(t, func(policy *a2a.ChannelA2APolicy, cfg *a2a.Config) {
+		policy.ResultVisibility = "transparent"
+		policy.DiscordTranscriptMode = "co_present"
+		policy.ShareDiscordContext = true
+		policy.CoPresentFrom = []string{"eve-local"}
+	})
+	req := phase5Request()
+	req.GuildID = "guild-1"
+	req.ChannelID = "channel-1"
+	req.ChannelRef = "discord-thread-1"
+	req.ResultVisibility = "transparent"
+	req.DiscordTranscriptMode = "co_present"
+	req.Delivery.ShareDiscordContext = true
+	req.Delivery.CoPresentFrom = "eve-local"
+	req.Delivery.DiscordContext = &a2a.DiscordContext{GuildID: "guild-1", ChannelID: "channel-1", ThreadID: "thread-1"}
+	req.OriginRuntimeRef = a2a.OriginRuntimeRef{DiscordGuildID: "guild-1", DiscordChannelID: "channel-1", DiscordThreadID: "thread-1"}
+
+	res, err := h.manager.AdmitA2ATask(context.Background(), req)
+	if err != nil {
+		t.Fatalf("AdmitA2ATask error: %v", err)
+	}
+	if !res.Accepted {
+		t.Fatalf("thread-ref request rejected: %#v", res.Error)
+	}
+	if res.ChannelRef != "backend" || res.ChannelID != "channel-1" {
+		t.Fatalf("inherited policy result = channelRef %q channelID %q, want parent policy", res.ChannelRef, res.ChannelID)
+	}
+}
+
+func TestManagerA2AThreadRefDoesNotInheritWrongParent(t *testing.T) {
+	h := newPhase5Harness(t, nil)
+	req := phase5Request()
+	req.GuildID = "guild-1"
+	req.ChannelID = "channel-2"
+	req.ChannelRef = "discord-thread-1"
+	req.OriginRuntimeRef = a2a.OriginRuntimeRef{DiscordGuildID: "guild-1", DiscordChannelID: "channel-1", DiscordThreadID: "thread-1"}
+
+	res, err := h.manager.AdmitA2ATask(context.Background(), req)
+	if err != nil {
+		t.Fatalf("AdmitA2ATask error: %v", err)
+	}
+	if res.Accepted || res.Error.Code != a2a.ErrorChannelNotEnabled {
+		t.Fatalf("wrong-parent thread-ref result = %#v, want channel_not_enabled", res)
+	}
+}
+
 func TestManagerA2AContinuationReusesExecutorConversationThread(t *testing.T) {
 	h := newPhase5Harness(t, nil)
 	admission := admitPhase5(t, h)

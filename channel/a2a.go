@@ -41,7 +41,7 @@ func (m *Manager) AdmitA2ATask(ctx context.Context, req a2a.TaskExecutionRequest
 		return rejectedA2AAdmission(req, a2a.ErrorStoreError, "A2A task store is unavailable"), nil
 	}
 
-	policy, err := m.a2aPolicies.GetEnabledByChannelRef(ctx, req.ChannelRef)
+	policy, err := m.a2aPolicyForRequest(ctx, req)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return rejectedA2AAdmission(req, a2a.ErrorChannelNotEnabled, "channel_ref is not enabled"), nil
@@ -136,6 +136,55 @@ func (m *Manager) AdmitA2ATask(ctx context.Context, req a2a.TaskExecutionRequest
 		SkillID:       row.SkillID,
 		Admission:     admission,
 	}, nil
+}
+
+func (m *Manager) a2aPolicyForRequest(ctx context.Context, req a2a.TaskExecutionRequest) (a2a.ChannelA2APolicy, error) {
+	policy, err := m.a2aPolicies.GetEnabledByChannelRef(ctx, req.ChannelRef)
+	if err == nil {
+		return policy, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) || !a2aRequestCanInheritChannelPolicy(req) {
+		return a2a.ChannelA2APolicy{}, err
+	}
+	parent, parentErr := m.a2aPolicies.Get(ctx, strings.TrimSpace(req.GuildID), strings.TrimSpace(req.ChannelID))
+	if parentErr != nil {
+		return a2a.ChannelA2APolicy{}, err
+	}
+	if !parent.Enabled {
+		return a2a.ChannelA2APolicy{}, err
+	}
+	return parent, nil
+}
+
+func a2aRequestCanInheritChannelPolicy(req a2a.TaskExecutionRequest) bool {
+	guildID := strings.TrimSpace(req.GuildID)
+	channelID := strings.TrimSpace(req.ChannelID)
+	ref := strings.TrimSpace(req.ChannelRef)
+	if guildID == "" || channelID == "" || !strings.HasPrefix(ref, "discord-") {
+		return false
+	}
+	discordID := strings.TrimPrefix(ref, "discord-")
+	if discordID == "" {
+		return false
+	}
+	matches := channelID == discordID
+	if dc := req.Delivery.DiscordContext; dc != nil {
+		if strings.TrimSpace(dc.GuildID) != "" && strings.TrimSpace(dc.GuildID) != guildID {
+			return false
+		}
+		if strings.TrimSpace(dc.ChannelID) != "" && strings.TrimSpace(dc.ChannelID) != channelID {
+			return false
+		}
+		matches = matches || strings.TrimSpace(dc.ThreadID) == discordID || strings.TrimSpace(dc.ChannelID) == discordID
+	}
+	origin := req.OriginRuntimeRef
+	if strings.TrimSpace(origin.DiscordGuildID) != "" && strings.TrimSpace(origin.DiscordGuildID) != guildID {
+		return false
+	}
+	if strings.TrimSpace(origin.DiscordChannelID) != "" && strings.TrimSpace(origin.DiscordChannelID) != channelID {
+		return false
+	}
+	return matches || strings.TrimSpace(origin.DiscordThreadID) == discordID
 }
 
 func admissionFromRow(req a2a.TaskExecutionRequest, row a2a.TaskRow) a2a.A2AAdmission {
