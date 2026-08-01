@@ -259,6 +259,8 @@
   "a2a.trust.untrusted": "未信任",
   "a2a.delegate.allowed": "此頻道已允許",
   "a2a.delegate.not_allowed": "此頻道尚未允許",
+  "a2a.delegate.guard.local_id_placeholder": "bot_a2a_delegate_回傳的_local_id",
+  "a2a.delegate.guard.unconfirmed": "⚠️ A2A 委託請求已排入佇列，但尚未確認 executor 已接受或完成。我不會把它視為成功。\n\n宣稱委託 bot 已接受、完成或會回覆前，請先用 `/a2a status task:%s` 查詢 durable 狀態。",
   "a2a.task.title": "A2A 任務",
   "a2a.task.state": "- 狀態：`%s`",
   "a2a.task.local_id": "- 本機 ID：%s",

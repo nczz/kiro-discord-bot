@@ -265,6 +265,8 @@
   "a2a.trust.untrusted": "not trusted",
   "a2a.delegate.allowed": "allowed in this channel",
   "a2a.delegate.not_allowed": "not yet allowed in this channel",
+  "a2a.delegate.guard.local_id_placeholder": "the_local_id_returned_by_bot_a2a_delegate",
+  "a2a.delegate.guard.unconfirmed": "⚠️ A2A delegation request was queued, but executor acceptance/completion was not confirmed. I am not treating it as successful.\n\nCheck durable status with `/a2a status task:%s` before claiming the delegated bot accepted, completed, or will reply.",
   "a2a.task.title": "A2A task",
   "a2a.task.state": "- State: `%s`",
   "a2a.task.local_id": "- Local id: %s",

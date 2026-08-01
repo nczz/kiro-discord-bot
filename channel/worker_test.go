@@ -1318,6 +1318,18 @@ func TestWorkerThreadReplacesUnconfirmedA2ADelegateFinalSuccess(t *testing.T) {
 	}
 }
 
+func TestWorkerA2ADelegateFinalGuardUsesLocale(t *testing.T) {
+	L.Load("zh-TW")
+	guard := a2aDelegateFinalGuard{delegated: true, localID: "local-abc"}
+	got := guard.finalResponse("已經委派給 M5Bot 了")
+	if !strings.Contains(got, "A2A 委託請求已排入佇列") || !strings.Contains(got, "local-abc") {
+		t.Fatalf("localized guard response = %q", got)
+	}
+	if strings.Contains(got, "delegation request was queued") {
+		t.Fatalf("localized guard leaked English fallback: %q", got)
+	}
+}
+
 func TestWorkerThreadAllowsA2ADelegateFinalAfterStatusCheck(t *testing.T) {
 	L.Load("en")
 	rt := &recordingRoundTripper{}

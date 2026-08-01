@@ -281,11 +281,11 @@ func (g a2aDelegateFinalGuard) finalResponse(response string) string {
 	if !g.delegated || g.statusChecked {
 		return response
 	}
-	statusTarget := "the local_id returned by bot_a2a_delegate"
+	statusTarget := L.Get("a2a.delegate.guard.local_id_placeholder")
 	if id := strings.TrimSpace(g.localID); id != "" {
 		statusTarget = EscapeDiscordMarkdown(id)
 	}
-	return "⚠️ A2A delegation request was queued, but executor acceptance/completion was not confirmed. I am not treating it as successful.\n\nCheck durable status with `/a2a status task:" + statusTarget + "` before claiming the delegated bot accepted, completed, or will reply."
+	return L.Getf("a2a.delegate.guard.unconfirmed", statusTarget)
 }
 
 func extractA2ADelegateLocalID(raw string) string {
