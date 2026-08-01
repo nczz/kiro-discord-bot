@@ -42,20 +42,37 @@ func (b *Bot) syncGuildChannelMetadata(ds *discordgo.Session, guildID string) {
 	}
 	entries := make([]channelmeta.Entry, 0, len(channels))
 	for _, ch := range channels {
-		if ch == nil || channelMetadataType(ch) != "channel" {
+		entry, ok := b.channelMetadataEntryForCurrentBot(ds, guildID, ch)
+		if !ok {
 			continue
 		}
-		entries = append(entries, channelmeta.Entry{
-			ID:              ch.ID,
-			GuildID:         firstNonEmpty(ch.GuildID, guildID),
-			Name:            ch.Name,
-			Type:            "channel",
-			ParentChannelID: ch.ParentID,
-		})
+		entries = append(entries, entry)
 	}
 	if err := channelmeta.ReplaceGuildChannels(b.dataDir, guildID, entries); err != nil {
 		log.Printf("[channel-meta] sync guild channels guild=%s: %v", guildID, err)
 	}
+}
+
+func (b *Bot) channelMetadataEntryForCurrentBot(ds *discordgo.Session, guildID string, ch *discordgo.Channel) (channelmeta.Entry, bool) {
+	if b == nil || ds == nil || ch == nil || channelMetadataType(ch) != "channel" {
+		return channelmeta.Entry{}, false
+	}
+	if ds.State == nil || ds.State.User == nil || ds.State.User.ID == "" {
+		return channelmeta.Entry{}, false
+	}
+	if err := ds.State.ChannelAdd(ch); err != nil {
+		log.Printf("[channel-meta] cache channel=%s: %v", ch.ID, err)
+	}
+	if !b.peerCanRespondInTarget(ds, ds.State.User.ID, ch.ID) {
+		return channelmeta.Entry{}, false
+	}
+	return channelmeta.Entry{
+		ID:              ch.ID,
+		GuildID:         firstNonEmpty(ch.GuildID, guildID),
+		Name:            ch.Name,
+		Type:            "channel",
+		ParentChannelID: ch.ParentID,
+	}, true
 }
 
 func channelMetadataType(ch *discordgo.Channel) string {
