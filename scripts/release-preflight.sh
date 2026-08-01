@@ -34,8 +34,25 @@ is_true() {
 
 need_cmd go
 
+GO_TEST_ENV=(
+  env
+  -u KIRO_CLI
+  -u NATS_URL
+  -u NATS_CREDS_FILE
+  -u NATS_TOKEN
+  -u NATS_TLS_CA_FILE
+  -u A2A_AGENT_ID
+  -u A2A_RUNTIME_ID_MODE
+  -u A2A_AGENT_NAME
+  -u A2A_AGENT_DESCRIPTION
+  -u A2A_REQUIRE_CONFIRMATION_FOR_REMOTE
+  -u A2A_PRODUCTION_SECURITY
+)
+
+
+
 step "go test ./..."
-env -u KIRO_CLI GOCACHE="$GOCACHE" GOMODCACHE="$GOMODCACHE" go test ./...
+"${GO_TEST_ENV[@]}" GOCACHE="$GOCACHE" GOMODCACHE="$GOMODCACHE" go test ./...
 
 step "go vet ./..."
 GOCACHE="$GOCACHE" go vet ./...
