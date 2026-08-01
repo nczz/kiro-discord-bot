@@ -53,7 +53,7 @@ func registerA2ATools(s *server.MCPServer) {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			defer svc.Close()
-			toolReq := a2aRequestFromMCP(req)
+			toolReq := svc.normalizeBoundContext(a2aRequestFromMCP(req))
 			if spec.tool.Name == ToolA2ATaskStatus {
 				toolReq.ManageChannels = false
 			}

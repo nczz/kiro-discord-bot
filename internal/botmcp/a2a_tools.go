@@ -1989,6 +1989,15 @@ func a2aToolResult(resp A2AToolResponse) (*mcp.CallToolResult, error) {
 	}
 	return mcp.NewToolResultText(string(raw)), nil
 }
+func (s *A2AService) normalizeBoundContext(req A2AToolRequest) A2AToolRequest {
+	bound := strings.TrimSpace(s.cfg.BoundChannelID)
+	target := strings.TrimSpace(s.cfg.BoundTargetID)
+	if bound != "" && target != "" && target != bound && strings.TrimSpace(req.ChannelID) == target {
+		req.ChannelID = bound
+	}
+	return req
+}
+
 func a2aRequestFromMCP(req mcp.CallToolRequest) A2AToolRequest {
 	var out A2AToolRequest
 	raw, _ := json.Marshal(req.GetArguments())

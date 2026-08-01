@@ -1071,6 +1071,59 @@ func TestA2AToolsTrustPeerRejectsOutboundOnlyAutoCoPresent(t *testing.T) {
 	}
 }
 
+func TestA2AToolsThreadBoundContextUsesParentChannel(t *testing.T) {
+	ctx := context.Background()
+	svc, err := NewA2AService(A2AServiceConfig{
+		DataDir:        t.TempDir(),
+		Config:         a2a.Config{AgentID: "adam-n200", TaskTimeoutSec: 60},
+		BoundGuildID:   "guild-1",
+		BoundChannelID: "channel-1",
+		BoundTargetID:  "thread-1",
+		ConnectNATS:    false,
+	})
+	if err != nil {
+		t.Fatalf("NewA2AService: %v", err)
+	}
+	defer svc.Close()
+	if err := svc.policies.Save(ctx, a2a.ChannelA2APolicy{GuildID: "guild-1", ChannelID: "channel-1", Enabled: true, ChannelRef: "ch-parent", RuntimeAgentID: "adam-n200-ch-parent", BotAgentID: "adam-n200"}, "manager"); err != nil {
+		t.Fatalf("Save policy: %v", err)
+	}
+	row, err := svc.tasks.CreateOutbound(ctx, a2a.TaskRow{
+		TaskID:        "task_thread",
+		MessageID:     "msg_thread",
+		ClientTaskRef: "owner-1",
+		FromAgent:     "adam-n200-ch-parent",
+		ToAgent:       "peer-n100",
+		ChannelID:     "channel-1",
+		GuildID:       "guild-1",
+		ChannelRef:    "ch-parent",
+		State:         a2a.TaskStateCompleted,
+		Terminal:      true,
+	})
+	if err != nil {
+		t.Fatalf("CreateOutbound: %v", err)
+	}
+
+	req := svc.normalizeBoundContext(A2AToolRequest{GuildID: "guild-1", ChannelID: "thread-1", RequestedBy: "owner", RequestedByID: "owner-1", LocalID: row.LocalID})
+	if req.ChannelID != "channel-1" {
+		t.Fatalf("normalized ChannelID = %q, want parent channel", req.ChannelID)
+	}
+	policy, err := svc.currentPolicy(ctx, req)
+	if err != nil {
+		t.Fatalf("currentPolicy: %v", err)
+	}
+	if !policy.Enabled || policy.ChannelRef != "ch-parent" {
+		t.Fatalf("currentPolicy = %+v, want parent channel policy", policy)
+	}
+	got, err := svc.TaskStatus(ctx, req)
+	if err != nil {
+		t.Fatalf("TaskStatus: %v", err)
+	}
+	if !got.OK || got.Task == nil || got.Task.LocalID != row.LocalID {
+		t.Fatalf("TaskStatus = %+v, want parent-channel task visible from thread target", got)
+	}
+}
+
 func TestA2AToolsAnnotations(t *testing.T) {
 	readTool := a2aReadTool(ToolA2APeers, "peers")
 	if readTool.Annotations.ReadOnlyHint == nil || !*readTool.Annotations.ReadOnlyHint {
