@@ -25,6 +25,10 @@ Linux host 使用 service unit 設定 `WorkingDirectory`、`EnvironmentFile` 與
 
 Compose 設定使用 host networking，掛載所選 engine 的 authentication state 與 project roots，並讓 runtime MCP config 和全域 catalog sources 隔離。Catalog servers 仍需透過 `/mcp` 依頻道啟用。
 
+## A2A NATS 部署
+
+第一次設定請先看 [使用 NATS 啟用 A2A](a2a-nats-setup.md)，內容從 NATS server、`.env` 到 Discord policy 操作。啟用 bot A2A 變數前，先部署 NATS/JetStream。內部輕量部署使用一個 private JetStream node，搭配 TLS、token authentication、persistent storage、localhost-only monitoring 與 host/network firewalling；強化部署則應使用 `NATS_CREDS_FILE` NKey/JWT credentials、選用 TLS CA validation、每個穩定 bot/base identity 對應一組 credential，且 ACL 必須授權由該 base identity 衍生的 runtime ID subjects，並設定 `A2A_PRODUCTION_SECURITY=true`。透過 service manager 或 container environment 注入 A2A 變數，restart 或 drain bot，然後用 `/doctor` 與 rollout smoke checks 驗證。Setup 與 rollout gates 準備好前，保持 `NATS_URL` 為空。Identity、subject、task、policy 與 delivery model 見 [A2A 協議模型](a2a-protocol.md)。
+
 ## Release 更新
 
 tag 或部署 release 前，先執行：

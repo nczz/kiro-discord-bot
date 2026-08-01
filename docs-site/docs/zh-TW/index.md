@@ -29,6 +29,6 @@ README 保留為精簡入口；完整教學與 runbook 放在這裡。
 | 日常 Discord 使用者 | [指令參考](guide/commands.html)、[監聽模式](guide/listen-modes.html)、[Cron 與提醒](guide/cron-reminders.html) |
 | Channel/admin 管理者 | [管理與安全](guide/admin-security.html)、[MCP 權限](guide/mcp.html)、[Audit、用量與隱私](guide/audit-usage-privacy.html) |
 | MCP 管理者 | [MCP 權限](guide/mcp.html)、[Bot Tools MCP](guide/bot-tools.html)、[Discord MCP](guide/mcp-discord.html)、[Media MCP](guide/media-mcp.html) |
-| 生產環境部署者 | [Agent Engines](guide/agent-engines.html)、[部署](guide/deployment.html)、[macOS MCP 網路](guide/macos-mcp-networking.html)、[疑難排解](guide/troubleshooting.html) |
+| 生產環境部署者 | [Agent Engines](guide/agent-engines.html)、[部署](guide/deployment.html)、[使用 NATS 啟用 A2A](guide/a2a-nats-setup.html)、[A2A 協議模型](guide/a2a-protocol.html)、[macOS MCP 網路](guide/macos-mcp-networking.html)、[疑難排解](guide/troubleshooting.html) |
 | Release 維護者 | [Release Runbook](guide/release.html)、[貢獻者指南](guide/contributing.html)、[文件維護](guide/docs-maintenance.html) |
 | Security reviewer | [安全模型](guide/security-model.html)、[Audit、用量與隱私](guide/audit-usage-privacy.html)、[環境變數參考](guide/environment.html) |

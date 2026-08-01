@@ -29,6 +29,6 @@ The README remains the compact project entry point. Detailed explanations and op
 | Discord user | [Command Reference](guide/commands.html), [Listen Modes](guide/listen-modes.html), [Cron and Reminders](guide/cron-reminders.html) |
 | Channel admin | [Admin and Security](guide/admin-security.html), [MCP Policy](guide/mcp.html), [Audit, Usage, and Privacy](guide/audit-usage-privacy.html) |
 | MCP admin | [MCP Policy](guide/mcp.html), [Bot Tools MCP](guide/bot-tools.html), [Discord MCP](guide/mcp-discord.html), [Media MCP](guide/media-mcp.html) |
-| Operator | [Agent Engines](guide/agent-engines.html), [Deployment](guide/deployment.html), [macOS MCP Networking](guide/macos-mcp-networking.html), [Troubleshooting](guide/troubleshooting.html) |
+| Operator | [Agent Engines](guide/agent-engines.html), [Deployment](guide/deployment.html), [Enable A2A with NATS](guide/a2a-nats-setup.html), [A2A Protocol Model](guide/a2a-protocol.html), [macOS MCP Networking](guide/macos-mcp-networking.html), [Troubleshooting](guide/troubleshooting.html) |
 | Maintainer | [Release Runbook](guide/release.html), [Contributor Guide](guide/contributing.html), [Docs Maintenance](guide/docs-maintenance.html) |
 | Security reviewer | [Security Model](guide/security-model.html), [Audit, Usage, and Privacy](guide/audit-usage-privacy.html), [Environment Reference](guide/environment.html) |

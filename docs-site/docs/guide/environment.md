@@ -169,7 +169,7 @@ Do not share `DATA_DIR` between bot identities. Audit DBs, the usage SQLite DB a
 
 ## A2A NATS Custom Binding
 
-A2A is disabled while `NATS_URL` is empty. Existing Discord behavior should remain unchanged in that state. If `NATS_URL` is set, startup requires a valid `A2A_AGENT_ID`; clear `NATS_URL` for rollback/no-op disable. For the rollout procedure, ACL template, and smoke matrix, see [A2A NATS Rollout](a2a-nats-rollout.md).
+A2A is disabled while `NATS_URL` is empty. Existing Discord behavior should remain unchanged in that state. If `NATS_URL` is set, startup requires a valid `A2A_AGENT_ID`; clear `NATS_URL` for rollback/no-op disable. For step-by-step setup, see [Enable A2A with NATS](a2a-nats-setup.md). For identity, subject, policy, and task-state terminology, see [A2A Protocol Model](a2a-protocol.md). For rollout gates, ACL templates, and smoke matrix, see [A2A NATS Rollout](a2a-nats-rollout.md).
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
@@ -177,7 +177,9 @@ A2A is disabled while `NATS_URL` is empty. Existing Discord behavior should rema
 | `NATS_CREDS_FILE` | empty | NKey/JWT credentials file path. Preferred production credential. |
 | `NATS_TOKEN` | empty | Development token. Do not use as the only production credential. |
 | `NATS_TLS_CA_FILE` | empty | TLS CA file for server certificate validation. This is not client mTLS authentication by itself. |
-| `A2A_AGENT_ID` | empty | Stable logical agent ID; must match the credential identity. |
+| `A2A_AGENT_ID` | empty | Stable bot/process base identity. NATS credentials or ACLs must authorize the runtime IDs derived from this base identity. |
+| `A2A_RUNTIME_ID_MODE` | `legacy` | `legacy`, `dual`, or `runtime`. Production target is `runtime`; `dual` is only for a bounded legacy drain. |
+| `A2A_CONFIRMATION_SECRET` | empty | Signs A2A policy/delegation confirmation tokens and Discord confirmation buttons. Set a stable secret; otherwise it falls back to `DISCORD_TOKEN` or a process-random value that invalidates pending confirmations on restart. |
 | `A2A_AGENT_NAME` | empty | Public peer-card display name. |
 | `A2A_AGENT_DESCRIPTION` | empty | Public capability summary. Do not include secrets, private paths, hosts, or user data. |
 | `A2A_TASK_TIMEOUT_SEC` | `3600` | Remote task timeout seconds. |

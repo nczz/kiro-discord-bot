@@ -37,7 +37,7 @@
 | `/agent` | 列出目前頻道/討論串 agent 的可用 modes。 |
 | `/agent <mode-id>` | 切換 agent mode，例如 planner/guide mode 或 active ACP session 回報的 OMP modes。 |
 | `/engine` | 顯示目前的 agent 引擎（kiro/omp）與已啟用的引擎清單。 |
-| `/engine <kiro\|omp>` | 切換此頻道/討論串的引擎（僅限 `AGENT_ENGINES_ENABLED` 列出的引擎）。會在新引擎開全新 session，並重放最近的對話內容。 |
+| `/engine <kiro_or_omp>` | 切換此頻道/討論串的引擎（僅限 `AGENT_ENGINES_ENABLED` 列出的引擎）。會在新引擎開全新 session，並重放最近的對話內容。 |
 
 ## Memory 與 Steering
 
@@ -65,6 +65,23 @@ Memory、flash memory、steering 與 session cleanup 的操作差異見 [日常�
 Audit data 請使用 slash `/audit`；usage data 請使用 slash `/usage` 或 `/usage-history`。文字 `!audit` 不回傳 audit rows，文字 `!usage` 只會提示改用 slash，因為 Discord 無法讓這類文字回覆變成 private。
 
 Audit rows、audit prompt investigations 與 usage attribution 的行為見 [Audit、用量與隱私](audit-usage-privacy.md)。
+## A2A
+
+只有在 NATS 已設定且 channel 有 A2A policy 後才使用 A2A commands。從 NATS server、`.env` 到 Discord policy 的完整 setup 見 [使用 NATS 啟用 A2A](a2a-nats-setup.md)。協議關鍵字見 [A2A 協議模型](a2a-protocol.md)。
+
+| Command | 用途 |
+| --- | --- |
+| `/a2a peers` | 列出可見 runtime peers、skills、trust、stale/online status 與 delivery readiness。 |
+| `/a2a trust peer_agent:<runtime>` | Plan 或 apply 高階 peer trust。預設為 bidirectional general-task trust，套用前需要 confirmation。 |
+| `/a2a ask peer_agent:<runtime> message:<text>` | 對 trusted runtime 排入 general delegated task。 |
+| `/a2a delegate target_agent:<runtime> skill_id:<skill> message:<text> reason:<reason>` | Policy 與 confirmation checks 通過後，對明確 runtime/skill target 排入 task。 |
+| `/a2a status [task]` | 查看 durable task state 與 events。Queued task 不代表完成，必須到 terminal state。 |
+| `/a2a cancel task:<task>` | 要求取消 remote A2A task。 |
+| `/a2a reply task:<task> input:<text>` | 當 task 是 `TASK_STATE_INPUT_REQUIRED` 時提供 input。 |
+| `/a2a authorize task:<task> approve:true_or_false` | 當 task 是 `TASK_STATE_AUTH_REQUIRED` 時 approve 或 deny。 |
+
+`/a2a enable`、`/a2a disable`、`/a2a expose`、`/a2a accept-from`、`/a2a delegate-to` 等 policy subcommands 是進階介面。一般 bidirectional peer setup 優先使用 `/a2a trust`。
+
 
 ## 排程
 

@@ -166,6 +166,35 @@ BOT_PEERS=...
 | `AUDIT_LOG_RECORD_CONTENT` | `true` | 在 audit projection 與 raw event payload 中記錄訊息內容。 |
 | `AUDIT_LOG_RECORD_TYPING` | `false` | 記錄 Discord typing event。 |
 
+## A2A NATS Custom Binding
+
+`NATS_URL` 為空時 A2A 停用，既有 Discord 行為應維持不變。如果設定 `NATS_URL`，startup 需要有效的 `A2A_AGENT_ID`；rollback/no-op disable 時清空 `NATS_URL`。Step-by-step setup 見 [使用 NATS 啟用 A2A](a2a-nats-setup.md)。Identity、subject、policy 與 task-state 關鍵字見 [A2A 協議模型](a2a-protocol.md)。Rollout gates、ACL templates 與 smoke matrix 見 [A2A NATS Rollout](../../guide/a2a-nats-rollout.md)。
+
+| 變數 | 預設 | 用途 |
+| --- | --- | --- |
+| `NATS_URL` | 空 | NATS server URL list。空值會完全停用 A2A。 |
+| `NATS_CREDS_FILE` | 空 | NKey/JWT credentials file path。建議的 production credential。 |
+| `NATS_TOKEN` | 空 | Development token。不要作為唯一 production credential。 |
+| `NATS_TLS_CA_FILE` | 空 | NATS server certificate validation 的 TLS CA file。這不是 client mTLS authentication。 |
+| `A2A_CONFIRMATION_SECRET` | 空 | A2A policy/delegation confirmation token 的簽章 secret；production 建議由 secret manager 注入。 |
+| `A2A_AGENT_ID` | 空 | 穩定 bot/process base identity；runtime mode 中不是單獨的 route。 |
+| `A2A_RUNTIME_ID_MODE` | `legacy` | `legacy`、`dual` 或 `runtime`。Production target 是 `runtime`；`dual` 只用於 bounded legacy drain。 |
+| `A2A_AGENT_NAME` | 空 | Public peer-card display name。 |
+| `A2A_AGENT_DESCRIPTION` | 空 | Public capability summary。不要包含 secrets、private paths、hosts 或 user data。 |
+| `A2A_TASK_TIMEOUT_SEC` | `3600` | Remote task timeout 秒數。 |
+| `A2A_MAX_DELEGATION_DEPTH` | `1` | 最大 nested delegation depth。 |
+| `A2A_AUTO_DELEGATE_ENABLED` | `false` | 當 channel policy 也允許時，允許 automatic outbound delegation。 |
+| `A2A_REQUIRE_CONFIRMATION_FOR_REMOTE` | `true` | Remote task execution 前需要 confirmation。 |
+| `A2A_PRODUCTION_SECURITY` | `false` | `true` 時需要 `NATS_CREDS_FILE`，並拒絕 token-only 或 unauthenticated production startup。 |
+| `A2A_TASK_RETENTION_DAYS` | `30` | Task/event retention。只有明確要永久保留時才設為 `0`。 |
+| `A2A_OBJECT_RETENTION_DAYS` | `30` | Object/artifact retention。只有明確要永久保留時才設為 `0`。 |
+| `A2A_MAX_PENDING_TASKS` | `100` | Global pending remote task limit。`0` 表示無限制。 |
+| `A2A_MAX_OUTBOUND_TASKS_PER_CHANNEL` | `10` | Per-channel outbound remote task limit。`0` 表示無限制。 |
+| `A2A_MAX_INBOUND_TASKS_PER_CHANNEL` | `10` | Per-channel inbound remote task limit。`0` 表示無限制。 |
+| `A2A_MAX_EVENT_RATE_PER_MIN` | `120` | A2A event quota per minute。`0` 表示無限制。 |
+
+修改任何 A2A 變數後，請重啟 bot 並執行 `/doctor`。`/doctor` 會顯示 enabled/disabled state、auth mode、production guard state、retention、quotas 與已遮蔽的 credential presence，不會印出 raw tokens 或 credential paths。
+
 ## 語音轉文字
 
 | 變數 | 預設 | 用途 |

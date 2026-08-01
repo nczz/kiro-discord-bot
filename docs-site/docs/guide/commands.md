@@ -37,7 +37,7 @@ In a parent channel, `/clear` clears the active agent session and the bot-local 
 | `/agent` | List available modes for the current channel/thread agent. |
 | `/agent <mode-id>` | Switch agent mode, such as planner/guide modes or OMP modes advertised by the active ACP session. |
 | `/engine` | Show the current agent engine (kiro/omp) and which engines are enabled. |
-| `/engine <kiro\|omp>` | Switch the engine for this channel/thread (only engines listed in `AGENT_ENGINES_ENABLED`). Starts a fresh session on the new engine; recent conversation context is replayed. |
+| `/engine <kiro_or_omp>` | Switch the engine for this channel/thread (only engines listed in `AGENT_ENGINES_ENABLED`). Starts a fresh session on the new engine; recent conversation context is replayed. |
 
 ## Memory and Steering
 
@@ -65,6 +65,23 @@ See [Daily Workflows](daily-workflows.md) for the operational difference between
 Use slash `/audit` for audit data and slash `/usage` or `/usage-history` for usage data. Text `!audit` does not return audit rows, and text `!usage` only returns a slash-only notice, because Discord cannot make those replies private.
 
 See [Audit, Usage, and Privacy](audit-usage-privacy.md) for how audit rows, audit prompt investigations, and usage attribution work.
+## A2A
+
+Use A2A commands only after NATS is configured and the channel has an A2A policy. For setup from NATS server through Discord policy, see [Enable A2A with NATS](a2a-nats-setup.md). For protocol terms, see [A2A Protocol Model](a2a-protocol.md).
+
+| Command | Purpose |
+| --- | --- |
+| `/a2a peers` | List visible runtime peers, skills, trust, stale/online status, and delivery readiness. |
+| `/a2a trust peer_agent:<runtime>` | Plan or apply high-level peer trust. Defaults to bidirectional general-task trust and requires confirmation before applying. |
+| `/a2a ask peer_agent:<runtime> message:<text>` | Queue a general delegated task for a trusted runtime. |
+| `/a2a delegate target_agent:<runtime> skill_id:<skill> message:<text> reason:<reason>` | Queue a task for an explicit runtime/skill target after policy and confirmation checks. |
+| `/a2a status [task]` | Inspect durable task state and events. A queued task is not complete until status reaches a terminal state. |
+| `/a2a cancel task:<task>` | Request cancellation for a remote A2A task. |
+| `/a2a reply task:<task> input:<text>` | Provide input when a task is `TASK_STATE_INPUT_REQUIRED`. |
+| `/a2a authorize task:<task> approve:true_or_false` | Approve or deny when a task is `TASK_STATE_AUTH_REQUIRED`. |
+
+Policy subcommands such as `/a2a enable`, `/a2a disable`, `/a2a expose`, `/a2a accept-from`, and `/a2a delegate-to` are advanced surfaces. Prefer `/a2a trust` for normal bidirectional peer setup.
+
 
 ## Scheduling
 

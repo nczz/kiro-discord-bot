@@ -2,6 +2,8 @@
 
 This runbook covers production rollout of the optional A2A NATS custom binding. Keep `NATS_URL` empty until every gate below passes.
 
+For first-time enablement from NATS server setup through bot `.env` and Discord policy, use `docs-site/docs/guide/a2a-nats-setup.md`. For the implementation glossary and protocol model, use `docs-site/docs/guide/a2a-protocol.md`.
+
 ## Deployment model
 
 - Development: one local NATS server with JetStream enabled is enough for two-bot smokes.
