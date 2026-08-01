@@ -882,7 +882,7 @@ Append one subsection per completed phase.
 
 ### RC release cleanup and hardening
 
-- Status: validation passed; commit pending.
+- Status: validation passed; deployed locally and to <remote-test-host>; commit `efc5a3c` (pre-amend cleanup commit).
 - Decision: keep the runtime-first implementation intact and limit this cleanup to release blockers: environment defaults, production profile docs, confirmation-secret fallback hygiene, A2A policy readiness metadata, and scrubbed test/operator artifacts.
 - Changed files: `.env.example`, `a2a/card_phase4_test.go`, `a2a/store_phase3_test.go`, `bot/a2a_commands.go`, `bot/a2a_discovery_test.go`, `bot/handler_test.go`, `bot/peers_test.go`, `channel/a2a_phase5_test.go`, `channel/a2a_phase8_test.go`, `channel/doctor_env_test.go`, `channel/worker_test.go`, `docs/a2a-nats-implementation-guide.md`, `docs/a2a-nats-implementation-progress.md`, `docs/a2a-nats-integration-spec.md`, `docs/a2a-nats-rollout.md`, `internal/botmcp/a2a_tool_register.go`, `internal/botmcp/a2a_tools.go`, `internal/botmcp/a2a_tools_test.go`, `locale/lang/en.json`, and `locale/lang/zh-TW.json`.
 - Validation:
@@ -890,9 +890,11 @@ Append one subsection per completed phase.
   - Full regression: `env -u NATS_URL -u NATS_CREDS_FILE -u NATS_TOKEN -u NATS_TLS_CA_FILE -u A2A_AGENT_ID -u A2A_RUNTIME_ID_MODE -u A2A_AGENT_NAME -u A2A_AGENT_DESCRIPTION -u A2A_REQUIRE_CONFIRMATION_FOR_REMOTE go test ./...` passed (`22 packages ok, 1 no tests`).
   - LSP workspace diagnostics: no issues found.
   - Secret/sensitive-artifact scan found no live host/IP, Discord snowflake, bot label, old fallback secret, or deployment path leftovers in release-scoped files.
-- Runtime settings touched: no live env, DATA_DIR, deployment host, Docker volume, or service changed in this cleanup.
-- Rollback boundary: revert this cleanup commit only. Runtime-first A2A code remains at the prior committed behavior; no database or live service migration was performed.
-- Next phase: commit and push this cleanup, then deploy only if explicitly requested by the operator.
+  - Deployment smoke: local service restarted and logged `NATS node enabled`, `transport consumers started`, and `Bot running`; remote systemd service active and logged the same A2A readiness markers.
+  - Installed binary hashes: local darwin arm64 `<sha256:e08d88a44d09...>`; remote linux amd64 `<sha256:b8fe47c4c6c1...>`.
+- Runtime settings touched: no env, DATA_DIR, Docker volume, or database changed. Deployment touched only local and <remote-test-host> bot binaries/services.
+- Rollback boundary: restore the timestamped pre-cleanup binary on the affected host or revert this cleanup commit; `NATS_URL=""` remains the no-op A2A rollback. No database or live policy migration was performed.
+- Next phase: monitor the deployed cleanup build; no implementation phase is open.
 
 ## Master goal prompt
 
