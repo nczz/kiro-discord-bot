@@ -188,6 +188,7 @@ Default setup semantics:
 - Trust UX may default to `auto`: verified same Discord guild/channel runtime peers can use `transparent` + `co_present`; unknown/cross-location peers stay safe. Direct policy setup without explicit `co_present` stays safe because it does not prove peer Discord location.
 - `bot_a2a_delegate` with no `setup_mode` uses stored policy; explicit `auto`, `safe`, or `co_present` is required to override delivery per request.
 - Policy/status UX must describe local co-present gates only; remote executor admission and Discord permissions remain separately validated.
+- Confirmation tokens returned by `bot_a2a_trust_peer` must be applicable either by re-calling `bot_a2a_trust_peer` with the token or by calling `bot_a2a_policy_apply` with the returned `change_id` and `confirmation_token`; both paths must apply the exact planned policy or reject as stale.
 
 Slash fallback commands MUST call the same internal service methods; no separate policy path is allowed.
 

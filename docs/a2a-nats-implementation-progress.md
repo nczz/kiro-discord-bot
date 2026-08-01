@@ -870,6 +870,28 @@ Append one subsection per completed phase.
 - Rollback boundary: restore `/Users/chun/Projects/kiro-discord-bot-local/bin/kiro-discord-bot.pre-a2a-copresent-20260801193450` locally and `/opt/kiro-discord-bot/kiro-discord-bot.pre-a2a-copresent-20260801193500` on d80, restart both services, and recreate the previous safe/proxy policy rows from `/Users/chun/Projects/kiro-discord-bot-local/data/a2a/policy.sqlite.pre-a2a-copresent-sync-20260801193521` and `/home/chun/kiro-discord-bot/data/a2a/policy.sqlite.pre-a2a-copresent-sync-20260801193523` if needed.
 - Next phase: after policy reset, rerun the natural Discord trust/setup flow from empty policy and confirm it recreates the intended transparent/co_present same-channel contract through public tools rather than direct DB mutation.
 
+
+### R30 pending trust plan apply compatibility
+
+- Status: deployed locally and to d80.
+- Trigger: after policy reset, a natural ChunBot MCP flow called `bot_a2a_peers`, then `bot_a2a_trust_peer`, then `bot_a2a_policy_apply`. The peer was already trusted but `channel_a2a_policy` was empty. `bot_a2a_trust_peer` planned change `5588a15784ae2e38679e5e25b3343746`, but `bot_a2a_policy_apply` recomputed a plain policy diff from its own sparse request and returned `change_id does not match policy diff`.
+- Decision: confirmation should apply the planned policy, not require the MCP caller to reproduce a high-level tool's internal diff. `A2AService` now stores short-lived pending policy plans keyed by `change_id` with the base policy hash and persists them in `data/a2a/pending_policy_plans.sqlite` so separate MCP tool invocations can share the plan. `bot_a2a_policy_apply` can apply a pending `bot_a2a_trust_peer` or `bot_a2a_policy_plan` result when the caller supplies only `change_id` and `confirmation_token`, but rejects if the base policy changed or the plan expired. `bot_a2a_trust_peer` response text and tool description now explicitly name both valid apply paths.
+- Changed files: `internal/botmcp/a2a_tools.go`, `internal/botmcp/a2a_tool_register.go`, `internal/botmcp/a2a_tools_test.go`, `docs/a2a-nats-implementation-guide.md`, and this progress ledger.
+- Validation:
+  - Pending trust apply regression passed across fresh service instances: `env -u NATS_URL -u NATS_CREDS_FILE -u NATS_TOKEN -u NATS_TLS_CA_FILE -u A2A_AGENT_ID -u A2A_RUNTIME_ID_MODE -u A2A_AGENT_NAME -u A2A_AGENT_DESCRIPTION -u A2A_REQUIRE_CONFIRMATION_FOR_REMOTE go test ./internal/botmcp -run 'TestA2AToolsPolicyApplyAcceptsPendingTrustPeerPlanAcrossServiceInstances|TestA2AToolsTrustPeerDefaultsGeneralTaskBidirectional|TestA2AToolsTrustPeerRejectsOutboundOnlyAutoCoPresent'`.
+  - Strict reviewer initially blocked the in-memory-only version because MCP dispatch constructs a fresh `A2AService` per tool call. Recheck passed after SQLite persistence and the fresh-service regression.
+  - Affected regression passed: `env -u NATS_URL -u NATS_CREDS_FILE -u NATS_TOKEN -u NATS_TLS_CA_FILE -u A2A_AGENT_ID -u A2A_RUNTIME_ID_MODE -u A2A_AGENT_NAME -u A2A_AGENT_DESCRIPTION -u A2A_REQUIRE_CONFIRMATION_FOR_REMOTE go test ./internal/botmcp ./bot -run 'TestA2AToolsPolicyApplyAcceptsPendingTrustPeerPlanAcrossServiceInstances|TestA2AToolsPolicyPlanPolicyApply|TestA2AToolsTrustPeerDefaultsGeneralTaskBidirectional|TestA2AToolsTrustPeerDefaultUnknownLocationStaysSafe|TestA2AToolsTrustPeerRejectsOutboundOnlyAutoCoPresent|TestA2ATrustSlashDefaultsGeneralTaskAutoBidirectional'`.
+  - Full regression passed: `env -u NATS_URL -u NATS_CREDS_FILE -u NATS_TOKEN -u NATS_TLS_CA_FILE -u A2A_AGENT_ID -u A2A_RUNTIME_ID_MODE -u A2A_AGENT_NAME -u A2A_AGENT_DESCRIPTION -u A2A_REQUIRE_CONFIRMATION_FOR_REMOTE go test ./...`.
+  - LSP workspace diagnostics reported no issues.
+  - Built `/tmp/kiro-discord-bot-darwin-a2a-trust-apply` with SHA-256 `9b67b023eefa0e3edbc3303382dc7b7793c1ec27e171df2887f146efb946796e` and `/tmp/kiro-discord-bot-linux-amd64-a2a-trust-apply` with SHA-256 `32a6a7c57c729e19fca4debe2c49189d0681a89e94746a840101275268ced73c`.
+  - Local M5 bot restarted and logged `NATS node enabled`, `transport consumers started`, and `Bot running as M5Bot#8313`.
+  - Remote d80 bot service is active and logged `NATS node enabled`, `transport consumers started`, and `Bot running as ChunBot#4533`.
+  - Local and d80 `channel_a2a_policy` rows were reset to `0`; no `pending_policy_plans.sqlite` rows existed after reset.
+- Runtime settings touched: local policy row count reset from 1 to 0; d80 policy row count remained 0. No env changes.
+- Deployment hosts touched: local M5 bot binary/service and remote d80 bot binary/service.
+- Rollback boundary: restore `/Users/chun/Projects/kiro-discord-bot-local/bin/kiro-discord-bot.pre-a2a-trust-apply-20260801202429` locally and `/opt/kiro-discord-bot/kiro-discord-bot.pre-a2a-trust-apply-20260801202443` on d80, then restart both services. Code rollback would make `bot_a2a_trust_peer` apply via the same tool still work, but `bot_a2a_policy_apply` on a trust-peer token would again fail with `change_id does not match policy diff`.
+- Next phase: rerun the ChunBot MCP flow from empty policy: `bot_a2a_peers` → `bot_a2a_trust_peer` → `bot_a2a_policy_apply`; expected result is an enabled d80 policy delegating to `m5bot-local-ch-2cbaf623`.
+
 ## Master goal prompt
 
 Use this prompt when starting or resuming the full implementation program:

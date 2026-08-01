@@ -12,9 +12,11 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -58,13 +60,22 @@ type A2AServiceConfig struct {
 }
 
 type A2AService struct {
-	cfg       A2AServiceConfig
-	peers     *a2a.SQLitePeerStore
-	policies  *a2a.SQLitePolicyStore
-	tasks     *a2a.SQLiteTaskStore
-	node      *a2a.Node
-	publisher *a2a.Publisher
-	closeFns  []func()
+	cfg         A2AServiceConfig
+	peers       *a2a.SQLitePeerStore
+	policies    *a2a.SQLitePolicyStore
+	tasks       *a2a.SQLiteTaskStore
+	node        *a2a.Node
+	publisher   *a2a.Publisher
+	pendingMu   sync.Mutex
+	pendingPlan map[string]pendingPolicyPlan
+	closeFns    []func()
+}
+
+type pendingPolicyPlan struct {
+	BaseChangeID string
+	Tool         string
+	Policy       a2a.ChannelA2APolicy
+	ExpiresAt    time.Time
 }
 
 type A2AToolRequest struct {
@@ -220,7 +231,7 @@ func NewA2AService(cfg A2AServiceConfig) (*A2AService, error) {
 	if cfg.AuditDBPath == "" {
 		cfg.AuditDBPath = botToolsAuditDBPath()
 	}
-	s := &A2AService{cfg: cfg, peers: cfg.PeerStore, policies: cfg.PolicyStore, tasks: cfg.TaskStore, node: cfg.Node, publisher: cfg.Publisher}
+	s := &A2AService{cfg: cfg, peers: cfg.PeerStore, policies: cfg.PolicyStore, tasks: cfg.TaskStore, node: cfg.Node, publisher: cfg.Publisher, pendingPlan: make(map[string]pendingPolicyPlan)}
 	if s.peers == nil {
 		store, err := a2a.OpenPeerStore(cfg.DataDir)
 		if err != nil {
@@ -520,6 +531,9 @@ func (s *A2AService) PolicyPlan(ctx context.Context, req A2AToolRequest) (A2AToo
 	summary := policySummary(policy, planned)
 	token := s.confirmationToken("policy_apply", changeID, req, planned)
 	exp := s.cfg.Now().UTC().Add(10 * time.Minute)
+	if err := s.storePendingPolicyPlan(changeID, policyChangeID(policy), ToolA2APolicyPlan, planned, exp); err != nil {
+		return responseError(fmt.Errorf("%w: store pending policy plan: %v", errorCode(a2a.ErrorStoreError), err)), nil
+	}
 	_ = s.recordAudit(ctx, a2a.AuditPolicyChangePlanned, req, "planned", "", map[string]any{"change_id": changeID})
 	return A2AToolResponse{OK: true, Message: "A2A policy change planned", RequiresConfirmation: true, ConfirmationSummary: summary, RiskLabels: policyRiskLabels(policy, planned), ExpiresAt: exp.Format(time.RFC3339), ChangeID: changeID, ConfirmationToken: token, Policy: &planned}, nil
 }
@@ -534,6 +548,15 @@ func (s *A2AService) PolicyApply(ctx context.Context, req A2AToolRequest) (A2ATo
 	}
 	planned := s.applyPolicyDiff(policy, req)
 	changeID := policyChangeID(planned)
+	if strings.TrimSpace(req.ChangeID) != "" && strings.TrimSpace(req.ChangeID) != changeID {
+		if pending, ok := s.pendingPolicyPlan(strings.TrimSpace(req.ChangeID)); ok {
+			if pending.BaseChangeID != policyChangeID(policy) {
+				return responseError(fmt.Errorf("%w: planned policy is stale; re-run the plan", errorCode(a2a.ErrorPolicyDenied))), nil
+			}
+			planned = pending.Policy
+			changeID = strings.TrimSpace(req.ChangeID)
+		}
+	}
 	if strings.TrimSpace(req.ChangeID) != "" && strings.TrimSpace(req.ChangeID) != changeID {
 		return responseError(fmt.Errorf("%w: change_id does not match policy diff", errorCode(a2a.ErrorPolicyDenied))), nil
 	}
@@ -565,8 +588,11 @@ func (s *A2AService) TrustPeer(ctx context.Context, req A2AToolRequest) (A2ATool
 	if strings.TrimSpace(req.ConfirmationToken) == "" {
 		token := s.confirmationToken("policy_apply", changeID, req, planned)
 		exp := s.cfg.Now().UTC().Add(10 * time.Minute)
+		if err := s.storePendingPolicyPlan(changeID, policyChangeID(policy), ToolA2ATrustPeer, planned, exp); err != nil {
+			return responseError(fmt.Errorf("%w: store pending trust plan: %v", errorCode(a2a.ErrorStoreError), err)), nil
+		}
 		_ = s.recordAudit(ctx, a2a.AuditPolicyChangePlanned, req, "planned", "", map[string]any{"change_id": changeID, "tool": ToolA2ATrustPeer})
-		return A2AToolResponse{OK: true, Message: "A2A trust peer policy change planned", RequiresConfirmation: true, ConfirmationSummary: policySummary(policy, planned), RiskLabels: policyRiskLabels(policy, planned), ExpiresAt: exp.Format(time.RFC3339), ChangeID: changeID, ConfirmationToken: token, Policy: &planned}, nil
+		return A2AToolResponse{OK: true, Message: "A2A trust peer policy change planned; apply by calling bot_a2a_trust_peer again or bot_a2a_policy_apply with the returned change_id and confirmation_token", RequiresConfirmation: true, ConfirmationSummary: policySummary(policy, planned), RiskLabels: policyRiskLabels(policy, planned), ExpiresAt: exp.Format(time.RFC3339), ChangeID: changeID, ConfirmationToken: token, Policy: &planned, Metadata: map[string]interface{}{"apply_tools": []string{ToolA2ATrustPeer, ToolA2APolicyApply}}}, nil
 	}
 	if strings.TrimSpace(req.ChangeID) != "" && strings.TrimSpace(req.ChangeID) != changeID {
 		return responseError(fmt.Errorf("%w: change_id does not match policy diff", errorCode(a2a.ErrorPolicyDenied))), nil
@@ -1799,6 +1825,109 @@ func canonicalPeerSkill(peer a2a.PeerRow, skillID, targetChannelRef string) stri
 		}
 	}
 	return ""
+}
+
+func (s *A2AService) storePendingPolicyPlan(changeID, baseChangeID, tool string, policy a2a.ChannelA2APolicy, expiresAt time.Time) error {
+	changeID = strings.TrimSpace(changeID)
+	if changeID == "" {
+		return nil
+	}
+	plan := pendingPolicyPlan{BaseChangeID: baseChangeID, Tool: tool, Policy: policy, ExpiresAt: expiresAt}
+	s.pendingMu.Lock()
+	now := s.cfg.Now().UTC()
+	for id, existing := range s.pendingPlan {
+		if !existing.ExpiresAt.IsZero() && !existing.ExpiresAt.After(now) {
+			delete(s.pendingPlan, id)
+		}
+	}
+	s.pendingPlan[changeID] = plan
+	s.pendingMu.Unlock()
+	return s.persistPendingPolicyPlan(changeID, plan)
+}
+
+func (s *A2AService) pendingPolicyPlan(changeID string) (pendingPolicyPlan, bool) {
+	changeID = strings.TrimSpace(changeID)
+	if changeID == "" {
+		return pendingPolicyPlan{}, false
+	}
+	s.pendingMu.Lock()
+	plan, ok := s.pendingPlan[changeID]
+	if ok && !plan.ExpiresAt.IsZero() && !plan.ExpiresAt.After(s.cfg.Now().UTC()) {
+		delete(s.pendingPlan, changeID)
+		ok = false
+	}
+	s.pendingMu.Unlock()
+	if ok {
+		return plan, true
+	}
+	plan, err := s.loadPendingPolicyPlan(changeID)
+	if err != nil || (!plan.ExpiresAt.IsZero() && !plan.ExpiresAt.After(s.cfg.Now().UTC())) {
+		return pendingPolicyPlan{}, false
+	}
+	s.pendingMu.Lock()
+	s.pendingPlan[changeID] = plan
+	s.pendingMu.Unlock()
+	return plan, true
+}
+
+func (s *A2AService) pendingPolicyDB() (*sql.DB, error) {
+	dir := filepath.Join(s.cfg.DataDir, "a2a")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return nil, err
+	}
+	db, err := sql.Open("sqlite", filepath.Join(dir, "pending_policy_plans.sqlite"))
+	if err != nil {
+		return nil, err
+	}
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS pending_policy_plans (
+		change_id TEXT PRIMARY KEY,
+		base_change_id TEXT NOT NULL,
+		tool TEXT NOT NULL,
+		policy_json TEXT NOT NULL,
+		expires_at TEXT NOT NULL
+	)`); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return db, nil
+}
+
+func (s *A2AService) persistPendingPolicyPlan(changeID string, plan pendingPolicyPlan) error {
+	raw, err := json.Marshal(plan.Policy)
+	if err != nil {
+		return err
+	}
+	db, err := s.pendingPolicyDB()
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	_, err = db.Exec(`INSERT INTO pending_policy_plans(change_id, base_change_id, tool, policy_json, expires_at)
+		VALUES(?,?,?,?,?)
+		ON CONFLICT(change_id) DO UPDATE SET base_change_id=excluded.base_change_id, tool=excluded.tool, policy_json=excluded.policy_json, expires_at=excluded.expires_at`,
+		changeID, plan.BaseChangeID, plan.Tool, string(raw), plan.ExpiresAt.UTC().Format(time.RFC3339))
+	return err
+}
+
+func (s *A2AService) loadPendingPolicyPlan(changeID string) (pendingPolicyPlan, error) {
+	db, err := s.pendingPolicyDB()
+	if err != nil {
+		return pendingPolicyPlan{}, err
+	}
+	defer db.Close()
+	var plan pendingPolicyPlan
+	var raw, expires string
+	err = db.QueryRow(`SELECT base_change_id, tool, policy_json, expires_at FROM pending_policy_plans WHERE change_id=?`, changeID).Scan(&plan.BaseChangeID, &plan.Tool, &raw, &expires)
+	if err != nil {
+		return pendingPolicyPlan{}, err
+	}
+	if err := json.Unmarshal([]byte(raw), &plan.Policy); err != nil {
+		return pendingPolicyPlan{}, err
+	}
+	if t, err := time.Parse(time.RFC3339, expires); err == nil {
+		plan.ExpiresAt = t
+	}
+	return plan, nil
 }
 
 func skillListAllows(list []string, skill string) bool {

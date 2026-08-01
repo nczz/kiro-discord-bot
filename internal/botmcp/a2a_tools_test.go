@@ -931,6 +931,61 @@ func TestA2AToolsTrustPeerDefaultsGeneralTaskBidirectional(t *testing.T) {
 	}
 }
 
+func TestA2AToolsPolicyApplyAcceptsPendingTrustPeerPlanAcrossServiceInstances(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+	dataDir := t.TempDir()
+	cfg := A2AServiceConfig{
+		DataDir:            dataDir,
+		Config:             a2a.Config{AgentID: "d80-chunbot", RuntimeIDMode: a2a.RuntimeIDModeRuntime},
+		BoundGuildID:       "1495737767827865620",
+		BoundChannelID:     "1495737768905670719",
+		ConfirmationSecret: "test-secret",
+		ConnectNATS:        false,
+		Now:                func() time.Time { return now },
+	}
+	planSvc, err := NewA2AService(cfg)
+	if err != nil {
+		t.Fatalf("NewA2AService plan: %v", err)
+	}
+
+	peerCard := a2a.AgentCard{Name: "m5bot-local-ch-2cbaf623", Description: "runtime", Version: "1.0.0", SupportedInterfaces: []a2a.A2AInterface{{URL: "nats://nats.example.internal:4222", ProtocolBinding: a2a.ProtocolBindingNATS, ProtocolVersion: a2a.ProtocolVersion}}, Skills: []a2a.AgentSkill{{ID: "ch-2cbaf623/task", Name: "Task", Description: "task"}}}
+	peerExt := a2a.ExtendedAgentCard{ChannelRef: "ch-2cbaf623", DiscordGuildID: "1495737767827865620", DiscordChannelID: "1495737768905670719"}
+	if _, err := planSvc.peers.UpsertExtendedCard(ctx, "m5bot-local-ch-2cbaf623", peerCard, peerExt, false, "peer-instance", "online", time.Now().Add(time.Hour)); err != nil {
+		t.Fatalf("Upsert peer: %v", err)
+	}
+
+	req := A2AToolRequest{GuildID: "1495737767827865620", ChannelID: "1495737768905670719", RequestedBy: "manager", RequestedByID: "manager-1", ManageChannels: true, TargetAgent: "m5bot-local-ch-2cbaf623"}
+	planned, err := planSvc.TrustPeer(ctx, req)
+	if err != nil {
+		t.Fatalf("TrustPeer plan: %v", err)
+	}
+	if !planned.OK || !planned.RequiresConfirmation || planned.Policy == nil {
+		t.Fatalf("TrustPeer plan = %+v, want confirmation policy", planned)
+	}
+	planSvc.Close()
+
+	applySvc, err := NewA2AService(cfg)
+	if err != nil {
+		t.Fatalf("NewA2AService apply: %v", err)
+	}
+	defer applySvc.Close()
+
+	applied, err := applySvc.PolicyApply(ctx, A2AToolRequest{GuildID: req.GuildID, ChannelID: req.ChannelID, RequestedBy: req.RequestedBy, RequestedByID: req.RequestedByID, ManageChannels: true, ChangeID: planned.ChangeID, ConfirmationToken: planned.ConfirmationToken})
+	if err != nil {
+		t.Fatalf("PolicyApply pending trust plan: %v", err)
+	}
+	if !applied.OK || applied.Policy == nil || !applied.Policy.Enabled {
+		t.Fatalf("PolicyApply pending trust plan = %+v, want applied enabled policy", applied)
+	}
+	if applied.Policy.ResultVisibility != "transparent" || applied.Policy.DiscordTranscriptMode != "co_present" || !applied.Policy.ShareDiscordContext {
+		t.Fatalf("applied pending trust delivery = %+v, want same-Discord co_present", applied.Policy)
+	}
+	if !policyDelegatesRuntime(*applied.Policy, "m5bot-local-ch-2cbaf623", "ch-2cbaf623/task", applied.Policy.ChannelRef) {
+		t.Fatalf("applied pending trust policy = %+v, want delegate target", applied.Policy)
+	}
+}
+
 func TestA2AToolsTrustPeerDefaultUnknownLocationStaysSafe(t *testing.T) {
 	ctx := context.Background()
 	svc, err := NewA2AService(A2AServiceConfig{

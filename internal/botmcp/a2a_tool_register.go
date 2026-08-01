@@ -98,7 +98,7 @@ func a2aPolicyPlanTool() mcp.Tool {
 }
 
 func a2aTrustPeerTool() mcp.Tool {
-	t := a2aWriteTool(ToolA2ATrustPeer, "High-level trust grant for one peer runtime. Plans by default and applies only with a fresh confirmation_token. Defaults to bidirectional general_task with auto setup: same Discord guild/channel peers use transparent/co_present, otherwise safe/delegator/proxy. Agents must not hand-edit accept_skills, delegate_skills, or delegate_targets for normal text delegation.", false, true)
+	t := a2aWriteTool(ToolA2ATrustPeer, "High-level trust grant for one peer runtime. Plans by default and applies only with a fresh confirmation_token. Apply a returned trust_peer plan by re-calling bot_a2a_trust_peer or by calling bot_a2a_policy_apply with the returned change_id and confirmation_token. Defaults to bidirectional general_task with auto setup: same Discord guild/channel peers use transparent/co_present, otherwise safe/delegator/proxy. Agents must not hand-edit accept_skills, delegate_skills, or delegate_targets for normal text delegation.", false, true)
 	for _, opt := range []mcp.ToolOption{
 		mcp.WithString("target_agent", mcp.Required(), mcp.Description("Peer runtime agent ID to trust for general text A2A tasks.")),
 		mcp.WithString("relationship", mcp.Description("bidirectional, inbound, or outbound. Default bidirectional.")),
