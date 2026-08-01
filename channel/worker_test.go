@@ -1298,7 +1298,7 @@ func TestWorkerThreadReplacesUnconfirmedA2ADelegateFinalSuccess(t *testing.T) {
 		Status:    "completed",
 		RawOutput: `{"ok":true,"message":"A2A request queued","task":{"localId":"local-abc","state":"TASK_STATE_SUBMITTED"},"metadata":{"must_check_status":true}}`,
 	})
-	cb.OnComplete("已經委派給 M5Bot 了 ✅", nil)
+	cb.OnComplete("已經委派給 AlphaBot 了 ✅", nil)
 
 	_, bodies := rt.Snapshot()
 	var final string
@@ -1310,7 +1310,7 @@ func TestWorkerThreadReplacesUnconfirmedA2ADelegateFinalSuccess(t *testing.T) {
 	if final == "" {
 		t.Fatalf("missing unconfirmed delegation guard response; bodies=%v", bodies)
 	}
-	if strings.Contains(final, "已經委派給 M5Bot") {
+	if strings.Contains(final, "已經委派給 AlphaBot") {
 		t.Fatalf("guard response leaked false success text: %q", final)
 	}
 	if !strings.Contains(final, "not confirmed") || !strings.Contains(final, "local-abc") || !strings.Contains(final, "/a2a status") {
@@ -1321,7 +1321,7 @@ func TestWorkerThreadReplacesUnconfirmedA2ADelegateFinalSuccess(t *testing.T) {
 func TestWorkerA2ADelegateFinalGuardUsesLocale(t *testing.T) {
 	L.Load("zh-TW")
 	guard := a2aDelegateFinalGuard{delegated: true, localID: "local-abc"}
-	got := guard.finalResponse("已經委派給 M5Bot 了")
+	got := guard.finalResponse("已經委派給 AlphaBot 了")
 	if !strings.Contains(got, "A2A 委託請求已排入佇列") || !strings.Contains(got, "local-abc") {
 		t.Fatalf("localized guard response = %q", got)
 	}
@@ -1348,12 +1348,12 @@ func TestWorkerThreadAllowsA2ADelegateFinalAfterStatusCheck(t *testing.T) {
 	cb := agent.Callbacks()
 	cb.OnToolResult(acp.ToolCallEvent{Title: "Running: @bot-tools/bot_a2a_delegate", Status: "completed", RawOutput: `{"task":{"localId":"local-abc"}}`})
 	cb.OnToolResult(acp.ToolCallEvent{Title: "Running: @bot-tools/bot_a2a_task_status", Status: "completed", RawOutput: `{"task":{"localId":"local-abc","state":"TASK_STATE_REJECTED","terminal":true}}`})
-	cb.OnComplete("委託被 M5Bot 拒絕", nil)
+	cb.OnComplete("委託被 AlphaBot 拒絕", nil)
 
 	_, bodies := rt.Snapshot()
 	var sawStatusBasedFinal bool
 	for _, body := range bodies {
-		if strings.Contains(body, "委託被 M5Bot 拒絕") {
+		if strings.Contains(body, "委託被 AlphaBot 拒絕") {
 			sawStatusBasedFinal = true
 			if strings.Contains(body, "A2A delegation request was queued") {
 				t.Fatalf("guard replaced status-checked final response: %q", body)

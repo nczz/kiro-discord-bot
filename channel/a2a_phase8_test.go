@@ -53,7 +53,7 @@ func TestA2AProxyDelegatorResultDoesNotDuplicateExecutorTranscript(t *testing.T)
 func TestA2AKnownRuntimePoliciesNormalizeMetadataAndIncludeInactiveChannels(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
-	store, err := a2a.OpenPolicyStore(dir, "m5bot-local")
+	store, err := a2a.OpenPolicyStore(dir, "local-bot")
 	if err != nil {
 		t.Fatalf("OpenPolicyStore: %v", err)
 	}
@@ -69,8 +69,8 @@ func TestA2AKnownRuntimePoliciesNormalizeMetadataAndIncludeInactiveChannels(t *t
 		ChannelID:             "channel-1",
 		Enabled:               true,
 		Discoverable:          true,
-		RuntimeAgentID:        "m5bot-local-m5-main",
-		BotAgentID:            "m5bot-local",
+		RuntimeAgentID:        "local-bot-m5-main",
+		BotAgentID:            "local-bot",
 		ChannelRef:            "m5-main",
 		AcceptSkills:          []string{"task"},
 		ExposeSkills:          []a2a.SkillPolicy{{ID: "task", InputModes: []string{"text/plain"}, OutputModes: []string{"text/plain"}}},
@@ -79,7 +79,7 @@ func TestA2AKnownRuntimePoliciesNormalizeMetadataAndIncludeInactiveChannels(t *t
 	}, "manager"); err != nil {
 		t.Fatalf("Save policy: %v", err)
 	}
-	m := &Manager{dataDir: dir, a2aConfig: a2a.Config{AgentID: "m5bot-local", RuntimeIDMode: a2a.RuntimeIDModeRuntime}, a2aPolicies: store}
+	m := &Manager{dataDir: dir, a2aConfig: a2a.Config{AgentID: "local-bot", RuntimeIDMode: a2a.RuntimeIDModeRuntime}, a2aPolicies: store}
 	policies, err := m.A2AKnownRuntimePolicies(ctx)
 	if err != nil {
 		t.Fatalf("A2AKnownRuntimePolicies: %v", err)
@@ -91,14 +91,14 @@ func TestA2AKnownRuntimePoliciesNormalizeMetadataAndIncludeInactiveChannels(t *t
 	if err != nil {
 		t.Fatalf("Get active: %v", err)
 	}
-	if active.ChannelRef == "m5-main" || active.RuntimeAgentID == "m5bot-local-m5-main" || !strings.HasPrefix(active.ChannelRef, "ch-") || !strings.HasPrefix(active.RuntimeAgentID, "m5bot-local-ch-") {
+	if active.ChannelRef == "m5-main" || active.RuntimeAgentID == "local-bot-m5-main" || !strings.HasPrefix(active.ChannelRef, "ch-") || !strings.HasPrefix(active.RuntimeAgentID, "local-bot-ch-") {
 		t.Fatalf("active policy was not normalized from metadata: %+v", active)
 	}
 	foundInactive := false
 	for _, policy := range policies {
 		if policy.ChannelID == "channel-2" {
 			foundInactive = true
-			if policy.Enabled || len(policy.ExposeSkills) != 0 || !strings.HasPrefix(policy.ChannelRef, "ch-") || !strings.HasPrefix(policy.RuntimeAgentID, "m5bot-local-ch-") {
+			if policy.Enabled || len(policy.ExposeSkills) != 0 || !strings.HasPrefix(policy.ChannelRef, "ch-") || !strings.HasPrefix(policy.RuntimeAgentID, "local-bot-ch-") {
 				t.Fatalf("inactive metadata policy = %+v", policy)
 			}
 		}

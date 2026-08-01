@@ -188,6 +188,7 @@ func addA2APolicyFields(t *mcp.Tool) {
 		mcp.WithString("target_thread_id", mcp.Description("Discord target thread ID used to derive target channel_ref.")),
 		mcp.WithString("setup_mode", mcp.Description("auto, safe, or co_present setup defaults. co_present is an atomic UX preset: transparent result visibility, shared Discord context, and co-present allowlists must all be configured.")),
 		mcp.WithArray("accept_from", mcp.Description("Inbound agent IDs to accept.")),
+		mcp.WithArray("accept_from_runtimes", mcp.Description("Inbound runtime agent IDs to accept in runtime mode.")),
 		mcp.WithArray("accept_skills", mcp.Description("Inbound skill IDs to accept.")),
 		mcp.WithArray("expose_skills", mcp.Description("Local skill IDs to expose.")),
 		mcp.WithArray("delegate_to", mcp.Description("Outbound agent IDs to delegate to.")),
@@ -199,6 +200,7 @@ func addA2APolicyFields(t *mcp.Tool) {
 		mcp.WithString("transcript_mode", mcp.Description("delegator, mirror, or co_present.")),
 		mcp.WithBoolean("share_discord_context", mcp.Description("Allow co-present Discord context sharing when policy also permits it.")),
 		mcp.WithArray("co_present_from", mcp.Description("Delegator agent IDs allowed for co-present transcript.")),
+		mcp.WithArray("co_present_from_runtimes", mcp.Description("Delegator runtime agent IDs allowed for co-present transcript in runtime mode.")),
 		mcp.WithArray("co_present_target_channels", mcp.Description("Discord channel/thread IDs or * where same-guild co-present replies may be posted.")),
 		mcp.WithBoolean("allow_memory_write", mcp.Description("Allow remote A2A jobs to use bot memory write tools.")),
 	} {

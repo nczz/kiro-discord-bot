@@ -31,15 +31,18 @@ A2A_PRODUCTION_SECURITY=false \
 
 A second bot must use a different `A2A_AGENT_ID`, Discord bot token, `DATA_DIR`, and Discord channel/guild binding. In `dual` mode it may still consume legacy bot-level tasks while publishing runtime cards for discoverable policies.
 
-## Production environment block
+## Production environment blocks
 
-Required or recommended values:
+Use one profile. Do not merge hardened and lightweight auth settings.
+
+### Hardened production
 
 ```bash
 NATS_URL=tls://nats.example.internal:4222
-NATS_CREDS_FILE=
-NATS_TOKEN=<internal-shared-token-or-empty-when-using-creds>
+NATS_CREDS_FILE=/etc/kiro-discord-bot/nats/bot.creds
+NATS_TOKEN=
 NATS_TLS_CA_FILE=/etc/kiro-discord-bot/nats/ca.pem
+A2A_CONFIRMATION_SECRET=<set-via-secret-manager>
 A2A_AGENT_ID=adam-n200
 A2A_RUNTIME_ID_MODE=runtime
 A2A_AGENT_NAME=Adam production bot
@@ -57,9 +60,36 @@ A2A_MAX_INBOUND_TASKS_PER_CHANNEL=10
 A2A_MAX_EVENT_RATE_PER_MIN=120
 ```
 
+### Internal lightweight profile
+
+Use this only for private/internal deployments where the single-node and shared-token tradeoff is explicitly accepted.
+
+```bash
+NATS_URL=tls://nats.example.internal:4222
+NATS_CREDS_FILE=
+NATS_TOKEN=<set-via-secret-manager>
+NATS_TLS_CA_FILE=/etc/kiro-discord-bot/nats/ca.pem
+A2A_CONFIRMATION_SECRET=<set-via-secret-manager>
+A2A_AGENT_ID=adam-n200
+A2A_RUNTIME_ID_MODE=runtime
+A2A_AGENT_NAME=Adam internal bot
+A2A_AGENT_DESCRIPTION=Public capability summary only; no paths, hosts, tokens, or user data.
+A2A_TASK_TIMEOUT_SEC=3600
+A2A_MAX_DELEGATION_DEPTH=1
+A2A_AUTO_DELEGATE_ENABLED=false
+A2A_REQUIRE_CONFIRMATION_FOR_REMOTE=true
+A2A_PRODUCTION_SECURITY=false
+A2A_TASK_RETENTION_DAYS=30
+A2A_OBJECT_RETENTION_DAYS=30
+A2A_MAX_PENDING_TASKS=100
+A2A_MAX_OUTBOUND_TASKS_PER_CHANNEL=10
+A2A_MAX_INBOUND_TASKS_PER_CHANNEL=10
+A2A_MAX_EVENT_RATE_PER_MIN=120
+```
+
 Use `A2A_RUNTIME_ID_MODE=dual` only during a bounded legacy drain window. Before changing production to `runtime`, verify no nonterminal legacy bot-level tasks remain and run a negative smoke proving new legacy-addressed `send_message` publishes are rejected whenever a matching runtime card exists.
 
-`NATS_TLS_CA_FILE` validates the NATS server certificate. It is not client mTLS authentication by itself; this implementation's production client credential is `NATS_CREDS_FILE`.
+`NATS_TLS_CA_FILE` validates the NATS server certificate. It is not client mTLS authentication by itself. Hardened production client credentials come from `NATS_CREDS_FILE`; internal lightweight token credentials come from `NATS_TOKEN` and require private/firewalled listeners plus TLS server validation.
 
 Do not put raw credentials, tokens, private paths, or internal topology in `A2A_AGENT_DESCRIPTION`; peer cards are discoverable by other A2A participants.
 
@@ -68,6 +98,8 @@ For the internal lightweight profile, document the single-node tradeoff before r
 ## Runtime ACL template
 
 Replace `<runtime>` with the exact `runtime_agent_id` bound to this credential or allowed by this bot-process credential, for example `adam-n200-erp-support`. Do not write a single bot-level allowlist that accidentally authorizes all runtimes.
+
+When one bot-process credential owns multiple runtimes, enumerate each exact runtime subject set. Never grant ownership with a broad bot-prefix wildcard such as `<bot-base>.>`.
 ```text
 publish allow:
 a2a.v1.task.<runtime>.>

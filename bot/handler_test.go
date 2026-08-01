@@ -821,7 +821,7 @@ func TestSelfMentionHelpers(t *testing.T) {
 	}
 
 	msg := &discordgo.MessageCreate{Message: &discordgo.Message{
-		Content:  "@M5Bot review this",
+		Content:  "@AlphaBot review this",
 		Mentions: []*discordgo.User{{ID: "self"}},
 	}}
 	if !messageMentionsUser(msg, msg.Content, "self") {
@@ -830,7 +830,7 @@ func TestSelfMentionHelpers(t *testing.T) {
 }
 
 func TestMentionsOtherPeer(t *testing.T) {
-	b := &Bot{peers: parseBotPeers("M5Bot:bot-1:role-1,ChunBot:bot-2:role-2")}
+	b := &Bot{peers: parseBotPeers("AlphaBot:bot-1:role-1,BetaBot:bot-2:role-2")}
 
 	if !b.mentionsOtherPeer("<@bot-2> review this", "bot-1") {
 		t.Fatal("expected mention of another configured peer to match")
@@ -846,7 +846,7 @@ func TestMentionsOtherPeer(t *testing.T) {
 	}
 
 	msg := &discordgo.MessageCreate{Message: &discordgo.Message{
-		Content:  "@ChunBot handle this",
+		Content:  "@BetaBot handle this",
 		Mentions: []*discordgo.User{{ID: "bot-2"}},
 	}}
 	if !b.messageMentionsOtherPeer(msg, msg.Content, "bot-1") {
@@ -867,7 +867,7 @@ func TestMentionsOtherPeer(t *testing.T) {
 }
 
 func TestStripLeadingPeerMentions(t *testing.T) {
-	b := &Bot{peers: parseBotPeers("M5Bot:bot-1:role-1,ChunBot:bot-2:role-2,ReviewBot:bot-3")}
+	b := &Bot{peers: parseBotPeers("AlphaBot:bot-1:role-1,BetaBot:bot-2:role-2,ReviewBot:bot-3")}
 
 	tests := []struct {
 		name    string
@@ -905,7 +905,7 @@ func TestStripLeadingPeerMentions(t *testing.T) {
 }
 
 func TestHumanMultiBotLeadingMentionsBecomeTaskText(t *testing.T) {
-	b := &Bot{peers: parseBotPeers("M5Bot:bot-1:role-1,ChunBot:bot-2:role-2")}
+	b := &Bot{peers: parseBotPeers("AlphaBot:bot-1:role-1,BetaBot:bot-2:role-2")}
 	content := b.stripOwnMentions("<@bot-1> <@bot-2> hi", "bot-1")
 	content = b.stripLeadingPeerMentions(content)
 	if content != "hi" {
@@ -914,7 +914,7 @@ func TestHumanMultiBotLeadingMentionsBecomeTaskText(t *testing.T) {
 }
 
 func TestHumanMessageAddressesSelfOnlyWhenSelfIsAddressed(t *testing.T) {
-	b := &Bot{peers: parseBotPeers("M5Bot:bot-1:role-1,ChunBot:bot-2:role-2,KiroAgent:bot-3:role-3")}
+	b := &Bot{peers: parseBotPeers("AlphaBot:bot-1:role-1,BetaBot:bot-2:role-2,KiroAgent:bot-3:role-3")}
 
 	tests := []struct {
 		name    string
@@ -969,9 +969,9 @@ func TestHumanMessageAddressesSelfOnlyWhenSelfIsAddressed(t *testing.T) {
 }
 
 func TestHumanMessageAddressesSelfUsesStructuredMentions(t *testing.T) {
-	b := &Bot{peers: parseBotPeers("M5Bot:bot-1:role-1,ChunBot:bot-2:role-2")}
+	b := &Bot{peers: parseBotPeers("AlphaBot:bot-1:role-1,BetaBot:bot-2:role-2")}
 	msg := &discordgo.MessageCreate{Message: &discordgo.Message{
-		Content:  "@M5Bot handle this",
+		Content:  "@AlphaBot handle this",
 		Mentions: []*discordgo.User{{ID: "bot-1"}},
 	}}
 	if !b.humanMessageAddressesSelf(msg, msg.Content, "bot-1") {
@@ -1014,7 +1014,7 @@ func TestMessageHasReaction(t *testing.T) {
 
 func TestMultiBotMentionOnlyCanBeOpenedByBack(t *testing.T) {
 	b := &Bot{
-		peers:   parseBotPeers("M5Bot:bot-1,ChunBot:bot-2"),
+		peers:   parseBotPeers("AlphaBot:bot-1,BetaBot:bot-2"),
 		manager: channel.NewManager(channel.ManagerConfig{}),
 	}
 	ds := testPeerPermissionSession(t, nil)
@@ -1050,7 +1050,7 @@ func TestRequiresHumanMentionReasons(t *testing.T) {
 			name:       "paused override",
 			setup:      func(m *channel.Manager) { m.Pause("channel-1") },
 			targetID:   "channel-1",
-			peers:      "M5Bot:bot-1,ChunBot:bot-2",
+			peers:      "AlphaBot:bot-1,BetaBot:bot-2",
 			wantNeeded: true,
 			wantReason: "paused",
 		},
@@ -1059,7 +1059,7 @@ func TestRequiresHumanMentionReasons(t *testing.T) {
 			setup:      func(m *channel.Manager) { m.SetThreadListenMode("thread-1", true) },
 			targetID:   "thread-1",
 			parentID:   "channel-1",
-			peers:      "M5Bot:bot-1,ChunBot:bot-2",
+			peers:      "AlphaBot:bot-1,BetaBot:bot-2",
 			wantNeeded: true,
 			wantReason: "thread_snapshot_mention",
 		},
@@ -1068,7 +1068,7 @@ func TestRequiresHumanMentionReasons(t *testing.T) {
 			setup:      func(m *channel.Manager) { m.SetThreadMode("channel-1", false) },
 			targetID:   "thread-1",
 			parentID:   "channel-1",
-			peers:      "M5Bot:bot-1,ChunBot:bot-2",
+			peers:      "AlphaBot:bot-1,BetaBot:bot-2",
 			wantNeeded: true,
 			wantReason: "thread_inherit",
 		},
@@ -1076,7 +1076,7 @@ func TestRequiresHumanMentionReasons(t *testing.T) {
 			name:       "channel thread mode off",
 			setup:      func(m *channel.Manager) { m.SetThreadMode("channel-1", false) },
 			targetID:   "channel-1",
-			peers:      "M5Bot:bot-1,ChunBot:bot-2",
+			peers:      "AlphaBot:bot-1,BetaBot:bot-2",
 			wantNeeded: true,
 			wantReason: "thread_mode_off",
 		},
@@ -1085,21 +1085,21 @@ func TestRequiresHumanMentionReasons(t *testing.T) {
 			setup:      func(m *channel.Manager) { m.Pause("channel-1") },
 			targetID:   "thread-1",
 			parentID:   "channel-1",
-			peers:      "M5Bot:bot-1,ChunBot:bot-2",
+			peers:      "AlphaBot:bot-1,BetaBot:bot-2",
 			wantNeeded: true,
 			wantReason: "multi_bot_parent_paused",
 		},
 		{
 			name:       "multi bot",
 			targetID:   "channel-1",
-			peers:      "M5Bot:bot-1,ChunBot:bot-2",
+			peers:      "AlphaBot:bot-1,BetaBot:bot-2",
 			wantNeeded: true,
 			wantReason: "multi_bot",
 		},
 		{
 			name:       "no responding peer",
 			targetID:   "channel-1",
-			peers:      "M5Bot:bot-1",
+			peers:      "AlphaBot:bot-1",
 			wantNeeded: false,
 			wantReason: "",
 		},
@@ -1122,7 +1122,7 @@ func TestRequiresHumanMentionReasons(t *testing.T) {
 
 func TestThreadMentionModeInheritsParentBack(t *testing.T) {
 	b := &Bot{
-		peers:   parseBotPeers("M5Bot:bot-1,ChunBot:bot-2"),
+		peers:   parseBotPeers("AlphaBot:bot-1,BetaBot:bot-2"),
 		manager: channel.NewManager(channel.ManagerConfig{}),
 	}
 	ds := testPeerPermissionSession(t, nil)
@@ -1149,7 +1149,7 @@ func TestThreadMentionModeInheritsParentBack(t *testing.T) {
 
 func TestThreadListenSnapshotOutlivesParentThreadModeChange(t *testing.T) {
 	b := &Bot{
-		peers:   parseBotPeers("M5Bot:bot-1,ChunBot:bot-2"),
+		peers:   parseBotPeers("AlphaBot:bot-1,BetaBot:bot-2"),
 		manager: channel.NewManager(channel.ManagerConfig{}),
 	}
 	ds := testPeerPermissionSession(t, nil)
@@ -1194,7 +1194,7 @@ func TestChannelPauseBackToggleThreadMode(t *testing.T) {
 
 func TestMultiBotMentionOnlyIsChannelScoped(t *testing.T) {
 	b := &Bot{
-		peers:   parseBotPeers("M5Bot:bot-1,ChunBot:bot-2"),
+		peers:   parseBotPeers("AlphaBot:bot-1,BetaBot:bot-2"),
 		manager: channel.NewManager(channel.ManagerConfig{}),
 	}
 	ds := testPeerPermissionSession(t, []*discordgo.PermissionOverwrite{botMemberDenyOverwrite("bot-2")})
@@ -1217,7 +1217,7 @@ func TestMultiBotMentionOnlyIsChannelScoped(t *testing.T) {
 
 func TestPeerExplicitViewOverwriteForcesMentionOnlyWhenEffectiveSendAllows(t *testing.T) {
 	b := &Bot{
-		peers:   parseBotPeers("M5Bot:bot-1,ChunBot:bot-2"),
+		peers:   parseBotPeers("AlphaBot:bot-1,BetaBot:bot-2"),
 		manager: channel.NewManager(channel.ManagerConfig{}),
 	}
 	ds := testPeerPermissionSession(t, []*discordgo.PermissionOverwrite{botMemberViewOverwrite("bot-2")})
@@ -1229,7 +1229,7 @@ func TestPeerExplicitViewOverwriteForcesMentionOnlyWhenEffectiveSendAllows(t *te
 
 func TestPeerThreadReplyPermissionsForceMentionOnlyWithoutChannelSend(t *testing.T) {
 	b := &Bot{
-		peers:   parseBotPeers("M5Bot:bot-1,ChunBot:bot-2"),
+		peers:   parseBotPeers("AlphaBot:bot-1,BetaBot:bot-2"),
 		manager: channel.NewManager(channel.ManagerConfig{}),
 	}
 	ds := testPeerPermissionSession(t, []*discordgo.PermissionOverwrite{botMemberThreadReplyOverwrite("bot-2")})
@@ -1241,7 +1241,7 @@ func TestPeerThreadReplyPermissionsForceMentionOnlyWithoutChannelSend(t *testing
 
 func TestPeerThreadPermissionsForceMentionOnlyInThreadWithoutParentChannelSend(t *testing.T) {
 	b := &Bot{
-		peers:   parseBotPeers("M5Bot:bot-1,ChunBot:bot-2"),
+		peers:   parseBotPeers("AlphaBot:bot-1,BetaBot:bot-2"),
 		manager: channel.NewManager(channel.ManagerConfig{}),
 	}
 	ds := testPeerPermissionSession(t, []*discordgo.PermissionOverwrite{botMemberThreadReplyOverwrite("bot-2")})
@@ -1254,7 +1254,7 @@ func TestPeerThreadPermissionsForceMentionOnlyInThreadWithoutParentChannelSend(t
 func TestRoleOnlyPeerRequiresExplicitChannelAllow(t *testing.T) {
 	b := &Bot{
 		peers: []BotPeer{
-			{Name: "M5Bot", ID: "bot-1", RoleID: "role-1"},
+			{Name: "AlphaBot", ID: "bot-1", RoleID: "role-1"},
 			{Name: "PeerRole", RoleID: "role-2", Manual: true},
 		},
 		manager: channel.NewManager(channel.ManagerConfig{}),
@@ -1277,7 +1277,7 @@ func TestRoleOnlyPeerRequiresExplicitChannelAllow(t *testing.T) {
 func TestDiscoveredRoleOnlyPeerDoesNotForceMentionOnly(t *testing.T) {
 	b := &Bot{
 		peers: []BotPeer{
-			{Name: "M5Bot", ID: "bot-1", RoleID: "role-1"},
+			{Name: "AlphaBot", ID: "bot-1", RoleID: "role-1"},
 			{Name: "DiscoveredRole", RoleID: "role-2"},
 		},
 		manager: channel.NewManager(channel.ManagerConfig{}),
@@ -1294,12 +1294,12 @@ func TestDoctorBotPeersExplainsChannelTrigger(t *testing.T) {
 	ds := testPeerPermissionSession(t, []*discordgo.PermissionOverwrite{botMemberAllowOverwrite("bot-2")})
 	b := &Bot{
 		discord: ds,
-		peers:   parseBotPeers("M5Bot:bot-1,ChunBot:bot-2"),
+		peers:   parseBotPeers("AlphaBot:bot-1,BetaBot:bot-2"),
 		manager: channel.NewManager(channel.ManagerConfig{}),
 	}
 
 	got := b.doctorBotPeers("channel-1")
-	if !strings.Contains(got, "trigger: `ChunBot` (`bot-2`) via member overwrite") {
+	if !strings.Contains(got, "trigger: `BetaBot` (`bot-2`) via member overwrite") {
 		t.Fatalf("doctor output missing trigger explanation:\n%s", got)
 	}
 	if !strings.Contains(got, "mention-only") {
@@ -1312,12 +1312,12 @@ func TestDoctorBotPeersExplainsEffectivePermissionTrigger(t *testing.T) {
 	ds := testPeerPermissionSession(t, nil)
 	b := &Bot{
 		discord: ds,
-		peers:   parseBotPeers("M5Bot:bot-1,ChunBot:bot-2"),
+		peers:   parseBotPeers("AlphaBot:bot-1,BetaBot:bot-2"),
 		manager: channel.NewManager(channel.ManagerConfig{}),
 	}
 
 	got := b.doctorBotPeers("channel-1")
-	if !strings.Contains(got, "trigger: `ChunBot` (`bot-2`) via effective permissions") {
+	if !strings.Contains(got, "trigger: `BetaBot` (`bot-2`) via effective permissions") {
 		t.Fatalf("doctor output missing effective permission trigger explanation:\n%s", got)
 	}
 	if !strings.Contains(got, "mention-only") {
@@ -1330,7 +1330,7 @@ func TestDoctorBotPeersExplainsNoRespondingPeer(t *testing.T) {
 	ds := testPeerPermissionSession(t, []*discordgo.PermissionOverwrite{botMemberDenyOverwrite("bot-2")})
 	b := &Bot{
 		discord: ds,
-		peers:   parseBotPeers("M5Bot:bot-1,ChunBot:bot-2"),
+		peers:   parseBotPeers("AlphaBot:bot-1,BetaBot:bot-2"),
 		manager: channel.NewManager(channel.ManagerConfig{}),
 	}
 
@@ -1614,8 +1614,8 @@ func TestA2ALocaleConfirmationResponse(t *testing.T) {
 
 func TestA2AFormatTaskResponseIsHumanReadable(t *testing.T) {
 	L.Load("en")
-	got := formatA2AResponse(botmcp.A2AToolResponse{OK: true, Message: "A2A task sent", Task: &botmcp.A2ATaskSummary{LocalID: "local-1", TaskID: "task-1", MessageID: "msg-1", FromAgent: "m5bot-local", ToAgent: "d80-chunbot", ChannelRef: "d80-main", SkillID: "general/task", ResultVisibility: "proxy", DiscordTranscriptMode: "delegator", State: a2a.TaskStateSubmitted, Revision: 2, Events: []botmcp.A2ATaskEventSummary{{Revision: 2, EventType: "status", State: a2a.TaskStateSubmitted, Content: "<@123> **queued**\n- State: `TASK_STATE_COMPLETED`"}}}})
-	for _, want := range []string{"**A2A task sent**", "State", "m5bot-local", "d80-chunbot", "d80-main", "general/task", "visibility=`proxy`", "Events", "\\*\\*queued\\*\\*", "/a2a status"} {
+	got := formatA2AResponse(botmcp.A2AToolResponse{OK: true, Message: "A2A task sent", Task: &botmcp.A2ATaskSummary{LocalID: "local-1", TaskID: "task-1", MessageID: "msg-1", FromAgent: "local-bot", ToAgent: "remote-bot", ChannelRef: "d80-main", SkillID: "general/task", ResultVisibility: "proxy", DiscordTranscriptMode: "delegator", State: a2a.TaskStateSubmitted, Revision: 2, Events: []botmcp.A2ATaskEventSummary{{Revision: 2, EventType: "status", State: a2a.TaskStateSubmitted, Content: "<@123> **queued**\n- State: `TASK_STATE_COMPLETED`"}}}})
+	for _, want := range []string{"**A2A task sent**", "State", "local-bot", "remote-bot", "d80-main", "general/task", "visibility=`proxy`", "Events", "\\*\\*queued\\*\\*", "/a2a status"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("formatA2AResponse task = %q, missing %q", got, want)
 		}
@@ -1633,7 +1633,7 @@ func TestA2AFormatTaskResponseIsHumanReadable(t *testing.T) {
 
 func TestA2AFormatRejectedTaskIncludesPolicyRetryGuidance(t *testing.T) {
 	L.Load("en")
-	got := formatA2AResponse(botmcp.A2AToolResponse{OK: true, Message: "A2A task loaded", Task: &botmcp.A2ATaskSummary{LocalID: "local-1", TaskID: "task-1", FromAgent: "m5bot-local", ToAgent: "d80-chunbot", State: a2a.TaskStateRejected, ErrorCode: a2a.ErrorSenderNotAllowed, ErrorMessage: "sender is not accepted"}})
+	got := formatA2AResponse(botmcp.A2AToolResponse{OK: true, Message: "A2A task loaded", Task: &botmcp.A2ATaskSummary{LocalID: "local-1", TaskID: "task-1", FromAgent: "local-bot", ToAgent: "remote-bot", State: a2a.TaskStateRejected, ErrorCode: a2a.ErrorSenderNotAllowed, ErrorMessage: "sender is not accepted"}})
 	for _, want := range []string{"sender is not accepted", "executor rejected this sender", "apply the peer A2A policy", "/a2a status"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("formatA2AResponse rejected task = %q, missing %q", got, want)
@@ -1645,7 +1645,7 @@ func TestA2ASetupSlashDefaultsHumanFlow(t *testing.T) {
 	raw := a2aArgsFromSlashOptions([]*discordgo.ApplicationCommandInteractionDataOption{{
 		Name: "setup",
 		Options: []*discordgo.ApplicationCommandInteractionDataOption{
-			{Name: "peer_agent", Type: discordgo.ApplicationCommandOptionString, Value: "d80-chunbot"},
+			{Name: "peer_agent", Type: discordgo.ApplicationCommandOptionString, Value: "remote-bot"},
 			{Name: "mode", Type: discordgo.ApplicationCommandOptionString, Value: "co_present"},
 		},
 	}}, "guild-1", "channel-1", "user-1", "alice", true)
@@ -1656,7 +1656,7 @@ func TestA2ASetupSlashDefaultsHumanFlow(t *testing.T) {
 	if payload.Subcommand != "setup" || payload.Request.Enable == nil || !*payload.Request.Enable {
 		t.Fatalf("setup payload enable = %+v", payload)
 	}
-	for _, want := range []string{"d80-chunbot"} {
+	for _, want := range []string{"remote-bot"} {
 		if len(payload.Request.AcceptFrom) != 1 || payload.Request.AcceptFrom[0] != want || len(payload.Request.DelegateTo) != 1 || payload.Request.DelegateTo[0] != want {
 			t.Fatalf("setup peer defaults = %+v, want %s", payload.Request, want)
 		}
@@ -1676,14 +1676,14 @@ func TestA2ATrustSlashDefaultsGeneralTaskAutoBidirectional(t *testing.T) {
 	raw := a2aArgsFromSlashOptions([]*discordgo.ApplicationCommandInteractionDataOption{{
 		Name: "trust",
 		Options: []*discordgo.ApplicationCommandInteractionDataOption{
-			{Name: "peer_agent", Type: discordgo.ApplicationCommandOptionString, Value: "d80-chunbot-ch-2cbaf623"},
+			{Name: "peer_agent", Type: discordgo.ApplicationCommandOptionString, Value: "remote-bot-ch-2cbaf623"},
 		},
 	}}, "guild-1", "channel-1", "user-1", "alice", true)
 	var payload a2aSlashPayload
 	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload.Subcommand != "trust" || payload.Request.TargetAgent != "d80-chunbot-ch-2cbaf623" {
+	if payload.Subcommand != "trust" || payload.Request.TargetAgent != "remote-bot-ch-2cbaf623" {
 		t.Fatalf("trust payload target = %+v", payload)
 	}
 	if payload.Request.SkillID != "task" || payload.Request.TrustRelationship != "bidirectional" || payload.Request.SetupMode != "auto" {
@@ -1695,7 +1695,7 @@ func TestA2ASetupSlashAutoCrossRuntimeUsesProxy(t *testing.T) {
 	raw := a2aArgsFromSlashOptions([]*discordgo.ApplicationCommandInteractionDataOption{{
 		Name: "setup",
 		Options: []*discordgo.ApplicationCommandInteractionDataOption{
-			{Name: "peer_agent", Type: discordgo.ApplicationCommandOptionString, Value: "d80-chunbot"},
+			{Name: "peer_agent", Type: discordgo.ApplicationCommandOptionString, Value: "remote-bot"},
 			{Name: "target_channel_ref", Type: discordgo.ApplicationCommandOptionString, Value: "erp-support"},
 		},
 	}}, "guild-1", "channel-1", "user-1", "alice", true)
@@ -1731,14 +1731,14 @@ func TestA2ATaskOptionKeepsUnprefixedValueInTaskIDField(t *testing.T) {
 	raw := a2aArgsFromSlashOptions([]*discordgo.ApplicationCommandInteractionDataOption{{
 		Name: "status",
 		Options: []*discordgo.ApplicationCommandInteractionDataOption{
-			{Name: "task", Type: discordgo.ApplicationCommandOptionString, Value: "1532735828919320688"},
+			{Name: "task", Type: discordgo.ApplicationCommandOptionString, Value: "444444444444444444"},
 		},
 	}}, "guild-1", "channel-1", "user-1", "alice", false)
 	var payload a2aSlashPayload
 	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
 		t.Fatal(err)
 	}
-	if payload.Request.TaskID != "1532735828919320688" || payload.Request.MessageID != "" || payload.Request.LocalID != "" {
+	if payload.Request.TaskID != "444444444444444444" || payload.Request.MessageID != "" || payload.Request.LocalID != "" {
 		t.Fatalf("task option = %+v, want task id lookup with service-side message id fallback", payload.Request)
 	}
 }
@@ -1761,8 +1761,8 @@ func TestA2ATranscriptModeSafeClearsContextSharing(t *testing.T) {
 
 func TestA2APolicyFormatterIncludesPolicyMutationFields(t *testing.T) {
 	L.Load("en")
-	got := formatA2APolicy("Preview", a2a.ChannelA2APolicy{Enabled: true, ChannelRef: "d80-test", ResultVisibility: "transparent", DiscordTranscriptMode: "co_present", ShareDiscordContext: true, AcceptFrom: []string{"d80-chunbot"}, AcceptFromRuntimes: []string{"d80-chunbot-main"}, AcceptSkills: []string{"task"}, ExposeSkills: []a2a.SkillPolicy{{ID: "task"}}, DelegateTo: []string{"d80-chunbot"}, DelegateSkills: []string{"task"}, DelegateTargets: []a2a.DelegateTargetPolicy{{RuntimeAgentID: "d80-chunbot-main", SkillID: "task"}}, CoPresentFromRuntimes: []string{"d80-chunbot-main"}, CoPresentTargetChannels: []string{"1495737768905670719"}, MaxConcurrent: 3})
-	for _, want := range []string{"Result visibility", "Trusted general-task runtimes", "`d80-chunbot-main inbound default_task`", "`d80-chunbot-main outbound default_task`", "Local capabilities exposed", "`task`", "Max concurrent inbound tasks: 3", "Local co-present policy gates: configured locally", "Co-present runtime allowlist: `d80-chunbot-main`", "Additional same-guild co-present targets: `1495737768905670719`"} {
+	got := formatA2APolicy("Preview", a2a.ChannelA2APolicy{Enabled: true, ChannelRef: "d80-test", ResultVisibility: "transparent", DiscordTranscriptMode: "co_present", ShareDiscordContext: true, AcceptFrom: []string{"remote-bot"}, AcceptFromRuntimes: []string{"remote-bot-main"}, AcceptSkills: []string{"task"}, ExposeSkills: []a2a.SkillPolicy{{ID: "task"}}, DelegateTo: []string{"remote-bot"}, DelegateSkills: []string{"task"}, DelegateTargets: []a2a.DelegateTargetPolicy{{RuntimeAgentID: "remote-bot-main", SkillID: "task"}}, CoPresentFromRuntimes: []string{"remote-bot-main"}, CoPresentTargetChannels: []string{"222222222222222222"}, MaxConcurrent: 3})
+	for _, want := range []string{"Result visibility", "Trusted general-task runtimes", "`remote-bot-main inbound default_task`", "`remote-bot-main outbound default_task`", "Local capabilities exposed", "`task`", "Max concurrent inbound tasks: 3", "Local co-present policy gates: configured locally", "Co-present runtime allowlist: `remote-bot-main`", "Additional same-guild co-present targets: `222222222222222222`"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("formatA2APolicy = %q, missing %q", got, want)
 		}
@@ -1813,6 +1813,19 @@ func TestA2AButtonsConfirmationCustomIDIsSigned(t *testing.T) {
 	}
 	if validateA2APolicyConfirmationButtonCustomID(buttonID, "apply", "state-1", "channel-2", "change-1") {
 		t.Fatal("signed A2A policy button custom_id accepted wrong channel")
+	}
+}
+
+func TestA2AComponentSecretFallbackIsProcessRandom(t *testing.T) {
+	t.Setenv("A2A_CONFIRMATION_SECRET", "")
+	t.Setenv("DISCORD_TOKEN", "")
+	first := a2aComponentSecret()
+	second := a2aComponentSecret()
+	if first == "" || first != second {
+		t.Fatalf("fallback component secret unstable: first=%q second=%q", first, second)
+	}
+	if len(first) != 64 {
+		t.Fatalf("fallback component secret length = %d, want 64 hex chars", len(first))
 	}
 }
 

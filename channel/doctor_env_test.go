@@ -175,7 +175,7 @@ func TestDoctorRuntimeOverviewShowsA2AAuthModeWithoutSecrets(t *testing.T) {
 		"auth mode: `token-dev`",
 		"production guard: `off`",
 		"startup validation: `ok`",
-		"token-only A2A auth is for development",
+		"token-only A2A auth is allowed only for local development or accepted internal lightweight deployments",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("doctor runtime overview missing %q:\n%s", want, got)

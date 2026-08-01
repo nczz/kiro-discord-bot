@@ -1,8 +1,8 @@
 # A2A NATS Implementation Guide
 
-> Status: runtime-first revision plan.
+> Status: historical implementation guide; runtime-first migration is implemented.
 > Source spec: `docs/a2a-nats-integration-spec.md`.  
-> Objective: provide exact, phase-ordered instructions so a coding agent can migrate the existing A2A-like NATS binding from bot-level identity to runtime-level identity without making architecture decisions, and prove each correctness/security boundary with explicit validation gates.
+> Release operators should use `docs/a2a-nats-rollout.md` plus the current-state summary in `docs/a2a-nats-implementation-progress.md`; the phase instructions below are retained as implementation history, not a new execution plan.
 
 ## 1. Final guide contract
 

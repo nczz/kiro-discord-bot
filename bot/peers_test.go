@@ -108,13 +108,13 @@ func TestBotPeerCountsSeparatesUserAndRoleOnlyPeers(t *testing.T) {
 
 func TestBotRoleIDPrefersManagedNameMatch(t *testing.T) {
 	member := &discordgo.Member{
-		Nick:  "M5Bot",
+		Nick:  "AlphaBot",
 		User:  &discordgo.User{ID: "bot-1", Username: "m5-app", Bot: true},
 		Roles: []string{"generic", "managed-match"},
 	}
 	roles := map[string]*discordgo.Role{
 		"generic":       {ID: "generic", Name: "Bot", Managed: true},
-		"managed-match": {ID: "managed-match", Name: "M5Bot", Managed: true},
+		"managed-match": {ID: "managed-match", Name: "AlphaBot", Managed: true},
 	}
 
 	if got := botRoleID(member, roles); got != "managed-match" {

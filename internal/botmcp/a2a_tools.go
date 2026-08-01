@@ -110,6 +110,7 @@ type A2AToolRequest struct {
 	Capability              string   `json:"capability,omitempty"`
 	Enable                  *bool    `json:"enable,omitempty"`
 	AcceptFrom              []string `json:"accept_from,omitempty"`
+	AcceptFromRuntimes      []string `json:"accept_from_runtimes,omitempty"`
 	AcceptSkills            []string `json:"accept_skills,omitempty"`
 	ExposeSkills            []string `json:"expose_skills,omitempty"`
 	DelegateTo              []string `json:"delegate_to,omitempty"`
@@ -119,6 +120,7 @@ type A2AToolRequest struct {
 	MaxConcurrent           *int     `json:"max_concurrent,omitempty"`
 	ShareDiscordContext     *bool    `json:"share_discord_context,omitempty"`
 	CoPresentFrom           []string `json:"co_present_from,omitempty"`
+	CoPresentFromRuntimes   []string `json:"co_present_from_runtimes,omitempty"`
 	CoPresentTargetChannels []string `json:"co_present_target_channels,omitempty"`
 	AllowMemoryWrite        *bool    `json:"allow_memory_write,omitempty"`
 	Limit                   int      `json:"limit,omitempty"`
@@ -239,7 +241,10 @@ func NewA2AService(cfg A2AServiceConfig) (*A2AService, error) {
 		cfg.BoundTargetID = strings.TrimSpace(os.Getenv("BOT_TOOLS_TARGET_CHANNEL_ID"))
 	}
 	if cfg.ConfirmationSecret == "" {
-		cfg.ConfirmationSecret = firstNonEmpty(os.Getenv("A2A_CONFIRMATION_SECRET"), os.Getenv("DISCORD_TOKEN"), "kiro-a2a-dev-confirmation-secret")
+		cfg.ConfirmationSecret = firstNonEmpty(os.Getenv("A2A_CONFIRMATION_SECRET"), os.Getenv("DISCORD_TOKEN"))
+		if cfg.ConfirmationSecret == "" {
+			cfg.ConfirmationSecret = fallbackConfirmationSecret()
+		}
 	}
 	if cfg.AuditDBPath == "" {
 		cfg.AuditDBPath = botToolsAuditDBPath()
@@ -1020,6 +1025,7 @@ func (s *A2AService) applyPolicyDiff(policy a2a.ChannelA2APolicy, req A2AToolReq
 		}
 	}
 	policy.AcceptFrom = appendUnique(policy.AcceptFrom, req.AcceptFrom...)
+	policy.AcceptFromRuntimes = appendUnique(policy.AcceptFromRuntimes, req.AcceptFromRuntimes...)
 	policy.AcceptSkills = appendUnique(policy.AcceptSkills, req.AcceptSkills...)
 	for _, skill := range req.ExposeSkills {
 		if skill = strings.TrimSpace(skill); skill != "" {
@@ -1066,6 +1072,7 @@ func (s *A2AService) applyPolicyDiff(policy a2a.ChannelA2APolicy, req A2AToolReq
 		policy.ShareDiscordContext = *req.ShareDiscordContext
 	}
 	policy.CoPresentFrom = appendUnique(policy.CoPresentFrom, req.CoPresentFrom...)
+	policy.CoPresentFromRuntimes = appendUnique(policy.CoPresentFromRuntimes, req.CoPresentFromRuntimes...)
 	policy.CoPresentTargetChannels = appendUnique(policy.CoPresentTargetChannels, req.CoPresentTargetChannels...)
 	if req.AllowMemoryWrite != nil {
 		policy.RemoteToolPolicy.AllowMemoryWrite = *req.AllowMemoryWrite
@@ -1095,6 +1102,8 @@ func applyA2APolicyRequestDefaults(req A2AToolRequest, policy a2a.ChannelA2APoli
 	req.AcceptFrom = appendUnique(req.AcceptFrom, req.TargetAgent)
 	req.DelegateTo = appendUnique(req.DelegateTo, req.TargetAgent)
 	req.CoPresentFrom = appendUnique(req.CoPresentFrom, req.TargetAgent)
+	req.AcceptFromRuntimes = appendUnique(req.AcceptFromRuntimes, req.TargetAgent)
+	req.CoPresentFromRuntimes = appendUnique(req.CoPresentFromRuntimes, req.TargetAgent)
 	localSkill := string(a2a.SkillSlug(req.SkillID))
 	req.AcceptSkills = appendUnique(req.AcceptSkills, localSkill)
 	req.ExposeSkills = appendUnique(req.ExposeSkills, localSkill)
@@ -1617,6 +1626,22 @@ func (s *A2AService) recordAudit(ctx context.Context, eventType string, req A2AT
 	return store.RecordBotEvent(ctx, audit.BotEvent{Type: eventType, GuildID: req.GuildID, ChannelID: req.ChannelID, TargetID: req.ChannelID, UserID: req.RequestedByID, Username: req.RequestedBy, Command: eventType, Source: "bot_a2a", Status: status, Error: errText, Metadata: metadata, OccurredAt: s.cfg.Now()})
 }
 
+var (
+	fallbackConfirmationOnce  sync.Once
+	fallbackConfirmationValue string
+)
+
+func fallbackConfirmationSecret() string {
+	fallbackConfirmationOnce.Do(func() {
+		var b [32]byte
+		if _, err := rand.Read(b[:]); err != nil {
+			panic(err)
+		}
+		fallbackConfirmationValue = hex.EncodeToString(b[:])
+	})
+	return fallbackConfirmationValue
+}
+
 func A2AConfigFromEnv() a2a.Config {
 	return a2aConfigFromEnv()
 }
@@ -1902,6 +1927,10 @@ func (s *A2AService) pendingPolicyDB() (*sql.DB, error) {
 		_ = db.Close()
 		return nil, err
 	}
+	if _, err := db.Exec(`DELETE FROM pending_policy_plans WHERE expires_at <= ?`, s.cfg.Now().UTC().Format(time.RFC3339)); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	return db, nil
 }
 
@@ -2004,6 +2033,15 @@ func policyDeliveryReadiness(policy a2a.ChannelA2APolicy) A2APolicyDeliveryReadi
 
 func coPresentMissing(policy a2a.ChannelA2APolicy) []string {
 	var missing []string
+	if !policy.Enabled {
+		missing = append(missing, "enabled=true")
+	}
+	if len(policy.AcceptFrom) == 0 && len(policy.AcceptFromRuntimes) == 0 {
+		missing = append(missing, "accept_from or accept_from_runtimes")
+	}
+	if !skillListAllows(policy.AcceptSkills, "task") && !skillListAllows(policy.AcceptSkills, "general/task") {
+		missing = append(missing, "accept_skills includes task/general_task")
+	}
 	if strings.TrimSpace(policy.ResultVisibility) != "transparent" {
 		missing = append(missing, "result_visibility=transparent")
 	}

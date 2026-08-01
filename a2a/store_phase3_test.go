@@ -69,8 +69,8 @@ func TestTaskStorePersistsOriginRuntimeRef(t *testing.T) {
 
 	row := phase3TaskRow("origin_ref_msg")
 	row.OriginRuntimeRef = OriginRuntimeRef{
-		RuntimeAgentID:   "m5bot-local-ch-2cbaf623",
-		BotAgentID:       "m5bot-local",
+		RuntimeAgentID:   "local-bot-ch-2cbaf623",
+		BotAgentID:       "local-bot",
 		ChannelRef:       "ch-2cbaf623",
 		DisplayName:      "隨口問",
 		DiscordGuildID:   "guild",
@@ -86,8 +86,8 @@ func TestTaskStorePersistsOriginRuntimeRef(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetByLocalID: %v", err)
 	}
-	if got.OriginRuntimeRef.RuntimeAgentID != "m5bot-local-ch-2cbaf623" ||
-		got.OriginRuntimeRef.BotAgentID != "m5bot-local" ||
+	if got.OriginRuntimeRef.RuntimeAgentID != "local-bot-ch-2cbaf623" ||
+		got.OriginRuntimeRef.BotAgentID != "local-bot" ||
 		got.OriginRuntimeRef.ChannelRef != "ch-2cbaf623" ||
 		got.OriginRuntimeRef.DisplayName != "隨口問" ||
 		got.OriginRuntimeRef.DiscordThreadID != "thread" {

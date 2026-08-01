@@ -35,8 +35,8 @@ NATS AgentID = runtime_agent_id
 同一個 bot process 可發布多個 runtime cards，例如：
 
 ```text
-d80-chunbot-erp-support
-d80-chunbot-backend
+remote-bot-erp-support
+remote-bot-backend
 m5bot-main
 ```
 
@@ -66,7 +66,7 @@ m5bot-main
 - 取代現有 Discord `BOT_PEERS` peer discovery。
 - 讓 Discord bot 直接寫入 Kiro 內建 knowledge base。
 - 讓 remote task 直接繞過 channel.Manager / MCP policy / safe egress。
-- shared-token production deployment。
+- unauthenticated production deployment, or shared-token production deployment on broadly exposed NATS listeners. Hardened production uses NKey/JWT credentials; internal lightweight token deployments are an explicitly accepted lower-security profile only when the listener is private/firewalled, TLS-protected, and `A2A_PRODUCTION_SECURITY=false`.
 
 ### 1.3 核心原則
 
@@ -220,7 +220,7 @@ channel.Manager.ExecuteA2ATask(ctx, req)
 它 **不是 peer list、task/control/event/card/heartbeat 的主要 routing identity**；runtime mode 的 user-facing peer 必須是 Discord channel/thread runtime，不是 bot host card。
 
 ```text
-A2A_AGENT_ID=d80-chunbot
+A2A_AGENT_ID=remote-bot
 ```
 
 格式仍為：
@@ -246,8 +246,8 @@ runtime_agent_id = <bot_prefix>-rt-<short_hash(guild_id + channel_id + thread_id
 例：
 
 ```text
-d80-chunbot-erp-support
-d80-chunbot-backend
+remote-bot-erp-support
+remote-bot-backend
 m5bot-kiro-discord-bot
 m5bot-rt-4f8a9c01
 ```
@@ -434,8 +434,8 @@ Production topology：
 Per runtime durable consumer（runtime-first production mode）：
 
 ```bash
-nats consumer add A2A_TASKS a2a_tasks_d80-chunbot-erp-support \
-  --filter "a2a.v1.task.*.d80-chunbot-erp-support.>" \
+nats consumer add A2A_TASKS a2a_tasks_remote-bot-erp-support \
+  --filter "a2a.v1.task.*.remote-bot-erp-support.>" \
   --deliver all \
   --ack explicit \
   --max-deliver 5 \
@@ -448,8 +448,8 @@ nats consumer add A2A_TASKS a2a_tasks_d80-chunbot-erp-support \
 ### 6.3 Control consumer
 
 ```bash
-nats consumer add A2A_CONTROLS a2a_controls_d80-chunbot-erp-support \
-  --filter "a2a.v1.control.*.d80-chunbot-erp-support.>" \
+nats consumer add A2A_CONTROLS a2a_controls_remote-bot-erp-support \
+  --filter "a2a.v1.control.*.remote-bot-erp-support.>" \
   --deliver all \
   --ack explicit \
   --max-deliver 10 \
@@ -459,8 +459,8 @@ nats consumer add A2A_CONTROLS a2a_controls_d80-chunbot-erp-support \
 ### 6.4 Event consumer
 
 ```bash
-nats consumer add A2A_EVENTS a2a_events_d80-chunbot-erp-support \
-  --filter "a2a.v1.event.*.d80-chunbot-erp-support.>" \
+nats consumer add A2A_EVENTS a2a_events_remote-bot-erp-support \
+  --filter "a2a.v1.event.*.remote-bot-erp-support.>" \
   --deliver all \
   --ack explicit \
   --max-deliver 10 \
@@ -635,7 +635,7 @@ Fields：
 
 ```json
 {
-  "name": "d80-chunbot-erp-support",
+  "name": "remote-bot-erp-support",
   "description": "ERP support runtime",
   "version": "2.30.0",
   "supportedInterfaces": [
@@ -774,24 +774,25 @@ Validation：
 | Variable | Default | Required | Description |
 |---|---|---:|---|
 | `NATS_URL` | empty | no | Empty disables A2A completely |
-| `NATS_CREDS_FILE` | empty | prod yes | NATS NKey/JWT creds file |
-| `NATS_TOKEN` | empty | dev only | Shared token; forbidden in production mode |
-| `NATS_TLS_CA_FILE` | empty | prod yes if private CA | CA bundle for server verification |
+| `NATS_CREDS_FILE` | empty | hardened prod yes | NATS NKey/JWT creds file; required when `A2A_PRODUCTION_SECURITY=true` |
+| `NATS_TOKEN` | empty | no | Shared token for local development or accepted internal lightweight profile only; keep empty in hardened production |
+| `NATS_TLS_CA_FILE` | empty | prod yes if private CA | CA bundle for server verification; not client authentication |
+| `A2A_CONFIRMATION_SECRET` | empty | prod recommended | Random secret for signed A2A policy/delegation confirmations; falls back to `DISCORD_TOKEN`, then process-random runtime secret |
 | `A2A_AGENT_ID` | empty | if enabled yes | Bot/process base identity; not a runtime route by itself |
-| `A2A_RUNTIME_ID_MODE` | `legacy` | no | `legacy`, `dual`, or `runtime`; production cutover target is `runtime` |
+| `A2A_RUNTIME_ID_MODE` | `runtime` in release examples | no | `legacy`, `dual`, or `runtime`; production cutover target is `runtime`; `dual` is bounded drain only |
 | `A2A_AGENT_NAME` | Discord bot username | no | Bot display name; runtime cards may override with sanitized runtime display label |
-| `A2A_AGENT_DESCRIPTION` | empty | no | Public card description default |
-| `A2A_TASK_TIMEOUT_SEC` | 300 | no | Per task execution timeout |
-| `A2A_MAX_DELEGATION_DEPTH` | 3 | no | Loop prevention |
+| `A2A_AGENT_DESCRIPTION` | empty | no | Public card description default; no hosts, paths, tokens, or user data |
+| `A2A_TASK_TIMEOUT_SEC` | 3600 | no | Per task execution timeout |
+| `A2A_MAX_DELEGATION_DEPTH` | 1 | no | Loop prevention |
 | `A2A_AUTO_DELEGATE_ENABLED` | false | no | Allow LLM-initiated delegation tool |
 | `A2A_REQUIRE_CONFIRMATION_FOR_REMOTE` | true | no | Require confirmation for sensitive/remote delegation |
-| `A2A_PRODUCTION_SECURITY` | false | no | If true, reject token-only auth |
-| `A2A_TASK_RETENTION_DAYS` | 0 | no | Task/event retention in days; 0 means permanent until manual purge |
-| `A2A_OBJECT_RETENTION_DAYS` | 0 | no | A2A object/artifact retention in days; 0 means permanent until manual purge |
-| `A2A_MAX_PENDING_TASKS` | 0 | no | Per-runtime pending task cap; 0 means unlimited |
-| `A2A_MAX_OUTBOUND_TASKS_PER_CHANNEL` | 0 | no | Per-channel outbound pending cap; 0 means unlimited |
-| `A2A_MAX_INBOUND_TASKS_PER_CHANNEL` | 0 | no | Per-channel inbound pending cap; 0 means unlimited |
-| `A2A_MAX_EVENT_RATE_PER_MIN` | 0 | no | Per-runtime A2A event rate cap; 0 means unlimited |
+| `A2A_PRODUCTION_SECURITY` | false | no | If true, require `NATS_CREDS_FILE` and reject token-only/unauthenticated A2A |
+| `A2A_TASK_RETENTION_DAYS` | 30 | no | Task/event retention in days; explicit `0` means permanent until manual purge |
+| `A2A_OBJECT_RETENTION_DAYS` | 30 | no | A2A object/artifact retention in days; explicit `0` means permanent until manual purge |
+| `A2A_MAX_PENDING_TASKS` | 100 | no | Per-runtime pending task cap; explicit `0` means unlimited |
+| `A2A_MAX_OUTBOUND_TASKS_PER_CHANNEL` | 10 | no | Per-channel outbound pending cap; explicit `0` means unlimited |
+| `A2A_MAX_INBOUND_TASKS_PER_CHANNEL` | 10 | no | Per-channel inbound pending cap; explicit `0` means unlimited |
+| `A2A_MAX_EVENT_RATE_PER_MIN` | 120 | no | Per-runtime A2A event rate cap; explicit `0` means unlimited |
 
 ### 11.2 Enabled rule
 
@@ -809,37 +810,34 @@ If `A2A_PRODUCTION_SECURITY=true` and only `NATS_TOKEN` is set，startup fails�
 
 ### 12.1 Authentication
 
-Production supported：
+Supported profiles：
 
-- NKey/JWT creds file。
-- mTLS mapped identity。
-
-Dev-only：
-
-- shared token。
+- Hardened production: NKey/JWT creds file via `NATS_CREDS_FILE`; `A2A_PRODUCTION_SECURITY=true`; `NATS_TOKEN` empty。
+- Internal lightweight: TLS server validation plus `NATS_TOKEN`, private/firewalled listener, localhost-only monitoring, documented HA/security tradeoff, and `A2A_PRODUCTION_SECURITY=false`。
+- Local development: loopback NATS with no auth or token auth only in isolated developer environments。
 
 ### 12.2 Authorization
 
 NATS subject permissions must enforce sender identity at subject level。
 
-For runtime `d80-chunbot-erp-support`：
+For runtime `remote-bot-erp-support`：
 
 Publish allow：
 
 ```text
-a2a.v1.task.d80-chunbot-erp-support.>
-a2a.v1.control.d80-chunbot-erp-support.>
-a2a.v1.event.d80-chunbot-erp-support.>
-a2a.v1.card.d80-chunbot-erp-support
-a2a.v1.heartbeat.d80-chunbot-erp-support.>
+a2a.v1.task.remote-bot-erp-support.>
+a2a.v1.control.remote-bot-erp-support.>
+a2a.v1.event.remote-bot-erp-support.>
+a2a.v1.card.remote-bot-erp-support
+a2a.v1.heartbeat.remote-bot-erp-support.>
 ```
 
 Subscribe allow：
 
 ```text
-a2a.v1.task.*.d80-chunbot-erp-support.>
-a2a.v1.control.*.d80-chunbot-erp-support.>
-a2a.v1.event.*.d80-chunbot-erp-support.>
+a2a.v1.task.*.remote-bot-erp-support.>
+a2a.v1.control.*.remote-bot-erp-support.>
+a2a.v1.event.*.remote-bot-erp-support.>
 a2a.v1.card.>
 a2a.v1.heartbeat.>
 ```
@@ -1223,8 +1221,8 @@ Heartbeat payload：
 
 ```json
 {
-  "agentId": "d80-chunbot-erp-support",
-  "instanceId": "d80-chunbot-erp-support-1234-...",
+  "agentId": "remote-bot-erp-support",
+  "instanceId": "remote-bot-erp-support-1234-...",
   "status": "online",
   "activeTasks": 2,
   "startedAt": "2026-07-29T00:00:00Z",
@@ -1784,9 +1782,9 @@ The following product decisions are accepted for the first implementation：
 2. **Peer trust model**: admin review displays runtime display name, bot base identity, signature status, credential issuer, and credential/public-key fingerprint before adding a runtime to `accept_from_runtimes` or `delegate_targets`。
 3. **Credential lifecycle**: credential issuance, rotation, and revocation are manual operations for v1。The bot documents current credential identity and fails closed when credentials are missing or revoked。
 4. **Data egress labels**: every confirmation shows explicit labels for prompt text, attachments, Discord context sharing, transparent delivery, and co-present transcript posting。
-5. **Retention policy**: default retention is permanent。Retention is configurable in days; `0` means keep until manual purge。
+5. **Retention policy**: default task/object retention is 30 days。Retention is configurable in days; explicit `0` means keep until manual purge。
 6. **Failure UX**: bot replies through i18n to the relevant channel/thread/status surface using contextual error messages。
-7. **Quota/backpressure**: default quotas are unlimited。All quota knobs remain configurable; `0` means unlimited。
+7. **Quota/backpressure**: default quotas are bounded (`pending=100`, outbound/inbound per channel `10`, event rate `120/min`)。All quota knobs remain configurable; explicit `0` means unlimited。
 8. **Version compatibility**: incompatible or unknown peer `binding` / `protocolVersion` values are displayed, not hidden。Unsupported operations degrade with localized explanation。
 9. **Admin review surface**: required。Managers must be able to inspect who may delegate to this channel, who this channel may delegate to, transcript mode, egress labels, and audit history。
 10. **Rollout gates**: required before production enablement: local two-bot smoke, same-channel co-present smoke, cross-server proxy smoke, NATS restart smoke, credential revocation smoke。

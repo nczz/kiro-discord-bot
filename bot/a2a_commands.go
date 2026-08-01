@@ -34,6 +34,11 @@ const (
 	a2aPolicyConfirmTTL       = 10 * time.Minute
 )
 
+var (
+	a2aComponentFallbackOnce   sync.Once
+	a2aComponentFallbackSecret string
+)
+
 type a2aPolicyConfirmationEntry struct {
 	Payload   a2aSlashPayload
 	ExpiresAt time.Time
@@ -222,14 +227,18 @@ func assignA2AAgentOption(payload *a2aSlashPayload, subcommand string, value str
 	switch subcommand {
 	case "accept-from", "deny-from":
 		payload.Request.AcceptFrom = []string{value}
+		payload.Request.AcceptFromRuntimes = []string{value}
 	case "delegate-to", "undelegate-to":
 		payload.Request.DelegateTo = []string{value}
 	case "setup":
 		payload.Request.AcceptFrom = []string{value}
+		payload.Request.AcceptFromRuntimes = []string{value}
 		payload.Request.DelegateTo = []string{value}
 		payload.Request.CoPresentFrom = []string{value}
+		payload.Request.CoPresentFromRuntimes = []string{value}
 	case "transcript-from":
 		payload.Request.CoPresentFrom = []string{value}
+		payload.Request.CoPresentFromRuntimes = []string{value}
 	}
 }
 
@@ -535,7 +544,14 @@ func a2aComponentSecret() string {
 	if v := strings.TrimSpace(os.Getenv("DISCORD_TOKEN")); v != "" {
 		return v
 	}
-	return "kiro-a2a-dev-component-secret"
+	a2aComponentFallbackOnce.Do(func() {
+		var b [32]byte
+		if _, err := rand.Read(b[:]); err != nil {
+			panic(err)
+		}
+		a2aComponentFallbackSecret = hex.EncodeToString(b[:])
+	})
+	return a2aComponentFallbackSecret
 }
 
 func formatA2AResponse(resp botmcp.A2AToolResponse) string {

@@ -11,13 +11,13 @@ import (
 )
 
 func TestAgentCardSanitizer(t *testing.T) {
-	card, err := BuildPublicAgentCard(Config{NATSURL: "nats://token:secret@nats.example.internal:4222?auth=secret", AgentID: "adam-n200", AgentDescription: "runtime in /Users/adam/project with DISCORD_TOKEN 123456789012345678"}, "2.30.0", []AgentSkill{{ID: "backend/code-review", Name: "Code Review", Description: "reads /data/private", Examples: []string{"secret prompt"}, InputModes: []string{"text/plain"}, OutputModes: []string{"application/json"}}})
+	card, err := BuildPublicAgentCard(Config{NATSURL: "nats://user:credential@nats.example.internal:4222?auth=credential", AgentID: "adam-n200", AgentDescription: "runtime in /Users/example/project with DISCORD_TOKEN 123456789012345678"}, "2.30.0", []AgentSkill{{ID: "backend/code-review", Name: "Code Review", Description: "reads /data/private", Examples: []string{"sensitive prompt"}, InputModes: []string{"text/plain"}, OutputModes: []string{"application/json"}}})
 	if err != nil {
 		t.Fatalf("BuildPublicAgentCard: %v", err)
 	}
 	raw, _ := json.Marshal(card)
 	text := string(raw)
-	for _, forbidden := range []string{"/Users", "/data", "DISCORD_TOKEN", "123456789012345678", "secret prompt", "token:secret", "auth=secret"} {
+	for _, forbidden := range []string{"/Users", "/data", "DISCORD_TOKEN", "123456789012345678", "sensitive prompt", "user:credential", "auth=credential"} {
 		if strings.Contains(text, forbidden) {
 			t.Fatalf("public card leaked %q: %s", forbidden, text)
 		}
@@ -46,9 +46,9 @@ func TestBuildRuntimeAgentCardIncludesDiscordIdentifiers(t *testing.T) {
 	runtime := RuntimeRecord{
 		RuntimeAgentID: "adam-n200-main",
 		BotAgentID:     "adam-n200",
-		GuildID:        "1495737767827865620",
-		ChannelID:      "1495737768905670719",
-		ThreadID:       "1532710952477261854",
+		GuildID:        "111111111111111111",
+		ChannelID:      "222222222222222222",
+		ThreadID:       "333333333333333333",
 		ChannelRef:     "main",
 		DisplayName:    "Main",
 		RuntimeKind:    "channel",
@@ -62,7 +62,7 @@ func TestBuildRuntimeAgentCardIncludesDiscordIdentifiers(t *testing.T) {
 	if card.Name != "adam-n200-main" || card.Description != "Main" || len(card.Skills) != 1 || card.Skills[0].ID != "main/task" {
 		t.Fatalf("runtime card = %+v, want runtime-scoped identity and skill", card)
 	}
-	if ext.ChannelRef != "main" || ext.Runtime != "channel" || ext.BotAgentID != "adam-n200" || ext.DisplayName != "Main" || ext.DiscordGuildID != "1495737767827865620" || ext.DiscordChannelID != "1495737768905670719" || ext.DiscordThreadID != "1532710952477261854" {
+	if ext.ChannelRef != "main" || ext.Runtime != "channel" || ext.BotAgentID != "adam-n200" || ext.DisplayName != "Main" || ext.DiscordGuildID != "111111111111111111" || ext.DiscordChannelID != "222222222222222222" || ext.DiscordThreadID != "333333333333333333" {
 		t.Fatalf("extended runtime card = %+v, want Discord identifiers", ext)
 	}
 }
@@ -71,18 +71,18 @@ func TestRuntimeAliasUsesChannelNameOrStableHash(t *testing.T) {
 	if got := RuntimeAlias("Backend Support", "guild\x00channel"); !strings.HasPrefix(got, "backend-support-") || got == "backend-support" {
 		t.Fatalf("RuntimeAlias ascii = %q, want readable alias with stable disambiguator", got)
 	}
-	if got := RuntimeAlias("support-1495737768905670719-room", "guild\x00channel"); got == "" || strings.Contains(got, "1495737768905670719") || !strings.HasPrefix(got, "ch-") {
+	if got := RuntimeAlias("support-222222222222222222-room", "guild\x00channel"); got == "" || strings.Contains(got, "222222222222222222") || !strings.HasPrefix(got, "ch-") {
 		t.Fatalf("RuntimeAlias snowflake = %q, want hashed public alias", got)
 	}
-	if got := RuntimeAlias("隨口問", "guild\x00channel"); got == "" || strings.Contains(got, "149573") || !strings.HasPrefix(got, "ch-") {
+	if got := RuntimeAlias("隨口問", "guild\x00channel"); got == "" || strings.Contains(got, "111111") || !strings.HasPrefix(got, "ch-") {
 		t.Fatalf("RuntimeAlias unicode = %q, want hashed public alias", got)
 	}
 	id, err := GenerateRuntimeAgentIDFromAlias("m5bot", "Backend Support", "guild\x00channel")
 	if err != nil || id != "m5bot-backend-support" {
 		t.Fatalf("GenerateRuntimeAgentIDFromAlias = %q/%v, want m5bot-backend-support", id, err)
 	}
-	id, err = GenerateRuntimeAgentIDFromAlias("m5bot", "support-1495737768905670719-room", "guild\x00channel")
-	if err != nil || strings.Contains(string(id), "1495737768905670719") || !strings.HasPrefix(string(id), "m5bot-rt-") {
+	id, err = GenerateRuntimeAgentIDFromAlias("m5bot", "support-222222222222222222-room", "guild\x00channel")
+	if err != nil || strings.Contains(string(id), "222222222222222222") || !strings.HasPrefix(string(id), "m5bot-rt-") {
 		t.Fatalf("GenerateRuntimeAgentIDFromAlias snowflake = %q/%v, want hashed runtime id", id, err)
 	}
 }

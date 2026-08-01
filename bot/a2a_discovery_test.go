@@ -10,11 +10,11 @@ import (
 )
 
 func TestBuildBotA2APeerCardUsesStableAgentIDAndGeneralSkill(t *testing.T) {
-	card, err := buildBotA2APeerCard(a2a.Config{NATSURL: "nats://nats.example.internal:4222", AgentID: "m5bot-local", AgentName: "M5Bot", AgentDescription: "runtime in /Users/chun with DISCORD_TOKEN"}, "2.29.1-test")
+	card, err := buildBotA2APeerCard(a2a.Config{NATSURL: "nats://nats.example.internal:4222", AgentID: "local-bot", AgentName: "AlphaBot", AgentDescription: "runtime in /Users/chun with DISCORD_TOKEN"}, "2.29.1-test")
 	if err != nil {
 		t.Fatalf("buildBotA2APeerCard: %v", err)
 	}
-	if card.Name != "m5bot-local" {
+	if card.Name != "local-bot" {
 		t.Fatalf("card name = %q, want stable agent id", card.Name)
 	}
 	if len(card.Skills) != 1 || card.Skills[0].ID != "general/task" {
@@ -28,7 +28,7 @@ func TestBuildBotA2APeerCardUsesStableAgentIDAndGeneralSkill(t *testing.T) {
 
 func TestRuntimePeerCardUsesRuntimeIDAndPolicySkills(t *testing.T) {
 	b := &Bot{
-		a2aConfig:   a2a.Config{NATSURL: "nats://nats.example.internal:4222", AgentID: "m5bot-local"},
+		a2aConfig:   a2a.Config{NATSURL: "nats://nats.example.internal:4222", AgentID: "local-bot"},
 		version:     "2.29.1-test",
 		startedAt:   nowForA2ATest(),
 		dataDir:     t.TempDir(),
@@ -43,15 +43,15 @@ func TestRuntimePeerCardUsesRuntimeIDAndPolicySkills(t *testing.T) {
 		ChannelID:      "channel-1",
 		Enabled:        true,
 		Discoverable:   true,
-		RuntimeAgentID: "m5bot-local-support",
-		BotAgentID:     "m5bot-local",
+		RuntimeAgentID: "local-bot-support",
+		BotAgentID:     "local-bot",
 		ChannelRef:     "support",
 		ExposeSkills:   []a2a.SkillPolicy{{ID: "review", InputModes: []string{"text/plain"}, OutputModes: []string{"application/json"}}},
 	})
 	if err != nil {
 		t.Fatalf("a2aRuntimePeerCardRecord: %v", err)
 	}
-	if record.AgentID != "m5bot-local-support" || record.Card.Name != "m5bot-local-support" || record.ExtendedCard.ChannelRef != "support" || record.ExtendedCard.DisplayName != "Support Room" || record.ExtendedCard.BotAgentID != "m5bot-local" {
+	if record.AgentID != "local-bot-support" || record.Card.Name != "local-bot-support" || record.ExtendedCard.ChannelRef != "support" || record.ExtendedCard.DisplayName != "Support Room" || record.ExtendedCard.BotAgentID != "local-bot" {
 		t.Fatalf("runtime record = %+v", record)
 	}
 	if len(record.Card.Skills) != 1 || record.Card.Skills[0].ID != "support/review" {
@@ -61,7 +61,7 @@ func TestRuntimePeerCardUsesRuntimeIDAndPolicySkills(t *testing.T) {
 
 func TestRuntimePeerCardForInactiveMetadataChannelHasNoSkills(t *testing.T) {
 	b := &Bot{
-		a2aConfig: a2a.Config{NATSURL: "nats://nats.example.internal:4222", AgentID: "m5bot-local"},
+		a2aConfig: a2a.Config{NATSURL: "nats://nats.example.internal:4222", AgentID: "local-bot"},
 		version:   "2.29.1-test",
 		startedAt: nowForA2ATest(),
 		dataDir:   t.TempDir(),
@@ -74,8 +74,8 @@ func TestRuntimePeerCardForInactiveMetadataChannelHasNoSkills(t *testing.T) {
 		ChannelID:             "channel-2",
 		Enabled:               false,
 		Discoverable:          false,
-		RuntimeAgentID:        "m5bot-local-ch-1234abcd",
-		BotAgentID:            "m5bot-local",
+		RuntimeAgentID:        "local-bot-ch-1234abcd",
+		BotAgentID:            "local-bot",
 		ChannelRef:            "ch-1234abcd",
 		ResultVisibility:      "proxy",
 		DiscordTranscriptMode: "delegator",
