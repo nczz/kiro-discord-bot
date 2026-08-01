@@ -294,6 +294,35 @@ func TestA2AToolsPolicySetupDefaultsRuntimeTarget(t *testing.T) {
 	}
 }
 
+func TestA2AToolsPolicySetupDefaultsWithoutModeStaySafe(t *testing.T) {
+	ctx := context.Background()
+	svc, err := NewA2AService(A2AServiceConfig{
+		DataDir:            t.TempDir(),
+		Config:             a2a.Config{AgentID: "adam-n200", TaskTimeoutSec: 60, MaxDelegationDepth: 1},
+		BoundGuildID:       "guild-1",
+		BoundChannelID:     "channel-1",
+		ConfirmationSecret: "test-secret",
+		ConnectNATS:        false,
+	})
+	if err != nil {
+		t.Fatalf("NewA2AService: %v", err)
+	}
+	defer svc.Close()
+
+	req := A2AToolRequest{GuildID: "guild-1", ChannelID: "channel-1", RequestedBy: "manager", RequestedByID: "manager-1", ManageChannels: true, TargetAgent: "peer-n100", SkillID: "general/task", ChannelRef: "m5-main"}
+	planned, err := svc.PolicyPlan(ctx, req)
+	if err != nil {
+		t.Fatalf("PolicyPlan: %v", err)
+	}
+	if !planned.OK || planned.Policy == nil {
+		t.Fatalf("PolicyPlan = %+v, want planned policy", planned)
+	}
+	policy := planned.Policy
+	if policy.ResultVisibility != "proxy" || policy.DiscordTranscriptMode != "delegator" || policy.ShareDiscordContext {
+		t.Fatalf("implicit setup defaults = visibility %q transcript %q share %v, want proxy/delegator/false", policy.ResultVisibility, policy.DiscordTranscriptMode, policy.ShareDiscordContext)
+	}
+}
+
 func TestA2AToolsLegacyDelegatePolicyCannotCrossRuntime(t *testing.T) {
 	policy := a2a.ChannelA2APolicy{ChannelRef: "m5-main", DelegateTo: []string{"peer-n100"}, DelegateSkills: []string{"general/task"}}
 	if !policyDelegatesRuntime(policy, "peer-n100", "general/task", "m5-main") {
@@ -532,6 +561,38 @@ func TestA2AToolsDelegateConfirmationBindsDeliveryMode(t *testing.T) {
 	}
 	if replayed.OK || replayed.ErrorCode != a2a.ErrorPolicyDenied || !strings.Contains(replayed.Message, "confirmation") {
 		t.Fatalf("Delegate replay = %+v, want confirmation policy denial", replayed)
+	}
+}
+
+func TestA2AToolsDelegateWithoutModeUsesPolicyDelivery(t *testing.T) {
+	ctx := context.Background()
+	svc, err := NewA2AService(A2AServiceConfig{
+		DataDir:            t.TempDir(),
+		Config:             a2a.Config{AgentID: "adam-n200", NATSURL: "nats://a2a.example.internal:4222", TaskTimeoutSec: 60, MaxDelegationDepth: 1, RequireConfirmationForRemote: true},
+		BoundGuildID:       "guild-1",
+		BoundChannelID:     "channel-1",
+		ConfirmationSecret: "test-secret",
+		ConnectNATS:        false,
+	})
+	if err != nil {
+		t.Fatalf("NewA2AService: %v", err)
+	}
+	defer svc.Close()
+	if err := svc.policies.Save(ctx, a2a.ChannelA2APolicy{GuildID: "guild-1", ChannelID: "channel-1", Enabled: true, RuntimeAgentID: "adam-n200-m5-main", BotAgentID: "adam-n200", ChannelRef: "m5-main", DelegateTargets: []a2a.DelegateTargetPolicy{{AgentID: "peer-n100", ChannelRef: "m5-main", SkillID: "general/task"}}, ResultVisibility: "proxy", DiscordTranscriptMode: "delegator"}, "manager"); err != nil {
+		t.Fatalf("Save policy: %v", err)
+	}
+	card := a2a.AgentCard{Name: "peer-n100", Version: "1.0.0", SupportedInterfaces: []a2a.A2AInterface{{URL: "nats://nats.example.internal:4222", ProtocolBinding: a2a.ProtocolBindingNATS, ProtocolVersion: a2a.ProtocolVersion}}, Skills: []a2a.AgentSkill{{ID: "general/task", Name: "General"}}}
+	peerExt := a2a.ExtendedAgentCard{DiscordGuildID: "guild-1", DiscordChannelID: "channel-1", ChannelRef: "m5-main"}
+	if _, err := svc.peers.UpsertExtendedCard(ctx, "peer-n100", card, peerExt, true, "peer-instance", "online", time.Now().Add(time.Hour)); err != nil {
+		t.Fatalf("Upsert peer: %v", err)
+	}
+	req := A2AToolRequest{GuildID: "guild-1", ChannelID: "channel-1", RequestedBy: "alice", RequestedByID: "user-1", TargetAgent: "peer-n100", SkillID: "general/task", Message: "ping"}
+	planned, err := svc.Delegate(ctx, req)
+	if err != nil {
+		t.Fatalf("Delegate plan: %v", err)
+	}
+	if !planned.RequiresConfirmation || planned.Metadata["result_visibility"] != "proxy" || planned.Metadata["discord_transcript_mode"] != "delegator" {
+		t.Fatalf("Delegate plan metadata = %+v, want policy proxy/delegator", planned.Metadata)
 	}
 }
 

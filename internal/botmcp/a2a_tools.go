@@ -636,7 +636,7 @@ func (s *A2AService) Delegate(ctx context.Context, req A2AToolRequest) (A2AToolR
 	resultVisibility := firstNonEmpty(req.ResultVisibility, policy.ResultVisibility, "proxy")
 	transcriptMode := firstNonEmpty(req.TranscriptMode, policy.DiscordTranscriptMode, "delegator")
 	deliveryReason := "policy/default delivery settings"
-	switch normalizeSetupMode(req.SetupMode) {
+	switch normalizeExplicitSetupMode(req.SetupMode) {
 	case "co_present":
 		resultVisibility, transcriptMode = "transparent", "co_present"
 		deliveryReason = "explicit co_present setup mode"
@@ -1061,6 +1061,9 @@ func applyA2APolicyRequestDefaults(req A2AToolRequest, policy a2a.ChannelA2APoli
 	req.ExposeSkills = appendUnique(req.ExposeSkills, localSkill)
 	req.DelegateSkills = appendUnique(req.DelegateSkills, req.SkillID)
 	mode := normalizeSetupMode(req.SetupMode)
+	if strings.TrimSpace(req.SetupMode) == "" {
+		mode = "safe"
+	}
 	req.SetupMode = mode
 	if mode == "co_present" || (mode == "auto" && req.targetRuntimeRef(policy.ChannelRef) == policy.ChannelRef) {
 		req.TranscriptMode = "co_present"
@@ -1200,6 +1203,12 @@ func normalizeSetupMode(mode string) string {
 	default:
 		return strings.TrimSpace(mode)
 	}
+}
+func normalizeExplicitSetupMode(mode string) string {
+	if strings.TrimSpace(mode) == "" {
+		return ""
+	}
+	return normalizeSetupMode(mode)
 }
 
 func (req A2AToolRequest) targetRuntimeRef(fallback string) string {
