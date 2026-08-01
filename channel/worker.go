@@ -1103,11 +1103,12 @@ func (job *Job) inlineBotToolsTargetID() string {
 	return job.ChannelID
 }
 
+func (job *Job) suppressInlineDiscordFinal() bool {
+	return job != nil && job.A2AResult != nil
+}
+
 func (job *Job) sendInlineFinalReply(ds *discordgo.Session, content string) error {
-	if job == nil {
-		return nil
-	}
-	if job.A2AResult != nil {
+	if job == nil || job.suppressInlineDiscordFinal() {
 		return nil
 	}
 	if job.FinalReply != nil {
@@ -1364,7 +1365,9 @@ func (w *Worker) executeInline(job *Job) {
 					"ctx_error":     fmt.Sprint(ctxErr),
 					"elapsed_ms":    time.Since(startTime).Milliseconds(),
 				})
-				w.auditResponseEvent(job, "", "error", errorContent)
+				if !job.suppressInlineDiscordFinal() {
+					w.auditResponseEvent(job, "", "error", errorContent)
+				}
 				w.recordUsage(job, "", "error", startTime)
 				finishJob(emoji)
 				return
@@ -1403,7 +1406,9 @@ func (w *Worker) executeInline(job *Job) {
 				addDeliveryFailureHintReaction(ds, job.ChannelID, job.MessageID, sendErr)
 				return
 			}
-			w.auditResponseEvent(job, "", "success", response)
+			if !job.suppressInlineDiscordFinal() {
+				w.auditResponseEvent(job, "", "success", response)
+			}
 			if w.logger != nil {
 				w.logger.Log(w.channelID, ChatEntry{Role: "assistant", Content: response, Model: w.currentModel()})
 			}
@@ -1415,6 +1420,9 @@ func (w *Worker) executeInline(job *Job) {
 			}
 			if stopReason != "" {
 				inlineCompletedMeta["stop_reason"] = stopReason
+			}
+			if job.suppressInlineDiscordFinal() {
+				inlineCompletedMeta["discord_final_suppressed"] = true
 			}
 			w.auditJobEvent("agent_job_completed", job, "", "success", inlineCompletedMeta)
 			finishJob("✅")
@@ -1459,7 +1467,9 @@ func (w *Worker) executeInline(job *Job) {
 			"error":         errMsg,
 			"elapsed_ms":    time.Since(startTime).Milliseconds(),
 		})
-		w.auditResponseEvent(job, "", "error", errMsg)
+		if !job.suppressInlineDiscordFinal() {
+			w.auditResponseEvent(job, "", "error", errMsg)
+		}
 		w.recordUsage(job, "", "error", startTime)
 		cancel()
 		finishJob("⚠️")

@@ -301,8 +301,34 @@ func TestManagerA2AUsesWorker(t *testing.T) {
 	}
 }
 
-func TestManagerA2AStartsDiscordConversationWithMetrics(t *testing.T) {
+func TestManagerA2AProxyDelegatorSuppressesExecutorDiscordConversation(t *testing.T) {
 	h := newPhase5Harness(t, nil)
+	h.agent.metrics = acp.TurnMetrics{
+		MeteringUsage:  []acp.MeteringItem{{Value: 0.25, Unit: "credit"}},
+		TurnDurationMs: 1234,
+		ContextUsage:   42,
+	}
+	admission := admitPhase5(t, h)
+	result := runPhase5(t, h, admission.Admission, func(cb acp.AsyncCallbacks) { cb.OnComplete("worker result", nil) })
+	if result.State != a2a.TaskStateCompleted || result.Content != "worker result" {
+		t.Fatalf("RunA2ATask result = %#v, want completed pure worker result", result)
+	}
+	reqs, bodies := h.rt.Snapshot()
+	for i, req := range reqs {
+		if strings.HasPrefix(req, "POST ") && strings.Contains(req, "/threads") {
+			t.Fatalf("proxy/delegator A2A created executor thread: reqs=%v bodies=%v", reqs, bodies)
+		}
+		if strings.HasPrefix(req, "POST ") && strings.Contains(req, "/messages") && strings.Contains(bodies[i], "worker result") {
+			t.Fatalf("proxy/delegator A2A posted executor final response: req=%s body=%s", req, bodies[i])
+		}
+	}
+}
+
+func TestManagerA2AMirrorStartsDiscordConversationWithMetrics(t *testing.T) {
+	h := newPhase5Harness(t, func(policy *a2a.ChannelA2APolicy, cfg *a2a.Config) {
+		policy.ResultVisibility = "transparent"
+		policy.DiscordTranscriptMode = "mirror"
+	})
 	h.agent.metrics = acp.TurnMetrics{
 		MeteringUsage:  []acp.MeteringItem{{Value: 0.25, Unit: "credit"}},
 		TurnDurationMs: 1234,
@@ -581,7 +607,10 @@ func TestManagerA2AThreadRefDoesNotInheritWrongParent(t *testing.T) {
 }
 
 func TestManagerA2AContinuationReusesExecutorConversationThread(t *testing.T) {
-	h := newPhase5Harness(t, nil)
+	h := newPhase5Harness(t, func(policy *a2a.ChannelA2APolicy, cfg *a2a.Config) {
+		policy.ResultVisibility = "transparent"
+		policy.DiscordTranscriptMode = "mirror"
+	})
 	admission := admitPhase5(t, h)
 	h.agent.mu.Lock()
 	h.agent.stopReason = "input_required"
@@ -622,7 +651,10 @@ func TestManagerA2AContinuationReusesExecutorConversationThread(t *testing.T) {
 }
 
 func TestManagerA2AThreadCreationFailureReleasesWorker(t *testing.T) {
-	h := newPhase5Harness(t, nil)
+	h := newPhase5Harness(t, func(policy *a2a.ChannelA2APolicy, cfg *a2a.Config) {
+		policy.ResultVisibility = "transparent"
+		policy.DiscordTranscriptMode = "mirror"
+	})
 	h.manager.discord = testDiscordSession(failingRoundTripper{})
 
 	admission := admitPhase5(t, h)
@@ -881,13 +913,25 @@ func TestWorkerA2AInlineResultSuppressesDiscordReply(t *testing.T) {
 	}
 }
 
-func TestA2APromptDescribesExecutorOwnedConversation(t *testing.T) {
+func TestA2APromptDescribesDelegatorRelayAndExecutorOwnedModes(t *testing.T) {
 	admission := a2a.A2AAdmission{TaskID: "task_abc", Request: phase5Request()}
 	admission.Request.ResultVisibility = "proxy"
+	admission.Request.DiscordTranscriptMode = "delegator"
 	prompt := buildA2APrompt(admission)
-	for _, want := range []string{"[A2A remote task]", "from_agent=eve-local", "executor bot owns the Discord conversation", "Separate bot-tools egress remains policy-gated", "Canonical A2A payload JSON"} {
+	for _, want := range []string{"[A2A remote task]", "from_agent=eve-local", "store the A2A result for the delegator to relay", "Canonical A2A payload JSON"} {
 		if !strings.Contains(prompt, want) {
-			t.Fatalf("prompt missing %q:\n%s", want, prompt)
+			t.Fatalf("delegator prompt missing %q:\n%s", want, prompt)
+		}
+	}
+	if strings.Contains(prompt, "executor bot owns the Discord conversation") {
+		t.Fatalf("delegator prompt should not claim executor-owned Discord conversation:\n%s", prompt)
+	}
+	admission.Request.ResultVisibility = "transparent"
+	admission.Request.DiscordTranscriptMode = "mirror"
+	prompt = buildA2APrompt(admission)
+	for _, want := range []string{"executor bot owns the Discord conversation", "Separate bot-tools egress remains policy-gated"} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("mirror prompt missing %q:\n%s", want, prompt)
 		}
 	}
 	if strings.Contains(prompt, filepath.Clean(homedirForA2ATest())) {

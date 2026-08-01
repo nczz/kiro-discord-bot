@@ -245,7 +245,11 @@ func (m *Manager) RunA2ATask(ctx context.Context, admitted a2a.A2AAdmission) (a2
 	requesterID, requesterName := a2aRequesterIdentity(admitted.Request)
 
 	resultCh := make(chan a2a.TaskExecutionResult, 1)
+	deliveryMode := a2aExecutorDeliveryMode(admitted.Request)
 	threadID := a2aConversationThreadID(admitted)
+	if deliveryMode == DeliveryInline {
+		threadID = ""
+	}
 	job := &Job{
 		ChannelID:              admitted.Request.ChannelID,
 		GuildID:                admitted.Request.GuildID,
@@ -256,8 +260,8 @@ func (m *Manager) RunA2ATask(ctx context.Context, admitted a2a.A2AAdmission) (a2
 		MessageID:              string(admitted.Request.MessageID),
 		ThreadID:               threadID,
 		Source:                 "a2a",
-		DeliveryMode:           DeliveryThread,
-		DisableBotEgress:       admitted.Request.ResultVisibility == "" || admitted.Request.ResultVisibility == "proxy",
+		DeliveryMode:           deliveryMode,
+		DisableBotEgress:       deliveryMode == DeliveryInline || admitted.Request.ResultVisibility == "" || admitted.Request.ResultVisibility == "proxy",
 		RemoteA2A:              true,
 		AllowRemoteMemoryWrite: m.remoteMemoryWriteAllowed(admitted.Request.ChannelID),
 		A2ADelegationDepth:     admitted.Request.Delivery.MaxDelegationDepth,
@@ -331,6 +335,15 @@ func (m *Manager) remoteMemoryWriteAllowed(channelID string) bool {
 		return false
 	}
 	return policy.RemoteToolPolicy.AllowMemoryWrite
+}
+
+func a2aExecutorDeliveryMode(req a2a.TaskExecutionRequest) DeliveryMode {
+	switch strings.TrimSpace(req.DiscordTranscriptMode) {
+	case "mirror", "co_present":
+		return DeliveryThread
+	default:
+		return DeliveryInline
+	}
 }
 
 func a2aConversationThreadID(admitted a2a.A2AAdmission) string {
@@ -714,8 +727,13 @@ func buildA2APrompt(admitted a2a.A2AAdmission) string {
 		sb.WriteString("delegated_from=" + label + "\n")
 		sb.WriteString("The Discord response will be prefixed with \"委託自：\" by the bot. Do not add your own source prefix.\n")
 	}
+	mode := strings.TrimSpace(admitted.Request.DiscordTranscriptMode)
 	sb.WriteString("result_visibility=" + admitted.Request.ResultVisibility + "\n")
-	sb.WriteString("This executor bot owns the Discord conversation for this delegated task. Return ordinary replies as final text; do not call bot-tools for the final answer or duplicate Discord posts. Separate bot-tools egress remains policy-gated.\n\n")
+	if mode == "mirror" || mode == "co_present" {
+		sb.WriteString("This executor bot owns the Discord conversation for this delegated task. Return ordinary replies as final text; do not call bot-tools for the final answer or duplicate Discord posts. Separate bot-tools egress remains policy-gated.\n\n")
+	} else {
+		sb.WriteString("Return ordinary final text only. The bot will store the A2A result for the delegator to relay; do not call bot-tools or create extra Discord posts for the final answer.\n\n")
+	}
 	if admitted.Continuation != nil {
 		sb.WriteString("[A2A continuation]\n")
 		sb.WriteString("control_kind=" + admitted.Continuation.Kind + "\n")
