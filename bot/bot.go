@@ -197,6 +197,9 @@ func (b *Bot) Start() error {
 	b.discord.AddHandler(func(ds *discordgo.Session, r *discordgo.Ready) {
 		log.Printf("Bot running as %s#%s", r.User.Username, r.User.Discriminator)
 		b.manager.SetBotID(r.User.ID)
+		for _, guildID := range b.peerDiscoveryGuildIDs(r) {
+			b.syncGuildChannelMetadata(ds, guildID)
+		}
 		b.discoverBotPeers(ds, r)
 		_ = ds.UpdateGameStatus(0, "ACP agent "+b.version)
 		b.registerSlashCommands()

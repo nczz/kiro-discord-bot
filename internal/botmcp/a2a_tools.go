@@ -278,6 +278,9 @@ func (s *A2AService) Peers(ctx context.Context, req A2AToolRequest) (A2AToolResp
 		if row.AgentID == s.cfg.Config.AgentID || (runtimeOnly && row.Runtime == "kiro-discord-bot") {
 			continue
 		}
+		if runtimeOnly && (row.Stale || !row.Online) {
+			continue
+		}
 		if runtimeOnly {
 			if row.Runtime != "channel" && row.Runtime != "thread" {
 				continue

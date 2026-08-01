@@ -62,6 +62,64 @@ func Upsert(dataDir string, entry Entry) error {
 	return nil
 }
 
+func ReplaceGuildChannels(dataDir, guildID string, channels []Entry) error {
+	guildID = strings.TrimSpace(guildID)
+	if guildID == "" {
+		return nil
+	}
+	mu.Lock()
+	defer mu.Unlock()
+
+	if strings.TrimSpace(dataDir) == "" {
+		dataDir = "./data"
+	}
+	path := Path(dataDir)
+	entries, err := Read(dataDir)
+	if err != nil {
+		return err
+	}
+	keep := make(map[string]Entry, len(channels))
+	for _, entry := range channels {
+		entry.ID = strings.TrimSpace(entry.ID)
+		if entry.ID == "" || strings.TrimSpace(entry.Type) != "channel" {
+			continue
+		}
+		if strings.TrimSpace(entry.GuildID) == "" {
+			entry.GuildID = guildID
+		}
+		if entry.GuildID != guildID {
+			continue
+		}
+		if strings.TrimSpace(entry.UpdatedAt) == "" {
+			entry.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
+		}
+		keep[entry.ID] = entry
+	}
+	for id, entry := range entries {
+		if strings.TrimSpace(entry.GuildID) == guildID && strings.TrimSpace(entry.Type) == "channel" {
+			delete(entries, id)
+		}
+	}
+	for id, entry := range keep {
+		entries[id] = entry
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	raw, err := json.MarshalIndent(entries, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, raw, 0600); err != nil {
+		return fmt.Errorf("write channel metadata: %w", err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return fmt.Errorf("replace channel metadata: %w", err)
+	}
+	return nil
+}
+
 func Read(dataDir string) (map[string]Entry, error) {
 	if strings.TrimSpace(dataDir) == "" {
 		dataDir = "./data"

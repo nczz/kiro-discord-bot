@@ -147,6 +147,45 @@ func TestA2AToolsPeersRuntimeModeListsWakeableRuntimeAndHidesLegacyBot(t *testin
 	}
 }
 
+func TestA2AToolsPeersRuntimeModeHidesStaleRuntimeRows(t *testing.T) {
+	ctx := context.Background()
+	svc, err := NewA2AService(A2AServiceConfig{
+		DataDir: t.TempDir(),
+		Config:  a2a.Config{AgentID: "adam-n200", RuntimeIDMode: a2a.RuntimeIDModeRuntime},
+	})
+	if err != nil {
+		t.Fatalf("NewA2AService: %v", err)
+	}
+	defer svc.Close()
+
+	card := a2a.AgentCard{Name: "peer-n100-ch-support", Version: "1.0.0", SupportedInterfaces: []a2a.A2AInterface{{URL: "nats://nats.example.internal:4222", ProtocolBinding: a2a.ProtocolBindingNATS, ProtocolVersion: a2a.ProtocolVersion}}, Skills: []a2a.AgentSkill{{ID: "ch-support/task", Name: "Task"}}}
+	activeCard := card
+	activeCard.Name = "peer-n100-ch-active"
+	ext := a2a.ExtendedAgentCard{Runtime: "channel", BotAgentID: "peer-n100", ChannelRef: "ch-support", DisplayName: "Support", DiscordGuildID: "1495737767827865620", DiscordChannelID: "1495737768905670719"}
+	if _, err := svc.peers.UpsertExtendedCard(ctx, "peer-n100-ch-support", card, ext, false, "peer-n100-ch-support", "online", time.Now().Add(-time.Minute)); err != nil {
+		t.Fatalf("UpsertExtendedCard stale: %v", err)
+	}
+	if _, err := svc.peers.UpsertExtendedCard(ctx, "peer-n100-ch-active", activeCard, ext, false, "peer-n100-ch-active", "online", time.Now().Add(time.Hour)); err != nil {
+		t.Fatalf("UpsertExtendedCard active: %v", err)
+	}
+	resp, err := svc.Peers(ctx, A2AToolRequest{GuildID: "1495737767827865620", ChannelID: "1495737768905670719", RequestedBy: "alice", RequestedByID: "user-1"})
+	if err != nil {
+		t.Fatalf("Peers: %v", err)
+	}
+	foundActive := false
+	for _, peer := range resp.Peers {
+		if peer.AgentID == "peer-n100-ch-support" {
+			t.Fatalf("stale runtime peer leaked: %+v", resp.Peers)
+		}
+		if peer.AgentID == "peer-n100-ch-active" {
+			foundActive = true
+		}
+	}
+	if !foundActive {
+		t.Fatalf("active runtime peer missing: %+v", resp.Peers)
+	}
+}
+
 func TestA2AToolsDefaultPolicyUsesDiscordChannelNameAlias(t *testing.T) {
 	dataDir := t.TempDir()
 	if err := channelmeta.Upsert(dataDir, channelmeta.Entry{ID: "channel-1", GuildID: "guild-1", Name: "Backend Support", Type: "channel"}); err != nil {

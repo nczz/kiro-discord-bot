@@ -31,6 +31,33 @@ func (b *Bot) recordChannelMetadata(ds *discordgo.Session, channelID, guildID st
 	}
 }
 
+func (b *Bot) syncGuildChannelMetadata(ds *discordgo.Session, guildID string) {
+	if b == nil || ds == nil || guildID == "" {
+		return
+	}
+	channels, err := ds.GuildChannels(guildID)
+	if err != nil {
+		log.Printf("[channel-meta] list guild channels guild=%s: %v", guildID, err)
+		return
+	}
+	entries := make([]channelmeta.Entry, 0, len(channels))
+	for _, ch := range channels {
+		if ch == nil || channelMetadataType(ch) != "channel" {
+			continue
+		}
+		entries = append(entries, channelmeta.Entry{
+			ID:              ch.ID,
+			GuildID:         firstNonEmpty(ch.GuildID, guildID),
+			Name:            ch.Name,
+			Type:            "channel",
+			ParentChannelID: ch.ParentID,
+		})
+	}
+	if err := channelmeta.ReplaceGuildChannels(b.dataDir, guildID, entries); err != nil {
+		log.Printf("[channel-meta] sync guild channels guild=%s: %v", guildID, err)
+	}
+}
+
 func channelMetadataType(ch *discordgo.Channel) string {
 	if ch == nil {
 		return ""
