@@ -3,6 +3,7 @@ package channel
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -26,7 +27,10 @@ import (
 	L "github.com/nczz/kiro-discord-bot/locale"
 )
 
-var reMention = regexp.MustCompile(`<@!?\d+>`)
+var (
+	reMention          = regexp.MustCompile(`<@!?\d+>`)
+	a2aLocalIDOutputRe = regexp.MustCompile(`"localId"\s*:\s*"([^"]+)"`)
+)
 
 const autoCompactContextThreshold = 90.0
 
@@ -250,6 +254,60 @@ func suppressGenericKiroErrorAfterEgress(err error, ctxErr error, delivered int)
 		return false
 	}
 	return strings.Contains(err.Error(), "Kiro failed to generate a response")
+}
+
+type a2aDelegateFinalGuard struct {
+	delegated     bool
+	statusChecked bool
+	localID       string
+}
+
+func (g *a2aDelegateFinalGuard) observeToolResult(evt acp.ToolCallEvent) {
+	title := strings.ToLower(evt.Title)
+	switch {
+	case strings.Contains(title, "bot_a2a_delegate"):
+		g.delegated = true
+		if localID := extractA2ADelegateLocalID(evt.RawOutput); localID != "" {
+			g.localID = localID
+		}
+	case strings.Contains(title, "bot_a2a_task_status"):
+		if g.delegated {
+			g.statusChecked = true
+		}
+	}
+}
+
+func (g a2aDelegateFinalGuard) finalResponse(response string) string {
+	if !g.delegated || g.statusChecked {
+		return response
+	}
+	statusTarget := "the local_id returned by bot_a2a_delegate"
+	if id := strings.TrimSpace(g.localID); id != "" {
+		statusTarget = EscapeDiscordMarkdown(id)
+	}
+	return "⚠️ A2A delegation request was queued, but executor acceptance/completion was not confirmed. I am not treating it as successful.\n\nCheck durable status with `/a2a status task:" + statusTarget + "` before claiming the delegated bot accepted, completed, or will reply."
+}
+
+func extractA2ADelegateLocalID(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	var resp struct {
+		Task struct {
+			LocalID string `json:"localId"`
+		} `json:"task"`
+	}
+	if err := json.Unmarshal([]byte(raw), &resp); err == nil {
+		if localID := strings.TrimSpace(resp.Task.LocalID); localID != "" {
+			return localID
+		}
+	}
+	match := a2aLocalIDOutputRe.FindStringSubmatch(raw)
+	if len(match) == 2 {
+		return strings.TrimSpace(match[1])
+	}
+	return ""
 }
 
 func (w *Worker) QueueLen() int {
@@ -640,6 +698,7 @@ func (w *Worker) execute(job *Job) {
 
 	// Async callbacks — all post to thread
 	lastPlanMessage := ""
+	delegateGuard := a2aDelegateFinalGuard{}
 	callbacks := acp.AsyncCallbacks{
 		OnChunk: func(chunk string) {
 			if w.onActivity != nil {
@@ -676,6 +735,7 @@ func (w *Worker) execute(job *Job) {
 			if w.onActivity != nil {
 				w.onActivity()
 			}
+			delegateGuard.observeToolResult(evt)
 			swapReaction(ds, job.ChannelID, job.MessageID, "⚙️", "🔄")
 			title := toolDisplayTitle(evt)
 			w.auditJobEvent("agent_tool_result", job, threadID, evt.Status, map[string]any{
@@ -809,6 +869,7 @@ func (w *Worker) execute(job *Job) {
 			if response == "" {
 				response = L.Get("worker.empty_response")
 			}
+			response = delegateGuard.finalResponse(response)
 
 			// Drain pending tool-egress messages before final text.
 			w.drainBeforeFinal(threadID)
@@ -1191,6 +1252,7 @@ func (w *Worker) executeInline(job *Job) {
 	currentJobSeq := w.currentJobSeq
 	w.cancelMu.Unlock()
 
+	delegateGuard := a2aDelegateFinalGuard{}
 	callbacks := acp.AsyncCallbacks{
 		OnChunk: func(chunk string) {
 			if w.onActivity != nil {
@@ -1213,6 +1275,7 @@ func (w *Worker) executeInline(job *Job) {
 			if w.onActivity != nil {
 				w.onActivity()
 			}
+			delegateGuard.observeToolResult(evt)
 			w.auditJobEvent("agent_tool_result", job, "", evt.Status, map[string]any{
 				"kind":          evt.Kind,
 				"title":         evt.Title,
@@ -1310,6 +1373,7 @@ func (w *Worker) executeInline(job *Job) {
 			if response == "" {
 				response = L.Get("worker.empty_response")
 			}
+			response = delegateGuard.finalResponse(response)
 			stopReason := w.agent.StopReason()
 			response = AppendStopReasonNotice(response, stopReason)
 			responseWithMetrics := AppendMetricsFooter(response, MetricsWithElapsed(w.agent.TurnMetrics(), startTime))

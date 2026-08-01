@@ -1274,6 +1274,85 @@ func TestWorkerThreadDrainsBotToolsBeforeFinalResponse(t *testing.T) {
 	}
 }
 
+func TestWorkerThreadReplacesUnconfirmedA2ADelegateFinalSuccess(t *testing.T) {
+	L.Load("en")
+	rt := &recordingRoundTripper{}
+	ds := testDiscordSession(rt)
+	agent := &fakeWorkerAgent{}
+	w := newWorker("ch1", agent, 1, 30, 1, 1440, nil, "")
+	w.SetBotToolsTargetStatePath(filepath.Join(t.TempDir(), "target.json"))
+
+	w.execute(&Job{
+		ChannelID: "ch1",
+		ThreadID:  "thread-1",
+		MessageID: "m1",
+		Prompt:    "delegate to m5bot",
+		Session:   ds,
+	})
+	cb := agent.Callbacks()
+	if cb.OnToolResult == nil || cb.OnComplete == nil {
+		t.Fatal("expected thread callbacks to be registered")
+	}
+	cb.OnToolResult(acp.ToolCallEvent{
+		Title:     "Running: @bot-tools/bot_a2a_delegate",
+		Status:    "completed",
+		RawOutput: `{"ok":true,"message":"A2A request queued","task":{"localId":"local-abc","state":"TASK_STATE_SUBMITTED"},"metadata":{"must_check_status":true}}`,
+	})
+	cb.OnComplete("已經委派給 M5Bot 了 ✅", nil)
+
+	_, bodies := rt.Snapshot()
+	var final string
+	for _, body := range bodies {
+		if strings.Contains(body, "A2A delegation request was queued") {
+			final = body
+		}
+	}
+	if final == "" {
+		t.Fatalf("missing unconfirmed delegation guard response; bodies=%v", bodies)
+	}
+	if strings.Contains(final, "已經委派給 M5Bot") {
+		t.Fatalf("guard response leaked false success text: %q", final)
+	}
+	if !strings.Contains(final, "not confirmed") || !strings.Contains(final, "local-abc") || !strings.Contains(final, "/a2a status") {
+		t.Fatalf("guard response = %q, want status guidance with local id", final)
+	}
+}
+
+func TestWorkerThreadAllowsA2ADelegateFinalAfterStatusCheck(t *testing.T) {
+	L.Load("en")
+	rt := &recordingRoundTripper{}
+	ds := testDiscordSession(rt)
+	agent := &fakeWorkerAgent{}
+	w := newWorker("ch1", agent, 1, 30, 1, 1440, nil, "")
+	w.SetBotToolsTargetStatePath(filepath.Join(t.TempDir(), "target.json"))
+
+	w.execute(&Job{
+		ChannelID: "ch1",
+		ThreadID:  "thread-1",
+		MessageID: "m1",
+		Prompt:    "delegate to m5bot",
+		Session:   ds,
+	})
+	cb := agent.Callbacks()
+	cb.OnToolResult(acp.ToolCallEvent{Title: "Running: @bot-tools/bot_a2a_delegate", Status: "completed", RawOutput: `{"task":{"localId":"local-abc"}}`})
+	cb.OnToolResult(acp.ToolCallEvent{Title: "Running: @bot-tools/bot_a2a_task_status", Status: "completed", RawOutput: `{"task":{"localId":"local-abc","state":"TASK_STATE_REJECTED","terminal":true}}`})
+	cb.OnComplete("委託被 M5Bot 拒絕", nil)
+
+	_, bodies := rt.Snapshot()
+	var sawStatusBasedFinal bool
+	for _, body := range bodies {
+		if strings.Contains(body, "委託被 M5Bot 拒絕") {
+			sawStatusBasedFinal = true
+			if strings.Contains(body, "A2A delegation request was queued") {
+				t.Fatalf("guard replaced status-checked final response: %q", body)
+			}
+		}
+	}
+	if !sawStatusBasedFinal {
+		t.Fatalf("missing status-based final response; bodies=%v", bodies)
+	}
+}
+
 func TestWorkerAutoCreatedThreadUpdatesBotToolsTargetState(t *testing.T) {
 	L.Load("en")
 	rt := &recordingRoundTripper{}
