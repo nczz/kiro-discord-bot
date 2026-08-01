@@ -18,10 +18,22 @@
 | `bot_send_file` | Write, non-destructive | 將 sanitized file upload 排入 Discord delivery queue。 |
 | `bot_send_image_url` | Write, non-destructive | 從允許的 non-secret URL 抓取 JPEG/PNG 圖片並排入 Discord delivery queue。 |
 | `bot_create_cron` | Write, non-destructive | 排入建立 scheduled task 的請求。 |
+| `bot_update_cron` | Write, non-destructive, idempotent | 排入修改既有 recurring cron job 的 name、schedule、prompt 或 enabled state。 |
 | `bot_create_reminder` | Write, non-destructive | 排入一次性提醒，交由 bot scheduler 到期發送。 |
 | `bot_query_channel_history` | Read | 搜尋或分頁讀取目前 channel/thread context 的已儲存歷史。 |
 | `bot_memory_list` | Read | 列出目前 parent channel 的 persistent memory rules。 |
 | `bot_memory_add` | Write, non-destructive | 排入使用者明確要求、且已 audit-recorded 的 channel memory rule。 |
+| `bot_a2a_peers` | Read | 列出已知 A2A runtime peers、可呼叫 channel refs、visible skills、wakeability 與 delivery readiness。 |
+| `bot_a2a_policy_get` | Read | 顯示目前綁定 channel 的 A2A policy 與 delivery readiness。 |
+| `bot_a2a_task_status` | Read | 讀取 durable A2A TaskStore state 與 task 或 recent outbound tasks 的 event history。 |
+| `bot_a2a_runtime_preflight` | Read | 檢查 guild-scoped A2A runtime cutover readiness，不套用 policy 或 service changes。 |
+| `bot_a2a_policy_plan` | Read | 規劃 A2A policy change 並回傳 confirmation challenge；不套用變更。 |
+| `bot_a2a_trust_peer` | Write, non-destructive | 對單一 peer runtime 規劃或套用 high-level trust grant；套用需 confirmation。 |
+| `bot_a2a_delegate` | Write, non-destructive | 通過 outbound policy、quota 與 confirmation checks 後，排入 approved remote A2A task。 |
+| `bot_a2a_policy_apply` | Write, non-destructive | 在 manager validation 與 fresh token 後套用 confirmed A2A policy diff。 |
+| `bot_a2a_cancel` | Write, destructive | requester 或 channel manager 可取消 nonterminal A2A task。 |
+| `bot_a2a_input_reply` | Write, non-destructive | 對 `TASK_STATE_INPUT_REQUIRED` 的 task 傳送使用者提供的 input。 |
+| `bot_a2a_auth_reply` | Write, non-destructive | 對 `TASK_STATE_AUTH_REQUIRED` 的 task approve 或 deny，不攜帶 raw long-lived credentials。 |
 
 這些工具存在，但預設不啟用：
 
@@ -44,6 +56,19 @@ Recurring cron 管理在 runtime 中是 channel scope；thread ID 會依需要�
 Persistent memory 是 parent-channel scope。`bot_memory_add` 只在使用者明確說「記住」時預設可用，會拒絕看似 secret 的文字，透過 pending bot-side queue 寫入，並在 main bot 套用前先記錄 audit event。`bot_memory_remove` 與 `bot_memory_clear` 預設不啟用。
 
 「10 分鐘後提醒我」、「明天 09:00 提醒某人」這類一次性提醒應使用 `bot_create_reminder`。每天、每週或週期性自動化才使用 `bot_create_cron`。
+
+## A2A Bot Tools
+
+`bot_a2a_*` tools 預設啟用，但每次呼叫仍綁定目前 Discord guild/channel context，且必須通過目前 A2A policy、manager permission、confirmation-token、quota 與 runtime-readiness checks。
+
+宣稱另一個 bot 可以接工作前，先用 `bot_a2a_peers` 檢查。`trusted=true` 只代表 trust display state；direct same-thread collaboration 還需要相關 runtime policy 的 `deliveryReadiness.coPresentReady`。
+
+使用 `bot_a2a_policy_plan` 或 `bot_a2a_trust_peer` 提出變更。套用 policy 需要 `bot_a2a_policy_apply`，或在 `bot_a2a_trust_peer` 帶入 fresh confirmation token；requester 也必須有 Manage Channels permission。
+
+`bot_a2a_delegate` 只用於已核准的 outbound work。成功呼叫只代表 task 已 durable queued，不代表已 accepted 或 completed。回報成功前，使用 `bot_a2a_task_status` 搭配 `local_id`、`task_id` 或 `message_id` 查權威狀態。
+
+Continuation 場景中，只有 task 在 `TASK_STATE_INPUT_REQUIRED` 時使用 `bot_a2a_input_reply`；只有 task 在 `TASK_STATE_AUTH_REQUIRED` 時使用 `bot_a2a_auth_reply`。一般操作不要直接檢查或編輯 `data/a2a/*.sqlite`。
+
 
 ## 時間脈絡工具
 

@@ -18,10 +18,22 @@ On first channel setup, these safe tools are enabled by default:
 | `bot_send_file` | Write, non-destructive | Queue a sanitized file upload for Discord delivery. |
 | `bot_send_image_url` | Write, non-destructive | Queue a JPEG/PNG image fetched from an allowed non-secret URL for Discord delivery. |
 | `bot_create_cron` | Write, non-destructive | Queue creation of a scheduled task. |
+| `bot_update_cron` | Write, non-destructive, idempotent | Queue changes to an existing recurring cron job: name, schedule, prompt, or enabled state. |
 | `bot_create_reminder` | Write, non-destructive | Queue a one-time reminder delivered by the bot scheduler. |
 | `bot_query_channel_history` | Read | Search or page through stored history for the current channel or thread context. |
 | `bot_memory_list` | Read | List persistent memory rules for the current parent channel. |
 | `bot_memory_add` | Write, non-destructive | Queue an explicitly requested, audit-recorded channel memory rule. |
+| `bot_a2a_peers` | Read | List known A2A runtime peers, callable channel refs, visible skills, wakeability, and delivery readiness. |
+| `bot_a2a_policy_get` | Read | Show the current bound channel A2A policy and delivery readiness. |
+| `bot_a2a_task_status` | Read | Read durable A2A TaskStore state and event history for a task or recent outbound tasks. |
+| `bot_a2a_runtime_preflight` | Read | Check guild-scoped A2A runtime cutover readiness without applying policy or service changes. |
+| `bot_a2a_policy_plan` | Read | Plan an A2A policy change and return a confirmation challenge; applies nothing. |
+| `bot_a2a_trust_peer` | Write, non-destructive | Plan or apply a high-level trust grant for one peer runtime after confirmation. |
+| `bot_a2a_delegate` | Write, non-destructive | Queue an approved remote A2A task after outbound policy, quota, and confirmation checks. |
+| `bot_a2a_policy_apply` | Write, non-destructive | Apply a confirmed A2A policy diff after manager validation and a fresh token. |
+| `bot_a2a_cancel` | Write, destructive | Cancel a nonterminal A2A task when requested by the requester or a channel manager. |
+| `bot_a2a_input_reply` | Write, non-destructive | Send user-provided input for a task in `TASK_STATE_INPUT_REQUIRED`. |
+| `bot_a2a_auth_reply` | Write, non-destructive | Approve or deny a task in `TASK_STATE_AUTH_REQUIRED` without carrying raw long-lived credentials. |
 
 These tools are available but not enabled by default:
 
@@ -44,6 +56,19 @@ Thread IDs are normalized to the parent channel for recurring cron management wh
 Persistent memory is parent-channel scoped. `bot_memory_add` is default-enabled only for explicit "remember this" requests, rejects secret-like text, writes through the pending bot-side queue, and records an audit event before the main bot applies it. `bot_memory_remove` and `bot_memory_clear` are not default-enabled.
 
 Use `bot_create_reminder` for one-time delayed reminders such as "in 10 minutes" or "tomorrow at 09:00". Use `bot_create_cron` only for recurring jobs such as daily, weekly, or periodic automation.
+
+## A2A Bot Tools
+
+The `bot_a2a_*` tools are default-enabled, but each call is still bound to the current Discord guild/channel context and must pass the current A2A policy, manager permission, confirmation-token, quota, and runtime-readiness checks.
+
+Use `bot_a2a_peers` before claiming another bot can receive work. `trusted=true` only describes trust display state; direct same-thread collaboration also requires `deliveryReadiness.coPresentReady` on the relevant runtime policy.
+
+Use `bot_a2a_policy_plan` or `bot_a2a_trust_peer` to propose changes. Applying policy requires `bot_a2a_policy_apply` or a confirmed `bot_a2a_trust_peer` call with a fresh confirmation token and requester Manage Channels permission.
+
+Use `bot_a2a_delegate` only for approved outbound work. A successful call means the task was durably queued, not accepted or completed. Use `bot_a2a_task_status` with `local_id`, `task_id`, or `message_id` for authoritative state before reporting success.
+
+For continuations, use `bot_a2a_input_reply` only when the task is in `TASK_STATE_INPUT_REQUIRED`, and `bot_a2a_auth_reply` only when the task is in `TASK_STATE_AUTH_REQUIRED`. Do not inspect or edit `data/a2a/*.sqlite` directly for normal operation.
+
 
 ## Time Context Tools
 
