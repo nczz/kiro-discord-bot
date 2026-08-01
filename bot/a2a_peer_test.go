@@ -31,6 +31,9 @@ func TestBotA2APeerDoctorSurface(t *testing.T) {
 	if idx := strings.Index(a2aSection, "\n**MCP"); idx >= 0 {
 		a2aSection = a2aSection[:idx]
 	}
+	if idx := strings.Index(a2aSection, "\nNo MCP"); idx >= 0 {
+		a2aSection = a2aSection[:idx]
+	}
 	for _, want := range []string{"**A2A Peers**", "eve-local", "trusted", "compatible", "backend/code-review"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("bot doctor missing %q:\n%s", want, got)
