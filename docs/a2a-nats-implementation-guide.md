@@ -181,6 +181,14 @@ Every publisher MUST declare a stable `Nats-Msg-Id` before implementation:
 | `bot_a2a_input_reply` | requester or manager | `TASK_STATE_INPUT_REQUIRED`, nonce fresh, safe egress labels | input control published |
 | `bot_a2a_auth_reply` | requester or manager | `TASK_STATE_AUTH_REQUIRED`, scoped confirmation, no raw long-lived credential | auth control published |
 
+
+Default setup semantics:
+
+- Stored policy defaults stay safe proxy/delegator.
+- Trust UX may default to `auto`: verified same Discord guild/channel runtime peers can use `transparent` + `co_present`; unknown/cross-location peers stay safe. Direct policy setup without explicit `co_present` stays safe because it does not prove peer Discord location.
+- `bot_a2a_delegate` with no `setup_mode` uses stored policy; explicit `auto`, `safe`, or `co_present` is required to override delivery per request.
+- Policy/status UX must describe local co-present gates only; remote executor admission and Discord permissions remain separately validated.
+
 Slash fallback commands MUST call the same internal service methods; no separate policy path is allowed.
 
 

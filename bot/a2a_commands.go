@@ -254,7 +254,7 @@ func applyA2ASubcommandDefaults(payload *a2aSlashPayload) {
 		mode := normalizeA2ASetupMode(payload.Request.SetupMode)
 		payload.Request.SetupMode = mode
 		switch {
-		case mode == "co_present" || (mode == "auto" && payload.Request.TargetChannelRef == payload.Request.ChannelRef):
+		case mode == "co_present":
 			payload.Request.TranscriptMode = "co_present"
 			payload.Request.ResultVisibility = "transparent"
 			share := true

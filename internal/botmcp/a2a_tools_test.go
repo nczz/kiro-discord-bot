@@ -294,7 +294,7 @@ func TestA2AToolsPolicySetupDefaultsRuntimeTarget(t *testing.T) {
 	}
 }
 
-func TestA2AToolsPolicySetupDefaultsWithoutModeUseSameRuntimeCoPresent(t *testing.T) {
+func TestA2AToolsPolicySetupDefaultsWithoutModeStaysSafeWithoutPeerVerification(t *testing.T) {
 	ctx := context.Background()
 	svc, err := NewA2AService(A2AServiceConfig{
 		DataDir:            t.TempDir(),
@@ -318,8 +318,8 @@ func TestA2AToolsPolicySetupDefaultsWithoutModeUseSameRuntimeCoPresent(t *testin
 		t.Fatalf("PolicyPlan = %+v, want planned policy", planned)
 	}
 	policy := planned.Policy
-	if policy.ResultVisibility != "transparent" || policy.DiscordTranscriptMode != "co_present" || !policy.ShareDiscordContext {
-		t.Fatalf("implicit same-runtime setup defaults = visibility %q transcript %q share %v, want transparent/co_present/true", policy.ResultVisibility, policy.DiscordTranscriptMode, policy.ShareDiscordContext)
+	if policy.ResultVisibility != "proxy" || policy.DiscordTranscriptMode != "delegator" || policy.ShareDiscordContext {
+		t.Fatalf("implicit unverified setup defaults = visibility %q transcript %q share %v, want proxy/delegator/false", policy.ResultVisibility, policy.DiscordTranscriptMode, policy.ShareDiscordContext)
 	}
 }
 
@@ -983,6 +983,36 @@ func TestA2AToolsTrustPeerRejectsOutboundOnlyCoPresent(t *testing.T) {
 	}
 	if resp.OK || resp.ErrorCode != a2a.ErrorPolicyDenied {
 		t.Fatalf("TrustPeer outbound co_present = %+v, want policy_denied", resp)
+	}
+}
+
+func TestA2AToolsTrustPeerRejectsOutboundOnlyAutoCoPresent(t *testing.T) {
+	ctx := context.Background()
+	svc, err := NewA2AService(A2AServiceConfig{
+		DataDir:            t.TempDir(),
+		Config:             a2a.Config{AgentID: "m5bot-local", RuntimeIDMode: a2a.RuntimeIDModeRuntime},
+		BoundGuildID:       "1495737767827865620",
+		BoundChannelID:     "1495737768905670719",
+		ConfirmationSecret: "test-secret",
+		ConnectNATS:        false,
+	})
+	if err != nil {
+		t.Fatalf("NewA2AService: %v", err)
+	}
+	defer svc.Close()
+
+	peerCard := a2a.AgentCard{Name: "d80-chunbot-ch-2cbaf623", Description: "runtime", Version: "1.0.0", SupportedInterfaces: []a2a.A2AInterface{{URL: "nats://nats.example.internal:4222", ProtocolBinding: a2a.ProtocolBindingNATS, ProtocolVersion: a2a.ProtocolVersion}}, Skills: []a2a.AgentSkill{{ID: "ch-2cbaf623/task", Name: "Task", Description: "task"}}}
+	peerExt := a2a.ExtendedAgentCard{ChannelRef: "ch-2cbaf623", DiscordGuildID: "1495737767827865620", DiscordChannelID: "1495737768905670719"}
+	if _, err := svc.peers.UpsertExtendedCard(ctx, "d80-chunbot-ch-2cbaf623", peerCard, peerExt, false, "peer-instance", "online", time.Now().Add(time.Hour)); err != nil {
+		t.Fatalf("Upsert peer: %v", err)
+	}
+
+	resp, err := svc.TrustPeer(ctx, A2AToolRequest{GuildID: "1495737767827865620", ChannelID: "1495737768905670719", RequestedBy: "manager", RequestedByID: "manager-1", ManageChannels: true, TargetAgent: "d80-chunbot-ch-2cbaf623", TrustRelationship: "outbound", SetupMode: "auto", TargetChannelRef: "ch-2cbaf623"})
+	if err != nil {
+		t.Fatalf("TrustPeer outbound auto err: %v", err)
+	}
+	if resp.OK || resp.ErrorCode != a2a.ErrorPolicyDenied {
+		t.Fatalf("TrustPeer outbound auto same-Discord = %+v, want policy_denied", resp)
 	}
 }
 

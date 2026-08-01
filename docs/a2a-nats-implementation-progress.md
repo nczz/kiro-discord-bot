@@ -836,7 +836,7 @@ Append one subsection per completed phase.
 
 ### R28 same-guild co-present target allowlist
 
-- Status: implemented, not deployed.
+- Status: deployed locally and to d80 as part of the later co-present defaults deployment.
 - Trigger: natural M5Bot→ChunBot same-channel delegation exposed delivery-mode mismatch risk, and operator requested a simpler runtime communication default while retaining protocol delivery modes.
 - Decision: keep `transparent + co_present` as the preferred runtime collaboration path, but widen it beyond same-channel only with an explicit same-guild Discord target allowlist. `co_present_target_channels` grants executor policy permission to use shared Discord context whose target channel/thread differs from the executor runtime channel; absent an entry, channel-bound co-present remains unchanged.
 - Changed files: `a2a/policy_store.go`, `channel/a2a.go`, `internal/botmcp/a2a_tools.go`, `internal/botmcp/a2a_tool_register.go`, `bot/a2a_commands.go`, locale files, regression tests, and A2A docs.
@@ -845,10 +845,30 @@ Append one subsection per completed phase.
   - Full regression passed: `env -u NATS_URL -u NATS_CREDS_FILE -u NATS_TOKEN -u NATS_TLS_CA_FILE -u A2A_AGENT_ID -u A2A_RUNTIME_ID_MODE -u A2A_AGENT_NAME -u A2A_AGENT_DESCRIPTION -u A2A_REQUIRE_CONFIRMATION_FOR_REMOTE go test ./...`.
   - LSP workspace diagnostics reported no issues.
   - Strict reviewer initially found two security blockers: spoofable cross-guild allowlist target and remote tool policy derived from delivery target. Fixed by keeping `admission.Request.ChannelID` policy-bound, verifying cross-channel egress target guild through channel metadata, and preserving the validated Discord egress target separately; reviewer recheck reported no remaining blockers.
-- Runtime settings touched: no env or live policy changes. `policy.sqlite` gets additive column `co_present_target_channels_json` with default `[]` on next store open.
-- Deployment hosts touched: none.
+- Runtime settings touched: no env or live policy changes for R28 itself. `policy.sqlite` gets additive column `co_present_target_channels_json` with default `[]` on next store open.
+- Deployment hosts touched: local M5 bot binary/service and remote d80 bot binary/service by the later fd43466 deployment package.
 - Rollback boundary: revert this section's code/doc changes and restart bots if deployed; existing same-channel `transparent + co_present` behavior remains from R20-R22.
-- Next phase: if operator approves deployment, rebuild/restart local and d80 bot binaries, then issue a real delegated A2A task that targets an allowlisted same-guild Discord thread/channel and confirm executor-owned reply delivery plus `/a2a status` behavior.
+- Next phase: validate natural same-guild target allowlist only when an operator actually configures `co_present_target_channels`; ordinary same-channel co-present remains covered by R20-R22/R29.
+
+
+### R29 co-present setup defaults realignment
+
+- Status: deployed locally and to d80.
+- Trigger: natural same-channel M5/ChunBot testing still left confusing default seams: slash `/a2a trust` defaulted to safe/proxy, trust auto did not use verified peer Discord metadata, policy display implied full co-present readiness, and resetting policy required confidence that a fresh trust flow would recreate the transparent/co_present contract without manual DB edits.
+- Decision: keep stored policy defaults safe, but make trust defaults operator-friendly without weakening direct policy setup. `/a2a trust` now sends `setup_mode=auto`; `bot_a2a_trust_peer` auto chooses `transparent` + `co_present` only when the peer extended card verifies the same Discord guild/channel or an explicit same local runtime ref is provided, otherwise it stays safe. Outbound-only trust cannot auto-escalate to co_present because shared Discord context is an inbound grant. `bot_a2a_policy_plan`/`apply` without explicit `setup_mode=co_present` stays safe because target-agent setup cannot verify peer Discord location. `bot_a2a_delegate` with omitted setup mode continues to use stored policy, and explicit auto/safe/co_present is required for request-level override. Policy UX now reports local co-present policy gates, not remote readiness.
+- Changed files: `bot/a2a_commands.go`, `bot/handler_test.go`, `internal/botmcp/a2a_tool_register.go`, `internal/botmcp/a2a_tools.go`, `internal/botmcp/a2a_tools_test.go`, `locale/lang/en.json`, `locale/lang/zh-TW.json`, `docs/a2a-nats-integration-spec.md`, `docs/a2a-nats-implementation-guide.md`, and this progress ledger.
+- Validation:
+  - Focused co-present/default matrix passed: `go test ./internal/botmcp ./bot -run 'TestA2AToolsPolicySetupDefaultsRuntimeTarget|TestA2AToolsPolicySetupDefaultsWithoutModeStaysSafeWithoutPeerVerification|TestA2AToolsTrustPeerDefaultsGeneralTaskBidirectional|TestA2AToolsTrustPeerDefaultUnknownLocationStaysSafe|TestA2AToolsTrustPeerRejectsOutboundOnlyCoPresent|TestA2AToolsTrustPeerRejectsOutboundOnlyAutoCoPresent|TestA2AToolsDelegateWithoutModeUsesPolicyDelivery|TestA2ASetupSlashDefaultsHumanFlow|TestA2ATrustSlashDefaultsGeneralTaskAutoBidirectional|TestA2ASetupSlashAutoCrossRuntimeUsesProxy|TestA2APolicyFormatterIncludesPolicyMutationFields'`.
+  - Affected suites passed: `env -u NATS_URL -u NATS_CREDS_FILE -u NATS_TOKEN -u NATS_TLS_CA_FILE -u A2A_AGENT_ID -u A2A_RUNTIME_ID_MODE -u A2A_AGENT_NAME -u A2A_AGENT_DESCRIPTION -u A2A_REQUIRE_CONFIRMATION_FOR_REMOTE go test ./a2a ./channel ./internal/botmcp ./bot ./locale`.
+  - Full regression passed: `env -u NATS_URL -u NATS_CREDS_FILE -u NATS_TOKEN -u NATS_TLS_CA_FILE -u A2A_AGENT_ID -u A2A_RUNTIME_ID_MODE -u A2A_AGENT_NAME -u A2A_AGENT_DESCRIPTION -u A2A_REQUIRE_CONFIRMATION_FOR_REMOTE go test ./...`.
+  - LSP workspace diagnostics reported no issues.
+  - Built `/tmp/kiro-discord-bot-darwin-a2a-copresent` with SHA-256 `fb9449bfcf1e288dcbcfc44071b1f813e60a7bf5a823679b117e3a6443120e7d` and `/tmp/kiro-discord-bot-linux-amd64-a2a-copresent` with SHA-256 `139869bc3f7b3495455c2c821d67ced026594dc065603ed805517ac946bb94c0`.
+  - Local M5 bot restarted and logged `NATS node enabled`, `transport consumers started`, and `Bot running as M5Bot#8313`.
+  - Remote d80 bot service is active and logged `NATS node enabled`, `transport consumers started`, and `Bot running as ChunBot#4533`.
+- Runtime settings touched: active local and d80 A2A policies were temporarily synchronized to `result_visibility=transparent`, `discord_transcript_mode=co_present`, `share_discord_context=1`, and reciprocal `co_present_from` runtime allowlists for immediate smoke readiness. Operator then requested policy reset for a fresh test.
+- Deployment hosts touched: local M5 bot binary/service and remote d80 bot binary/service.
+- Rollback boundary: restore `/Users/chun/Projects/kiro-discord-bot-local/bin/kiro-discord-bot.pre-a2a-copresent-20260801193450` locally and `/opt/kiro-discord-bot/kiro-discord-bot.pre-a2a-copresent-20260801193500` on d80, restart both services, and recreate the previous safe/proxy policy rows from `/Users/chun/Projects/kiro-discord-bot-local/data/a2a/policy.sqlite.pre-a2a-copresent-sync-20260801193521` and `/home/chun/kiro-discord-bot/data/a2a/policy.sqlite.pre-a2a-copresent-sync-20260801193523` if needed.
+- Next phase: after policy reset, rerun the natural Discord trust/setup flow from empty policy and confirm it recreates the intended transparent/co_present same-channel contract through public tools rather than direct DB mutation.
 
 ## Master goal prompt
 

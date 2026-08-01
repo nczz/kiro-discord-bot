@@ -1409,6 +1409,14 @@ Users may want visible bot-to-bot collaboration when both bot accounts are prese
 
 Default is `delegator`。
 
+High-level setup defaults:
+
+- Stored channel policy defaults remain safe: `result_visibility='proxy'`, `discord_transcript_mode='delegator'`, and `share_discord_context=false`.
+- `bot_a2a_policy_plan`/`bot_a2a_policy_apply` without an explicit `setup_mode` stay safe proxy/delegator; policy setup cannot infer shared Discord eligibility from `target_agent` alone. Operators must explicitly choose `setup_mode='co_present'` for direct policy mutation, or use `bot_a2a_trust_peer` auto so peer-card Discord metadata is verified first.
+- `bot_a2a_trust_peer` defaults to `setup_mode='auto'`: a peer card verified in the same Discord guild/channel may plan `transparent` + `co_present`; unknown or cross-location peers must stay safe proxy/delegator unless the operator explicitly chooses a broader mode.
+- `bot_a2a_delegate` with omitted `setup_mode` must honor the stored channel policy. Only explicit `setup_mode='auto'`, `safe`, or `co_present` may override delivery for that request.
+
+
 Co-present mode requirements：
 
 1. Delegator channel policy sets `discord_transcript_mode='co_present'` and `share_discord_context=true`。

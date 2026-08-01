@@ -1062,7 +1062,7 @@ func applyA2APolicyRequestDefaults(req A2AToolRequest, policy a2a.ChannelA2APoli
 	req.DelegateSkills = appendUnique(req.DelegateSkills, req.SkillID)
 	mode := normalizeSetupMode(req.SetupMode)
 	req.SetupMode = mode
-	if mode == "co_present" || (mode == "auto" && req.targetRuntimeRef(policy.ChannelRef) == policy.ChannelRef) {
+	if mode == "co_present" {
 		req.TranscriptMode = "co_present"
 		req.ResultVisibility = "transparent"
 		share := true
@@ -1109,9 +1109,6 @@ func (s *A2AService) applyTrustPeerDiff(ctx context.Context, policy a2a.ChannelA
 	if strings.TrimSpace(req.SetupMode) != "" && mode == "" {
 		return a2a.ChannelA2APolicy{}, fmt.Errorf("%w: setup_mode must be auto, safe, or co_present", errorCode(a2a.ErrorPolicyDenied))
 	}
-	if relationship == "outbound" && mode == "co_present" {
-		return a2a.ChannelA2APolicy{}, fmt.Errorf("%w: co_present trust must be inbound or bidirectional because shared Discord context is an inbound admission grant", errorCode(a2a.ErrorPolicyDenied))
-	}
 	targetChannelRef := ""
 	if relationship == "outbound" || relationship == "bidirectional" {
 		var err error
@@ -1119,6 +1116,12 @@ func (s *A2AService) applyTrustPeerDiff(ctx context.Context, policy a2a.ChannelA
 		if err != nil {
 			return a2a.ChannelA2APolicy{}, err
 		}
+	}
+	if mode == "auto" {
+		mode = s.autoTrustPeerSetupMode(ctx, req, peer, targetChannelRef)
+	}
+	if relationship == "outbound" && mode == "co_present" {
+		return a2a.ChannelA2APolicy{}, fmt.Errorf("%w: co_present trust must be inbound or bidirectional because shared Discord context is an inbound admission grant", errorCode(a2a.ErrorPolicyDenied))
 	}
 	enable := true
 	policy = s.applyPolicyDiff(policy, A2AToolRequest{
@@ -1145,9 +1148,6 @@ func (s *A2AService) applyTrustPeerDiff(ctx context.Context, policy a2a.ChannelA
 			ChannelRef:     targetChannelRef,
 			SkillID:        "task",
 		})
-	}
-	if mode == "auto" {
-		mode = s.autoTrustPeerSetupMode(ctx, req, peer, targetChannelRef)
 	}
 	if mode == "" || mode == "safe" {
 		policy.DiscordTranscriptMode = "delegator"
