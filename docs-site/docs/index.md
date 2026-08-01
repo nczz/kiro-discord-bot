@@ -4,7 +4,7 @@ A trainable ACP agent control plane that lives in Discord.
 
 Bind Discord channels to real projects, choose an ACP engine, teach persistent rules, and safely extend the agent with MCP tools.
 
-[Get Started](guide/getting-started.html) · [Agent Engines](guide/agent-engines.html) · [Command Reference](guide/commands.html) · [繁體中文](zh-TW/)
+[Get Started](guide/getting-started.html) · [Agent Engines](guide/agent-engines.html) · [Command Reference](guide/commands.html) · [Enable A2A with NATS](guide/a2a-nats-setup.html) · [繁體中文](zh-TW/)
 
 ## Highlights
 

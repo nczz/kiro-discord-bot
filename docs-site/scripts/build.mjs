@@ -149,6 +149,7 @@ function renderNav(isZh, pagePath) {
         ['指南', 'zh-TW/guide/getting-started.html'],
         ['Steering', 'zh-TW/guide/steering.html'],
         ['MCP', 'zh-TW/guide/mcp.html'],
+        ['A2A', 'zh-TW/guide/a2a-nats-setup.html'],
         ['English', 'index.html'],
         ['GitHub', 'https://github.com/nczz/kiro-discord-bot'],
       ]
@@ -156,6 +157,7 @@ function renderNav(isZh, pagePath) {
         ['Guide', 'guide/getting-started.html'],
         ['Steering', 'guide/steering.html'],
         ['MCP', 'guide/mcp.html'],
+        ['A2A', 'guide/a2a-nats-setup.html'],
         ['zh-TW', 'zh-TW/index.html'],
         ['GitHub', 'https://github.com/nczz/kiro-discord-bot'],
       ]

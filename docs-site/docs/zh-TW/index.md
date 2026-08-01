@@ -4,7 +4,7 @@
 
 把 Discord 頻道綁定到真實專案，選擇 ACP engine，持續累積規則與脈絡，並用 MCP 安全擴充能力。
 
-[快速開始](guide/getting-started.html) · [Agent Engines](guide/agent-engines.html) · [指令參考](guide/commands.html) · [English](/)
+[快速開始](guide/getting-started.html) · [Agent Engines](guide/agent-engines.html) · [指令參考](guide/commands.html) · [使用 NATS 啟用 A2A](guide/a2a-nats-setup.html) · [English](/)
 
 ## 重點
 
