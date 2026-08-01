@@ -423,8 +423,8 @@ func (p ChannelA2APolicy) ValidateInboundRuntime(fromRuntime AgentID, skillID st
 	if !skillSlugPattern.MatchString(slug) {
 		return fmt.Errorf("%w: skill %q is invalid", errorCodeError(ErrorUnknownSkill), skillID)
 	}
-	if !stringListAllowsValue(p.AcceptSkills, slug) {
-		return fmt.Errorf("%w: skill %s is not accepted", errorCodeError(ErrorSkillNotAllowed), slug)
+	if !acceptSkillAllowsTaskDefault(p.AcceptSkills, slug) {
+		return fmt.Errorf("%w: skill %s is not accepted by default_task policy", errorCodeError(ErrorSkillNotAllowed), slug)
 	}
 	return nil
 }
@@ -450,6 +450,14 @@ func stringListAllowsValue(list []string, value string) bool {
 		}
 	}
 	return false
+}
+
+func acceptSkillAllowsTaskDefault(list []string, slug string) bool {
+	slug = strings.TrimSpace(slug)
+	if stringListAllowsValue(list, slug) {
+		return true
+	}
+	return slug == "task" && len(list) == 0
 }
 
 type errorCodeError ErrorCode

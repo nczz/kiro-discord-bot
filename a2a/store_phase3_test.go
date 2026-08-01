@@ -417,4 +417,19 @@ func phase3TaskRow(message string) TaskRow {
 	return TaskRow{MessageID: MessageID(message), FromAgent: "adam-n200", ToAgent: "eve-local", ChannelID: "channel", GuildID: "guild", ChannelRef: "backend", SkillID: "review"}
 }
 
+func TestValidateInboundRuntimeTrustedSenderDefaultsTaskSkill(t *testing.T) {
+	policy := ChannelA2APolicy{
+		Enabled:            true,
+		AcceptFromRuntimes: []string{"peer-runtime"},
+	}
+	for _, skillID := range []string{"task", "general/task", "ch-2cbaf623/task"} {
+		if err := policy.ValidateInboundRuntime("peer-runtime", skillID); err != nil {
+			t.Fatalf("ValidateInboundRuntime(%q): %v", skillID, err)
+		}
+	}
+	if err := policy.ValidateInboundRuntime("peer-runtime", "danger/admin"); err == nil {
+		t.Fatalf("ValidateInboundRuntime accepted non-task skill with empty accept_skills")
+	}
+}
+
 func sha256ForTest(b []byte) string { sum := sha256.Sum256(b); return fmt.Sprintf("%x", sum[:]) }

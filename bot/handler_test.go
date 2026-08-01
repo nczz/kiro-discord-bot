@@ -1570,10 +1570,10 @@ func TestSlashCommandsIncludeAgentAndUsage(t *testing.T) {
 		}
 		if cmd.Name == "a2a" {
 			foundA2A = true
-			if len(cmd.Options) != 21 {
-				t.Fatalf("/a2a should expose 21 subcommands, got %+v", cmd.Options)
+			if len(cmd.Options) != 22 {
+				t.Fatalf("/a2a should expose 22 subcommands, got %+v", cmd.Options)
 			}
-			if cmd.Options[0].Name != "peers" || cmd.Options[1].Name != "setup" || cmd.Options[2].Name != "ask" || cmd.Options[4].Name != "delegate" {
+			if cmd.Options[0].Name != "peers" || cmd.Options[1].Name != "setup" || cmd.Options[2].Name != "trust" || cmd.Options[3].Name != "ask" || cmd.Options[5].Name != "delegate" {
 				t.Fatalf("/a2a subcommands = %+v", cmd.Options)
 			}
 			continue
@@ -1661,7 +1661,7 @@ func TestA2ASetupSlashDefaultsHumanFlow(t *testing.T) {
 			t.Fatalf("setup peer defaults = %+v, want %s", payload.Request, want)
 		}
 	}
-	if payload.Request.SkillID != "general/task" || len(payload.Request.AcceptSkills) != 1 || payload.Request.AcceptSkills[0] != "task" || len(payload.Request.ExposeSkills) != 1 || payload.Request.ExposeSkills[0] != "task" || len(payload.Request.DelegateSkills) != 1 || payload.Request.DelegateSkills[0] != "general/task" {
+	if payload.Request.SkillID != "task" || len(payload.Request.AcceptSkills) != 1 || payload.Request.AcceptSkills[0] != "task" || len(payload.Request.ExposeSkills) != 1 || payload.Request.ExposeSkills[0] != "task" || len(payload.Request.DelegateSkills) != 1 || payload.Request.DelegateSkills[0] != "task" {
 		t.Fatalf("setup skill defaults = %+v", payload.Request)
 	}
 	if payload.Request.TranscriptMode != "co_present" || payload.Request.ShareDiscordContext == nil || !*payload.Request.ShareDiscordContext {
@@ -1669,6 +1669,25 @@ func TestA2ASetupSlashDefaultsHumanFlow(t *testing.T) {
 	}
 	if payload.Request.TargetChannelRef != payload.Request.ChannelRef {
 		t.Fatalf("setup target runtime default = %+v", payload.Request)
+	}
+}
+
+func TestA2ATrustSlashDefaultsGeneralTaskSafeBidirectional(t *testing.T) {
+	raw := a2aArgsFromSlashOptions([]*discordgo.ApplicationCommandInteractionDataOption{{
+		Name: "trust",
+		Options: []*discordgo.ApplicationCommandInteractionDataOption{
+			{Name: "peer_agent", Type: discordgo.ApplicationCommandOptionString, Value: "d80-chunbot-ch-2cbaf623"},
+		},
+	}}, "guild-1", "channel-1", "user-1", "alice", true)
+	var payload a2aSlashPayload
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Subcommand != "trust" || payload.Request.TargetAgent != "d80-chunbot-ch-2cbaf623" {
+		t.Fatalf("trust payload target = %+v", payload)
+	}
+	if payload.Request.SkillID != "task" || payload.Request.TrustRelationship != "bidirectional" || payload.Request.SetupMode != "safe" {
+		t.Fatalf("trust defaults = %+v", payload.Request)
 	}
 }
 
@@ -1742,8 +1761,8 @@ func TestA2ATranscriptModeSafeClearsContextSharing(t *testing.T) {
 
 func TestA2APolicyFormatterIncludesPolicyMutationFields(t *testing.T) {
 	L.Load("en")
-	got := formatA2APolicy("Preview", a2a.ChannelA2APolicy{Enabled: true, ChannelRef: "d80-test", ResultVisibility: "transparent", DiscordTranscriptMode: "co_present", ShareDiscordContext: true, AcceptFrom: []string{"d80-chunbot"}, AcceptSkills: []string{"task"}, ExposeSkills: []a2a.SkillPolicy{{ID: "task"}}, DelegateTo: []string{"d80-chunbot"}, DelegateSkills: []string{"general/task"}, CoPresentFromRuntimes: []string{"d80-chunbot-main"}, CoPresentTargetChannels: []string{"1495737768905670719"}, MaxConcurrent: 3})
-	for _, want := range []string{"Result visibility", "Local capabilities exposed", "`task`", "Max concurrent inbound tasks: 3", "Same-thread co-present readiness: ready", "Co-present runtime allowlist: `d80-chunbot-main`", "Same-server co-present target channels: `1495737768905670719`"} {
+	got := formatA2APolicy("Preview", a2a.ChannelA2APolicy{Enabled: true, ChannelRef: "d80-test", ResultVisibility: "transparent", DiscordTranscriptMode: "co_present", ShareDiscordContext: true, AcceptFrom: []string{"d80-chunbot"}, AcceptFromRuntimes: []string{"d80-chunbot-main"}, AcceptSkills: []string{"task"}, ExposeSkills: []a2a.SkillPolicy{{ID: "task"}}, DelegateTo: []string{"d80-chunbot"}, DelegateSkills: []string{"task"}, DelegateTargets: []a2a.DelegateTargetPolicy{{RuntimeAgentID: "d80-chunbot-main", SkillID: "task"}}, CoPresentFromRuntimes: []string{"d80-chunbot-main"}, CoPresentTargetChannels: []string{"1495737768905670719"}, MaxConcurrent: 3})
+	for _, want := range []string{"Result visibility", "Trusted general-task runtimes", "`d80-chunbot-main inbound default_task`", "`d80-chunbot-main outbound default_task`", "Local capabilities exposed", "`task`", "Max concurrent inbound tasks: 3", "Same-thread co-present readiness: ready", "Co-present runtime allowlist: `d80-chunbot-main`", "Same-server co-present target channels: `1495737768905670719`"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("formatA2APolicy = %q, missing %q", got, want)
 		}

@@ -134,7 +134,7 @@ func TestDefaultSafeToolNamesExcludeDestructiveTools(t *testing.T) {
 	if !seen[ToolA2ARuntimePreflight] {
 		t.Fatalf("A2A runtime preflight should be default-enabled for read-only cutover checks: %+v", tools)
 	}
-	for _, tool := range []string{ToolA2APeers, ToolA2APolicyGet, ToolA2ATaskStatus, ToolA2APolicyPlan, ToolA2APolicyApply, ToolA2ACancel, ToolA2AInputReply, ToolA2AAuthReply} {
+	for _, tool := range []string{ToolA2APeers, ToolA2APolicyGet, ToolA2ATaskStatus, ToolA2ARuntimePreflight, ToolA2APolicyPlan, ToolA2ATrustPeer, ToolA2APolicyApply, ToolA2ADelegate, ToolA2ACancel, ToolA2AInputReply, ToolA2AAuthReply} {
 		if !seen[tool] {
 			t.Fatalf("A2A MCP tool %s should be default-enabled behind bound-context/policy gates: %+v", tool, tools)
 		}

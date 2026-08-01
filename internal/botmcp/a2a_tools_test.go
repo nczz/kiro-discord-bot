@@ -804,6 +804,95 @@ func TestA2AToolsRuntimePreflightRequiresManagerAndReportsBlockers(t *testing.T)
 	}
 }
 
+func TestA2AToolsTrustPeerDefaultsGeneralTaskBidirectional(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+	svc, err := NewA2AService(A2AServiceConfig{
+		DataDir:            t.TempDir(),
+		Config:             a2a.Config{AgentID: "m5bot-local", RuntimeIDMode: a2a.RuntimeIDModeRuntime},
+		BoundGuildID:       "guild-1",
+		BoundChannelID:     "channel-1",
+		ConfirmationSecret: "test-secret",
+		ConnectNATS:        false,
+		Now:                func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatalf("NewA2AService: %v", err)
+	}
+	defer svc.Close()
+
+	peerCard := a2a.AgentCard{Name: "d80-chunbot-ch-2cbaf623", Description: "runtime", Version: "1.0.0", SupportedInterfaces: []a2a.A2AInterface{{URL: "nats://nats.example.internal:4222", ProtocolBinding: a2a.ProtocolBindingNATS, ProtocolVersion: a2a.ProtocolVersion}}, Skills: []a2a.AgentSkill{{ID: "ch-2cbaf623/task", Name: "Task", Description: "task"}}}
+	if _, err := svc.peers.UpsertCard(ctx, "d80-chunbot-ch-2cbaf623", peerCard, false, time.Now().Add(time.Hour)); err != nil {
+		t.Fatalf("Upsert peer: %v", err)
+	}
+
+	req := A2AToolRequest{GuildID: "guild-1", ChannelID: "channel-1", RequestedBy: "manager", RequestedByID: "manager-1", ManageChannels: true, TargetAgent: "d80-chunbot-ch-2cbaf623"}
+	planned, err := svc.TrustPeer(ctx, req)
+	if err != nil {
+		t.Fatalf("TrustPeer plan: %v", err)
+	}
+	if !planned.OK || !planned.RequiresConfirmation || planned.Policy == nil {
+		t.Fatalf("TrustPeer plan = %+v, want confirmation policy", planned)
+	}
+	policy := planned.Policy
+	if !policy.Enabled || policy.ResultVisibility != "proxy" || policy.DiscordTranscriptMode != "delegator" || policy.ShareDiscordContext {
+		t.Fatalf("planned delivery policy = %+v, want safe/delegator", policy)
+	}
+	if !stringListAllows(policy.AcceptFromRuntimes, "d80-chunbot-ch-2cbaf623") || !skillListAllows(policy.AcceptSkills, "ch-2cbaf623/task") {
+		t.Fatalf("planned inbound policy = %+v, want runtime default_task", policy)
+	}
+	if len(policy.DelegateTargets) != 1 || policy.DelegateTargets[0].ChannelRef != "ch-2cbaf623" {
+		t.Fatalf("planned delegate target = %+v, want peer runtime channel_ref", policy.DelegateTargets)
+	}
+	if !policyDelegatesRuntime(*policy, "d80-chunbot-ch-2cbaf623", "ch-2cbaf623/task", policy.ChannelRef) {
+		t.Fatalf("planned outbound policy = %+v, want runtime default_task delegation", policy)
+	}
+	if err := policy.ValidateInboundRuntime("d80-chunbot-ch-2cbaf623", "ch-2cbaf623/task"); err != nil {
+		t.Fatalf("planned policy inbound validation: %v", err)
+	}
+
+	req.ConfirmationToken = planned.ConfirmationToken
+	req.ChangeID = planned.ChangeID
+	applied, err := svc.TrustPeer(ctx, req)
+	if err != nil {
+		t.Fatalf("TrustPeer apply: %v", err)
+	}
+	if !applied.OK || applied.Policy == nil {
+		t.Fatalf("TrustPeer apply = %+v, want applied policy", applied)
+	}
+	peer, err := svc.peers.Get(ctx, "d80-chunbot-ch-2cbaf623")
+	if err != nil {
+		t.Fatalf("trusted peer lookup: %v", err)
+	}
+	if !peer.Trusted {
+		t.Fatalf("trusted peer = %+v, want trusted", peer)
+	}
+}
+
+func TestA2AToolsTrustPeerRejectsOutboundOnlyCoPresent(t *testing.T) {
+	ctx := context.Background()
+	svc, err := NewA2AService(A2AServiceConfig{
+		DataDir:            t.TempDir(),
+		Config:             a2a.Config{AgentID: "m5bot-local", RuntimeIDMode: a2a.RuntimeIDModeRuntime},
+		BoundGuildID:       "guild-1",
+		BoundChannelID:     "channel-1",
+		ConfirmationSecret: "test-secret",
+		ConnectNATS:        false,
+	})
+	if err != nil {
+		t.Fatalf("NewA2AService: %v", err)
+	}
+	defer svc.Close()
+
+	resp, err := svc.TrustPeer(ctx, A2AToolRequest{GuildID: "guild-1", ChannelID: "channel-1", RequestedBy: "manager", RequestedByID: "manager-1", ManageChannels: true, TargetAgent: "d80-chunbot-ch-2cbaf623", TrustRelationship: "outbound", SetupMode: "co_present", TargetChannelRef: "ch-2cbaf623"})
+	if err != nil {
+		t.Fatalf("TrustPeer outbound co_present err: %v", err)
+	}
+	if resp.OK || resp.ErrorCode != a2a.ErrorPolicyDenied {
+		t.Fatalf("TrustPeer outbound co_present = %+v, want policy_denied", resp)
+	}
+}
+
 func TestA2AToolsAnnotations(t *testing.T) {
 	readTool := a2aReadTool(ToolA2APeers, "peers")
 	if readTool.Annotations.ReadOnlyHint == nil || !*readTool.Annotations.ReadOnlyHint {

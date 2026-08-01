@@ -31,6 +31,7 @@ const (
 	ToolA2ARuntimePreflight = "bot_a2a_runtime_preflight"
 	ToolA2APolicyPlan       = "bot_a2a_policy_plan"
 	ToolA2APolicyApply      = "bot_a2a_policy_apply"
+	ToolA2ATrustPeer        = "bot_a2a_trust_peer"
 	ToolA2ADelegate         = "bot_a2a_delegate"
 	ToolA2ACancel           = "bot_a2a_cancel"
 	ToolA2AInputReply       = "bot_a2a_input_reply"
@@ -94,6 +95,8 @@ type A2AToolRequest struct {
 	TargetThreadID          string   `json:"target_thread_id,omitempty"`
 	TargetChannelRef        string   `json:"target_channel_ref,omitempty"`
 	SetupMode               string   `json:"setup_mode,omitempty"`
+	TrustRelationship       string   `json:"relationship,omitempty"`
+	Capability              string   `json:"capability,omitempty"`
 	Enable                  *bool    `json:"enable,omitempty"`
 	AcceptFrom              []string `json:"accept_from,omitempty"`
 	AcceptSkills            []string `json:"accept_skills,omitempty"`
@@ -544,6 +547,40 @@ func (s *A2AService) PolicyApply(ctx context.Context, req A2AToolRequest) (A2ATo
 	s.trustDelegatedPeers(ctx, delegatedPeerAgents(planned))
 	_ = s.recordAudit(ctx, a2a.AuditPolicyChangeApplied, req, "applied", "", map[string]any{"change_id": changeID})
 	return A2AToolResponse{OK: true, Message: "A2A policy applied", ChangeID: changeID, Policy: &planned}, nil
+}
+
+func (s *A2AService) TrustPeer(ctx context.Context, req A2AToolRequest) (A2AToolResponse, error) {
+	if err := s.validateContext(req, true); err != nil {
+		return responseError(err), nil
+	}
+	policy, err := s.currentPolicy(ctx, req)
+	if err != nil {
+		return responseError(err), nil
+	}
+	planned, err := s.applyTrustPeerDiff(ctx, policy, req)
+	if err != nil {
+		return responseError(err), nil
+	}
+	changeID := policyChangeID(planned)
+	if strings.TrimSpace(req.ConfirmationToken) == "" {
+		token := s.confirmationToken("policy_apply", changeID, req, planned)
+		exp := s.cfg.Now().UTC().Add(10 * time.Minute)
+		_ = s.recordAudit(ctx, a2a.AuditPolicyChangePlanned, req, "planned", "", map[string]any{"change_id": changeID, "tool": ToolA2ATrustPeer})
+		return A2AToolResponse{OK: true, Message: "A2A trust peer policy change planned", RequiresConfirmation: true, ConfirmationSummary: policySummary(policy, planned), RiskLabels: policyRiskLabels(policy, planned), ExpiresAt: exp.Format(time.RFC3339), ChangeID: changeID, ConfirmationToken: token, Policy: &planned}, nil
+	}
+	if strings.TrimSpace(req.ChangeID) != "" && strings.TrimSpace(req.ChangeID) != changeID {
+		return responseError(fmt.Errorf("%w: change_id does not match policy diff", errorCode(a2a.ErrorPolicyDenied))), nil
+	}
+	if err := s.verifyConfirmation("policy_apply", changeID, req, planned); err != nil {
+		_ = s.recordAudit(ctx, a2a.AuditPolicyChangeDenied, req, "denied", err.Error(), map[string]any{"change_id": changeID, "tool": ToolA2ATrustPeer})
+		return responseError(err), nil
+	}
+	if err := s.policies.Save(ctx, planned, req.RequestedByID); err != nil {
+		return responseError(fmt.Errorf("%w: %v", errorCode(a2a.ErrorStoreError), err)), nil
+	}
+	s.trustDelegatedPeers(ctx, delegatedPeerAgents(planned))
+	_ = s.recordAudit(ctx, a2a.AuditPolicyChangeApplied, req, "applied", "", map[string]any{"change_id": changeID, "tool": ToolA2ATrustPeer})
+	return A2AToolResponse{OK: true, Message: "A2A trust peer policy applied", ChangeID: changeID, Policy: &planned}, nil
 }
 
 func (s *A2AService) Delegate(ctx context.Context, req A2AToolRequest) (A2AToolResponse, error) {
@@ -1039,6 +1076,119 @@ func applyA2APolicyRequestDefaults(req A2AToolRequest, policy a2a.ChannelA2APoli
 	return req
 }
 
+func (s *A2AService) applyTrustPeerDiff(ctx context.Context, policy a2a.ChannelA2APolicy, req A2AToolRequest) (a2a.ChannelA2APolicy, error) {
+	peer := strings.TrimSpace(req.TargetAgent)
+	if peer == "" && len(req.DelegateTo) > 0 {
+		peer = strings.TrimSpace(req.DelegateTo[0])
+	}
+	if peer == "" && len(req.AcceptFrom) > 0 {
+		peer = strings.TrimSpace(req.AcceptFrom[0])
+	}
+	if err := a2a.ValidateAgentID(a2a.AgentID(peer)); err != nil {
+		return a2a.ChannelA2APolicy{}, fmt.Errorf("%w: peer_agent is required and must be a valid agent id: %v", errorCode(a2a.ErrorPolicyDenied), err)
+	}
+	capability := strings.ToLower(strings.TrimSpace(req.Capability))
+	if capability == "" {
+		capability = "general_task"
+	}
+	if capability != "general_task" && capability != "default_task" && capability != "task" {
+		return a2a.ChannelA2APolicy{}, fmt.Errorf("%w: bot_a2a_trust_peer currently supports capability=general_task only; use bot_a2a_policy_plan for strict skill ACLs", errorCode(a2a.ErrorPolicyDenied))
+	}
+	skill := strings.TrimSpace(req.SkillID)
+	if skill == "" {
+		skill = "task"
+	}
+	if a2a.SkillSlug(skill) != "task" {
+		return a2a.ChannelA2APolicy{}, fmt.Errorf("%w: bot_a2a_trust_peer only grants default_task capability; use bot_a2a_policy_plan for skill %q", errorCode(a2a.ErrorPolicyDenied), skill)
+	}
+	relationship, err := normalizeTrustRelationship(req.TrustRelationship)
+	if err != nil {
+		return a2a.ChannelA2APolicy{}, err
+	}
+	mode := normalizeSetupMode(req.SetupMode)
+	if strings.TrimSpace(req.SetupMode) != "" && mode == "" {
+		return a2a.ChannelA2APolicy{}, fmt.Errorf("%w: setup_mode must be auto, safe, or co_present", errorCode(a2a.ErrorPolicyDenied))
+	}
+	if relationship == "outbound" && mode == "co_present" {
+		return a2a.ChannelA2APolicy{}, fmt.Errorf("%w: co_present trust must be inbound or bidirectional because shared Discord context is an inbound admission grant", errorCode(a2a.ErrorPolicyDenied))
+	}
+	targetChannelRef := ""
+	if relationship == "outbound" || relationship == "bidirectional" {
+		var err error
+		targetChannelRef, err = s.trustPeerTargetChannelRef(ctx, req, peer, skill)
+		if err != nil {
+			return a2a.ChannelA2APolicy{}, err
+		}
+	}
+	enable := true
+	policy = s.applyPolicyDiff(policy, A2AToolRequest{
+		GuildID:        req.GuildID,
+		ChannelID:      req.ChannelID,
+		RequestedBy:    req.RequestedBy,
+		RequestedByID:  req.RequestedByID,
+		ManageChannels: req.ManageChannels,
+		ChannelRef:     req.ChannelRef,
+		Enable:         &enable,
+		SetupMode:      req.SetupMode,
+	})
+	if relationship == "inbound" || relationship == "bidirectional" {
+		policy.AcceptFrom = appendUnique(policy.AcceptFrom, peer)
+		policy.AcceptFromRuntimes = appendUnique(policy.AcceptFromRuntimes, peer)
+		policy.AcceptSkills = appendUnique(policy.AcceptSkills, "task")
+		policy.ExposeSkills = upsertExposeSkill(policy.ExposeSkills, "task")
+	}
+	if relationship == "outbound" || relationship == "bidirectional" {
+		policy.DelegateTo = appendUnique(policy.DelegateTo, peer)
+		policy.DelegateSkills = appendUnique(policy.DelegateSkills, "task")
+		policy.DelegateTargets = upsertDelegateTarget(policy.DelegateTargets, a2a.DelegateTargetPolicy{
+			RuntimeAgentID: peer,
+			ChannelRef:     targetChannelRef,
+			SkillID:        "task",
+		})
+	}
+	if mode == "" || mode == "auto" || mode == "safe" {
+		policy.DiscordTranscriptMode = "delegator"
+		policy.ResultVisibility = "proxy"
+		policy.ShareDiscordContext = false
+	} else if mode == "co_present" {
+		policy.DiscordTranscriptMode = "co_present"
+		policy.ResultVisibility = "transparent"
+		policy.ShareDiscordContext = true
+		policy.CoPresentFrom = appendUnique(policy.CoPresentFrom, peer)
+		policy.CoPresentFromRuntimes = appendUnique(policy.CoPresentFromRuntimes, peer)
+	}
+	return policy, nil
+}
+
+func (s *A2AService) trustPeerTargetChannelRef(ctx context.Context, req A2AToolRequest, peer string, skill string) (string, error) {
+	if ref := req.targetRuntimeRef(""); ref != "" {
+		return ref, nil
+	}
+	row, err := s.peers.Get(ctx, a2a.AgentID(peer))
+	if err == nil {
+		if ref := strings.TrimSpace(row.ExtendedCard.ChannelRef); ref != "" {
+			return ref, nil
+		}
+		if ref := skillChannelRef(canonicalPeerSkill(row, skill, "")); ref != "" {
+			return ref, nil
+		}
+	}
+	return "", fmt.Errorf("%w: target_channel_ref is required when trusting outbound peer %s before its runtime channel_ref can be inferred from discovery", errorCode(a2a.ErrorPolicyDenied), peer)
+}
+
+func normalizeTrustRelationship(raw string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "both", "bidirectional":
+		return "bidirectional", nil
+	case "inbound", "accept", "receive":
+		return "inbound", nil
+	case "outbound", "delegate", "send":
+		return "outbound", nil
+	default:
+		return "", fmt.Errorf("%w: relationship must be inbound, outbound, or bidirectional", errorCode(a2a.ErrorPolicyDenied))
+	}
+}
+
 func normalizeSetupMode(mode string) string {
 	switch strings.TrimSpace(mode) {
 	case "", "auto":
@@ -1191,7 +1341,20 @@ func policyDelegatesRuntime(policy a2a.ChannelA2APolicy, agent, skill, targetCha
 			return true
 		}
 	}
-	return strings.TrimSpace(targetChannelRef) == strings.TrimSpace(policy.ChannelRef) && stringListAllows(policy.DelegateTo, agent) && skillListAllows(policy.DelegateSkills, skill)
+	return legacyDelegateAllowsTaskDefault(policy, agent, skill, targetChannelRef)
+}
+
+func legacyDelegateAllowsTaskDefault(policy a2a.ChannelA2APolicy, agent, skill, targetChannelRef string) bool {
+	if strings.TrimSpace(targetChannelRef) != strings.TrimSpace(policy.ChannelRef) {
+		return false
+	}
+	if !stringListAllows(policy.DelegateTo, agent) {
+		return false
+	}
+	if skillListAllows(policy.DelegateSkills, skill) {
+		return true
+	}
+	return a2a.SkillSlug(skill) == "task" && len(policy.DelegateSkills) == 0
 }
 
 func upsertDelegateTarget(targets []a2a.DelegateTargetPolicy, next a2a.DelegateTargetPolicy) []a2a.DelegateTargetPolicy {

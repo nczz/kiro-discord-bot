@@ -27,6 +27,9 @@ func registerA2ATools(s *server.MCPServer) {
 		{a2aPolicyPlanTool(), func(ctx context.Context, svc *A2AService, req A2AToolRequest) (A2AToolResponse, error) {
 			return svc.PolicyPlan(ctx, req)
 		}},
+		{a2aTrustPeerTool(), func(ctx context.Context, svc *A2AService, req A2AToolRequest) (A2AToolResponse, error) {
+			return svc.TrustPeer(ctx, req)
+		}},
 		{a2aWriteTool(ToolA2APolicyApply, "Apply a confirmed A2A policy diff after ManageChannels validation and a fresh confirmation token.", false, true), func(ctx context.Context, svc *A2AService, req A2AToolRequest) (A2AToolResponse, error) {
 			return svc.PolicyApply(ctx, req)
 		}},
@@ -91,6 +94,21 @@ func a2aPolicyPlanTool() mcp.Tool {
 	t := a2aReadTool(ToolA2APolicyPlan, "Plan an A2A policy change for the current bound Discord channel and return a confirmation challenge; applies nothing.")
 	addA2APolicyFields(&t)
 	mcp.WithBoolean("manage_channels", mcp.Required(), mcp.Description("Server-provided ManageChannels permission result for the requester."))(&t)
+	return t
+}
+
+func a2aTrustPeerTool() mcp.Tool {
+	t := a2aWriteTool(ToolA2ATrustPeer, "High-level trust grant for one peer runtime. Plans by default and applies only with a fresh confirmation_token. Defaults to bidirectional general_task in safe/delegator mode, so agents do not hand-edit accept_skills, delegate_skills, or delegate_targets for normal text delegation.", false, true)
+	for _, opt := range []mcp.ToolOption{
+		mcp.WithString("target_agent", mcp.Required(), mcp.Description("Peer runtime agent ID to trust for general text A2A tasks.")),
+		mcp.WithString("relationship", mcp.Description("bidirectional, inbound, or outbound. Default bidirectional.")),
+		mcp.WithString("capability", mcp.Description("Only general_task/default_task/task is supported by this high-level tool. Use bot_a2a_policy_plan for strict skill ACLs.")),
+		mcp.WithString("skill_id", mcp.Description("Optional task skill alias; defaults to task and canonicalizes */task as general_task.")),
+		mcp.WithString("target_channel_ref", mcp.Description("Optional target runtime channel_ref retained for display/routing compatibility.")),
+		mcp.WithString("setup_mode", mcp.Description("safe or co_present. Default safe/delegator/proxy.")),
+	} {
+		opt(&t)
+	}
 	return t
 }
 
