@@ -1124,6 +1124,56 @@ func TestA2AToolsThreadBoundContextUsesParentChannel(t *testing.T) {
 	}
 }
 
+func TestA2AToolsPolicyGetIncludesDeliveryReadiness(t *testing.T) {
+	ctx := context.Background()
+	svc, err := NewA2AService(A2AServiceConfig{
+		DataDir:        t.TempDir(),
+		Config:         a2a.Config{AgentID: "m5bot-local", RuntimeIDMode: a2a.RuntimeIDModeRuntime},
+		BoundGuildID:   "guild-1",
+		BoundChannelID: "channel-1",
+		ConnectNATS:    false,
+	})
+	if err != nil {
+		t.Fatalf("NewA2AService: %v", err)
+	}
+	defer svc.Close()
+	if err := svc.policies.Save(ctx, a2a.ChannelA2APolicy{
+		GuildID:               "guild-1",
+		ChannelID:             "channel-1",
+		Enabled:               true,
+		ChannelRef:            "ch-parent",
+		RuntimeAgentID:        "m5bot-local-ch-parent",
+		BotAgentID:            "m5bot-local",
+		AcceptFrom:            []string{"d80-chunbot-ch-parent"},
+		AcceptSkills:          []string{"task"},
+		ResultVisibility:      "proxy",
+		DiscordTranscriptMode: "delegator",
+		ShareDiscordContext:   false,
+		CoPresentFrom:         []string{"d80-chunbot-ch-parent"},
+	}, "manager"); err != nil {
+		t.Fatalf("Save policy: %v", err)
+	}
+
+	resp, err := svc.PolicyGet(ctx, A2AToolRequest{GuildID: "guild-1", ChannelID: "channel-1", RequestedBy: "owner", RequestedByID: "owner-1"})
+	if err != nil {
+		t.Fatalf("PolicyGet: %v", err)
+	}
+	if !resp.OK || resp.DeliveryReadiness == nil {
+		t.Fatalf("PolicyGet = %+v, want delivery readiness", resp)
+	}
+	if resp.DeliveryReadiness.CoPresentReady {
+		t.Fatalf("CoPresentReady = true, want blocked for safe/proxy policy")
+	}
+	for _, want := range []string{"result_visibility=transparent", "discord_transcript_mode=co_present", "share_discord_context=true"} {
+		if !stringListAllows(resp.DeliveryReadiness.CoPresentMissing, want) {
+			t.Fatalf("CoPresentMissing = %v, missing %q", resp.DeliveryReadiness.CoPresentMissing, want)
+		}
+	}
+	if !strings.Contains(resp.DeliveryReadiness.Guidance, "trusted/accept_from alone") {
+		t.Fatalf("Guidance = %q, want explicit trust warning", resp.DeliveryReadiness.Guidance)
+	}
+}
+
 func TestA2AToolsAnnotations(t *testing.T) {
 	readTool := a2aReadTool(ToolA2APeers, "peers")
 	if readTool.Annotations.ReadOnlyHint == nil || !*readTool.Annotations.ReadOnlyHint {

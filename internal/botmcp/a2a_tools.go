@@ -125,21 +125,22 @@ type A2AToolRequest struct {
 }
 
 type A2AToolResponse struct {
-	OK                   bool                      `json:"ok"`
-	Message              string                    `json:"message"`
-	ErrorCode            a2a.ErrorCode             `json:"errorCode,omitempty"`
-	RequiresConfirmation bool                      `json:"requiresConfirmation"`
-	ConfirmationSummary  string                    `json:"confirmationSummary,omitempty"`
-	RiskLabels           []string                  `json:"riskLabels,omitempty"`
-	ExpiresAt            string                    `json:"expiresAt,omitempty"`
-	ChangeID             string                    `json:"changeId,omitempty"`
-	ConfirmationToken    string                    `json:"confirmationToken,omitempty"`
-	Policy               *a2a.ChannelA2APolicy     `json:"policy,omitempty"`
-	RuntimePreflight     *a2a.RuntimeCutoverReport `json:"runtimePreflight,omitempty"`
-	Peers                []A2APeerSummary          `json:"peers,omitempty"`
-	Tasks                []A2ATaskSummary          `json:"tasks,omitempty"`
-	Task                 *A2ATaskSummary           `json:"task,omitempty"`
-	Metadata             map[string]interface{}    `json:"metadata,omitempty"`
+	OK                   bool                        `json:"ok"`
+	Message              string                      `json:"message"`
+	ErrorCode            a2a.ErrorCode               `json:"errorCode,omitempty"`
+	RequiresConfirmation bool                        `json:"requiresConfirmation"`
+	ConfirmationSummary  string                      `json:"confirmationSummary,omitempty"`
+	RiskLabels           []string                    `json:"riskLabels,omitempty"`
+	ExpiresAt            string                      `json:"expiresAt,omitempty"`
+	ChangeID             string                      `json:"changeId,omitempty"`
+	ConfirmationToken    string                      `json:"confirmationToken,omitempty"`
+	Policy               *a2a.ChannelA2APolicy       `json:"policy,omitempty"`
+	DeliveryReadiness    *A2APolicyDeliveryReadiness `json:"deliveryReadiness,omitempty"`
+	RuntimePreflight     *a2a.RuntimeCutoverReport   `json:"runtimePreflight,omitempty"`
+	Peers                []A2APeerSummary            `json:"peers,omitempty"`
+	Tasks                []A2ATaskSummary            `json:"tasks,omitempty"`
+	Task                 *A2ATaskSummary             `json:"task,omitempty"`
+	Metadata             map[string]interface{}      `json:"metadata,omitempty"`
 }
 
 type A2APeerSummary struct {
@@ -163,6 +164,18 @@ type A2APeerSummary struct {
 	DiscordGuildID    string   `json:"discordGuildId,omitempty"`
 	DiscordChannelID  string   `json:"discordChannelId,omitempty"`
 	DiscordThreadID   string   `json:"discordThreadId,omitempty"`
+}
+
+type A2APolicyDeliveryReadiness struct {
+	ResultVisibility        string   `json:"resultVisibility"`
+	DiscordTranscriptMode   string   `json:"discordTranscriptMode"`
+	ShareDiscordContext     bool     `json:"shareDiscordContext"`
+	CoPresentReady          bool     `json:"coPresentReady"`
+	CoPresentMissing        []string `json:"coPresentMissing,omitempty"`
+	CoPresentFrom           []string `json:"coPresentFrom,omitempty"`
+	CoPresentFromRuntimes   []string `json:"coPresentFromRuntimes,omitempty"`
+	CoPresentTargetChannels []string `json:"coPresentTargetChannels,omitempty"`
+	Guidance                string   `json:"guidance"`
 }
 
 type A2ATaskEventSummary struct {
@@ -312,7 +325,7 @@ func (s *A2AService) Peers(ctx context.Context, req A2AToolRequest) (A2AToolResp
 		reason := peerDelegationReason(row, policy, visibleSkills, runtimeOnly)
 		peers = append(peers, A2APeerSummary{AgentID: string(row.AgentID), Name: row.Name, BotAgentID: row.BotAgentID, Trusted: row.Trusted, Online: row.Online, Stale: row.Stale, Skills: visibleSkills, HiddenSkillCount: len(row.SkillIDs) - len(visibleSkills), DelegationAllowed: delegationAllowed, DelegationReason: reason, Runtime: row.Runtime, ChannelRef: row.ChannelRef, DisplayName: peerDisplayName(row), DiscordGuildID: row.DiscordGuildID, DiscordChannelID: row.DiscordChannelID, DiscordThreadID: row.DiscordThreadID, Wakeable: delegationAllowed && row.Runtime == "channel" && !row.Stale, ProtocolBinding: row.SupportedBinding, ProtocolVersion: row.ProtocolVersion, SignatureStatus: row.SignatureStatus})
 	}
-	return A2AToolResponse{OK: true, Message: "A2A peers listed", Peers: peers}, nil
+	return A2AToolResponse{OK: true, Message: "A2A peers listed", Peers: peers, DeliveryReadiness: ptrPolicyDeliveryReadiness(policy)}, nil
 }
 
 func peerDisplayName(peer a2a.PeerTrustDisplay) string {
@@ -433,7 +446,7 @@ func (s *A2AService) PolicyGet(ctx context.Context, req A2AToolRequest) (A2ATool
 	if err != nil {
 		return responseError(err), nil
 	}
-	return A2AToolResponse{OK: true, Message: "A2A policy loaded", Policy: &policy}, nil
+	return A2AToolResponse{OK: true, Message: "A2A policy loaded", Policy: &policy, DeliveryReadiness: ptrPolicyDeliveryReadiness(policy)}, nil
 }
 
 func (s *A2AService) RuntimePreflight(ctx context.Context, req A2AToolRequest) (A2AToolResponse, error) {
@@ -535,7 +548,7 @@ func (s *A2AService) PolicyPlan(ctx context.Context, req A2AToolRequest) (A2AToo
 		return responseError(fmt.Errorf("%w: store pending policy plan: %v", errorCode(a2a.ErrorStoreError), err)), nil
 	}
 	_ = s.recordAudit(ctx, a2a.AuditPolicyChangePlanned, req, "planned", "", map[string]any{"change_id": changeID})
-	return A2AToolResponse{OK: true, Message: "A2A policy change planned", RequiresConfirmation: true, ConfirmationSummary: summary, RiskLabels: policyRiskLabels(policy, planned), ExpiresAt: exp.Format(time.RFC3339), ChangeID: changeID, ConfirmationToken: token, Policy: &planned}, nil
+	return A2AToolResponse{OK: true, Message: "A2A policy change planned", RequiresConfirmation: true, ConfirmationSummary: summary, RiskLabels: policyRiskLabels(policy, planned), ExpiresAt: exp.Format(time.RFC3339), ChangeID: changeID, ConfirmationToken: token, Policy: &planned, DeliveryReadiness: ptrPolicyDeliveryReadiness(planned)}, nil
 }
 
 func (s *A2AService) PolicyApply(ctx context.Context, req A2AToolRequest) (A2AToolResponse, error) {
@@ -592,7 +605,7 @@ func (s *A2AService) TrustPeer(ctx context.Context, req A2AToolRequest) (A2ATool
 			return responseError(fmt.Errorf("%w: store pending trust plan: %v", errorCode(a2a.ErrorStoreError), err)), nil
 		}
 		_ = s.recordAudit(ctx, a2a.AuditPolicyChangePlanned, req, "planned", "", map[string]any{"change_id": changeID, "tool": ToolA2ATrustPeer})
-		return A2AToolResponse{OK: true, Message: "A2A trust peer policy change planned; apply by calling bot_a2a_trust_peer again or bot_a2a_policy_apply with the returned change_id and confirmation_token", RequiresConfirmation: true, ConfirmationSummary: policySummary(policy, planned), RiskLabels: policyRiskLabels(policy, planned), ExpiresAt: exp.Format(time.RFC3339), ChangeID: changeID, ConfirmationToken: token, Policy: &planned, Metadata: map[string]interface{}{"apply_tools": []string{ToolA2ATrustPeer, ToolA2APolicyApply}}}, nil
+		return A2AToolResponse{OK: true, Message: "A2A trust peer policy change planned; apply by calling bot_a2a_trust_peer again or bot_a2a_policy_apply with the returned change_id and confirmation_token", RequiresConfirmation: true, ConfirmationSummary: policySummary(policy, planned), RiskLabels: policyRiskLabels(policy, planned), ExpiresAt: exp.Format(time.RFC3339), ChangeID: changeID, ConfirmationToken: token, Policy: &planned, DeliveryReadiness: ptrPolicyDeliveryReadiness(planned), Metadata: map[string]interface{}{"apply_tools": []string{ToolA2ATrustPeer, ToolA2APolicyApply}}}, nil
 	}
 	if strings.TrimSpace(req.ChangeID) != "" && strings.TrimSpace(req.ChangeID) != changeID {
 		return responseError(fmt.Errorf("%w: change_id does not match policy diff", errorCode(a2a.ErrorPolicyDenied))), nil
@@ -1965,8 +1978,50 @@ func randomToken(n int) string {
 	}
 	return hex.EncodeToString(b)
 }
+func ptrPolicyDeliveryReadiness(policy a2a.ChannelA2APolicy) *A2APolicyDeliveryReadiness {
+	readiness := policyDeliveryReadiness(policy)
+	return &readiness
+}
+
+func policyDeliveryReadiness(policy a2a.ChannelA2APolicy) A2APolicyDeliveryReadiness {
+	missing := coPresentMissing(policy)
+	guidance := "transparent/co_present is ready for configured co-present senders; still verify the opposite bot's inbound policy before claiming bidirectional readiness"
+	if len(missing) > 0 {
+		guidance = "safe/proxy only for co-present purposes: trusted/accept_from alone is not transparent/co_present readiness; update the target bot policy before claiming direct same-thread replies"
+	}
+	return A2APolicyDeliveryReadiness{
+		ResultVisibility:        strings.TrimSpace(policy.ResultVisibility),
+		DiscordTranscriptMode:   strings.TrimSpace(policy.DiscordTranscriptMode),
+		ShareDiscordContext:     policy.ShareDiscordContext,
+		CoPresentReady:          len(missing) == 0,
+		CoPresentMissing:        missing,
+		CoPresentFrom:           append([]string{}, policy.CoPresentFrom...),
+		CoPresentFromRuntimes:   append([]string{}, policy.CoPresentFromRuntimes...),
+		CoPresentTargetChannels: append([]string{}, policy.CoPresentTargetChannels...),
+		Guidance:                guidance,
+	}
+}
+
+func coPresentMissing(policy a2a.ChannelA2APolicy) []string {
+	var missing []string
+	if strings.TrimSpace(policy.ResultVisibility) != "transparent" {
+		missing = append(missing, "result_visibility=transparent")
+	}
+	if strings.TrimSpace(policy.DiscordTranscriptMode) != "co_present" {
+		missing = append(missing, "discord_transcript_mode=co_present")
+	}
+	if !policy.ShareDiscordContext {
+		missing = append(missing, "share_discord_context=true")
+	}
+	if len(policy.CoPresentFrom) == 0 && len(policy.CoPresentFromRuntimes) == 0 {
+		missing = append(missing, "co_present_from or co_present_from_runtimes")
+	}
+	return missing
+}
+
 func policySummary(old, next a2a.ChannelA2APolicy) string {
-	return fmt.Sprintf("A2A policy for channel %s: enabled %v→%v, ref %q→%q, delegate_to=%v, delegate_skills=%v", next.ChannelID, old.Enabled, next.Enabled, old.ChannelRef, next.ChannelRef, next.DelegateTo, next.DelegateSkills)
+	readiness := policyDeliveryReadiness(next)
+	return fmt.Sprintf("A2A policy for channel %s: enabled %v→%v, ref %q→%q, delegate_to=%v, delegate_skills=%v, delivery=%s/%s, co_present_ready=%v, co_present_missing=%v", next.ChannelID, old.Enabled, next.Enabled, old.ChannelRef, next.ChannelRef, next.DelegateTo, next.DelegateSkills, readiness.ResultVisibility, readiness.DiscordTranscriptMode, readiness.CoPresentReady, readiness.CoPresentMissing)
 }
 func policyRiskLabels(old, next a2a.ChannelA2APolicy) []string {
 	labels := []string{"policy_change"}
