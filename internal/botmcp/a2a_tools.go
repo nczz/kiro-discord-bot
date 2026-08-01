@@ -700,6 +700,8 @@ func (s *A2AService) Delegate(ctx context.Context, req A2AToolRequest) (A2AToolR
 	sum := summarizeTask(row)
 	metaOut := deliveryResponseMetadata(resultVisibility, transcriptMode, deliveryReason, delivery.DiscordReplyThreadID)
 	metaOut["origin_runtime_ref"] = taskReq.OriginRuntimeRef
+	metaOut["success_confirmed"] = false
+	metaOut["must_check_status"] = true
 	return A2AToolResponse{OK: true, Message: delegateSuccessMessage(resultVisibility, transcriptMode, deliveryReason), Task: &sum, Metadata: metaOut}, nil
 }
 
@@ -1145,12 +1147,12 @@ func deliveryOptionsForDelegate(req A2AToolRequest, resultVisibility, transcript
 
 func delegateSuccessMessage(resultVisibility, transcriptMode, reason string) string {
 	if resultVisibility == "transparent" && transcriptMode == "co_present" {
-		return "A2A task sent; executor will reply in the shared Discord thread and this bot must not repost the result"
+		return "A2A request queued; executor owns the shared Discord thread, so this bot must not repost the result and should use task status to confirm terminal state"
 	}
 	if transcriptMode == "mirror" {
-		return "A2A task sent; delegator mirror mode may show executor transcript updates"
+		return "A2A request queued; mirror mode may show executor transcript updates and task status confirms terminal state"
 	}
-	return "A2A task sent; delegator will track durable status without duplicating executor-owned transcripts"
+	return "A2A request queued; durable task status must be checked before claiming the executor accepted or completed it"
 }
 
 func deliveryResponseMetadata(resultVisibility, transcriptMode, reason, discordThreadID string) map[string]interface{} {

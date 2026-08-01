@@ -1631,6 +1631,16 @@ func TestA2AFormatTaskResponseIsHumanReadable(t *testing.T) {
 	}
 }
 
+func TestA2AFormatRejectedTaskIncludesPolicyRetryGuidance(t *testing.T) {
+	L.Load("en")
+	got := formatA2AResponse(botmcp.A2AToolResponse{OK: true, Message: "A2A task loaded", Task: &botmcp.A2ATaskSummary{LocalID: "local-1", TaskID: "task-1", FromAgent: "m5bot-local", ToAgent: "d80-chunbot", State: a2a.TaskStateRejected, ErrorCode: a2a.ErrorSenderNotAllowed, ErrorMessage: "sender is not accepted"}})
+	for _, want := range []string{"sender is not accepted", "executor rejected this sender", "apply the peer A2A policy", "/a2a status"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("formatA2AResponse rejected task = %q, missing %q", got, want)
+		}
+	}
+}
+
 func TestA2ASetupSlashDefaultsHumanFlow(t *testing.T) {
 	raw := a2aArgsFromSlashOptions([]*discordgo.ApplicationCommandInteractionDataOption{{
 		Name: "setup",
@@ -2460,6 +2470,9 @@ func TestBuildPromptInjectsCurrentDatetimeGuidance(t *testing.T) {
 		"下個月第二週 => range_type=month_week offset=1 week_index=2",
 		"過去7天 => range_type=relative_days days=7 direction=past",
 		"Do not calculate weekdays, month boundaries, or relative ranges from model memory",
+		"Do not inspect or mutate raw bot databases",
+		"Use the exposed bot MCP tools",
+		"bot_a2a_task_status",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("prompt missing %q:\n%s", want, got)

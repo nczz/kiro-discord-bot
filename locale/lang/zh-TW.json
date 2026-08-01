@@ -278,6 +278,7 @@
   "a2a.remedy.not_delegated": "修正方式：頻道管理員可以執行 `/a2a setup peer_agent:<bot> skill_id:<能力>` 允許此協作。",
   "a2a.remedy.unknown_skill": "修正方式：請選 `/a2a peers` 顯示的 peer 能力，或先在 peer 頻道公開該能力。",
   "a2a.remedy.manager_required": "修正方式：此設定動作需要 Discord 的 Manage Channels 權限。",
+  "a2a.remedy.sender_not_allowed": "修正方式：executor 拒絕此 sender。請 executor 端頻道管理員套用 peer A2A policy，然後重新委派並用 `/a2a status` 確認。",
   "a2a.yes": "是",
   "a2a.no": "否",
   "a2a.none": "無",

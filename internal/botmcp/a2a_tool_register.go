@@ -101,7 +101,7 @@ func a2aRuntimePreflightTool() mcp.Tool {
 }
 
 func a2aDelegateTool() mcp.Tool {
-	t := a2aWriteTool(ToolA2ADelegate, "Delegate a task to an approved remote A2A peer skill after outbound policy, quota, and confirmation checks. The response includes the selected result_visibility/discord_transcript_mode and why it was chosen; for transparent/co_present, the executor owns the shared Discord thread and callers must not repost the result.", false, false)
+	t := a2aWriteTool(ToolA2ADelegate, "Queue a task for an approved remote A2A peer skill after outbound policy, quota, and confirmation checks. A successful tool call means the request was durably queued, not accepted or completed; use bot_a2a_task_status with local_id to confirm terminal accepted/rejected/completed state before reporting success. The response includes selected result_visibility/discord_transcript_mode and why it was chosen; for transparent/co_present, the executor owns the shared Discord thread and callers must not repost the result.", false, false)
 	for _, opt := range []mcp.ToolOption{
 		mcp.WithString("target_agent", mcp.Required(), mcp.Description("Approved remote A2A agent ID.")),
 		mcp.WithString("skill_id", mcp.Required(), mcp.Description("Approved remote skill ID.")),

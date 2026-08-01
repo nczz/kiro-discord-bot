@@ -777,6 +777,51 @@ func TestCustomPartialBotToolsPolicyWithImageDoesNotGainHistoryTool(t *testing.T
 	}
 }
 
+func TestCustomBotToolsPolicyWithA2ADelegateGainsA2AControlTools(t *testing.T) {
+	p := defaultMCPPolicy("guild-1", "channel-1", "bot-tools")
+	p.Enabled = true
+	p.Preset = "safe-write"
+	p.ReadOnly = false
+	p.AllowAllTools = false
+	p.AllowDestructive = false
+	p.AllowedTools = []string{
+		botmcp.ToolA2ADelegate,
+		botmcp.ToolA2ACancel,
+		botmcp.ToolA2AInputReply,
+	}
+
+	got := normalizeLegacyDefaultBotToolsPolicy(p)
+	for _, want := range []string{
+		botmcp.ToolA2APolicyGet,
+		botmcp.ToolA2ATaskStatus,
+		botmcp.ToolA2APolicyPlan,
+		botmcp.ToolA2APolicyApply,
+		botmcp.ToolA2ARuntimePreflight,
+	} {
+		if !containsString(got.EffectiveTools(), want) {
+			t.Fatalf("custom A2A allowlist did not gain %s: %+v", want, got.EffectiveTools())
+		}
+	}
+	if containsString(got.EffectiveTools(), botmcp.ToolSendMessage) || containsString(got.EffectiveTools(), botmcp.ToolQueryAudit) {
+		t.Fatalf("custom A2A allowlist gained unrelated sensitive tools: %+v", got.EffectiveTools())
+	}
+}
+
+func TestCustomBotToolsPolicyWithoutA2AStaysNarrow(t *testing.T) {
+	p := defaultMCPPolicy("guild-1", "channel-1", "bot-tools")
+	p.Enabled = true
+	p.Preset = "safe-write"
+	p.ReadOnly = false
+	p.AllowAllTools = false
+	p.AllowDestructive = false
+	p.AllowedTools = []string{botmcp.ToolDataSummary}
+
+	got := normalizeLegacyDefaultBotToolsPolicy(p)
+	if len(got.EffectiveTools()) != 1 || !containsString(got.EffectiveTools(), botmcp.ToolDataSummary) {
+		t.Fatalf("custom non-A2A allowlist changed: %+v", got.EffectiveTools())
+	}
+}
+
 func TestCustomBotToolsPolicyKeepsExplicitSensitiveTools(t *testing.T) {
 	p := defaultMCPPolicy("guild-1", "channel-1", "bot-tools")
 	p.Enabled = true

@@ -11,6 +11,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -726,7 +727,45 @@ func normalizeLegacyDefaultBotToolsPolicy(p MCPChannelPolicy) MCPChannelPolicy {
 			return p
 		}
 	}
+	return normalizeLegacyA2ABotToolsPolicy(p)
+}
+
+func normalizeLegacyA2ABotToolsPolicy(p MCPChannelPolicy) MCPChannelPolicy {
+	tools := normalizeStrings(p.AllowedTools)
+	if len(tools) == 0 || !containsAnyString(tools, a2aBotToolNames()) {
+		return p
+	}
+	for _, tool := range a2aBotToolNames() {
+		if !slices.Contains(tools, tool) {
+			tools = append(tools, tool)
+		}
+	}
+	p.AllowedTools = tools
 	return p
+}
+
+func a2aBotToolNames() []string {
+	return []string{
+		botmcp.ToolA2APeers,
+		botmcp.ToolA2APolicyGet,
+		botmcp.ToolA2ATaskStatus,
+		botmcp.ToolA2ARuntimePreflight,
+		botmcp.ToolA2APolicyPlan,
+		botmcp.ToolA2APolicyApply,
+		botmcp.ToolA2ADelegate,
+		botmcp.ToolA2ACancel,
+		botmcp.ToolA2AInputReply,
+		botmcp.ToolA2AAuthReply,
+	}
+}
+
+func containsAnyString(haystack, needles []string) bool {
+	for _, needle := range needles {
+		if slices.Contains(haystack, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 func sameStringSet(a, b []string) bool {

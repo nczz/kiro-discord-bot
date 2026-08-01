@@ -284,6 +284,7 @@
   "a2a.remedy.not_delegated": "Fix: a channel manager can run `/a2a setup peer_agent:<bot> skill_id:<capability>` to allow this collaboration.",
   "a2a.remedy.unknown_skill": "Fix: choose one of the peer capabilities shown by `/a2a peers`, or expose the capability on the peer channel.",
   "a2a.remedy.manager_required": "Fix: this setup action requires Discord Manage Channels permission.",
+  "a2a.remedy.sender_not_allowed": "Fix: the executor rejected this sender. A channel manager must apply the peer A2A policy on the executor side, then retry delegation and confirm with `/a2a status`.",
   "a2a.yes": "yes",
   "a2a.no": "no",
   "a2a.none": "none",

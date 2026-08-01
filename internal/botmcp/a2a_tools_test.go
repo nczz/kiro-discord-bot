@@ -644,6 +644,21 @@ func TestA2AToolsTaskStatusOmitsCoPresentResultText(t *testing.T) {
 	}
 }
 
+func TestA2AToolsDelegateSuccessMessageRequiresStatusCheck(t *testing.T) {
+	got := delegateSuccessMessage("proxy", "delegator", "policy/default delivery settings")
+	for _, want := range []string{"request queued", "task status", "before claiming"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("delegateSuccessMessage proxy = %q, missing %q", got, want)
+		}
+	}
+	coPresent := delegateSuccessMessage("transparent", "co_present", "same Discord channel")
+	for _, want := range []string{"executor owns the shared Discord thread", "must not repost", "task status"} {
+		if !strings.Contains(coPresent, want) {
+			t.Fatalf("delegateSuccessMessage co_present = %q, missing %q", coPresent, want)
+		}
+	}
+}
+
 func TestA2AToolsAutoDeliveryUsesCoPresentForSameDiscordRuntime(t *testing.T) {
 	req := A2AToolRequest{GuildID: "guild-1", ChannelID: "channel-1"}
 	peer := a2a.PeerRow{ExtendedCard: a2a.ExtendedAgentCard{DiscordGuildID: "guild-1", DiscordChannelID: "channel-1"}}

@@ -733,9 +733,26 @@ func formatA2ATask(task botmcp.A2ATaskSummary, message string) string {
 		sb.WriteString("\n")
 		sb.WriteString(L.Getf("a2a.task.error", task.ErrorMessage))
 	}
+	if remedy := a2aTaskRemedy(task); remedy != "" {
+		sb.WriteString("\n")
+		sb.WriteString(remedy)
+	}
 	sb.WriteString("\n")
 	sb.WriteString(L.Get("a2a.task.actions_hint"))
 	return sb.String()
+}
+
+func a2aTaskRemedy(task botmcp.A2ATaskSummary) string {
+	switch task.ErrorCode {
+	case a2a.ErrorSenderNotAllowed:
+		return L.Get("a2a.remedy.sender_not_allowed")
+	case a2a.ErrorChannelNotEnabled:
+		return L.Get("a2a.remedy.channel_disabled")
+	case a2a.ErrorSkillNotAllowed, a2a.ErrorUnauthorizedTarget:
+		return L.Get("a2a.remedy.not_delegated")
+	default:
+		return ""
+	}
 }
 
 func formatA2ATaskList(tasks []botmcp.A2ATaskSummary) string {
