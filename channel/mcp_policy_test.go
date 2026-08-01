@@ -797,6 +797,7 @@ func TestCustomBotToolsPolicyWithA2ADelegateGainsA2AControlTools(t *testing.T) {
 		botmcp.ToolA2APolicyPlan,
 		botmcp.ToolA2APolicyApply,
 		botmcp.ToolA2ARuntimePreflight,
+		botmcp.ToolA2ATrustPeer,
 	} {
 		if !containsString(got.EffectiveTools(), want) {
 			t.Fatalf("custom A2A allowlist did not gain %s: %+v", want, got.EffectiveTools())

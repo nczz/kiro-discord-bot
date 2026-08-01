@@ -751,6 +751,7 @@ func a2aBotToolNames() []string {
 		botmcp.ToolA2ATaskStatus,
 		botmcp.ToolA2ARuntimePreflight,
 		botmcp.ToolA2APolicyPlan,
+		botmcp.ToolA2ATrustPeer,
 		botmcp.ToolA2APolicyApply,
 		botmcp.ToolA2ADelegate,
 		botmcp.ToolA2ACancel,
