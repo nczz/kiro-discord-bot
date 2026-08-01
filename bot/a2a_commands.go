@@ -145,6 +145,7 @@ func a2aSlashOptions() []*discordgo.ApplicationCommandOption {
 		{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "max-concurrent", Description: L.Get("cmd.a2a.sub.max_concurrent"), Options: []*discordgo.ApplicationCommandOption{integer("value", L.Get("cmd.a2a.opt.value"), true), str("confirmation_token", L.Get("cmd.a2a.opt.confirmation_token"), false)}},
 		{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "transcript-mode", Description: L.Get("cmd.a2a.sub.transcript_mode"), Options: []*discordgo.ApplicationCommandOption{str("mode", L.Get("cmd.a2a.opt.mode"), true), str("confirmation_token", L.Get("cmd.a2a.opt.confirmation_token"), false)}},
 		{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "transcript-from", Description: L.Get("cmd.a2a.sub.transcript_from"), Options: []*discordgo.ApplicationCommandOption{str("agent_id", L.Get("cmd.a2a.opt.agent_id"), true), boolean("share", L.Get("cmd.a2a.opt.share"), false), str("confirmation_token", L.Get("cmd.a2a.opt.confirmation_token"), false)}},
+		{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "transcript-target", Description: L.Get("cmd.a2a.sub.transcript_target"), Options: []*discordgo.ApplicationCommandOption{str("channel_id", L.Get("cmd.a2a.opt.channel_id"), true), str("confirmation_token", L.Get("cmd.a2a.opt.confirmation_token"), false)}},
 	}
 }
 
@@ -194,6 +195,12 @@ func a2aArgsFromSlashOptions(options []*discordgo.ApplicationCommandInteractionD
 			}
 		case "target_channel_ref":
 			payload.Request.TargetChannelRef = opt.StringValue()
+		case "target_channel_id":
+			payload.Request.TargetChannelID = opt.StringValue()
+		case "target_thread_id":
+			payload.Request.TargetThreadID = opt.StringValue()
+		case "channel_id":
+			payload.Request.CoPresentTargetChannels = []string{opt.StringValue()}
 		case "share":
 			v := opt.BoolValue()
 			payload.Request.ShareDiscordContext = &v
@@ -339,7 +346,7 @@ func (b *Bot) cmdA2A(ctx cmdCtx) {
 		resp, _ = svc.InputReply(context.Background(), payload.Request)
 	case "authorize":
 		resp, _ = svc.AuthReply(context.Background(), payload.Request)
-	case "setup", "enable", "disable", "ref", "expose", "unexpose", "accept-from", "deny-from", "delegate-to", "undelegate-to", "max-concurrent", "transcript-mode", "transcript-from":
+	case "setup", "enable", "disable", "ref", "expose", "unexpose", "accept-from", "deny-from", "delegate-to", "undelegate-to", "max-concurrent", "transcript-mode", "transcript-from", "transcript-target":
 		if strings.TrimSpace(payload.Request.ConfirmationToken) == "" {
 			resp, _ = svc.PolicyPlan(context.Background(), payload.Request)
 		} else {
@@ -646,6 +653,8 @@ func formatA2APolicy(title string, policy a2a.ChannelA2APolicy) string {
 	sb.WriteString(L.Getf("a2a.policy.co_present_from", joinOrNone(policy.CoPresentFrom)))
 	sb.WriteString("\n")
 	sb.WriteString(L.Getf("a2a.policy.co_present_from_runtimes", joinOrNone(policy.CoPresentFromRuntimes)))
+	sb.WriteString("\n")
+	sb.WriteString(L.Getf("a2a.policy.co_present_target_channels", joinOrNone(policy.CoPresentTargetChannels)))
 	return sb.String()
 }
 

@@ -181,6 +181,7 @@ func addA2APolicyFields(t *mcp.Tool) {
 		mcp.WithString("transcript_mode", mcp.Description("delegator, mirror, or co_present.")),
 		mcp.WithBoolean("share_discord_context", mcp.Description("Allow co-present Discord context sharing when policy also permits it.")),
 		mcp.WithArray("co_present_from", mcp.Description("Delegator agent IDs allowed for co-present transcript.")),
+		mcp.WithArray("co_present_target_channels", mcp.Description("Discord channel/thread IDs or * where same-guild co-present replies may be posted.")),
 		mcp.WithBoolean("allow_memory_write", mcp.Description("Allow remote A2A jobs to use bot memory write tools.")),
 	} {
 		opt(t)

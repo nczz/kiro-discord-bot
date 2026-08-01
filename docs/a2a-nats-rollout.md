@@ -168,7 +168,7 @@ Internal lightweight profile (`A2A_PRODUCTION_SECURITY=false`, private single-no
 Hardened/HA profile (`A2A_PRODUCTION_SECURITY=true` or multi-tenant exposure):
 
 1. local two-bot smoke: two local bots exchange a delegated text task through embedded or local JetStream.
-2. same-channel co-present smoke: both Discord bot accounts can post the expected status/result labels in the same channel/thread with `share_discord_context=true` and approved `co_present_from_runtimes`.
+2. same-channel co-present smoke: both Discord bot accounts can post the expected status/result labels in the same channel/thread with `share_discord_context=true` and approved `co_present_from_runtimes`; same-guild cross-channel co-present additionally requires an explicit `co_present_target_channels` entry for the Discord target.
 3. cross-server proxy smoke: executor works in a different Discord server/channel and the requester bot reports the result through proxy visibility.
 4. NATS restart smoke: restart NATS after an accepted task and verify durable task/result state survives reconnect and replay without duplicate Discord delivery.
 5. credential revocation smoke: revoke one peer credential and verify new delegated work from that peer is denied while existing audit/task rows remain readable.

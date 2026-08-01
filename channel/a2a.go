@@ -18,6 +18,7 @@ import (
 	"github.com/nczz/kiro-discord-bot/acp"
 	"github.com/nczz/kiro-discord-bot/audit"
 	"github.com/nczz/kiro-discord-bot/internal/botegress"
+	"github.com/nczz/kiro-discord-bot/internal/channelmeta"
 )
 
 var _ a2a.Executor = (*Manager)(nil)
@@ -55,7 +56,7 @@ func (m *Manager) AdmitA2ATask(ctx context.Context, req a2a.TaskExecutionRequest
 	if err := policy.ValidateInboundRuntime(req.From, req.SkillID); err != nil {
 		return rejectedA2AAdmission(req, codeFromA2AError(err, a2a.ErrorPolicyDenied), err.Error()), nil
 	}
-	if err := validateA2ADeliveryAgainstPolicy(req, policy); err != nil {
+	if err := m.validateA2ADeliveryAgainstPolicy(req, policy); err != nil {
 		return rejectedA2AAdmission(req, a2a.ErrorPolicyDenied, err.Error()), nil
 	}
 
@@ -346,21 +347,37 @@ func a2aConversationThreadID(admitted a2a.A2AAdmission) string {
 	if strings.TrimSpace(dc.GuildID) != strings.TrimSpace(admitted.Request.GuildID) {
 		return ""
 	}
-	if strings.TrimSpace(dc.ChannelID) != strings.TrimSpace(admitted.Request.ChannelID) {
-		return ""
+	if threadID := strings.TrimSpace(dc.ThreadID); threadID != "" {
+		return threadID
 	}
-	return strings.TrimSpace(dc.ThreadID)
+	channelID := strings.TrimSpace(dc.ChannelID)
+	if channelID != "" && channelID != strings.TrimSpace(admitted.Request.ChannelID) {
+		return channelID
+	}
+	return ""
 }
 
 func (m *Manager) bindA2AConversationThread(ctx context.Context, admitted a2a.A2AAdmission, threadID string) {
 	if m == nil || m.a2aTasks == nil || strings.TrimSpace(threadID) == "" {
 		return
 	}
-	raw, err := json.Marshal(a2a.DiscordContext{
+	dc := a2a.DiscordContext{
 		GuildID:   admitted.Request.GuildID,
 		ChannelID: admitted.Request.ChannelID,
 		ThreadID:  threadID,
-	})
+	}
+	if len(admitted.Request.Delivery.DiscordContextJSON) > 0 {
+		var existing a2a.DiscordContext
+		if err := json.Unmarshal(admitted.Request.Delivery.DiscordContextJSON, &existing); err == nil {
+			if guildID := strings.TrimSpace(existing.GuildID); guildID != "" {
+				dc.GuildID = guildID
+			}
+			if channelID := strings.TrimSpace(existing.ChannelID); channelID != "" {
+				dc.ChannelID = channelID
+			}
+		}
+	}
+	raw, err := json.Marshal(dc)
 	if err != nil {
 		return
 	}
@@ -485,7 +502,7 @@ func validateA2ATarget(cfg a2a.Config, policy a2a.ChannelA2APolicy, req a2a.Task
 	return nil
 }
 
-func validateA2ADeliveryAgainstPolicy(req a2a.TaskExecutionRequest, policy a2a.ChannelA2APolicy) error {
+func (m *Manager) validateA2ADeliveryAgainstPolicy(req a2a.TaskExecutionRequest, policy a2a.ChannelA2APolicy) error {
 	if req.ResultVisibility != "" && req.ResultVisibility != policy.ResultVisibility {
 		return fmt.Errorf("result_visibility %q is not allowed by channel policy", req.ResultVisibility)
 	}
@@ -497,10 +514,21 @@ func validateA2ADeliveryAgainstPolicy(req a2a.TaskExecutionRequest, policy a2a.C
 	}
 	if req.Delivery.DiscordContext != nil {
 		dc := req.Delivery.DiscordContext
+		channelID := strings.TrimSpace(dc.ChannelID)
+		threadID := strings.TrimSpace(dc.ThreadID)
+		samePolicyTarget := coPresentDiscordTargetMatchesPolicy(policy, channelID, threadID)
+		if strings.TrimSpace(dc.GuildID) == "" && !samePolicyTarget {
+			return fmt.Errorf("Discord context guild is required for cross-channel co-present")
+		}
 		if strings.TrimSpace(dc.GuildID) != "" && strings.TrimSpace(dc.GuildID) != policy.GuildID {
 			return fmt.Errorf("Discord context guild %s is not allowed by channel policy", dc.GuildID)
 		}
-		if strings.TrimSpace(dc.ChannelID) != "" && strings.TrimSpace(dc.ChannelID) != policy.ChannelID {
+		if !samePolicyTarget {
+			if err := m.validateCoPresentDiscordTargetGuild(policy, channelID, threadID); err != nil {
+				return err
+			}
+		}
+		if !coPresentDiscordTargetAllowed(req, policy, channelID, threadID) {
 			return fmt.Errorf("Discord context channel %s is not allowed by channel policy", dc.ChannelID)
 		}
 	}
@@ -512,10 +540,62 @@ func validateA2ADeliveryAgainstPolicy(req a2a.TaskExecutionRequest, policy a2a.C
 	return nil
 }
 
+func (m *Manager) validateCoPresentDiscordTargetGuild(policy a2a.ChannelA2APolicy, channelID, threadID string) error {
+	targetID := strings.TrimSpace(threadID)
+	if targetID == "" {
+		targetID = strings.TrimSpace(channelID)
+	}
+	if targetID == "" || targetID == policy.ChannelID {
+		return nil
+	}
+	entries, err := channelmeta.Read(m.dataDir)
+	if err != nil {
+		return fmt.Errorf("read Discord target metadata: %w", err)
+	}
+	entry, ok := entries[targetID]
+	if !ok || strings.TrimSpace(entry.GuildID) == "" {
+		return fmt.Errorf("Discord context target %s has no verified guild metadata", targetID)
+	}
+	if strings.TrimSpace(entry.GuildID) != policy.GuildID {
+		return fmt.Errorf("Discord context target %s guild %s is not allowed by channel policy", targetID, entry.GuildID)
+	}
+	return nil
+}
+
+func coPresentDiscordTargetMatchesPolicy(policy a2a.ChannelA2APolicy, channelID, threadID string) bool {
+	channelID = strings.TrimSpace(channelID)
+	threadID = strings.TrimSpace(threadID)
+	return (channelID == "" && threadID == "") ||
+		(channelID != "" && channelID == policy.ChannelID) ||
+		(threadID != "" && threadID == policy.ChannelID)
+}
+
+func coPresentDiscordTargetAllowed(req a2a.TaskExecutionRequest, policy a2a.ChannelA2APolicy, channelID, threadID string) bool {
+	if coPresentDiscordTargetMatchesPolicy(policy, channelID, threadID) {
+		return true
+	}
+	channelID = strings.TrimSpace(channelID)
+	threadID = strings.TrimSpace(threadID)
+	return req.DiscordTranscriptMode == "co_present" &&
+		req.Delivery.ShareDiscordContext &&
+		(stringAllowed(policy.CoPresentTargetChannels, channelID) || stringAllowed(policy.CoPresentTargetChannels, threadID))
+}
+
 func agentAllowed(list []string, id a2a.AgentID) bool {
 	for _, item := range list {
 		item = strings.TrimSpace(item)
 		if item == "*" || item == string(id) {
+			return true
+		}
+	}
+	return false
+}
+
+func stringAllowed(list []string, value string) bool {
+	value = strings.TrimSpace(value)
+	for _, item := range list {
+		item = strings.TrimSpace(item)
+		if item == "*" || item == value {
 			return true
 		}
 	}

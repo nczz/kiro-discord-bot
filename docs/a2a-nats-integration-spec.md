@@ -734,6 +734,7 @@ CREATE TABLE IF NOT EXISTS channel_a2a_policy (
   discord_transcript_mode TEXT NOT NULL DEFAULT 'delegator',
   share_discord_context INTEGER NOT NULL DEFAULT 0,
   co_present_from_runtimes_json TEXT NOT NULL DEFAULT '[]',
+  co_present_target_channels_json TEXT NOT NULL DEFAULT '[]',
   auto_delegate_enabled INTEGER NOT NULL DEFAULT 0,
   remote_tool_policy_json TEXT NOT NULL DEFAULT '{"allow_memory_write":false}',
   legacy_accept_from_json TEXT NOT NULL DEFAULT '[]',
@@ -757,6 +758,7 @@ Validation：
 - `discord_transcript_mode in ('delegator','mirror','co_present')`。
 - `share_discord_context` may be true only when `discord_transcript_mode='co_present'`。
 - `co_present_from_runtimes` entries are runtime IDs or explicit wildcard `*`; default empty means the executor still owns its task conversation, but does not receive shared delegator Discord context or additional bot-tools egress rights。
+- `co_present_target_channels` entries are Discord channel/thread IDs or explicit wildcard `*`; default empty keeps co-present delivery scoped to the executor runtime's own channel, while non-empty entries permit same-guild co-present replies to those additional Discord targets after permission checks。
 - `max_concurrent` range: 0..64; `0` means unlimited。
 - `accept_from_runtimes` entries are runtime IDs or explicit wildcard `*`。
 - `accept_skills` entries are skill slugs, not arbitrary text。
@@ -1081,7 +1083,7 @@ func (m *Manager) ExecuteA2ATask(ctx context.Context, req A2ATaskRequest) (A2ATa
 3. Validate subject/envelope/policy-derived runtime consistency.
 4. Validate `AcceptFromRuntimes`。
 5. Validate `accept_skills` and exposed/accepted skill mapping。
-6. Reject or drop non-nil `DiscordContext` unless `TranscriptMode=co_present`, executor policy has `discord_transcript_mode='co_present'`, `co_present_from_runtimes` allows `FromRuntime`, the referenced guild/channel/thread resolves to the executor's own channel runtime, and Discord view/send permissions pass。
+6. Reject or drop non-nil `DiscordContext` unless `TranscriptMode=co_present`, executor policy has `discord_transcript_mode='co_present'`, `co_present_from_runtimes` allows `FromRuntime`, the referenced guild matches the executor policy, the referenced channel/thread resolves to either the executor runtime channel or an explicit `co_present_target_channels` same-guild target, and Discord view/send permissions pass。
 7. Enforce channel-level `max_concurrent` for inbound A2A tasks。
 8. Build a normal `channel.Job` using existing Worker queue。
 9. Set `DeliveryInline` / final reply capture。
@@ -1411,14 +1413,15 @@ Co-present mode requirements：
 
 1. Delegator channel policy sets `discord_transcript_mode='co_present'` and `share_discord_context=true`。
 2. Executor inbound channel policy sets `discord_transcript_mode='co_present'` and `co_present_from_runtimes` allows the delegator runtime。
-3. Both bot accounts are members of the same guild and can resolve the same channel/thread。
-4. Both bot accounts have Discord permission to view and send in the target location。
-5. Delegator includes `DiscordContext` only after user action originates from that Discord location。
-6. Executor validates `DiscordContext` before posting and rejects direct transcript if guild/channel/thread mismatch。
-7. Executor direct posts are templated orchestration notices only: accepted, working, input-required, auth-required, completed/failed/canceled summary。
-8. Final answer body is still delivered by delegator in `result_visibility=proxy`。Executor may post final content only when `result_visibility=transparent` and the same safe egress/audit/AllowedMentions controls pass。
-9. Every direct or mirrored transcript post records audit event `a2a_transcript_posted` with actor bot, mode, task ID, channel ID, and message ID。
-10. If any co-present check fails, fall back to `mirror` if allowed, otherwise `delegator`。
+3. Same-channel co-present requires both bot accounts to resolve the same guild/channel/thread。
+4. Same-guild cross-channel co-present is allowed only when executor policy explicitly includes the Discord target channel/thread in `co_present_target_channels`。
+5. Both bot accounts have Discord permission to view and send in the target location。
+6. Delegator includes `DiscordContext` only after user action originates from that Discord location。
+7. Executor validates `DiscordContext` before posting and rejects direct transcript if guild or target-channel policy checks fail。
+8. Executor direct posts are templated orchestration notices only: accepted, working, input-required, auth-required, completed/failed/canceled summary。
+9. Final answer body is still delivered by delegator in `result_visibility=proxy`。Executor may post final content only when `result_visibility=transparent` and the same safe egress/audit/AllowedMentions controls pass。
+10. Every direct or mirrored transcript post records audit event `a2a_transcript_posted` with actor bot, mode, task ID, channel ID, and message ID。
+11. If any co-present check fails, fall back to `mirror` if allowed, otherwise `delegator`。
 
 Co-present mode never grants remote tasks access to bot-tools Discord egress。It is a delivery-layer feature owned by `bot/` after A2A policy, Discord permission, and safe output checks。
 

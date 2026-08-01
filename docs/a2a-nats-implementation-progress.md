@@ -834,6 +834,22 @@ Append one subsection per completed phase.
 - Rollback boundary: restore local `/Users/chun/Projects/kiro-discord-bot-local/bin/kiro-discord-bot.pre-r27-origin-ref-20260801020923` and d80 `/opt/kiro-discord-bot/kiro-discord-bot.pre-r27-origin-ref-20260801021007`, then restart both services.
 - Next phase: issue one real delegated A2A task in Discord and confirm the executor-owned reply starts with `委託自：隨口問 · <delegator bot>` while `/a2a status` keeps durable result content unprefixed.
 
+### R28 same-guild co-present target allowlist
+
+- Status: implemented, not deployed.
+- Trigger: natural M5Bot→ChunBot same-channel delegation exposed delivery-mode mismatch risk, and operator requested a simpler runtime communication default while retaining protocol delivery modes.
+- Decision: keep `transparent + co_present` as the preferred runtime collaboration path, but widen it beyond same-channel only with an explicit same-guild Discord target allowlist. `co_present_target_channels` grants executor policy permission to use shared Discord context whose target channel/thread differs from the executor runtime channel; absent an entry, channel-bound co-present remains unchanged.
+- Changed files: `a2a/policy_store.go`, `channel/a2a.go`, `internal/botmcp/a2a_tools.go`, `internal/botmcp/a2a_tool_register.go`, `bot/a2a_commands.go`, locale files, regression tests, and A2A docs.
+- Validation:
+  - Focused R28 regression passed: `go test ./a2a ./channel ./internal/botmcp ./bot ./locale -run 'TestPolicyStoreValidationAndPersistence|TestManagerA2ACoPresent(SameGuildTargetRequiresAllowlist|SameGuildTargetAllowlistAdmits|SameGuildThreadTargetAllowlistAdmits|CrossChannelRequiresGuildContext|CrossChannelRejectsMetadataGuildMismatch|InitialTaskUsesSharedDiscordThread)|TestA2AToolsPolicyPlanPolicyApply|TestA2APolicyFormatterIncludesPolicyMutationFields|TestA2A(Slash|Buttons|Confirmation|Locale)'`.
+  - Full regression passed: `env -u NATS_URL -u NATS_CREDS_FILE -u NATS_TOKEN -u NATS_TLS_CA_FILE -u A2A_AGENT_ID -u A2A_RUNTIME_ID_MODE -u A2A_AGENT_NAME -u A2A_AGENT_DESCRIPTION -u A2A_REQUIRE_CONFIRMATION_FOR_REMOTE go test ./...`.
+  - LSP workspace diagnostics reported no issues.
+  - Strict reviewer initially found two security blockers: spoofable cross-guild allowlist target and remote tool policy derived from delivery target. Fixed by keeping `admission.Request.ChannelID` policy-bound, verifying cross-channel egress target guild through channel metadata, and preserving the validated Discord egress target separately; reviewer recheck reported no remaining blockers.
+- Runtime settings touched: no env or live policy changes. `policy.sqlite` gets additive column `co_present_target_channels_json` with default `[]` on next store open.
+- Deployment hosts touched: none.
+- Rollback boundary: revert this section's code/doc changes and restart bots if deployed; existing same-channel `transparent + co_present` behavior remains from R20-R22.
+- Next phase: if operator approves deployment, rebuild/restart local and d80 bot binaries, then issue a real delegated A2A task that targets an allowlisted same-guild Discord thread/channel and confirm executor-owned reply delivery plus `/a2a status` behavior.
+
 ## Master goal prompt
 
 Use this prompt when starting or resuming the full implementation program:

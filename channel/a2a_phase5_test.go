@@ -12,6 +12,7 @@ import (
 
 	"github.com/nczz/kiro-discord-bot/a2a"
 	"github.com/nczz/kiro-discord-bot/acp"
+	"github.com/nczz/kiro-discord-bot/internal/channelmeta"
 	L "github.com/nczz/kiro-discord-bot/locale"
 )
 
@@ -79,6 +80,13 @@ func newPhase5Harness(t *testing.T, mutate func(*a2a.ChannelA2APolicy, *a2a.Conf
 	m.mu.Unlock()
 	t.Cleanup(m.StopAll)
 	return &phase5Harness{manager: m, agent: agent, policy: policyStore, tasks: taskStore, dataDir: dataDir, rt: rt}
+}
+
+func addPhase5ChannelMeta(t *testing.T, h *phase5Harness, id, guildID string) {
+	t.Helper()
+	if err := channelmeta.Upsert(h.dataDir, channelmeta.Entry{ID: id, GuildID: guildID, Type: "channel"}); err != nil {
+		t.Fatalf("channelmeta.Upsert: %v", err)
+	}
 }
 
 func phase5Request() a2a.TaskExecutionRequest {
@@ -366,6 +374,162 @@ func TestManagerA2ACoPresentInitialTaskUsesSharedDiscordThread(t *testing.T) {
 	}
 	if createdThread || !finalInSharedThread {
 		t.Fatalf("createdThread=%v finalInSharedThread=%v reqs=%v bodies=%v", createdThread, finalInSharedThread, reqs, bodies)
+	}
+}
+
+func TestManagerA2ACoPresentSameGuildTargetRequiresAllowlist(t *testing.T) {
+	h := newPhase5Harness(t, func(policy *a2a.ChannelA2APolicy, cfg *a2a.Config) {
+		policy.ResultVisibility = "transparent"
+		policy.DiscordTranscriptMode = "co_present"
+		policy.ShareDiscordContext = true
+		policy.CoPresentFrom = []string{"eve-local"}
+	})
+	dc := a2a.DiscordContext{GuildID: "guild-1", ChannelID: "channel-2", ThreadID: "thread-shared"}
+	raw, _ := json.Marshal(dc)
+	req := phase5Request()
+	req.GuildID = "guild-1"
+	req.ChannelID = "channel-2"
+	req.ResultVisibility = "transparent"
+	req.DiscordTranscriptMode = "co_present"
+	req.Delivery.ShareDiscordContext = true
+	req.Delivery.CoPresentFrom = "eve-local"
+	req.Delivery.DiscordContext = &dc
+	req.Delivery.DiscordContextJSON = raw
+
+	res, err := h.manager.AdmitA2ATask(context.Background(), req)
+	if err != nil {
+		t.Fatalf("AdmitA2ATask error: %v", err)
+	}
+	if res.Accepted || res.Error.Code != a2a.ErrorPolicyDenied {
+		t.Fatalf("same-guild cross-channel co-present accepted without target allowlist: %#v", res)
+	}
+}
+
+func TestManagerA2ACoPresentSameGuildTargetAllowlistAdmits(t *testing.T) {
+	h := newPhase5Harness(t, func(policy *a2a.ChannelA2APolicy, cfg *a2a.Config) {
+		policy.ResultVisibility = "transparent"
+		policy.DiscordTranscriptMode = "co_present"
+		policy.ShareDiscordContext = true
+		policy.CoPresentFrom = []string{"eve-local"}
+		policy.CoPresentTargetChannels = []string{"channel-2"}
+	})
+	addPhase5ChannelMeta(t, h, "thread-shared", "guild-1")
+	dc := a2a.DiscordContext{GuildID: "guild-1", ChannelID: "channel-2", ThreadID: "thread-shared"}
+	raw, _ := json.Marshal(dc)
+	req := phase5Request()
+	req.GuildID = "guild-1"
+	req.ChannelID = "channel-2"
+	req.ResultVisibility = "transparent"
+	req.DiscordTranscriptMode = "co_present"
+	req.Delivery.ShareDiscordContext = true
+	req.Delivery.CoPresentFrom = "eve-local"
+	req.Delivery.DiscordContext = &dc
+	req.Delivery.DiscordContextJSON = raw
+
+	res, err := h.manager.AdmitA2ATask(context.Background(), req)
+	if err != nil {
+		t.Fatalf("AdmitA2ATask error: %v", err)
+	}
+	if !res.Accepted {
+		t.Fatalf("same-guild cross-channel co-present rejected with target allowlist: %#v", res.Error)
+	}
+	if threadID := a2aConversationThreadID(res.Admission); threadID != "thread-shared" {
+		t.Fatalf("conversation thread = %q, want allowlisted target thread", threadID)
+	}
+	if res.Admission.Request.ChannelID != "channel-1" {
+		t.Fatalf("execution channel = %q, want executor policy channel", res.Admission.Request.ChannelID)
+	}
+}
+
+func TestManagerA2ACoPresentSameGuildThreadTargetAllowlistAdmits(t *testing.T) {
+	h := newPhase5Harness(t, func(policy *a2a.ChannelA2APolicy, cfg *a2a.Config) {
+		policy.ResultVisibility = "transparent"
+		policy.DiscordTranscriptMode = "co_present"
+		policy.ShareDiscordContext = true
+		policy.CoPresentFrom = []string{"eve-local"}
+		policy.CoPresentTargetChannels = []string{"thread-shared"}
+	})
+	addPhase5ChannelMeta(t, h, "thread-shared", "guild-1")
+	dc := a2a.DiscordContext{GuildID: "guild-1", ChannelID: "channel-2", ThreadID: "thread-shared"}
+	raw, _ := json.Marshal(dc)
+	req := phase5Request()
+	req.GuildID = "guild-1"
+	req.ChannelID = "channel-2"
+	req.ResultVisibility = "transparent"
+	req.DiscordTranscriptMode = "co_present"
+	req.Delivery.ShareDiscordContext = true
+	req.Delivery.CoPresentFrom = "eve-local"
+	req.Delivery.DiscordContext = &dc
+	req.Delivery.DiscordContextJSON = raw
+
+	res, err := h.manager.AdmitA2ATask(context.Background(), req)
+	if err != nil {
+		t.Fatalf("AdmitA2ATask error: %v", err)
+	}
+	if !res.Accepted {
+		t.Fatalf("same-guild cross-thread co-present rejected with thread allowlist: %#v", res.Error)
+	}
+	if threadID := a2aConversationThreadID(res.Admission); threadID != "thread-shared" {
+		t.Fatalf("conversation thread = %q, want allowlisted target thread", threadID)
+	}
+}
+
+func TestManagerA2ACoPresentCrossChannelRequiresGuildContext(t *testing.T) {
+	h := newPhase5Harness(t, func(policy *a2a.ChannelA2APolicy, cfg *a2a.Config) {
+		policy.ResultVisibility = "transparent"
+		policy.DiscordTranscriptMode = "co_present"
+		policy.ShareDiscordContext = true
+		policy.CoPresentFrom = []string{"eve-local"}
+		policy.CoPresentTargetChannels = []string{"*"}
+	})
+	dc := a2a.DiscordContext{ChannelID: "channel-2", ThreadID: "thread-shared"}
+	raw, _ := json.Marshal(dc)
+	req := phase5Request()
+	req.GuildID = "guild-1"
+	req.ChannelID = "channel-2"
+	req.ResultVisibility = "transparent"
+	req.DiscordTranscriptMode = "co_present"
+	req.Delivery.ShareDiscordContext = true
+	req.Delivery.CoPresentFrom = "eve-local"
+	req.Delivery.DiscordContext = &dc
+	req.Delivery.DiscordContextJSON = raw
+
+	res, err := h.manager.AdmitA2ATask(context.Background(), req)
+	if err != nil {
+		t.Fatalf("AdmitA2ATask error: %v", err)
+	}
+	if res.Accepted || res.Error.Code != a2a.ErrorPolicyDenied {
+		t.Fatalf("cross-channel co-present accepted without guild context: %#v", res)
+	}
+}
+
+func TestManagerA2ACoPresentCrossChannelRejectsMetadataGuildMismatch(t *testing.T) {
+	h := newPhase5Harness(t, func(policy *a2a.ChannelA2APolicy, cfg *a2a.Config) {
+		policy.ResultVisibility = "transparent"
+		policy.DiscordTranscriptMode = "co_present"
+		policy.ShareDiscordContext = true
+		policy.CoPresentFrom = []string{"eve-local"}
+		policy.CoPresentTargetChannels = []string{"*"}
+	})
+	addPhase5ChannelMeta(t, h, "thread-shared", "guild-2")
+	dc := a2a.DiscordContext{GuildID: "guild-1", ChannelID: "channel-2", ThreadID: "thread-shared"}
+	raw, _ := json.Marshal(dc)
+	req := phase5Request()
+	req.GuildID = "guild-1"
+	req.ChannelID = "channel-2"
+	req.ResultVisibility = "transparent"
+	req.DiscordTranscriptMode = "co_present"
+	req.Delivery.ShareDiscordContext = true
+	req.Delivery.CoPresentFrom = "eve-local"
+	req.Delivery.DiscordContext = &dc
+	req.Delivery.DiscordContextJSON = raw
+
+	res, err := h.manager.AdmitA2ATask(context.Background(), req)
+	if err != nil {
+		t.Fatalf("AdmitA2ATask error: %v", err)
+	}
+	if res.Accepted || res.Error.Code != a2a.ErrorPolicyDenied {
+		t.Fatalf("cross-guild co-present accepted with claimed executor guild: %#v", res)
 	}
 }
 

@@ -67,46 +67,47 @@ type A2AService struct {
 }
 
 type A2AToolRequest struct {
-	GuildID              string   `json:"guild_id,omitempty"`
-	ChannelID            string   `json:"channel_id,omitempty"`
-	RequestedBy          string   `json:"requested_by,omitempty"`
-	RequestedByID        string   `json:"requested_by_id,omitempty"`
-	ManageChannels       bool     `json:"manage_channels,omitempty"`
-	TargetAgent          string   `json:"target_agent,omitempty"`
-	SkillID              string   `json:"skill_id,omitempty"`
-	Message              string   `json:"message,omitempty"`
-	Reason               string   `json:"reason,omitempty"`
-	TaskID               string   `json:"task_id,omitempty"`
-	MessageID            string   `json:"message_id,omitempty"`
-	LocalID              string   `json:"local_id,omitempty"`
-	Input                string   `json:"input,omitempty"`
-	Approve              bool     `json:"approve,omitempty"`
-	DenyReason           string   `json:"deny_reason,omitempty"`
-	ChangeID             string   `json:"change_id,omitempty"`
-	ConfirmationToken    string   `json:"confirmation_token,omitempty"`
-	PolicyAction         string   `json:"policy_action,omitempty"`
-	RequiresConfirmation bool     `json:"requires_confirmation,omitempty"`
-	DeliveryMode         string   `json:"delivery_mode,omitempty"`
-	TranscriptMode       string   `json:"transcript_mode,omitempty"`
-	ResultVisibility     string   `json:"result_visibility,omitempty"`
-	ChannelRef           string   `json:"channel_ref,omitempty"`
-	TargetChannelID      string   `json:"target_channel_id,omitempty"`
-	TargetThreadID       string   `json:"target_thread_id,omitempty"`
-	TargetChannelRef     string   `json:"target_channel_ref,omitempty"`
-	SetupMode            string   `json:"setup_mode,omitempty"`
-	Enable               *bool    `json:"enable,omitempty"`
-	AcceptFrom           []string `json:"accept_from,omitempty"`
-	AcceptSkills         []string `json:"accept_skills,omitempty"`
-	ExposeSkills         []string `json:"expose_skills,omitempty"`
-	DelegateTo           []string `json:"delegate_to,omitempty"`
-	DelegateSkills       []string `json:"delegate_skills,omitempty"`
-	DelegateMediaTypes   []string `json:"delegate_media_types,omitempty"`
-	DelegateMaxBytes     int64    `json:"delegate_max_bytes,omitempty"`
-	MaxConcurrent        *int     `json:"max_concurrent,omitempty"`
-	ShareDiscordContext  *bool    `json:"share_discord_context,omitempty"`
-	CoPresentFrom        []string `json:"co_present_from,omitempty"`
-	AllowMemoryWrite     *bool    `json:"allow_memory_write,omitempty"`
-	Limit                int      `json:"limit,omitempty"`
+	GuildID                 string   `json:"guild_id,omitempty"`
+	ChannelID               string   `json:"channel_id,omitempty"`
+	RequestedBy             string   `json:"requested_by,omitempty"`
+	RequestedByID           string   `json:"requested_by_id,omitempty"`
+	ManageChannels          bool     `json:"manage_channels,omitempty"`
+	TargetAgent             string   `json:"target_agent,omitempty"`
+	SkillID                 string   `json:"skill_id,omitempty"`
+	Message                 string   `json:"message,omitempty"`
+	Reason                  string   `json:"reason,omitempty"`
+	TaskID                  string   `json:"task_id,omitempty"`
+	MessageID               string   `json:"message_id,omitempty"`
+	LocalID                 string   `json:"local_id,omitempty"`
+	Input                   string   `json:"input,omitempty"`
+	Approve                 bool     `json:"approve,omitempty"`
+	DenyReason              string   `json:"deny_reason,omitempty"`
+	ChangeID                string   `json:"change_id,omitempty"`
+	ConfirmationToken       string   `json:"confirmation_token,omitempty"`
+	PolicyAction            string   `json:"policy_action,omitempty"`
+	RequiresConfirmation    bool     `json:"requires_confirmation,omitempty"`
+	DeliveryMode            string   `json:"delivery_mode,omitempty"`
+	TranscriptMode          string   `json:"transcript_mode,omitempty"`
+	ResultVisibility        string   `json:"result_visibility,omitempty"`
+	ChannelRef              string   `json:"channel_ref,omitempty"`
+	TargetChannelID         string   `json:"target_channel_id,omitempty"`
+	TargetThreadID          string   `json:"target_thread_id,omitempty"`
+	TargetChannelRef        string   `json:"target_channel_ref,omitempty"`
+	SetupMode               string   `json:"setup_mode,omitempty"`
+	Enable                  *bool    `json:"enable,omitempty"`
+	AcceptFrom              []string `json:"accept_from,omitempty"`
+	AcceptSkills            []string `json:"accept_skills,omitempty"`
+	ExposeSkills            []string `json:"expose_skills,omitempty"`
+	DelegateTo              []string `json:"delegate_to,omitempty"`
+	DelegateSkills          []string `json:"delegate_skills,omitempty"`
+	DelegateMediaTypes      []string `json:"delegate_media_types,omitempty"`
+	DelegateMaxBytes        int64    `json:"delegate_max_bytes,omitempty"`
+	MaxConcurrent           *int     `json:"max_concurrent,omitempty"`
+	ShareDiscordContext     *bool    `json:"share_discord_context,omitempty"`
+	CoPresentFrom           []string `json:"co_present_from,omitempty"`
+	CoPresentTargetChannels []string `json:"co_present_target_channels,omitempty"`
+	AllowMemoryWrite        *bool    `json:"allow_memory_write,omitempty"`
+	Limit                   int      `json:"limit,omitempty"`
 }
 
 type A2AToolResponse struct {
@@ -989,6 +990,7 @@ func (s *A2AService) applyPolicyDiff(policy a2a.ChannelA2APolicy, req A2AToolReq
 		policy.ShareDiscordContext = *req.ShareDiscordContext
 	}
 	policy.CoPresentFrom = appendUnique(policy.CoPresentFrom, req.CoPresentFrom...)
+	policy.CoPresentTargetChannels = appendUnique(policy.CoPresentTargetChannels, req.CoPresentTargetChannels...)
 	if req.AllowMemoryWrite != nil {
 		policy.RemoteToolPolicy.AllowMemoryWrite = *req.AllowMemoryWrite
 	}

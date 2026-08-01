@@ -554,6 +554,7 @@ CREATE TABLE IF NOT EXISTS channel_a2a_policy (
   discord_transcript_mode TEXT NOT NULL DEFAULT 'delegator',
   share_discord_context INTEGER NOT NULL DEFAULT 0,
   co_present_from_json TEXT NOT NULL DEFAULT '[]',
+  co_present_target_channels_json TEXT NOT NULL DEFAULT '[]',
   auto_delegate_enabled INTEGER NOT NULL DEFAULT 0,
   remote_tool_policy_json TEXT NOT NULL DEFAULT '{}',
   created_at TEXT NOT NULL,
@@ -563,7 +564,7 @@ CREATE TABLE IF NOT EXISTS channel_a2a_policy (
 );
 ```
 
-8. Validate policy rules exactly: `channel_ref` required when enabled; `channel_ref` unique per `A2A_AGENT_ID`; `result_visibility` in `proxy|transparent`; `discord_transcript_mode` in `delegator|mirror|co_present`; `share_discord_context` only with `co_present`; agent lists are stable IDs or explicit `*`; skill lists are slugs or explicitly chosen peer skill IDs; media rules define MIME types, max bytes, and object-ref permission; `remote_tool_policy_json.allow_memory_write` defaults false and is the only way channel policy permits remote memory writes; `max_concurrent` is `0..64` with `0` unlimited.
+8. Validate policy rules exactly: `channel_ref` required when enabled; `channel_ref` unique per `A2A_AGENT_ID`; `result_visibility` in `proxy|transparent`; `discord_transcript_mode` in `delegator|mirror|co_present`; `share_discord_context` only with `co_present`; agent lists are stable IDs or explicit `*`; `co_present_target_channels` entries are Discord channel/thread IDs or `*` and only widen co-present within the same guild; skill lists are slugs or explicitly chosen peer skill IDs; media rules define MIME types, max bytes, and object-ref permission; `remote_tool_policy_json.allow_memory_write` defaults false and is the only way channel policy permits remote memory writes; `max_concurrent` is `0..64` with `0` unlimited.
 9. Validate `0` means unlimited for concurrency, quota/backpressure envs, and retention.
 10. Implement peer card sanitizer fields and object reference digest validation without object bytes upload yet.
 
@@ -810,7 +811,7 @@ go test ./bot ./locale -run 'TestA2A(Slash|Buttons|Confirmation|Locale|Permissio
 3. Implement retention cleanup: `0` keeps permanently; positive days purge expired TaskStore/Object rows only.
 4. Add proxy delivery through delegator safe egress by default.
 5. Add mirror mode: delegator mirrors executor events with labels, no executor Discord egress.
-6. Add co-present mode: require same guild/channel/thread, both bot permissions, `share_discord_context=true`, and executor inbound `co_present_from` allow.
+6. Add co-present mode: require same guild, both bot permissions, `share_discord_context=true`, executor inbound `co_present_from` allow, and either same channel/thread or an explicit same-guild `co_present_target_channels` allowlist entry.
 7. Add transparent final result only when result visibility and safe egress checks pass.
 8. Audit every visible Discord post with actor agent ID, Discord user ID where known, transcript delivery kind, source event revision, source event ID, error code, payload size, and artifact count.
 9. Record every A2A audit event named in spec section 19 when applicable: `a2a_peer_card_updated`, `a2a_policy_change_planned`, `a2a_policy_change_applied`, `a2a_policy_change_denied`, `a2a_task_send_requested`, `a2a_task_publish_failed`, `a2a_task_received`, `a2a_task_rejected`, `a2a_task_admitted`, `a2a_task_started`, `a2a_task_status_published`, `a2a_task_artifact_published`, `a2a_task_completed`, `a2a_task_failed`, `a2a_task_canceled`, `a2a_result_received`, `a2a_result_delivered`, `a2a_control_received`, `a2a_auth_required`, `a2a_input_required`, and `a2a_transcript_posted`.

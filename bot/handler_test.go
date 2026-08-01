@@ -1570,8 +1570,8 @@ func TestSlashCommandsIncludeAgentAndUsage(t *testing.T) {
 		}
 		if cmd.Name == "a2a" {
 			foundA2A = true
-			if len(cmd.Options) != 20 {
-				t.Fatalf("/a2a should expose 20 subcommands, got %+v", cmd.Options)
+			if len(cmd.Options) != 21 {
+				t.Fatalf("/a2a should expose 21 subcommands, got %+v", cmd.Options)
 			}
 			if cmd.Options[0].Name != "peers" || cmd.Options[1].Name != "setup" || cmd.Options[2].Name != "ask" || cmd.Options[4].Name != "delegate" {
 				t.Fatalf("/a2a subcommands = %+v", cmd.Options)
@@ -1742,8 +1742,8 @@ func TestA2ATranscriptModeSafeClearsContextSharing(t *testing.T) {
 
 func TestA2APolicyFormatterIncludesPolicyMutationFields(t *testing.T) {
 	L.Load("en")
-	got := formatA2APolicy("Preview", a2a.ChannelA2APolicy{Enabled: true, ChannelRef: "d80-test", ResultVisibility: "transparent", DiscordTranscriptMode: "co_present", ShareDiscordContext: true, AcceptFrom: []string{"d80-chunbot"}, AcceptSkills: []string{"task"}, ExposeSkills: []a2a.SkillPolicy{{ID: "task"}}, DelegateTo: []string{"d80-chunbot"}, DelegateSkills: []string{"general/task"}, CoPresentFromRuntimes: []string{"d80-chunbot-main"}, MaxConcurrent: 3})
-	for _, want := range []string{"Result visibility", "Local capabilities exposed", "`task`", "Max concurrent inbound tasks: 3", "Same-thread co-present readiness: ready", "Co-present runtime allowlist: `d80-chunbot-main`"} {
+	got := formatA2APolicy("Preview", a2a.ChannelA2APolicy{Enabled: true, ChannelRef: "d80-test", ResultVisibility: "transparent", DiscordTranscriptMode: "co_present", ShareDiscordContext: true, AcceptFrom: []string{"d80-chunbot"}, AcceptSkills: []string{"task"}, ExposeSkills: []a2a.SkillPolicy{{ID: "task"}}, DelegateTo: []string{"d80-chunbot"}, DelegateSkills: []string{"general/task"}, CoPresentFromRuntimes: []string{"d80-chunbot-main"}, CoPresentTargetChannels: []string{"1495737768905670719"}, MaxConcurrent: 3})
+	for _, want := range []string{"Result visibility", "Local capabilities exposed", "`task`", "Max concurrent inbound tasks: 3", "Same-thread co-present readiness: ready", "Co-present runtime allowlist: `d80-chunbot-main`", "Same-server co-present target channels: `1495737768905670719`"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("formatA2APolicy = %q, missing %q", got, want)
 		}

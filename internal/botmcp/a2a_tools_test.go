@@ -42,7 +42,7 @@ func TestA2AToolsPolicyPlanPolicyApply(t *testing.T) {
 		t.Fatalf("Upsert untrusted peer: %v", err)
 	}
 
-	planReq := A2AToolRequest{GuildID: "guild-1", ChannelID: "channel-1", RequestedBy: "manager", RequestedByID: "manager-1", ManageChannels: true, Enable: &enable, ChannelRef: "case/alpha", ExposeSkills: []string{"search-case"}, DelegateTo: []string{"peer-n100"}, DelegateSkills: []string{"summarize-case"}}
+	planReq := A2AToolRequest{GuildID: "guild-1", ChannelID: "channel-1", RequestedBy: "manager", RequestedByID: "manager-1", ManageChannels: true, Enable: &enable, ChannelRef: "case/alpha", ExposeSkills: []string{"search-case"}, DelegateTo: []string{"peer-n100"}, DelegateSkills: []string{"summarize-case"}, CoPresentTargetChannels: []string{"channel-2"}}
 	planned, err := svc.PolicyPlan(context.Background(), planReq)
 	if err != nil {
 		t.Fatalf("PolicyPlan manager err: %v", err)
@@ -60,7 +60,7 @@ func TestA2AToolsPolicyPlanPolicyApply(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PolicyApply: %v", err)
 	}
-	if !applied.OK || applied.Policy == nil || !applied.Policy.Enabled || applied.Policy.ChannelRef != "case/alpha" {
+	if !applied.OK || applied.Policy == nil || !applied.Policy.Enabled || applied.Policy.ChannelRef != "case/alpha" || len(applied.Policy.CoPresentTargetChannels) != 1 || applied.Policy.CoPresentTargetChannels[0] != "channel-2" {
 		t.Fatalf("PolicyApply = %+v, want persisted policy", applied)
 	}
 	peer, err := svc.peers.Get(context.Background(), "peer-n100")
