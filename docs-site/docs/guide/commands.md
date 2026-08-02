@@ -68,17 +68,14 @@ See [Audit, Usage, and Privacy](audit-usage-privacy.md) for how audit rows, audi
 
 ## Scoped Skills
 
-Use scoped skills to save reviewed reusable procedures for a server, channel, project, or channel/project pair. Prefer natural-language requests for drafting and updating skills; slash commands are fallback and admin shortcuts. See [Scoped Skills](scoped-skills.md) for scope precedence, bot-tools behavior, audit, and recovery.
+Use scoped skills to save reviewed reusable procedures for a server, channel, project, or channel/project pair. Prefer natural-language requests for creating and updating skills; slash commands are fallback and admin shortcuts. See [Scoped Skills](scoped-skills.md) for scope precedence, bot-tools behavior, audit, and recovery.
 
 | Command | Purpose |
 | --- | --- |
-| `/skill list [query]` | List effective skills for the current channel/project. |
-| `/skill get skill_id:<id-or-slug>` | Read one visible skill. |
-| `/skill draft` | Create a reviewable skill draft from explicit fields. |
-| `/skill preview draft_id:<draft>` | Preview a draft and show review buttons. |
-| `/skill install draft_id:<draft>` | Install a reviewed draft when the caller can manage the target scope. |
-| `/skill discard draft_id:<draft>` | Reject a draft. |
-| `/skill disable` / `/skill restore` / `/skill rollback` | Manage active versions for an authorized scope. |
+| `/skill list [query]` | Managers see installed skills, including disabled skills; other users see only effective skills. |
+| `/skill get skill_id:<id-or-slug>` | Managers can read one installed skill after scope checks; other users can read only effective skills. |
+| `/skill create` | Create a skill from explicit fields; it is installed disabled by default. |
+| `/skill disable` / `/skill enable` / `/skill restore` / `/skill rollback` | Manage lifecycle state for an authorized scope. |
 | `/skill history skill_id:<id-or-slug> [scope]` | Show recent lifecycle audit history. |
 
 ## A2A

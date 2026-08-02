@@ -14,6 +14,7 @@ type MaterializedFile struct {
 	Path         string `json:"path"`
 	RelativePath string `json:"relative_path"`
 	SHA256       string `json:"sha256"`
+	Existed      bool   `json:"existed"`
 }
 
 func Materialize(projectCWD, slug, content string, overwrite bool) (MaterializedFile, error) {
@@ -55,7 +56,9 @@ func Materialize(projectCWD, slug, content string, overwrite bool) (Materialized
 		return MaterializedFile{}, err
 	}
 	sha := ContentSHA256(content)
+	existed := false
 	if raw, err := os.ReadFile(clean); err == nil {
+		existed = true
 		if ContentSHA256(string(raw)) != sha && !overwrite {
 			return MaterializedFile{}, ErrMaterializedDrift
 		}
@@ -91,7 +94,24 @@ func Materialize(projectCWD, slug, content string, overwrite bool) (Materialized
 		return MaterializedFile{}, err
 	}
 	removeTmp = false
-	return MaterializedFile{Path: clean, RelativePath: filepath.ToSlash(rel), SHA256: sha}, nil
+	return MaterializedFile{Path: clean, RelativePath: filepath.ToSlash(rel), SHA256: sha, Existed: existed}, nil
+}
+
+func RemoveMaterializedFileIfNewAndUnchanged(file MaterializedFile) error {
+	if strings.TrimSpace(file.Path) == "" || file.Existed {
+		return nil
+	}
+	raw, err := os.ReadFile(file.Path)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if ContentSHA256(string(raw)) != file.SHA256 {
+		return nil
+	}
+	return os.Remove(file.Path)
 }
 
 func ValidateProjectCWD(cwd string, allowedRoots []string) (string, error) {

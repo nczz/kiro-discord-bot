@@ -42,9 +42,9 @@ func commandError(err error) string {
 		return L.Getf("error.kiro_auth", msg)
 	case strings.Contains(lower, "skills store is unavailable"):
 		return L.Get("skill.error.store_unavailable")
-	case strings.Contains(lower, "skill draft content is required"):
+	case strings.Contains(lower, "skill content is required"):
 		return L.Get("skill.error.content_required")
-	case strings.Contains(lower, "skill draft content must be curated markdown"):
+	case strings.Contains(lower, "skill content must be curated markdown"):
 		return L.Get("skill.error.raw_html_content")
 	case strings.Contains(lower, "required tools must be json"):
 		return L.Get("skill.error.required_tools_json")
@@ -63,9 +63,9 @@ func commandError(err error) string {
 	case strings.Contains(lower, "unsupported skill scope"):
 		return L.Get("skill.error.unsupported_scope")
 	case strings.Contains(lower, "is not an active draft"):
-		return L.Get("skill.error.draft_not_active")
+		return L.Get("skill.error.creation_not_active")
 	case strings.Contains(lower, "draft ") && strings.Contains(lower, " expired"):
-		return L.Get("skill.error.draft_expired")
+		return L.Get("skill.error.creation_expired")
 	case strings.Contains(lower, "materialized skill file drifted"):
 		return L.Get("skill.error.materialized_drift")
 	case strings.Contains(lower, "queue full"):

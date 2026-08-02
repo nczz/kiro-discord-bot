@@ -29,7 +29,7 @@ Thread targets inherit the parent channel scope. Project-scoped resolution uses 
 The preferred workflow is conversational:
 
 1. Ask the channel agent to create a skill from a procedure, prior discussion, Markdown, URL, Gist, GitHub repository, or file.
-2. The agent researches any sources itself, extracts the reusable procedure, and calls `bot_skill_create_draft` with only clean curated Markdown plus source refs.
+2. The agent researches any sources itself, extracts the reusable procedure, and calls `bot_skill_create` with only clean curated Markdown plus source refs.
 3. The bot creates the skill as installed but disabled. It is listed for channel managers, but agents cannot use it yet.
 4. A channel manager clicks **Enable** or runs `/skill enable skill_id:<id-or-slug>` when the procedure is ready to use.
 5. The bot records mutation audit data before reporting success.
@@ -43,10 +43,6 @@ Slash commands remain fallback and admin shortcuts.
 | `/skill list [query]` | Managers see installed skills for the current channel/project, including disabled skills; other users see only effective skills. |
 | `/skill get skill_id:<id-or-slug>` | Managers can read one installed skill after scope checks; other users can read only effective skills. |
 | `/skill create` | Create a skill from explicit name/content fields; it is installed disabled by default. |
-| `/skill draft` | Legacy: create a review draft without installing it. |
-| `/skill preview draft_id:<draft>` | Preview a legacy draft with review buttons. |
-| `/skill install draft_id:<draft>` | Legacy: install a reviewed draft when the caller can manage the target scope. |
-| `/skill discard draft_id:<draft>` | Reject a legacy draft. |
 | `/skill disable skill_id:<id-or-slug> [scope]` | Disable an installed skill at the selected scope. |
 | `/skill enable skill_id:<id-or-slug> [scope]` | Enable an installed disabled skill at the selected scope. |
 | `/skill restore skill_id:<id-or-slug> [scope]` | Restore a disabled skill at the selected scope. |

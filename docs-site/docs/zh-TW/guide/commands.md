@@ -72,13 +72,10 @@ Audit rows、audit prompt investigations 與 usage attribution 的行為見 [Aud
 
 | Command | 用途 |
 | --- | --- |
-| `/skill list [query]` | 列出目前 channel/project 的 effective skills。 |
-| `/skill get skill_id:<id-or-slug>` | 讀取一個 visible skill。 |
-| `/skill draft` | 用明確欄位建立可 review 的 skill draft。 |
-| `/skill preview draft_id:<draft>` | 預覽 draft 並顯示 review buttons。 |
-| `/skill install draft_id:<draft>` | Caller 可管理目標 scope 時安裝已 review 的 draft。 |
-| `/skill discard draft_id:<draft>` | 拒絕 draft。 |
-| `/skill disable` / `/skill restore` / `/skill rollback` | 管理 authorized scope 的 active versions。 |
+| `/skill list [query]` | Manager 會看到已安裝 skills，包含已停用項目；其他使用者只看到 effective skills。 |
+| `/skill get skill_id:<id-or-slug>` | Manager 可在 scope 檢查後讀取已安裝 skill；其他使用者只能讀取 effective skills。 |
+| `/skill create` | 用明確欄位建立 skill；預設已安裝但停用。 |
+| `/skill disable` / `/skill enable` / `/skill restore` / `/skill rollback` | 管理 authorized scope 的 lifecycle state。 |
 | `/skill history skill_id:<id-or-slug> [scope]` | 顯示近期 lifecycle audit history。 |
 
 ## A2A

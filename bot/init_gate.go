@@ -29,7 +29,7 @@ func commandRequiresInitializedChannel(name, args string) bool {
 		}
 	case "skill":
 		fields := strings.Fields(args)
-		return len(fields) > 0 && fields[0] != "list" && fields[0] != "search" && fields[0] != "get" && fields[0] != "preview"
+		return len(fields) > 0 && fields[0] != "list" && fields[0] != "search" && fields[0] != "get"
 	default:
 		return false
 	}

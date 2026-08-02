@@ -20,10 +20,8 @@ const (
 	ToolSkillsEffectiveList             = "bot_skills_effective_list"
 	ToolSkillGet                        = "bot_skill_get"
 	ToolSkillUsageRecord                = "bot_skill_usage_record"
-	ToolSkillCreateDraft                = "bot_skill_create_draft"
-	ToolSkillPreviewDraft               = "bot_skill_preview_draft"
-	ToolSkillInstallDraft               = "bot_skill_install_draft"
-	ToolSkillDiscardDraft               = "bot_skill_discard_draft"
+	ToolSkillCreate                     = "bot_skill_create"
+	ToolSkillsChannelInventory          = "bot_skills_channel_inventory"
 	ToolSkillsChannelEnable             = "bot_skills_channel_enable"
 	ToolSkillsChannelDisable            = "bot_skills_channel_disable"
 	ToolSkillsChannelRemove             = "bot_skills_channel_remove"
@@ -56,20 +54,12 @@ func registerSkillTools(s *server.MCPServer) {
 		result, err := skillUsageRecord(ctx, dataDir(), req)
 		return skillJSONResult(result, err), nil
 	})
-	s.AddTool(skillCreateDraftTool(), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		result, err := skillCreateDraft(ctx, dataDir(), req)
+	s.AddTool(skillCreateTool(), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		result, err := skillCreate(ctx, dataDir(), req)
 		return skillJSONResult(result, err), nil
 	})
-	s.AddTool(skillPreviewDraftTool(), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		result, err := skillPreviewDraft(ctx, dataDir(), req)
-		return skillJSONResult(result, err), nil
-	})
-	s.AddTool(skillInstallDraftTool(), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		result, err := skillInstallDraft(ctx, dataDir(), req)
-		return skillJSONResult(result, err), nil
-	})
-	s.AddTool(skillDiscardDraftTool(), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		result, err := skillDiscardDraft(ctx, dataDir(), req)
+	s.AddTool(skillChannelInventoryTool(), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		result, err := skillChannelInventory(ctx, dataDir(), req)
 		return skillJSONResult(result, err), nil
 	})
 	s.AddTool(skillChannelLifecycleTool(ToolSkillsChannelEnable, "Enable a previously installed channel/project skill for this authenticated Discord channel context."), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -199,16 +189,16 @@ func skillUsageTool() mcp.Tool {
 	)
 }
 
-func skillDraftTool(name, desc string) mcp.Tool {
-	return mcp.NewTool(name,
-		mcp.WithDescription(desc),
+func skillCreateTool() mcp.Tool {
+	return mcp.NewTool(ToolSkillCreate,
+		mcp.WithDescription("Create one installed but disabled skill from agent-curated markdown. Use this for every user request to create a skill, including URLs, Gists, repositories, files, and prior conversation: inspect sources with normal agent tools first, then submit only the clean final skill markdown. This tool never fetches URLs, executes source content, enables the skill, or grants missing MCP tools."),
 		mcp.WithString("name", mcp.Required(), mcp.Description("Human-readable skill name.")),
 		mcp.WithString("slug", mcp.Description("Optional lowercase skill slug. If omitted, derived from name.")),
 		mcp.WithString("description", mcp.Description("Short skill description.")),
 		mcp.WithString("scope_type", mcp.Required(), mcp.Description("guild, channel, project, or channel_project.")),
 		mcp.WithString("guild_id", mcp.Description("Discord guild/server ID. Defaults to bound bot-tools guild.")),
 		mcp.WithString("channel_id", mcp.Description("Discord parent channel ID. Defaults to bound bot-tools parent channel.")),
-		mcp.WithString("project_cwd", mcp.Description("Project CWD for project/channel_project scope. Must pass allowed roots before materializing a review copy.")),
+		mcp.WithString("project_cwd", mcp.Description("Project CWD for project/channel_project scope. Must pass allowed roots before materializing a project-local SKILL.md copy.")),
 		mcp.WithString("content_markdown", mcp.Required(), mcp.Description("Agent-curated clean skill markdown. Inspect external URLs/Gists/repos yourself first; do not pass raw HTML or unreviewed page source.")),
 		mcp.WithString("required_tools", mcp.Description("Comma-separated or JSON array MCP tool names required by this skill.")),
 		mcp.WithString("source_type", mcp.Description("Optional audit provenance: conversation, markdown, url, github_repo, or manual. Defaults to conversation.")),
@@ -216,7 +206,7 @@ func skillDraftTool(name, desc string) mcp.Tool {
 		mcp.WithString("source_message_ids", mcp.Description("Optional JSON array or comma-separated Discord message IDs used as source.")),
 		mcp.WithString("risk_level", mcp.Description("low, medium, high, or critical. Defaults to low.")),
 		mcp.WithString("requested_by", mcp.Required(), mcp.Description("Requester identity from Discord context for audit.")),
-		mcp.WithBoolean("overwrite_materialized", mcp.Description("Set true only after explicit user confirmation to replace a drifted project-local SKILL.md review copy.")),
+		mcp.WithBoolean("overwrite_materialized", mcp.Description("Set true only after explicit user confirmation to replace a drifted project-local SKILL.md copy.")),
 		mcp.WithReadOnlyHintAnnotation(false),
 		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithIdempotentHintAnnotation(false),
@@ -224,44 +214,17 @@ func skillDraftTool(name, desc string) mcp.Tool {
 	)
 }
 
-func skillCreateDraftTool() mcp.Tool {
-	return skillDraftTool(ToolSkillCreateDraft, "Create one installed but disabled skill from agent-curated markdown. Use this for every user request to create a skill, including URLs, Gists, repositories, files, and prior conversation: inspect sources with normal agent tools first, then submit only the clean final skill markdown. This tool never fetches URLs, executes source content, enables the skill, or grants missing MCP tools.")
-}
-
-func skillPreviewDraftTool() mcp.Tool {
-	return mcp.NewTool(ToolSkillPreviewDraft,
-		mcp.WithDescription("Preview an inactive skill draft by ID without installing it."),
-		mcp.WithString("draft_id", mcp.Required(), mcp.Description("Draft ID returned by bot_skill_create_draft.")),
-		mcp.WithReadOnlyHintAnnotation(false),
+func skillChannelInventoryTool() mcp.Tool {
+	return mcp.NewTool(ToolSkillsChannelInventory,
+		mcp.WithDescription("List installed channel/project skills, including disabled skills, for an authenticated Discord channel manager. Returns metadata and enabled/executable status without full skill content."),
+		mcp.WithString("query", mcp.Description("Optional search query. Omit to list installed skills.")),
+		mcp.WithString("guild_id", mcp.Description("Discord guild/server ID. Defaults to bound bot-tools guild.")),
+		mcp.WithString("channel_id", mcp.Description("Discord parent channel ID. Defaults to bound bot-tools parent channel.")),
+		mcp.WithString("project_cwd", mcp.Description("Project CWD for channel_project scope. Defaults to bound bot-tools project CWD.")),
+		mcp.WithNumber("limit", mcp.Description("Maximum results, 1-50. Defaults to 10.")),
+		mcp.WithReadOnlyHintAnnotation(true),
 		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithIdempotentHintAnnotation(true),
-		mcp.WithOpenWorldHintAnnotation(false),
-	)
-}
-
-func skillInstallDraftTool() mcp.Tool {
-	return mcp.NewTool(ToolSkillInstallDraft,
-		mcp.WithDescription("Install a previously reviewed skill draft after explicit human confirmation. This never grants missing MCP tools."),
-		mcp.WithString("draft_id", mcp.Required(), mcp.Description("Draft ID to install.")),
-		mcp.WithString("confirmed_by", mcp.Required(), mcp.Description("Discord user identity that confirmed the install.")),
-		mcp.WithBoolean("manage_channels", mcp.Required(), mcp.Description("Server-provided permission result; must be true for channel/project/channel_project install in MCP-only flows.")),
-		mcp.WithBoolean("manage_guild", mcp.Description("Server-provided permission result; must be true for guild install in MCP-only flows.")),
-		mcp.WithBoolean("overwrite_materialized", mcp.Description("Set true only when the user confirmed replacing a drifted project-local SKILL.md.")),
-		mcp.WithReadOnlyHintAnnotation(false),
-		mcp.WithDestructiveHintAnnotation(false),
-		mcp.WithIdempotentHintAnnotation(false),
-		mcp.WithOpenWorldHintAnnotation(false),
-	)
-}
-
-func skillDiscardDraftTool() mcp.Tool {
-	return mcp.NewTool(ToolSkillDiscardDraft,
-		mcp.WithDescription("Reject an inactive skill draft. This does not remove installed skills."),
-		mcp.WithString("draft_id", mcp.Required(), mcp.Description("Draft ID to reject.")),
-		mcp.WithString("confirmed_by", mcp.Required(), mcp.Description("Discord user identity that rejected the draft.")),
-		mcp.WithReadOnlyHintAnnotation(false),
-		mcp.WithDestructiveHintAnnotation(false),
-		mcp.WithIdempotentHintAnnotation(false),
 		mcp.WithOpenWorldHintAnnotation(false),
 	)
 }
@@ -356,18 +319,14 @@ func skillUsageRecord(ctx context.Context, dataDir string, req mcp.CallToolReque
 	return store.RecordUsage(ctx, skills.UsageEvent{SkillID: req.GetString("skill_id", ""), Version: req.GetString("version", ""), GuildID: rc.GuildID, ChannelID: rc.ChannelID, ThreadID: req.GetString("thread_id", ""), ProjectCWDHash: rc.ProjectCWDHash, MessageID: req.GetString("message_id", ""), AgentSessionID: req.GetString("agent_session_id", ""), SelectedBy: req.GetString("selected_by", "")})
 }
 
-func skillCreateDraft(ctx context.Context, dataDir string, req mcp.CallToolRequest) (map[string]any, error) {
+func skillCreate(ctx context.Context, dataDir string, req mcp.CallToolRequest) (map[string]any, error) {
 	sourceType := strings.TrimSpace(req.GetString("source_type", ""))
 	if sourceType == "" {
 		sourceType = skills.SourceConversation
 	} else {
 		sourceType = skills.NormalizeSourceType(sourceType)
 	}
-	draft, err := skillDraft(ctx, dataDir, req, sourceType)
-	if err != nil {
-		return nil, err
-	}
-	materializedPath, materializedSHA, err := materializeSkillDraft(draft, req.GetBool("overwrite_materialized", false))
+	draft, err := skillDraftFromRequest(req, sourceType)
 	if err != nil {
 		return nil, err
 	}
@@ -376,6 +335,10 @@ func skillCreateDraft(ctx context.Context, dataDir string, req mcp.CallToolReque
 		return nil, err
 	}
 	defer store.Close()
+	draft, err = store.CreateDraft(ctx, draft)
+	if err != nil {
+		return nil, err
+	}
 	actor := skills.MutationActor{
 		GuildID:         draft.GuildID,
 		ChannelID:       draft.ChannelID,
@@ -384,65 +347,54 @@ func skillCreateDraft(ctx context.Context, dataDir string, req mcp.CallToolReque
 		SourceMessageID: req.GetString("message_id", ""),
 		AgentSessionID:  req.GetString("agent_session_id", ""),
 		MCPServerName:   "bot-tools",
-		MCPToolName:     ToolSkillCreateDraft,
+		MCPToolName:     ToolSkillCreate,
 	}
-	install, err := store.CreateDisabledInstallFromDraftWithMaterializationAndAudit(ctx, draft.DraftID, actor, "bot skill create request", materializedPath, materializedSHA)
+	materialized, err := materializeSkillDraft(draft, req.GetBool("overwrite_materialized", false))
 	if err != nil {
+		_, _ = store.DiscardDraftWithAudit(ctx, draft.DraftID, actor, "bot skill create request failed before materialization")
 		return nil, err
 	}
-	return map[string]any{"status": "created_disabled", "draft_id": draft.DraftID, "skill_id": install.SkillID, "version": install.Version, "scope_type": install.ScopeType, "guild_id": install.GuildID, "channel_id": install.ChannelID, "enabled": install.Enabled, "install_id": install.InstallID}, nil
+	install, err := store.CreateDisabledInstallFromDraftWithMaterializationAndAudit(ctx, draft.DraftID, actor, "bot skill create request", materialized.RelativePath, materialized.SHA256)
+	if err != nil {
+		_, _ = store.DiscardDraftWithAudit(ctx, draft.DraftID, actor, "bot skill create request failed before install")
+		_ = skills.RemoveMaterializedFileIfNewAndUnchanged(materialized)
+		return nil, err
+	}
+	return map[string]any{"status": "created_disabled", "skill_id": install.SkillID, "version": install.Version, "scope_type": install.ScopeType, "guild_id": install.GuildID, "channel_id": install.ChannelID, "enabled": install.Enabled, "install_id": install.InstallID}, nil
 }
 
-func skillDraft(ctx context.Context, dataDir string, req mcp.CallToolRequest, sourceType string) (skills.Draft, error) {
-	store, err := openSkillsStore(dataDir)
-	if err != nil {
-		return skills.Draft{}, err
-	}
-	defer store.Close()
+func skillDraftFromRequest(req mcp.CallToolRequest, sourceType string) (skills.Draft, error) {
 	rc := skillResolveContext(req)
-	draft, err := skills.NewDraftFromMarkdown(skills.DraftInput{Name: req.GetString("name", ""), Slug: req.GetString("slug", ""), Description: req.GetString("description", ""), ScopeType: req.GetString("scope_type", ""), GuildID: rc.GuildID, ChannelID: rc.ChannelID, ProjectCWD: strings.TrimSpace(req.GetString("project_cwd", "")), SourceType: sourceType, SourceRef: req.GetString("source_ref", ""), SourceMessageRefs: parseStringList(req.GetString("source_message_ids", "")), ContentMarkdown: req.GetString("content_markdown", ""), RequiredTools: parseStringList(req.GetString("required_tools", "")), RiskLevel: req.GetString("risk_level", ""), CreatedBy: req.GetString("requested_by", ""), TTL: skillDraftTTL()})
-	if err != nil {
-		return skills.Draft{}, err
-	}
-	return store.CreateDraft(ctx, draft)
+	return skills.NewDraftFromMarkdown(skills.DraftInput{Name: req.GetString("name", ""), Slug: req.GetString("slug", ""), Description: req.GetString("description", ""), ScopeType: req.GetString("scope_type", ""), GuildID: rc.GuildID, ChannelID: rc.ChannelID, ProjectCWD: strings.TrimSpace(req.GetString("project_cwd", "")), SourceType: sourceType, SourceRef: req.GetString("source_ref", ""), SourceMessageRefs: parseStringList(req.GetString("source_message_ids", "")), ContentMarkdown: req.GetString("content_markdown", ""), RequiredTools: parseStringList(req.GetString("required_tools", "")), RiskLevel: req.GetString("risk_level", ""), CreatedBy: req.GetString("requested_by", ""), TTL: skillDraftTTL()})
 }
 
-func materializeSkillDraft(draft skills.Draft, overwrite bool) (string, string, error) {
+func materializeSkillDraft(draft skills.Draft, overwrite bool) (skills.MaterializedFile, error) {
 	if !skillMaterializeEnabled() || (draft.ProposedScopeType != skills.ScopeProject && draft.ProposedScopeType != skills.ScopeChannelProject) {
-		return "", "", nil
+		return skills.MaterializedFile{}, nil
 	}
 	cleanCWD, err := skills.ValidateProjectCWD(draft.ProjectCWD, allowedCwdRoots())
 	if err != nil {
-		return "", "", err
+		return skills.MaterializedFile{}, err
 	}
-	file, err := skills.Materialize(cleanCWD, draft.ProposedSlug, draft.ProposedContentMarkdown, overwrite)
-	if err != nil {
-		return "", "", err
-	}
-	return file.RelativePath, file.SHA256, nil
+	return skills.Materialize(cleanCWD, draft.ProposedSlug, draft.ProposedContentMarkdown, overwrite)
 }
 
-func skillPreviewDraft(ctx context.Context, dataDir string, req mcp.CallToolRequest) (skills.Draft, error) {
+func skillChannelInventory(ctx context.Context, dataDir string, req mcp.CallToolRequest) (map[string]any, error) {
+	if _, err := authenticatedChannelSkillActor(req, "inventory"); err != nil {
+		return nil, err
+	}
 	store, err := openSkillsStore(dataDir)
 	if err != nil {
-		return skills.Draft{}, err
+		return nil, err
 	}
 	defer store.Close()
-	return store.GetDraft(ctx, req.GetString("draft_id", ""))
-}
-
-func skillInstallDraft(ctx context.Context, dataDir string, req mcp.CallToolRequest) (map[string]any, error) {
-	_ = ctx
-	_ = dataDir
-	_ = req
-	return nil, fmt.Errorf("a channel manager must confirm installation from the visible skill draft review message before this draft becomes active")
-}
-
-func skillDiscardDraft(ctx context.Context, dataDir string, req mcp.CallToolRequest) (map[string]any, error) {
-	_ = ctx
-	_ = dataDir
-	_ = req
-	return nil, fmt.Errorf("a channel manager must confirm discard from the visible skill draft review message before this draft is rejected")
+	rc := skillResolveContext(req)
+	rc.ProjectCWD = firstNonEmptySkill(req.GetString("project_cwd", ""), rc.ProjectCWD)
+	results, err := store.ListInstalled(ctx, rc, req.GetString("query", ""), req.GetInt("limit", 10))
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"results": sanitizeSkillResults(results)}, nil
 }
 
 func skillChannelSetEnabled(ctx context.Context, dataDir string, req mcp.CallToolRequest, enabled bool, action string) (map[string]any, error) {
@@ -668,22 +620,6 @@ func allowedCwdRoots() []string {
 		}
 	}
 	return out
-}
-
-func authorizeSkillInstall(d skills.Draft, manageChannels, manageGuild bool) error {
-	switch d.ProposedScopeType {
-	case skills.ScopeGuild:
-		if !manageGuild && !manageChannels {
-			return fmt.Errorf("guild skill install requires server management permission")
-		}
-	case skills.ScopeChannel, skills.ScopeProject, skills.ScopeChannelProject:
-		if !manageChannels {
-			return fmt.Errorf("%s skill install requires channel management permission", d.ProposedScopeType)
-		}
-	default:
-		return fmt.Errorf("unsupported skill scope %q", d.ProposedScopeType)
-	}
-	return nil
 }
 
 func skillJSONResult(v any, err error) *mcp.CallToolResult {

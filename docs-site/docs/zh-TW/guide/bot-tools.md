@@ -53,8 +53,8 @@
 | `bot_memory_clear` | Write, destructive | 排入清空目前 channel 所有 persistent memory rules。 |
 
 | `bot_skill_usage_record` | Write, audit | 記錄 agent 使用了特定 skill ID/version。 |
-| `bot_skill_create_draft` | Write, non-destructive | 對任何「建立技能」意圖建立已安裝但停用的 skill。Agent 必須自行研究 URL/Gist/repo/file，最後只提交整理後的乾淨 Markdown 與 source refs；建立後要等 manager 啟用才可使用。 |
-| `bot_skill_preview_draft` / `bot_skill_install_draft` / `bot_skill_discard_draft` | Write/admin | 舊版 review-draft tools。Agent-only install/discard 會被拒絕；建議流程是 create-disabled，再由 manager enable。 |
+| `bot_skill_create` | Write, non-destructive | 對任何「建立技能」意圖建立已安裝但停用的 skill。Agent 必須自行研究 URL/Gist/repo/file，最後只提交整理後的乾淨 Markdown 與 source refs；建立後要等 manager 啟用才可使用。 |
+| `bot_skills_channel_inventory` | Read/admin | 讓已驗證的 channel manager 列出 channel/project 已安裝 skills，包含已停用項目。 |
 | `bot_skills_channel_enable` / `bot_skills_channel_disable` / `bot_skills_channel_remove` / `bot_skills_channel_restore` / `bot_skills_channel_rollback` | Write/admin | 使用 channel management permission 管理 channel/project skill lifecycle。 |
 | `bot_skills_server_disable` / `bot_skills_server_remove` / `bot_skills_server_restore` / `bot_skills_server_rollback` | Write/admin | 管理 server-wide skills；預設關閉且 server-management scoped。 |
 

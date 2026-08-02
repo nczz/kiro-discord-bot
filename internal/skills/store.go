@@ -285,10 +285,10 @@ func validateDraft(d Draft) error {
 		return err
 	}
 	if d.ProposedContentMarkdown == "" {
-		return fmt.Errorf("skill draft content is required")
+		return fmt.Errorf("skill content is required")
 	}
 	if looksLikeRawHTMLDocument(d.ProposedContentMarkdown) {
-		return fmt.Errorf("skill draft content must be curated markdown, not raw HTML")
+		return fmt.Errorf("skill content must be curated markdown, not raw HTML")
 	}
 	if err := ValidateScope(d.ProposedScopeType); err != nil {
 		return err
@@ -584,6 +584,24 @@ func (s *Store) CreateDisabledInstallFromDraftWithMaterializationAndAudit(ctx co
 		return Install{}, fmt.Errorf("draft %s expired", draft.DraftID)
 	}
 	return s.installDraft(ctx, draft, firstNonEmpty(actor.ActorUsername, actor.ActorUserID), materializedPath, materializedSHA256, actor, reason, false, "skill_created", "create")
+}
+
+func (s *Store) GetInstallByID(ctx context.Context, installID string) (Install, error) {
+	if s == nil || s.db == nil {
+		return Install{}, fmt.Errorf("skills store is unavailable")
+	}
+	var install Install
+	var enabled int
+	var installedAt, updatedAt string
+	err := s.db.QueryRowContext(ctx, `SELECT install_id, skill_id, version, scope_type, guild_id, channel_id, project_cwd_hash, project_cwd, enabled, override_policy, materialized_path, materialized_sha256, installed_by, installed_at, updated_at
+		FROM skill_installs WHERE install_id=?`, strings.TrimSpace(installID)).Scan(&install.InstallID, &install.SkillID, &install.Version, &install.ScopeType, &install.GuildID, &install.ChannelID, &install.ProjectCWDHash, &install.ProjectCWD, &enabled, &install.OverridePolicy, &install.MaterializedPath, &install.MaterializedSHA256, &install.InstalledBy, &installedAt, &updatedAt)
+	if err != nil {
+		return Install{}, err
+	}
+	install.Enabled = intBool(enabled)
+	install.InstalledAt = parseTime(installedAt)
+	install.UpdatedAt = parseTime(updatedAt)
+	return install, nil
 }
 
 func installOverridePolicy(enabled bool) string {

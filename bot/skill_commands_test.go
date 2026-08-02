@@ -1,7 +1,6 @@
 package bot
 
 import (
-	"net/http"
 	"strings"
 	"testing"
 
@@ -11,7 +10,7 @@ import (
 	L "github.com/nczz/kiro-discord-bot/locale"
 )
 
-func TestSkillSlashCommandsIncludeReviewFlow(t *testing.T) {
+func TestSkillSlashCommandsExposeInstalledLifecycleOnly(t *testing.T) {
 	var skillCmd *discordgo.ApplicationCommand
 	for _, cmd := range buildSlashCommands() {
 		if cmd.Name == "skill" {
@@ -26,9 +25,14 @@ func TestSkillSlashCommandsIncludeReviewFlow(t *testing.T) {
 	for _, opt := range skillCmd.Options {
 		seen[opt.Name] = true
 	}
-	for _, name := range []string{"list", "get", "create", "draft", "preview", "install", "discard", "disable", "enable", "restore", "rollback", "history"} {
+	for _, name := range []string{"list", "get", "create", "disable", "enable", "restore", "rollback", "history"} {
 		if !seen[name] {
 			t.Fatalf("/skill missing subcommand %s", name)
+		}
+	}
+	for _, name := range []string{"draft", "preview", "install", "discard"} {
+		if seen[name] {
+			t.Fatalf("/skill still exposes removed subcommand %s", name)
 		}
 	}
 }
@@ -51,16 +55,7 @@ func TestSkillUserFacingTextUsesLocale(t *testing.T) {
 			t.Fatalf("history description = %q, want locale", opt.Description)
 		}
 	}
-	components := skillDraftComponents("draft-1", "channel-1")
-	row, ok := components[0].(discordgo.ActionsRow)
-	if !ok || len(row.Components) != 2 {
-		t.Fatalf("draft components = %#v", components)
-	}
-	install, ok := row.Components[0].(discordgo.Button)
-	if !ok || install.Label != "安裝" {
-		t.Fatalf("install button = %#v, want zh-TW label", row.Components[0])
-	}
-	createdComponents := skillCreatedComponents("draft-1", "channel-1")
+	createdComponents := skillCreatedComponents("inst_123456789012345678901234567890123456", "channel-1")
 	createdRow, ok := createdComponents[0].(discordgo.ActionsRow)
 	if !ok || len(createdRow.Components) != 1 {
 		t.Fatalf("created components = %#v", createdComponents)
@@ -69,9 +64,12 @@ func TestSkillUserFacingTextUsesLocale(t *testing.T) {
 	if !ok || enable.Label != "啟用" {
 		t.Fatalf("enable button = %#v, want zh-TW label", createdRow.Components[0])
 	}
+	if strings.Contains(enable.CustomID, "draft") || enable.CustomID != "skill:enable:channel-1:inst_123456789012345678901234567890123456" || len(enable.CustomID) > 100 {
+		t.Fatalf("enable custom id = %q", enable.CustomID)
+	}
 }
 
-func TestSkillDraftCommandCreatesReviewButtonsAndInstall(t *testing.T) {
+func TestSkillCreateCommandCreatesDisabledInstallAndEnable(t *testing.T) {
 	L.Load("en")
 	dataDir := t.TempDir()
 	project := t.TempDir()
@@ -161,135 +159,6 @@ func TestSkillDraftCommandCreatesReviewButtonsAndInstall(t *testing.T) {
 	}
 }
 
-func TestSkillDraftCommandKeepsLegacyReviewFlow(t *testing.T) {
-	L.Load("en")
-	dataDir := t.TempDir()
-	store, err := skills.Open(dataDir)
-	if err != nil {
-		t.Fatalf("open skills: %v", err)
-	}
-	defer store.Close()
-	sessionStore, err := channel.NewSessionStore(dataDir)
-	if err != nil {
-		t.Fatalf("new session store: %v", err)
-	}
-	manager := channel.NewManager(channel.ManagerConfig{DataDir: dataDir, GuildID: "guild-1", Store: sessionStore})
-	defer manager.StopAll()
-	ds := testPeerPermissionSession(t, []*discordgo.PermissionOverwrite{userMemberManageOverwrite("manager", discordgo.PermissionManageChannels)})
-	if err := ds.State.MemberAdd(&discordgo.Member{GuildID: "guild-1", User: &discordgo.User{ID: "manager"}}); err != nil {
-		t.Fatalf("MemberAdd manager: %v", err)
-	}
-	b := &Bot{discord: ds, manager: manager, skillsStore: store}
-	var replies []string
-	var componentCount int
-	ctx := cmdCtx{guildID: "guild-1", channelID: "channel-1", targetID: "channel-1", userID: "manager", username: "alice", reply: func(msg string) { replies = append(replies, msg) }, replyWithComponents: func(msg string, components []discordgo.MessageComponent, _ map[string]any) {
-		replies = append(replies, msg)
-		componentCount = len(components)
-	}}
-	b.cmdSkillDraft(ctx, store, "Review SOP", "Use this skill for a reviewed legacy install.", skills.ScopeChannel, "read", "low")
-	if len(replies) != 1 || !strings.Contains(replies[0], "Skill draft ready") || componentCount != 1 {
-		t.Fatalf("draft reply=%#v components=%d", replies, componentCount)
-	}
-	active, err := store.ActiveDrafts(t.Context(), skills.ResolveContext{GuildID: "guild-1", ChannelID: "channel-1"}, 10)
-	if err != nil {
-		t.Fatalf("active drafts: %v", err)
-	}
-	if len(active) != 1 || active[0].Status != skills.StatusDraft {
-		t.Fatalf("active drafts=%+v", active)
-	}
-	if results, err := store.Resolve(t.Context(), skills.ResolveContext{GuildID: "guild-1", ChannelID: "channel-1", EffectiveTools: []string{"read"}}); err != nil || len(results) != 0 {
-		t.Fatalf("legacy draft became visible before install: %+v, err=%v", results, err)
-	}
-}
-
-func TestPlainSkillInstallConfirmationInstallsOnlyActiveDraft(t *testing.T) {
-	L.Load("en")
-	dataDir := t.TempDir()
-	store, err := skills.Open(dataDir)
-	if err != nil {
-		t.Fatalf("open skills: %v", err)
-	}
-	defer store.Close()
-	sessionStore, err := channel.NewSessionStore(dataDir)
-	if err != nil {
-		t.Fatalf("new session store: %v", err)
-	}
-	manager := channel.NewManager(channel.ManagerConfig{DataDir: dataDir, GuildID: "guild-1", Store: sessionStore})
-	defer manager.StopAll()
-	ds := testPeerPermissionSession(t, []*discordgo.PermissionOverwrite{userMemberManageOverwrite("manager", discordgo.PermissionManageChannels)})
-	if err := ds.State.MemberAdd(&discordgo.Member{GuildID: "guild-1", User: &discordgo.User{ID: "manager", Username: "alice"}}); err != nil {
-		t.Fatalf("MemberAdd manager: %v", err)
-	}
-	rt := &recordingDiscordTransport{}
-	ds.Client = &http.Client{Transport: rt}
-	draft, err := skills.NewDraftFromMarkdown(skills.DraftInput{Name: "Install Reply SOP", ScopeType: skills.ScopeChannel, GuildID: "guild-1", ChannelID: "channel-1", ContentMarkdown: "# Steps\nReply install confirms this draft.", SourceType: skills.SourceConversation, CreatedBy: "agent"})
-	if err != nil {
-		t.Fatalf("new draft: %v", err)
-	}
-	if _, err := store.CreateDraft(t.Context(), draft); err != nil {
-		t.Fatalf("create draft: %v", err)
-	}
-	b := &Bot{discord: ds, manager: manager, skillsStore: store, seen: newSeenMessages()}
-	defer b.seen.Stop()
-	b.handleMessage(ds, &discordgo.MessageCreate{Message: &discordgo.Message{ID: "msg-install", ChannelID: "channel-1", GuildID: "guild-1", Content: "install", Author: &discordgo.User{ID: "manager", Username: "alice"}}})
-	paths, bodies := rt.Snapshot()
-	if len(paths) != 2 || !strings.Contains(paths[1], "/channels/channel-1/messages") || !strings.Contains(bodies[1], "Installed skill") {
-		t.Fatalf("reply paths=%#v bodies=%#v", paths, bodies)
-	}
-	got, err := store.GetVisible(t.Context(), skills.ResolveContext{GuildID: "guild-1", ChannelID: "channel-1"}, "install-reply-sop")
-	if err != nil {
-		t.Fatalf("get visible: %v", err)
-	}
-	if got.SkillID == "" || got.ScopeType != skills.ScopeChannel {
-		t.Fatalf("installed skill=%+v", got)
-	}
-}
-
-func TestPlainSkillInstallConfirmationWorksInsideThread(t *testing.T) {
-	L.Load("zh-TW")
-	defer L.Load("en")
-	dataDir := t.TempDir()
-	store, err := skills.Open(dataDir)
-	if err != nil {
-		t.Fatalf("open skills: %v", err)
-	}
-	defer store.Close()
-	sessionStore, err := channel.NewSessionStore(dataDir)
-	if err != nil {
-		t.Fatalf("new session store: %v", err)
-	}
-	manager := channel.NewManager(channel.ManagerConfig{DataDir: dataDir, GuildID: "guild-1", Store: sessionStore})
-	defer manager.StopAll()
-	ds := testPeerPermissionSession(t, []*discordgo.PermissionOverwrite{userMemberManageOverwrite("manager", discordgo.PermissionManageChannels)})
-	if err := ds.State.MemberAdd(&discordgo.Member{GuildID: "guild-1", User: &discordgo.User{ID: "manager", Username: "alice"}}); err != nil {
-		t.Fatalf("MemberAdd manager: %v", err)
-	}
-	rt := &recordingDiscordTransport{}
-	ds.Client = &http.Client{Transport: rt}
-	draft, err := skills.NewDraftFromMarkdown(skills.DraftInput{Name: "Thread Reply SOP", ScopeType: skills.ScopeChannel, GuildID: "guild-1", ChannelID: "channel-1", ContentMarkdown: "# Steps\nReply install confirms from a thread.", SourceType: skills.SourceConversation, CreatedBy: "agent"})
-	if err != nil {
-		t.Fatalf("new draft: %v", err)
-	}
-	if _, err := store.CreateDraft(t.Context(), draft); err != nil {
-		t.Fatalf("create draft: %v", err)
-	}
-	b := &Bot{discord: ds, manager: manager, skillsStore: store, seen: newSeenMessages()}
-	defer b.seen.Stop()
-	registerThreadParent("thread-1", "channel-1")
-	b.handleMessage(ds, &discordgo.MessageCreate{Message: &discordgo.Message{ID: "msg-thread-install", ChannelID: "thread-1", GuildID: "guild-1", Content: "安裝", Author: &discordgo.User{ID: "manager", Username: "alice"}}})
-	paths, bodies := rt.Snapshot()
-	if len(paths) == 0 || !strings.Contains(paths[len(paths)-1], "/channels/thread-1/messages") || !strings.Contains(bodies[len(bodies)-1], "已為") {
-		t.Fatalf("reply paths=%#v bodies=%#v", paths, bodies)
-	}
-	got, err := store.GetVisible(t.Context(), skills.ResolveContext{GuildID: "guild-1", ChannelID: "channel-1"}, "thread-reply-sop")
-	if err != nil {
-		t.Fatalf("get visible: %v", err)
-	}
-	if got.SkillID == "" || got.ScopeType != skills.ScopeChannel {
-		t.Fatalf("installed skill=%+v", got)
-	}
-}
-
 func TestSkillSlashLifecycleDisableRestoreHistoryRollback(t *testing.T) {
 	dataDir := t.TempDir()
 	project := t.TempDir()
@@ -366,18 +235,7 @@ func TestSkillSlashLifecycleDisableRestoreHistoryRollback(t *testing.T) {
 	}
 }
 
-func TestSkillDraftReviewIncludesContent(t *testing.T) {
-	draft, err := skills.NewDraftFromMarkdown(skills.DraftInput{Name: "Review Me", ScopeType: skills.ScopeChannel, GuildID: "guild-1", ChannelID: "channel-1", ContentMarkdown: "Follow the exact reconciliation checklist.", SourceType: skills.SourceConversation})
-	if err != nil {
-		t.Fatalf("new draft: %v", err)
-	}
-	review := skillDraftReview(draft)
-	if !strings.Contains(review, "Draft content") || !strings.Contains(review, "reconciliation checklist") {
-		t.Fatalf("review omitted draft content: %q", review)
-	}
-}
-
-func TestSkillInstallAuthorizationUsesDraftChannel(t *testing.T) {
+func TestSkillEnableAuthorizationUsesCreatedSkillChannel(t *testing.T) {
 	ds := testPeerPermissionSession(t, []*discordgo.PermissionOverwrite{userMemberManageOverwrite("manager", discordgo.PermissionManageChannels)})
 	if err := ds.State.MemberAdd(&discordgo.Member{GuildID: "guild-1", User: &discordgo.User{ID: "manager"}}); err != nil {
 		t.Fatalf("MemberAdd manager: %v", err)
@@ -386,20 +244,6 @@ func TestSkillInstallAuthorizationUsesDraftChannel(t *testing.T) {
 	draft := skills.Draft{GuildID: "guild-1", ChannelID: "channel-2", ProposedScopeType: skills.ScopeChannel}
 	ctx := cmdCtx{guildID: "guild-1", channelID: "channel-1", targetID: "channel-1", userID: "manager"}
 	if b.userCanManageSkillDraft(ds, ctx, draft) {
-		t.Fatal("manager of issuing channel authorized for another draft channel")
+		t.Fatal("manager of issuing channel authorized for another created skill channel")
 	}
-}
-
-func draftIDFromReply(reply string) string {
-	marker := "Draft: `"
-	idx := strings.Index(reply, marker)
-	if idx < 0 {
-		return ""
-	}
-	rest := reply[idx+len(marker):]
-	end := strings.Index(rest, "`")
-	if end < 0 {
-		return ""
-	}
-	return rest[:end]
 }

@@ -35,40 +35,6 @@ func skillMutationActorFromCmd(ctx cmdCtx, source string) skills.MutationActor {
 	}
 }
 
-func isPlainSkillInstallConfirmation(content string) bool {
-	switch strings.ToLower(strings.TrimSpace(content)) {
-	case "install", "安裝":
-		return true
-	default:
-		return false
-	}
-}
-
-func (b *Bot) handlePlainSkillInstallConfirmation(ctx cmdCtx, content string) bool {
-	if !isPlainSkillInstallConfirmation(content) {
-		return false
-	}
-	if b == nil || b.skillsStore == nil {
-		ctx.reply(L.Get("skill.error.store_unavailable"))
-		return true
-	}
-	drafts, err := b.skillsStore.ActiveDrafts(context.Background(), b.skillResolveContext(ctx), 2)
-	if err != nil {
-		ctx.reply(commandError(err))
-		return true
-	}
-	if len(drafts) == 0 {
-		ctx.reply(L.Get("skill.confirm.no_draft"))
-		return true
-	}
-	if len(drafts) > 1 {
-		ctx.reply(L.Get("skill.confirm.ambiguous"))
-		return true
-	}
-	b.installSkillDraft(ctx, b.skillsStore, drafts[0].DraftID, false, "message", "Discord message skill install confirmation")
-	return true
-}
-
 func skillSlashOptions() []*discordgo.ApplicationCommandOption {
 	str := func(name, desc string, required bool) *discordgo.ApplicationCommandOption {
 		return &discordgo.ApplicationCommandOption{Type: discordgo.ApplicationCommandOptionString, Name: name, Description: desc, Required: required}
@@ -77,10 +43,6 @@ func skillSlashOptions() []*discordgo.ApplicationCommandOption {
 		{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "list", Description: L.Get("cmd.skill.sub.list"), Options: []*discordgo.ApplicationCommandOption{str("query", L.Get("cmd.skill.opt.query"), false)}},
 		{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "get", Description: L.Get("cmd.skill.sub.get"), Options: []*discordgo.ApplicationCommandOption{str("skill_id", L.Get("cmd.skill.opt.skill_id"), true)}},
 		{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "create", Description: L.Get("cmd.skill.sub.create"), Options: []*discordgo.ApplicationCommandOption{str("name", L.Get("cmd.skill.opt.name"), true), str("content", L.Get("cmd.skill.opt.content"), true), str("scope", L.Get("cmd.skill.opt.scope"), false), str("required_tools", L.Get("cmd.skill.opt.required_tools"), false), str("risk", L.Get("cmd.skill.opt.risk"), false)}},
-		{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "draft", Description: L.Get("cmd.skill.sub.draft"), Options: []*discordgo.ApplicationCommandOption{str("name", L.Get("cmd.skill.opt.name"), true), str("content", L.Get("cmd.skill.opt.content"), true), str("scope", L.Get("cmd.skill.opt.scope"), false), str("required_tools", L.Get("cmd.skill.opt.required_tools"), false), str("risk", L.Get("cmd.skill.opt.risk"), false)}},
-		{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "preview", Description: L.Get("cmd.skill.sub.preview"), Options: []*discordgo.ApplicationCommandOption{str("draft_id", L.Get("cmd.skill.opt.draft_id"), true)}},
-		{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "install", Description: L.Get("cmd.skill.sub.install"), Options: []*discordgo.ApplicationCommandOption{str("draft_id", L.Get("cmd.skill.opt.draft_id"), true)}},
-		{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "discard", Description: L.Get("cmd.skill.sub.discard"), Options: []*discordgo.ApplicationCommandOption{str("draft_id", L.Get("cmd.skill.opt.draft_id"), true)}},
 		{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "disable", Description: L.Get("cmd.skill.sub.disable"), Options: []*discordgo.ApplicationCommandOption{str("skill_id", L.Get("cmd.skill.opt.skill_id"), true), str("scope", L.Get("cmd.skill.opt.scope"), false)}},
 		{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "enable", Description: L.Get("cmd.skill.sub.enable"), Options: []*discordgo.ApplicationCommandOption{str("skill_id", L.Get("cmd.skill.opt.skill_id"), true), str("scope", L.Get("cmd.skill.opt.scope"), false)}},
 		{Type: discordgo.ApplicationCommandOptionSubCommand, Name: "restore", Description: L.Get("cmd.skill.sub.restore"), Options: []*discordgo.ApplicationCommandOption{str("skill_id", L.Get("cmd.skill.opt.skill_id"), true), str("scope", L.Get("cmd.skill.opt.scope"), false)}},
@@ -133,16 +95,8 @@ func (b *Bot) handleSkillSlash(options []*discordgo.ApplicationCommandInteractio
 		b.cmdSkillList(ctx, store, opt("query"))
 	case "get":
 		b.cmdSkillGet(ctx, store, opt("skill_id"))
-	case "draft":
-		b.cmdSkillDraft(ctx, store, opt("name"), opt("content"), firstNonEmptySkill(opt("scope"), skills.ScopeChannelProject), opt("required_tools"), firstNonEmptySkill(opt("risk"), "low"))
-	case "preview":
-		b.cmdSkillPreview(ctx, store, opt("draft_id"))
 	case "create":
 		b.cmdSkillCreate(ctx, store, opt("name"), opt("content"), firstNonEmptySkill(opt("scope"), skills.ScopeChannelProject), opt("required_tools"), firstNonEmptySkill(opt("risk"), "low"))
-	case "install":
-		b.cmdSkillInstall(ctx, store, opt("draft_id"), false)
-	case "discard":
-		b.cmdSkillDiscard(ctx, store, opt("draft_id"))
 	case "disable":
 		b.cmdSkillSetEnabled(ctx, store, opt("skill_id"), opt("scope"), false, "disable")
 	case "enable":
@@ -179,14 +133,16 @@ func (b *Bot) cmdSkill(ctx cmdCtx) {
 			return
 		}
 		b.cmdSkillGet(ctx, store, fields[1])
-	case "create", "draft":
+	case "create":
 		args, err := parseSkillArgs(strings.TrimSpace(strings.TrimPrefix(ctx.args, fieldsFirst(ctx.args))))
 		if err != nil || len(args) < 2 {
 			ctx.reply(L.Get("skill.usage.create"))
 			return
 		}
 		name, content := args[0], args[1]
-		scope, required, risk := skills.ScopeChannelProject, "", "low"
+		scope := skills.ScopeChannelProject
+		required := ""
+		risk := "low"
 		if len(args) > 2 && args[2] != "" {
 			scope = args[2]
 		}
@@ -196,29 +152,7 @@ func (b *Bot) cmdSkill(ctx cmdCtx) {
 		if len(args) > 4 && args[4] != "" {
 			risk = args[4]
 		}
-		if action == "draft" {
-			b.cmdSkillDraft(ctx, store, name, content, scope, required, risk)
-		} else {
-			b.cmdSkillCreate(ctx, store, name, content, scope, required, risk)
-		}
-	case "preview":
-		if len(fields) < 2 {
-			ctx.reply(L.Get("skill.usage.preview"))
-			return
-		}
-		b.cmdSkillPreview(ctx, store, fields[1])
-	case "install":
-		if len(fields) < 2 {
-			ctx.reply(L.Get("skill.usage.install"))
-			return
-		}
-		b.cmdSkillInstall(ctx, store, fields[1], false)
-	case "discard", "reject":
-		if len(fields) < 2 {
-			ctx.reply(L.Get("skill.usage.discard"))
-			return
-		}
-		b.cmdSkillDiscard(ctx, store, fields[1])
+		b.cmdSkillCreate(ctx, store, name, content, scope, required, risk)
 	case "disable":
 		if len(fields) < 2 {
 			ctx.reply(L.Get("skill.usage.disable"))
@@ -382,9 +316,9 @@ func (b *Bot) cmdSkillGet(ctx cmdCtx, store *skills.Store, skillID string) {
 	ctx.reply(L.Getf("skill.get.details", skill.Name, skill.Slug, skill.Version, skill.Enabled, skill.Executable, strings.Join(skill.MissingTools, ", "), content))
 }
 
-func (b *Bot) commandSkillDraft(ctx cmdCtx, name, content, scope, required, risk string) (skills.Draft, bool) {
+func (b *Bot) commandSkillCreate(ctx cmdCtx, name, content, scope, required, risk string) (skills.Draft, bool) {
 	if !b.userCanManageAuditTarget(b.discord, ctx.userID, ctx.targetID) {
-		ctx.reply(L.Get("skill.permission.channel_draft"))
+		ctx.reply(L.Get("skill.permission.create_scope"))
 		return skills.Draft{}, false
 	}
 	projectCWD := ""
@@ -417,22 +351,8 @@ func (b *Bot) commandSkillDraft(ctx cmdCtx, name, content, scope, required, risk
 	return draft, true
 }
 
-func (b *Bot) cmdSkillDraft(ctx cmdCtx, store *skills.Store, name, content, scope, required, risk string) {
-	draft, ok := b.commandSkillDraft(ctx, name, content, scope, required, risk)
-	if !ok {
-		return
-	}
-	var err error
-	draft, err = store.CreateDraft(context.Background(), draft)
-	if err != nil {
-		ctx.reply(commandError(err))
-		return
-	}
-	ctx.sendReplyWithComponents(skillDraftReview(draft), skillDraftComponents(draft.DraftID, ctx.channelID), map[string]any{"skill_draft_id": draft.DraftID, "has_components": true})
-}
-
 func (b *Bot) cmdSkillCreate(ctx cmdCtx, store *skills.Store, name, content, scope, required, risk string) {
-	draft, ok := b.commandSkillDraft(ctx, name, content, scope, required, risk)
+	draft, ok := b.commandSkillCreate(ctx, name, content, scope, required, risk)
 	if !ok {
 		return
 	}
@@ -442,70 +362,21 @@ func (b *Bot) cmdSkillCreate(ctx cmdCtx, store *skills.Store, name, content, sco
 		ctx.reply(commandError(err))
 		return
 	}
-	materializedPath, materializedSHA, err := materializeSkillDraftIfNeeded(draft, false)
+	actor := skillMutationActorFromCmd(ctx, "slash")
+	materialized, err := materializeSkillDraftIfNeeded(draft, false)
 	if err != nil {
+		_, _ = store.DiscardDraftWithAudit(context.Background(), draft.DraftID, actor, "Discord /skill create failed before materialization")
 		ctx.reply(commandError(err))
 		return
 	}
-	install, err := store.CreateDisabledInstallFromDraftWithMaterializationAndAudit(context.Background(), draft.DraftID, skillMutationActorFromCmd(ctx, "slash"), "Discord /skill create request", materializedPath, materializedSHA)
+	install, err := store.CreateDisabledInstallFromDraftWithMaterializationAndAudit(context.Background(), draft.DraftID, actor, "Discord /skill create request", materialized.RelativePath, materialized.SHA256)
 	if err != nil {
+		_, _ = store.DiscardDraftWithAudit(context.Background(), draft.DraftID, actor, "Discord /skill create failed before install")
+		_ = skills.RemoveMaterializedFileIfNewAndUnchanged(materialized)
 		ctx.reply(commandError(err))
 		return
 	}
-	ctx.sendReplyWithComponents(skillCreatedSummary(draft, install), skillCreatedComponents(draft.DraftID, ctx.channelID), map[string]any{"skill_id": install.SkillID, "has_components": true})
-}
-
-func (b *Bot) cmdSkillPreview(ctx cmdCtx, store *skills.Store, draftID string) {
-	draft, err := store.GetDraft(context.Background(), draftID)
-	if err != nil {
-		ctx.reply(commandError(err))
-		return
-	}
-	ctx.sendReplyWithComponents(skillDraftReview(draft), skillDraftComponents(draft.DraftID, ctx.channelID), map[string]any{"skill_draft_id": draft.DraftID, "has_components": true})
-}
-
-func (b *Bot) cmdSkillInstall(ctx cmdCtx, store *skills.Store, draftID string, overwrite bool) {
-	b.installSkillDraft(ctx, store, draftID, overwrite, "slash", "Discord /skill install confirmation")
-}
-
-func (b *Bot) installSkillDraft(ctx cmdCtx, store *skills.Store, draftID string, overwrite bool, source, reason string) {
-	draft, err := store.GetDraft(context.Background(), draftID)
-	if err != nil {
-		ctx.reply(commandError(err))
-		return
-	}
-	if !b.userCanManageSkillDraft(b.discord, ctx, draft) {
-		ctx.reply(L.Get("skill.permission.draft_scope"))
-		return
-	}
-	materializedPath, materializedSHA, err := materializeSkillDraftIfNeeded(draft, overwrite)
-	if err != nil {
-		ctx.reply(commandError(err))
-		return
-	}
-	install, err := store.InstallDraftWithMaterializationAndAudit(context.Background(), draft.DraftID, skillMutationActorFromCmd(ctx, source), reason, materializedPath, materializedSHA)
-	if err != nil {
-		ctx.reply(commandError(err))
-		return
-	}
-	ctx.reply(L.Getf("skill.install.success", install.SkillID, install.Version, install.ScopeType))
-}
-
-func (b *Bot) cmdSkillDiscard(ctx cmdCtx, store *skills.Store, draftID string) {
-	draft, err := store.GetDraft(context.Background(), draftID)
-	if err != nil {
-		ctx.reply(commandError(err))
-		return
-	}
-	if !b.userCanManageSkillDraft(b.discord, ctx, draft) {
-		ctx.reply(L.Get("skill.permission.draft_scope"))
-		return
-	}
-	if _, err := store.DiscardDraftWithAudit(context.Background(), draftID, skillMutationActorFromCmd(ctx, "slash"), "Discord /skill discard confirmation"); err != nil {
-		ctx.reply(commandError(err))
-		return
-	}
-	ctx.reply(L.Getf("skill.discard.success", draftID))
+	ctx.sendReplyWithComponents(skillCreatedSummary(draft, install), skillCreatedComponents(install.InstallID, ctx.channelID), map[string]any{"skill_id": install.SkillID, "has_components": true})
 }
 
 func (b *Bot) cmdSkillSetEnabled(ctx cmdCtx, store *skills.Store, skillID, scopeArg string, enabled bool, action string) {
@@ -586,22 +457,22 @@ func (b *Bot) userCanManageSkillScope(ctx cmdCtx, scope string) bool {
 	}
 }
 
-func materializeSkillDraftIfNeeded(draft skills.Draft, overwrite bool) (string, string, error) {
+func materializeSkillDraftIfNeeded(draft skills.Draft, overwrite bool) (skills.MaterializedFile, error) {
 	if draft.ProposedScopeType != skills.ScopeProject && draft.ProposedScopeType != skills.ScopeChannelProject {
-		return "", "", nil
+		return skills.MaterializedFile{}, nil
 	}
 	cleanCWD, err := skills.ValidateProjectCWD(draft.ProjectCWD, allowedCwdRootsFromEnv())
 	if err != nil {
-		return "", "", err
+		return skills.MaterializedFile{}, err
 	}
 	file, err := skills.Materialize(cleanCWD, draft.ProposedSlug, draft.ProposedContentMarkdown, overwrite)
 	if err != nil {
 		if errors.Is(err, skills.ErrMaterializedDrift) {
-			return "", "", fmt.Errorf("%s", L.Get("skill.error.materialized_drift"))
+			return skills.MaterializedFile{}, fmt.Errorf("%s", L.Get("skill.error.materialized_drift"))
 		}
-		return "", "", err
+		return skills.MaterializedFile{}, err
 	}
-	return file.RelativePath, file.SHA256, nil
+	return file, nil
 }
 
 func skillCreatedSummary(draft skills.Draft, install skills.Install) string {
@@ -611,23 +482,6 @@ func skillCreatedSummary(draft skills.Draft, install skills.Install) string {
 		toolText = strings.Join(tools, ", ")
 	}
 	return L.Getf("skill.create.success", install.SkillID, install.Version, install.ScopeType, skillsRiskFromDraft(draft), toolText)
-}
-
-func skillDraftSummary(draft skills.Draft) string {
-	tools, _ := skills.RequiredToolsFromJSON(draft.RequiredToolsJSON)
-	toolText := L.Get("skill.tool.none")
-	if len(tools) > 0 {
-		toolText = strings.Join(tools, ", ")
-	}
-	return L.Getf("skill.draft.summary", draft.DraftID, draft.ProposedName, draft.ProposedScopeType, skillsRiskFromDraft(draft), toolText, draft.DraftID)
-}
-
-func skillDraftReview(draft skills.Draft) string {
-	content := truncateDiscordMessageContent(draft.ProposedContentMarkdown, 1200)
-	if content == "" {
-		content = L.Get("skill.draft.empty")
-	}
-	return skillDraftSummary(draft) + "\n\n" + L.Get("skill.draft.content_header") + "\n" + content
 }
 
 func (b *Bot) userCanManageSkillDraft(ds *discordgo.Session, ctx cmdCtx, draft skills.Draft) bool {
@@ -657,17 +511,9 @@ func skillsRiskFromDraft(draft skills.Draft) string {
 	}
 	return "low"
 }
-
-func skillDraftComponents(draftID, channelID string) []discordgo.MessageComponent {
+func skillCreatedComponents(installID, channelID string) []discordgo.MessageComponent {
 	return []discordgo.MessageComponent{discordgo.ActionsRow{Components: []discordgo.MessageComponent{
-		discordgo.Button{Label: L.Get("skill.button.install"), Style: discordgo.SuccessButton, CustomID: strings.Join([]string{skillComponentPrefix, "install", channelID, draftID}, ":")},
-		discordgo.Button{Label: L.Get("skill.button.discard"), Style: discordgo.DangerButton, CustomID: strings.Join([]string{skillComponentPrefix, "discard", channelID, draftID}, ":")},
-	}}}
-}
-
-func skillCreatedComponents(draftID, channelID string) []discordgo.MessageComponent {
-	return []discordgo.MessageComponent{discordgo.ActionsRow{Components: []discordgo.MessageComponent{
-		discordgo.Button{Label: L.Get("skill.button.enable"), Style: discordgo.SuccessButton, CustomID: strings.Join([]string{skillComponentPrefix, "enable", channelID, draftID}, ":")},
+		discordgo.Button{Label: L.Get("skill.button.enable"), Style: discordgo.SuccessButton, CustomID: strings.Join([]string{skillComponentPrefix, "enable", channelID, installID}, ":")},
 	}}}
 }
 
@@ -676,45 +522,37 @@ func (b *Bot) handleSkillComponent(ds *discordgo.Session, i *discordgo.Interacti
 	if len(parts) != 4 || parts[0] != skillComponentPrefix {
 		return
 	}
-	action, channelID, draftID := parts[1], parts[2], parts[3]
+	action, channelID, installID := parts[1], parts[2], parts[3]
 	userID, username := interactionUser(i)
 	store := b.skillsStore
 	if store == nil {
 		respondInteractionEphemeral(ds, i, L.Get("skill.error.store_unavailable"))
 		return
 	}
-	draft, err := store.GetDraft(context.Background(), draftID)
+	install, err := store.GetInstallByID(context.Background(), installID)
 	if err != nil {
 		respondInteractionEphemeral(ds, i, commandError(err))
 		return
 	}
-	if !b.userCanManageSkillDraft(ds, cmdCtx{guildID: i.GuildID, channelID: channelID, targetID: channelID, userID: userID}, draft) {
-		respondInteractionEphemeral(ds, i, L.Get("skill.permission.draft_scope"))
+	if (install.GuildID != "" && install.GuildID != i.GuildID) || (install.ChannelID != "" && install.ChannelID != channelID) {
+		respondInteractionEphemeral(ds, i, L.Get("error.expired"))
+		return
+	}
+	ctx := cmdCtx{guildID: i.GuildID, channelID: channelID, targetID: channelID, userID: userID, username: username}
+	if !b.userCanManageSkillScope(ctx, install.ScopeType) {
+		respondInteractionEphemeral(ds, i, L.Get("skill.permission.created_scope"))
 		return
 	}
 	_ = ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{Type: discordgo.InteractionResponseDeferredMessageUpdate})
 	content := ""
 	components := []discordgo.MessageComponent(nil)
 	switch action {
-	case "discard":
-		if _, err := store.DiscardDraftWithAudit(context.Background(), draftID, skills.MutationActor{GuildID: i.GuildID, ChannelID: channelID, TargetChannelID: channelID, ActorUserID: userID, ActorUsername: username, InteractionID: i.ID}, "Discord review-button discard confirmation"); err != nil {
-			content = commandError(err)
-		} else {
-			content = L.Getf("skill.discard.success", draftID)
-		}
-	case "install":
-		materializedPath, materializedSHA, err := materializeSkillDraftIfNeeded(draft, false)
-		if err != nil {
-			content = commandError(err)
-		} else if install, err := store.InstallDraftWithMaterializationAndAudit(context.Background(), draft.DraftID, skills.MutationActor{GuildID: i.GuildID, ChannelID: channelID, TargetChannelID: channelID, ActorUserID: userID, ActorUsername: username, InteractionID: i.ID}, "Discord review-button install confirmation", materializedPath, materializedSHA); err != nil {
-			content = commandError(err)
-		} else {
-			content = L.Getf("skill.install.success", install.SkillID, install.Version, install.ScopeType)
-		}
 	case "enable":
-		ctx := cmdCtx{guildID: i.GuildID, channelID: channelID, targetID: channelID, userID: userID, username: username}
-		skillID := firstNonEmptySkill(draft.ProposedSkillID, draft.ProposedSlug)
-		ev, err := store.SetInstallEnabled(context.Background(), b.skillResolveContext(ctx), skillID, draft.ProposedScopeType, true, skills.MutationActor{GuildID: i.GuildID, ChannelID: channelID, TargetChannelID: channelID, ActorUserID: userID, ActorUsername: username, InteractionID: i.ID}, "Discord enable-button confirmation", "enable")
+		rc := b.skillResolveContext(ctx)
+		if strings.TrimSpace(install.ProjectCWD) != "" {
+			rc.ProjectCWD = install.ProjectCWD
+		}
+		ev, err := store.SetInstallEnabled(context.Background(), rc, install.SkillID, install.ScopeType, true, skills.MutationActor{GuildID: i.GuildID, ChannelID: channelID, TargetChannelID: channelID, ActorUserID: userID, ActorUsername: username, InteractionID: i.ID}, "Discord enable-button confirmation", "enable")
 		if err != nil {
 			content = commandError(err)
 		} else {
@@ -725,7 +563,7 @@ func (b *Bot) handleSkillComponent(ds *discordgo.Session, i *discordgo.Interacti
 	}
 	content = secrets.RedactEnv(content)
 	if _, err := ds.InteractionResponseEdit(i.Interaction, webhookEdit(content, components)); err != nil {
-		log.Printf("[skill-ui] interaction edit failed action=%s channel=%s draft=%s: %v", action, channelID, draftID, err)
+		log.Printf("[skill-ui] interaction edit failed action=%s channel=%s install=%s: %v", action, channelID, installID, err)
 	}
 }
 
