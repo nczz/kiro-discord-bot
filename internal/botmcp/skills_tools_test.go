@@ -226,16 +226,35 @@ func TestSkillServerReadAndManageUsesGuildScope(t *testing.T) {
 
 func TestSkillCreateDraftUsesCuratedMarkdownOnly(t *testing.T) {
 	content := "---\nrequired_tools:\n  - python\n---\n# When to use\nUse fetched markdown."
-	draft, err := skillCreateDraft(context.Background(), t.TempDir(), skillReq(map[string]any{"name": "Fetched Skill", "scope_type": skills.ScopeGuild, "guild_id": "guild-1", "content_markdown": content, "source_type": "url", "source_ref": "https://gist.github.com/example", "requested_by": "alice"}))
+	dataDir := t.TempDir()
+	result, err := skillCreateDraft(context.Background(), dataDir, skillReq(map[string]any{"name": "Fetched Skill", "scope_type": skills.ScopeGuild, "guild_id": "guild-1", "content_markdown": content, "source_type": "url", "source_ref": "https://gist.github.com/example", "requested_by": "alice"}))
 	if err != nil {
-		t.Fatalf("draft from curated content: %v", err)
+		t.Fatalf("create from curated content: %v", err)
+	}
+	if result["status"] != "created_disabled" || result["enabled"] != false || result["skill_id"] != "fetched-skill" || result["scope_type"] != skills.ScopeGuild {
+		t.Fatalf("create result = %+v", result)
+	}
+	if _, ok := result["project_cwd"]; ok {
+		t.Fatalf("create result = %+v", result)
+	}
+	store, err := skills.Open(dataDir)
+	if err != nil {
+		t.Fatalf("open skills: %v", err)
+	}
+	defer store.Close()
+	draft, err := store.GetDraft(context.Background(), result["draft_id"].(string))
+	if err != nil {
+		t.Fatalf("get draft: %v", err)
 	}
 	tools, err := skills.RequiredToolsFromJSON(draft.RequiredToolsJSON)
 	if err != nil {
 		t.Fatalf("required tools json: %v", err)
 	}
-	if len(tools) != 1 || tools[0] != "python" || draft.Status != skills.StatusDraft || draft.SourceType != skills.SourceURL || draft.SourceRef == "" {
+	if len(tools) != 1 || tools[0] != "python" || draft.Status != skills.StatusInstalled || draft.SourceType != skills.SourceURL || draft.SourceRef == "" {
 		t.Fatalf("draft tools/status/source = %v/%s/%s/%q", tools, draft.Status, draft.SourceType, draft.SourceRef)
+	}
+	if visible, err := store.Resolve(context.Background(), skills.ResolveContext{GuildID: "guild-1", EffectiveTools: []string{"python"}}); err != nil || len(visible) != 0 {
+		t.Fatalf("created disabled skill visible to agents = %+v, err=%v", visible, err)
 	}
 }
 

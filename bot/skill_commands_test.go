@@ -26,7 +26,7 @@ func TestSkillSlashCommandsIncludeReviewFlow(t *testing.T) {
 	for _, opt := range skillCmd.Options {
 		seen[opt.Name] = true
 	}
-	for _, name := range []string{"list", "get", "draft", "preview", "install", "discard", "disable", "restore", "rollback", "history"} {
+	for _, name := range []string{"list", "get", "create", "draft", "preview", "install", "discard", "disable", "enable", "restore", "rollback", "history"} {
 		if !seen[name] {
 			t.Fatalf("/skill missing subcommand %s", name)
 		}
@@ -60,9 +60,19 @@ func TestSkillUserFacingTextUsesLocale(t *testing.T) {
 	if !ok || install.Label != "安裝" {
 		t.Fatalf("install button = %#v, want zh-TW label", row.Components[0])
 	}
+	createdComponents := skillCreatedComponents("draft-1", "channel-1")
+	createdRow, ok := createdComponents[0].(discordgo.ActionsRow)
+	if !ok || len(createdRow.Components) != 1 {
+		t.Fatalf("created components = %#v", createdComponents)
+	}
+	enable, ok := createdRow.Components[0].(discordgo.Button)
+	if !ok || enable.Label != "啟用" {
+		t.Fatalf("enable button = %#v, want zh-TW label", createdRow.Components[0])
+	}
 }
 
 func TestSkillDraftCommandCreatesReviewButtonsAndInstall(t *testing.T) {
+	L.Load("en")
 	dataDir := t.TempDir()
 	project := t.TempDir()
 	store, err := skills.Open(dataDir)
@@ -83,6 +93,9 @@ func TestSkillDraftCommandCreatesReviewButtonsAndInstall(t *testing.T) {
 	if err := ds.State.MemberAdd(&discordgo.Member{GuildID: "guild-1", User: &discordgo.User{ID: "manager"}}); err != nil {
 		t.Fatalf("MemberAdd manager: %v", err)
 	}
+	if err := ds.State.MemberAdd(&discordgo.Member{GuildID: "guild-1", User: &discordgo.User{ID: "regular"}}); err != nil {
+		t.Fatalf("MemberAdd regular: %v", err)
+	}
 	b := &Bot{discord: ds, manager: manager, skillsStore: store}
 	var replies []string
 	var componentCount int
@@ -90,33 +103,102 @@ func TestSkillDraftCommandCreatesReviewButtonsAndInstall(t *testing.T) {
 		replies = append(replies, msg)
 		componentCount = len(components)
 	}}
-	b.cmdSkillDraft(ctx, store, "ERP Reconcile", "Use this skill to reconcile ERP spreadsheets.", skills.ScopeChannelProject, "read", "low")
-	if len(replies) != 1 || !strings.Contains(replies[0], "Skill draft ready") || componentCount != 1 {
-		t.Fatalf("draft reply=%#v components=%d", replies, componentCount)
+	b.cmdSkillCreate(ctx, store, "ERP Reconcile", "Use this skill to reconcile ERP spreadsheets.", skills.ScopeChannelProject, "read", "low")
+	if len(replies) != 1 || !strings.Contains(replies[0], "Created skill") || componentCount != 1 {
+		t.Fatalf("create reply=%#v components=%d", replies, componentCount)
 	}
 	resolvedProject := manager.CWDPath("channel-1")
-	drafts, err := store.Search(t.Context(), skills.ResolveContext{GuildID: "guild-1", ChannelID: "channel-1", ProjectCWD: resolvedProject, EffectiveTools: []string{"read"}}, "ERP", 10)
+	results, err := store.Search(t.Context(), skills.ResolveContext{GuildID: "guild-1", ChannelID: "channel-1", ProjectCWD: resolvedProject, EffectiveTools: []string{"read"}}, "ERP", 10)
 	if err != nil {
-		t.Fatalf("search before install: %v", err)
+		t.Fatalf("search before enable: %v", err)
 	}
-	if len(drafts) != 0 {
-		t.Fatalf("draft should not be visible before install: %+v", drafts)
+	if len(results) != 0 {
+		t.Fatalf("disabled skill should not be effective before enable: %+v", results)
 	}
-	previewDraftID := draftIDFromReply(replies[0])
-	if previewDraftID == "" {
-		t.Fatalf("draft id missing from reply %q", replies[0])
+	listed, err := store.ListInstalled(t.Context(), skills.ResolveContext{GuildID: "guild-1", ChannelID: "channel-1", ProjectCWD: resolvedProject, EffectiveTools: []string{"read"}}, "ERP", 10)
+	if err != nil {
+		t.Fatalf("list before enable: %v", err)
+	}
+	if len(listed) != 1 || listed[0].Enabled || listed[0].Executable {
+		t.Fatalf("created skill should be listed disabled before enable: %+v", listed)
 	}
 	replies = nil
-	b.cmdSkillInstall(ctx, store, previewDraftID, false)
-	if len(replies) != 1 || !strings.Contains(replies[0], "Installed skill") {
-		t.Fatalf("install reply=%#v", replies)
+	b.cmdSkillList(ctx, store, "ERP")
+	if len(replies) != 1 || !strings.Contains(replies[0], "disabled") {
+		t.Fatalf("manager list reply=%#v", replies)
 	}
-	results, err := store.Search(t.Context(), skills.ResolveContext{GuildID: "guild-1", ChannelID: "channel-1", ProjectCWD: resolvedProject, EffectiveTools: []string{"read"}}, "ERP", 10)
+	replies = nil
+	b.cmdSkillGet(ctx, store, "erp-reconcile")
+	if len(replies) != 1 || !strings.Contains(replies[0], "Enabled: `false`") {
+		t.Fatalf("manager get reply=%#v", replies)
+	}
+	regularReplies := []string{}
+	regularCtx := ctx
+	regularCtx.userID = "regular"
+	regularCtx.username = "bob"
+	regularCtx.reply = func(msg string) { regularReplies = append(regularReplies, msg) }
+	regularCtx.replyWithComponents = nil
+	b.cmdSkillList(regularCtx, store, "ERP")
+	if len(regularReplies) != 1 || !strings.Contains(regularReplies[0], L.Get("skill.list.empty")) {
+		t.Fatalf("regular list reply=%#v", regularReplies)
+	}
+	regularReplies = nil
+	b.cmdSkillGet(regularCtx, store, "erp-reconcile")
+	if len(regularReplies) != 1 || !strings.Contains(regularReplies[0], L.Get("skill.get.not_visible")) {
+		t.Fatalf("regular get reply=%#v", regularReplies)
+	}
+	replies = nil
+	b.cmdSkillSetEnabled(ctx, store, "erp-reconcile", "", true, "enable")
+	if len(replies) != 1 || !strings.Contains(replies[0], "enabled") {
+		t.Fatalf("enable reply=%#v", replies)
+	}
+	results, err = store.Search(t.Context(), skills.ResolveContext{GuildID: "guild-1", ChannelID: "channel-1", ProjectCWD: resolvedProject, EffectiveTools: []string{"read"}}, "ERP", 10)
 	if err != nil {
 		t.Fatalf("search: %v", err)
 	}
 	if len(results) != 1 || !results[0].Executable || results[0].Slug != "erp-reconcile" {
 		t.Fatalf("installed results=%+v", results)
+	}
+}
+
+func TestSkillDraftCommandKeepsLegacyReviewFlow(t *testing.T) {
+	L.Load("en")
+	dataDir := t.TempDir()
+	store, err := skills.Open(dataDir)
+	if err != nil {
+		t.Fatalf("open skills: %v", err)
+	}
+	defer store.Close()
+	sessionStore, err := channel.NewSessionStore(dataDir)
+	if err != nil {
+		t.Fatalf("new session store: %v", err)
+	}
+	manager := channel.NewManager(channel.ManagerConfig{DataDir: dataDir, GuildID: "guild-1", Store: sessionStore})
+	defer manager.StopAll()
+	ds := testPeerPermissionSession(t, []*discordgo.PermissionOverwrite{userMemberManageOverwrite("manager", discordgo.PermissionManageChannels)})
+	if err := ds.State.MemberAdd(&discordgo.Member{GuildID: "guild-1", User: &discordgo.User{ID: "manager"}}); err != nil {
+		t.Fatalf("MemberAdd manager: %v", err)
+	}
+	b := &Bot{discord: ds, manager: manager, skillsStore: store}
+	var replies []string
+	var componentCount int
+	ctx := cmdCtx{guildID: "guild-1", channelID: "channel-1", targetID: "channel-1", userID: "manager", username: "alice", reply: func(msg string) { replies = append(replies, msg) }, replyWithComponents: func(msg string, components []discordgo.MessageComponent, _ map[string]any) {
+		replies = append(replies, msg)
+		componentCount = len(components)
+	}}
+	b.cmdSkillDraft(ctx, store, "Review SOP", "Use this skill for a reviewed legacy install.", skills.ScopeChannel, "read", "low")
+	if len(replies) != 1 || !strings.Contains(replies[0], "Skill draft ready") || componentCount != 1 {
+		t.Fatalf("draft reply=%#v components=%d", replies, componentCount)
+	}
+	active, err := store.ActiveDrafts(t.Context(), skills.ResolveContext{GuildID: "guild-1", ChannelID: "channel-1"}, 10)
+	if err != nil {
+		t.Fatalf("active drafts: %v", err)
+	}
+	if len(active) != 1 || active[0].Status != skills.StatusDraft {
+		t.Fatalf("active drafts=%+v", active)
+	}
+	if results, err := store.Resolve(t.Context(), skills.ResolveContext{GuildID: "guild-1", ChannelID: "channel-1", EffectiveTools: []string{"read"}}); err != nil || len(results) != 0 {
+		t.Fatalf("legacy draft became visible before install: %+v, err=%v", results, err)
 	}
 }
 

@@ -416,7 +416,7 @@ func (s *Store) InstallDraft(ctx context.Context, draftID, confirmedBy string) (
 	if !draft.ExpiresAt.IsZero() && time.Now().UTC().After(draft.ExpiresAt) {
 		return Install{}, fmt.Errorf("draft %s expired", draft.DraftID)
 	}
-	return s.installDraft(ctx, draft, strings.TrimSpace(confirmedBy), "", "", MutationActor{ActorUsername: strings.TrimSpace(confirmedBy)}, "install draft")
+	return s.installDraft(ctx, draft, strings.TrimSpace(confirmedBy), "", "", MutationActor{ActorUsername: strings.TrimSpace(confirmedBy)}, "install draft", true, "skill_installed", "install")
 }
 
 func (s *Store) InstallDraftWithMaterialization(ctx context.Context, draftID, confirmedBy, materializedPath, materializedSHA256 string) (Install, error) {
@@ -430,7 +430,7 @@ func (s *Store) InstallDraftWithMaterialization(ctx context.Context, draftID, co
 	if !draft.ExpiresAt.IsZero() && time.Now().UTC().After(draft.ExpiresAt) {
 		return Install{}, fmt.Errorf("draft %s expired", draft.DraftID)
 	}
-	return s.installDraft(ctx, draft, strings.TrimSpace(confirmedBy), materializedPath, materializedSHA256, MutationActor{ActorUsername: strings.TrimSpace(confirmedBy)}, "install draft")
+	return s.installDraft(ctx, draft, strings.TrimSpace(confirmedBy), materializedPath, materializedSHA256, MutationActor{ActorUsername: strings.TrimSpace(confirmedBy)}, "install draft", true, "skill_installed", "install")
 }
 
 func (s *Store) InstallDraftWithMaterializationAndAudit(ctx context.Context, draftID string, actor MutationActor, reason, materializedPath, materializedSHA256 string) (Install, error) {
@@ -447,10 +447,10 @@ func (s *Store) InstallDraftWithMaterializationAndAudit(ctx context.Context, dra
 	if !draft.ExpiresAt.IsZero() && time.Now().UTC().After(draft.ExpiresAt) {
 		return Install{}, fmt.Errorf("draft %s expired", draft.DraftID)
 	}
-	return s.installDraft(ctx, draft, firstNonEmpty(actor.ActorUsername, actor.ActorUserID), materializedPath, materializedSHA256, actor, reason)
+	return s.installDraft(ctx, draft, firstNonEmpty(actor.ActorUsername, actor.ActorUserID), materializedPath, materializedSHA256, actor, reason, true, "skill_installed", "install")
 }
 
-func (s *Store) installDraft(ctx context.Context, draft Draft, confirmedBy, materializedPath, materializedSHA256 string, actor MutationActor, reason string) (Install, error) {
+func (s *Store) installDraft(ctx context.Context, draft Draft, confirmedBy, materializedPath, materializedSHA256 string, actor MutationActor, reason string, enabled bool, eventType, action string) (Install, error) {
 	now := time.Now().UTC()
 	required, err := RequiredToolsFromJSON(draft.RequiredToolsJSON)
 	if err != nil {
@@ -462,6 +462,16 @@ func (s *Store) installDraft(ctx context.Context, draft Draft, confirmedBy, mate
 	}
 	defer tx.Rollback()
 	skillID := firstNonEmpty(draft.ProposedSkillID, draft.ProposedSlug)
+	if !enabled {
+		var existingSkillID string
+		err = tx.QueryRowContext(ctx, `SELECT skill_id FROM skills WHERE skill_id=?`, skillID).Scan(&existingSkillID)
+		if err == nil {
+			return Install{}, fmt.Errorf("skill %s already exists; use the review install flow or a new slug/version", skillID)
+		}
+		if err != sql.ErrNoRows {
+			return Install{}, err
+		}
+	}
 	before := s.installSnapshotTx(ctx, tx, skillID, draft.ProposedScopeType, draft.GuildID, draft.ChannelID, draft.ProjectCWDHash)
 	claim, err := tx.ExecContext(ctx, `UPDATE skill_drafts SET status=? WHERE draft_id=? AND status=?`, StatusInstalled, draft.DraftID, StatusDraft)
 	if err != nil {
@@ -504,8 +514,8 @@ func (s *Store) installDraft(ctx context.Context, draft Draft, confirmedBy, mate
 		ChannelID:          draft.ChannelID,
 		ProjectCWDHash:     draft.ProjectCWDHash,
 		ProjectCWD:         draft.ProjectCWD,
-		Enabled:            true,
-		OverridePolicy:     OverrideInherit,
+		Enabled:            enabled,
+		OverridePolicy:     installOverridePolicy(enabled),
 		MaterializedPath:   strings.TrimSpace(materializedPath),
 		MaterializedSHA256: strings.TrimSpace(materializedSHA256),
 		InstalledBy:        confirmedBy,
@@ -522,8 +532,8 @@ func (s *Store) installDraft(ctx context.Context, draft Draft, confirmedBy, mate
 		install.InstallID = before.installID
 	}
 	if err = s.recordMutationTx(ctx, tx, MutationEvent{
-		EventType:          "skill_installed",
-		Action:             "install",
+		EventType:          eventType,
+		Action:             action,
 		SkillID:            install.SkillID,
 		InstallID:          install.InstallID,
 		DraftID:            draft.DraftID,
@@ -541,7 +551,7 @@ func (s *Store) installDraft(ctx context.Context, draft Draft, confirmedBy, mate
 		MCPToolName:        actor.MCPToolName,
 		Reason:             reason,
 		StatusBefore:       before.status,
-		StatusAfter:        StatusActive,
+		StatusAfter:        installStatusAfter(enabled),
 		VersionBefore:      before.version,
 		VersionAfter:       install.Version,
 		ContentSHABefore:   before.contentSHA,
@@ -557,6 +567,37 @@ func (s *Store) installDraft(ctx context.Context, draft Draft, confirmedBy, mate
 		return Install{}, err
 	}
 	return install, nil
+}
+
+func (s *Store) CreateDisabledInstallFromDraftWithMaterializationAndAudit(ctx context.Context, draftID string, actor MutationActor, reason, materializedPath, materializedSHA256 string) (Install, error) {
+	if s == nil || s.db == nil {
+		return Install{}, fmt.Errorf("skills store is unavailable")
+	}
+	draft, err := s.GetDraft(ctx, draftID)
+	if err != nil {
+		return Install{}, err
+	}
+	if draft.Status != StatusDraft {
+		return Install{}, fmt.Errorf("draft %s is %s", draft.DraftID, draft.Status)
+	}
+	if !draft.ExpiresAt.IsZero() && time.Now().UTC().After(draft.ExpiresAt) {
+		return Install{}, fmt.Errorf("draft %s expired", draft.DraftID)
+	}
+	return s.installDraft(ctx, draft, firstNonEmpty(actor.ActorUsername, actor.ActorUserID), materializedPath, materializedSHA256, actor, reason, false, "skill_created", "create")
+}
+
+func installOverridePolicy(enabled bool) string {
+	if enabled {
+		return OverrideInherit
+	}
+	return OverrideDisable
+}
+
+func installStatusAfter(enabled bool) string {
+	if enabled {
+		return StatusActive
+	}
+	return StatusDisabled
 }
 
 type installSnapshot struct {
@@ -849,6 +890,10 @@ func scopeFieldsFromContext(scope string, rc ResolveContext) (string, string, st
 }
 
 func (s *Store) Resolve(ctx context.Context, rc ResolveContext) ([]ResolvedSkill, error) {
+	return s.resolve(ctx, rc, false)
+}
+
+func (s *Store) resolve(ctx context.Context, rc ResolveContext, includeDisabled bool) ([]ResolvedSkill, error) {
 	if s == nil || s.db == nil {
 		return nil, fmt.Errorf("skills store is unavailable")
 	}
@@ -893,7 +938,8 @@ func (s *Store) Resolve(ctx context.Context, rc ResolveContext) ([]ResolvedSkill
 	}
 	out := make([]ResolvedSkill, 0, len(selected))
 	for _, c := range selected {
-		if !c.enabled || c.override == OverrideDisable {
+		c.Enabled = c.enabled && c.override != OverrideDisable
+		if !includeDisabled && !c.Enabled {
 			continue
 		}
 		tools, err := s.RequiredTools(ctx, c.SkillID, c.Version)
@@ -902,7 +948,7 @@ func (s *Store) Resolve(ctx context.Context, rc ResolveContext) ([]ResolvedSkill
 		}
 		c.RequiredTools = tools
 		c.MissingTools = missingTools(tools, rc)
-		c.Executable = len(c.MissingTools) == 0
+		c.Executable = c.Enabled && len(c.MissingTools) == 0
 		out = append(out, c.ResolvedSkill)
 	}
 	sortResolved(out)
@@ -914,6 +960,18 @@ func (s *Store) Search(ctx context.Context, rc ResolveContext, query string, lim
 	if err != nil {
 		return nil, err
 	}
+	return filterSkillList(all, query, limit), nil
+}
+
+func (s *Store) ListInstalled(ctx context.Context, rc ResolveContext, query string, limit int) ([]ResolvedSkill, error) {
+	all, err := s.resolve(ctx, rc, true)
+	if err != nil {
+		return nil, err
+	}
+	return filterSkillList(all, query, limit), nil
+}
+
+func filterSkillList(all []ResolvedSkill, query string, limit int) []ResolvedSkill {
 	query = strings.ToLower(strings.TrimSpace(query))
 	if limit <= 0 || limit > 50 {
 		limit = 10
@@ -923,18 +981,32 @@ func (s *Store) Search(ctx context.Context, rc ResolveContext, query string, lim
 		if query != "" && !strings.Contains(strings.ToLower(skill.Slug+" "+skill.Name+" "+skill.Description+" "+skill.ContentMarkdown), query) {
 			continue
 		}
-		// Search returns metadata only.
+		// Search/list returns metadata only.
 		skill.ContentMarkdown = ""
 		out = append(out, skill)
 		if len(out) >= limit {
 			break
 		}
 	}
-	return out, nil
+	return out
 }
 
 func (s *Store) GetVisible(ctx context.Context, rc ResolveContext, skillID string) (ResolvedSkill, error) {
 	all, err := s.Resolve(ctx, rc)
+	if err != nil {
+		return ResolvedSkill{}, err
+	}
+	skillID = strings.TrimSpace(skillID)
+	for _, skill := range all {
+		if skill.SkillID == skillID || skill.Slug == skillID {
+			return skill, nil
+		}
+	}
+	return ResolvedSkill{}, sql.ErrNoRows
+}
+
+func (s *Store) GetInstalled(ctx context.Context, rc ResolveContext, skillID string) (ResolvedSkill, error) {
+	all, err := s.resolve(ctx, rc, true)
 	if err != nil {
 		return ResolvedSkill{}, err
 	}

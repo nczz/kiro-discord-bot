@@ -127,6 +127,7 @@ type ResolvedSkill struct {
 	ContentMarkdown  string   `json:"content_markdown,omitempty"`
 	RequiredTools    []string `json:"required_tools"`
 	MissingTools     []string `json:"missing_tools"`
+	Enabled          bool     `json:"enabled"`
 	Executable       bool     `json:"executable"`
 	MaterializedPath string   `json:"materialized_path,omitempty"`
 }

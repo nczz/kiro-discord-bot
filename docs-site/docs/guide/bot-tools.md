@@ -53,8 +53,8 @@ These tools are available but not enabled by default:
 | `bot_memory_clear` | Write, destructive | Queue removal of all persistent memory rules for the current channel. |
 
 | `bot_skill_usage_record` | Write, audit | Record that an agent used a specific skill ID/version. |
-| `bot_skill_create_draft` | Write, non-destructive | Create the single inactive review draft for any user skill-creation intent. Agents must inspect URLs/Gists/repos/files themselves and submit only clean curated Markdown with source refs. |
-| `bot_skill_preview_draft` / `bot_skill_install_draft` / `bot_skill_discard_draft` | Write/admin | Preview, install, or discard review drafts with authenticated actor checks. Agent-only install/discard requests are rejected until a user confirms from Discord. |
+| `bot_skill_create_draft` | Write, non-destructive | Create an installed but disabled skill for any user skill-creation intent. Agents must inspect URLs/Gists/repos/files themselves and submit only clean curated Markdown with source refs; the created skill is not usable until a manager enables it. |
+| `bot_skill_preview_draft` / `bot_skill_install_draft` / `bot_skill_discard_draft` | Write/admin | Legacy review-draft tools. Agent-only install/discard requests are rejected; the preferred flow is create-disabled, then manager enable. |
 | `bot_skills_channel_enable` / `bot_skills_channel_disable` / `bot_skills_channel_remove` / `bot_skills_channel_restore` / `bot_skills_channel_rollback` | Write/admin | Manage channel/project skill lifecycle with channel management permission. |
 | `bot_skills_server_disable` / `bot_skills_server_remove` / `bot_skills_server_restore` / `bot_skills_server_rollback` | Write/admin | Manage server-wide skills; default-off and server-management scoped. |
 

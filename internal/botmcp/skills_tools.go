@@ -208,7 +208,7 @@ func skillDraftTool(name, desc string) mcp.Tool {
 		mcp.WithString("scope_type", mcp.Required(), mcp.Description("guild, channel, project, or channel_project.")),
 		mcp.WithString("guild_id", mcp.Description("Discord guild/server ID. Defaults to bound bot-tools guild.")),
 		mcp.WithString("channel_id", mcp.Description("Discord parent channel ID. Defaults to bound bot-tools parent channel.")),
-		mcp.WithString("project_cwd", mcp.Description("Project CWD for project/channel_project scope. Must pass allowed roots during install.")),
+		mcp.WithString("project_cwd", mcp.Description("Project CWD for project/channel_project scope. Must pass allowed roots before materializing a review copy.")),
 		mcp.WithString("content_markdown", mcp.Required(), mcp.Description("Agent-curated clean skill markdown. Inspect external URLs/Gists/repos yourself first; do not pass raw HTML or unreviewed page source.")),
 		mcp.WithString("required_tools", mcp.Description("Comma-separated or JSON array MCP tool names required by this skill.")),
 		mcp.WithString("source_type", mcp.Description("Optional audit provenance: conversation, markdown, url, github_repo, or manual. Defaults to conversation.")),
@@ -216,6 +216,7 @@ func skillDraftTool(name, desc string) mcp.Tool {
 		mcp.WithString("source_message_ids", mcp.Description("Optional JSON array or comma-separated Discord message IDs used as source.")),
 		mcp.WithString("risk_level", mcp.Description("low, medium, high, or critical. Defaults to low.")),
 		mcp.WithString("requested_by", mcp.Required(), mcp.Description("Requester identity from Discord context for audit.")),
+		mcp.WithBoolean("overwrite_materialized", mcp.Description("Set true only after explicit user confirmation to replace a drifted project-local SKILL.md review copy.")),
 		mcp.WithReadOnlyHintAnnotation(false),
 		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithIdempotentHintAnnotation(false),
@@ -224,7 +225,7 @@ func skillDraftTool(name, desc string) mcp.Tool {
 }
 
 func skillCreateDraftTool() mcp.Tool {
-	return skillDraftTool(ToolSkillCreateDraft, "Create one inactive skill draft from agent-curated markdown. Use this for every user request to create/install a skill, including URLs, Gists, repositories, files, and prior conversation: inspect sources with normal agent tools first, then submit only the clean final skill markdown. This tool never fetches URLs, executes source content, installs, or enables the skill.")
+	return skillDraftTool(ToolSkillCreateDraft, "Create one installed but disabled skill from agent-curated markdown. Use this for every user request to create a skill, including URLs, Gists, repositories, files, and prior conversation: inspect sources with normal agent tools first, then submit only the clean final skill markdown. This tool never fetches URLs, executes source content, enables the skill, or grants missing MCP tools.")
 }
 
 func skillPreviewDraftTool() mcp.Tool {
@@ -355,14 +356,41 @@ func skillUsageRecord(ctx context.Context, dataDir string, req mcp.CallToolReque
 	return store.RecordUsage(ctx, skills.UsageEvent{SkillID: req.GetString("skill_id", ""), Version: req.GetString("version", ""), GuildID: rc.GuildID, ChannelID: rc.ChannelID, ThreadID: req.GetString("thread_id", ""), ProjectCWDHash: rc.ProjectCWDHash, MessageID: req.GetString("message_id", ""), AgentSessionID: req.GetString("agent_session_id", ""), SelectedBy: req.GetString("selected_by", "")})
 }
 
-func skillCreateDraft(ctx context.Context, dataDir string, req mcp.CallToolRequest) (skills.Draft, error) {
+func skillCreateDraft(ctx context.Context, dataDir string, req mcp.CallToolRequest) (map[string]any, error) {
 	sourceType := strings.TrimSpace(req.GetString("source_type", ""))
 	if sourceType == "" {
 		sourceType = skills.SourceConversation
 	} else {
 		sourceType = skills.NormalizeSourceType(sourceType)
 	}
-	return skillDraft(ctx, dataDir, req, sourceType)
+	draft, err := skillDraft(ctx, dataDir, req, sourceType)
+	if err != nil {
+		return nil, err
+	}
+	materializedPath, materializedSHA, err := materializeSkillDraft(draft, req.GetBool("overwrite_materialized", false))
+	if err != nil {
+		return nil, err
+	}
+	store, err := openSkillsStore(dataDir)
+	if err != nil {
+		return nil, err
+	}
+	defer store.Close()
+	actor := skills.MutationActor{
+		GuildID:         draft.GuildID,
+		ChannelID:       draft.ChannelID,
+		TargetChannelID: firstNonEmptySkill(os.Getenv("BOT_TOOLS_TARGET_CHANNEL_ID"), draft.ChannelID),
+		ActorUsername:   strings.TrimSpace(req.GetString("requested_by", "")),
+		SourceMessageID: req.GetString("message_id", ""),
+		AgentSessionID:  req.GetString("agent_session_id", ""),
+		MCPServerName:   "bot-tools",
+		MCPToolName:     ToolSkillCreateDraft,
+	}
+	install, err := store.CreateDisabledInstallFromDraftWithMaterializationAndAudit(ctx, draft.DraftID, actor, "bot skill create request", materializedPath, materializedSHA)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"status": "created_disabled", "draft_id": draft.DraftID, "skill_id": install.SkillID, "version": install.Version, "scope_type": install.ScopeType, "guild_id": install.GuildID, "channel_id": install.ChannelID, "enabled": install.Enabled, "install_id": install.InstallID}, nil
 }
 
 func skillDraft(ctx context.Context, dataDir string, req mcp.CallToolRequest, sourceType string) (skills.Draft, error) {
@@ -377,6 +405,21 @@ func skillDraft(ctx context.Context, dataDir string, req mcp.CallToolRequest, so
 		return skills.Draft{}, err
 	}
 	return store.CreateDraft(ctx, draft)
+}
+
+func materializeSkillDraft(draft skills.Draft, overwrite bool) (string, string, error) {
+	if !skillMaterializeEnabled() || (draft.ProposedScopeType != skills.ScopeProject && draft.ProposedScopeType != skills.ScopeChannelProject) {
+		return "", "", nil
+	}
+	cleanCWD, err := skills.ValidateProjectCWD(draft.ProjectCWD, allowedCwdRoots())
+	if err != nil {
+		return "", "", err
+	}
+	file, err := skills.Materialize(cleanCWD, draft.ProposedSlug, draft.ProposedContentMarkdown, overwrite)
+	if err != nil {
+		return "", "", err
+	}
+	return file.RelativePath, file.SHA256, nil
 }
 
 func skillPreviewDraft(ctx context.Context, dataDir string, req mcp.CallToolRequest) (skills.Draft, error) {

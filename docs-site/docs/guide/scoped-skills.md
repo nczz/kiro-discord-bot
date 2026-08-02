@@ -30,8 +30,9 @@ The preferred workflow is conversational:
 
 1. Ask the channel agent to create a skill from a procedure, prior discussion, Markdown, URL, Gist, GitHub repository, or file.
 2. The agent researches any sources itself, extracts the reusable procedure, and calls `bot_skill_create_draft` with only clean curated Markdown plus source refs.
-3. Channel manager reviews the draft preview, then clicks **Install**, replies `install`, or uses `/skill install draft_id:<draft>` to confirm the intended draft.
-4. The bot records mutation audit data before reporting success.
+3. The bot creates the skill as installed but disabled. It is listed for channel managers, but agents cannot use it yet.
+4. A channel manager clicks **Enable** or runs `/skill enable skill_id:<id-or-slug>` when the procedure is ready to use.
+5. The bot records mutation audit data before reporting success.
 
 Slash commands remain fallback and admin shortcuts.
 
@@ -39,13 +40,15 @@ Slash commands remain fallback and admin shortcuts.
 
 | Command | Purpose |
 | --- | --- |
-| `/skill list [query]` | List effective skills for the current channel/project. |
-| `/skill get skill_id:<id-or-slug>` | Read one visible skill after scope and tool checks. |
-| `/skill draft` | Create a draft from explicit name/content fields. |
-| `/skill preview draft_id:<draft>` | Preview a draft with review buttons. |
-| `/skill install draft_id:<draft>` | Install a reviewed draft when the caller can manage the target scope. |
-| `/skill discard draft_id:<draft>` | Reject a draft. |
+| `/skill list [query]` | Managers see installed skills for the current channel/project, including disabled skills; other users see only effective skills. |
+| `/skill get skill_id:<id-or-slug>` | Managers can read one installed skill after scope checks; other users can read only effective skills. |
+| `/skill create` | Create a skill from explicit name/content fields; it is installed disabled by default. |
+| `/skill draft` | Legacy: create a review draft without installing it. |
+| `/skill preview draft_id:<draft>` | Preview a legacy draft with review buttons. |
+| `/skill install draft_id:<draft>` | Legacy: install a reviewed draft when the caller can manage the target scope. |
+| `/skill discard draft_id:<draft>` | Reject a legacy draft. |
 | `/skill disable skill_id:<id-or-slug> [scope]` | Disable an installed skill at the selected scope. |
+| `/skill enable skill_id:<id-or-slug> [scope]` | Enable an installed disabled skill at the selected scope. |
 | `/skill restore skill_id:<id-or-slug> [scope]` | Restore a disabled skill at the selected scope. |
 | `/skill rollback skill_id:<id-or-slug> version:<version> [scope]` | Roll back to an existing version. |
 | `/skill history skill_id:<id-or-slug> [scope]` | Show recent lifecycle audit history for an authorized scope. |
@@ -66,7 +69,7 @@ Default channel setup exposes read/use skill tools only:
 
 Lifecycle tools are not trusted because a model asks for them. Channel lifecycle tools require the authenticated Discord actor context written by the bot for the current task and the caller's channel management permission. Server management tools are default-off and require server management context.
 
-A skill can declare `required_tools`, but this only affects resolution and `missing_tools` reporting. Installing a skill never grants MCP permissions or changes channel policy.
+A skill can declare `required_tools`, but this only affects resolution and `missing_tools` reporting. Creating, installing, or enabling a skill never grants MCP permissions or changes channel policy.
 
 ## Audit and Recovery
 

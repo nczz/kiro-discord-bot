@@ -187,6 +187,85 @@ func TestInstallDraftClaimsDraftOnceAndAuditsPersistedInstallID(t *testing.T) {
 	}
 }
 
+func TestCreateDisabledInstallRequiresExplicitEnable(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open skills store: %v", err)
+	}
+	defer store.Close()
+	d := draftFor(t, "Disabled Create SOP", ScopeChannel, "guild-1", "channel-1", "", []string{"read"})
+	if _, err := store.CreateDraft(ctx, d); err != nil {
+		t.Fatalf("create draft: %v", err)
+	}
+	install, err := store.CreateDisabledInstallFromDraftWithMaterializationAndAudit(ctx, d.DraftID, MutationActor{ActorUsername: "alice"}, "test create", "", "")
+	if err != nil {
+		t.Fatalf("create disabled install: %v", err)
+	}
+	if install.Enabled {
+		t.Fatalf("created install enabled = true")
+	}
+	rc := ResolveContext{GuildID: "guild-1", ChannelID: "channel-1", EffectiveTools: []string{"read"}}
+	if resolved, err := store.Resolve(ctx, rc); err != nil || len(resolved) != 0 {
+		t.Fatalf("resolve disabled = %+v, err=%v", resolved, err)
+	}
+	listed, err := store.ListInstalled(ctx, rc, "disabled", 10)
+	if err != nil {
+		t.Fatalf("list installed: %v", err)
+	}
+	if len(listed) != 1 || listed[0].Enabled || listed[0].Executable {
+		t.Fatalf("listed disabled skill = %+v", listed)
+	}
+	if _, err := store.SetInstallEnabled(ctx, rc, "disabled-create-sop", ScopeChannel, true, MutationActor{ActorUsername: "alice"}, "test enable", "enable"); err != nil {
+		t.Fatalf("enable: %v", err)
+	}
+	resolved, err := store.Resolve(ctx, rc)
+	if err != nil {
+		t.Fatalf("resolve enabled: %v", err)
+	}
+	if len(resolved) != 1 || !resolved[0].Enabled || !resolved[0].Executable {
+		t.Fatalf("resolved enabled = %+v", resolved)
+	}
+}
+
+func TestCreateDisabledInstallDoesNotReplaceExistingActiveContent(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open skills store: %v", err)
+	}
+	defer store.Close()
+	active, err := NewDraftFromMarkdown(DraftInput{Name: "Shared SOP", ScopeType: ScopeChannel, GuildID: "guild-1", ChannelID: "channel-1", SourceType: SourceConversation, ContentMarkdown: "# When to use\nOld approved content.", RequiredTools: []string{"read"}, CreatedBy: "tester"})
+	if err != nil {
+		t.Fatalf("active draft: %v", err)
+	}
+	active, err = store.CreateDraft(ctx, active)
+	if err != nil {
+		t.Fatalf("create active draft: %v", err)
+	}
+	if _, err := store.InstallDraft(ctx, active.DraftID, "alice"); err != nil {
+		t.Fatalf("install active draft: %v", err)
+	}
+	replacement, err := NewDraftFromMarkdown(DraftInput{Name: "Shared SOP", ScopeType: ScopeChannel, GuildID: "guild-1", ChannelID: "channel-1", SourceType: SourceConversation, ContentMarkdown: "# When to use\nNew unapproved content.", RequiredTools: []string{"read"}, CreatedBy: "tester"})
+	if err != nil {
+		t.Fatalf("replacement draft: %v", err)
+	}
+	replacement, err = store.CreateDraft(ctx, replacement)
+	if err != nil {
+		t.Fatalf("create replacement draft: %v", err)
+	}
+	if _, err := store.CreateDisabledInstallFromDraftWithMaterializationAndAudit(ctx, replacement.DraftID, MutationActor{ActorUsername: "alice"}, "test create", "", ""); err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("create duplicate disabled err = %v", err)
+	}
+	visible, err := store.GetVisible(ctx, ResolveContext{GuildID: "guild-1", ChannelID: "channel-1", EffectiveTools: []string{"read"}}, "shared-sop")
+	if err != nil {
+		t.Fatalf("get visible: %v", err)
+	}
+	if strings.Contains(visible.ContentMarkdown, "New unapproved") {
+		t.Fatalf("unapproved content became visible: %q", visible.ContentMarkdown)
+	}
+}
+
 func draftFor(t *testing.T, name, scope, guild, channel, project string, tools []string) Draft {
 	t.Helper()
 	d, err := NewDraftFromMarkdown(DraftInput{Name: name, ScopeType: scope, GuildID: guild, ChannelID: channel, ProjectCWD: project, SourceType: SourceConversation, ContentMarkdown: "# When to use\n" + name, RequiredTools: tools, CreatedBy: "tester"})

@@ -30,8 +30,9 @@ Thread target 繼承 parent channel scope。Project-scoped resolution 會使用 
 
 1. 請 channel agent 從 procedure、先前討論、Markdown、URL、Gist、GitHub repository 或檔案建立 skill。
 2. Agent 自行研究所有來源、萃取可重用流程，然後用 `bot_skill_create_draft` 提交乾淨 Markdown 與 source refs。
-3. Channel manager review draft preview 後，點 **安裝**、回覆 `安裝`，或使用 `/skill install draft_id:<draft>` 確認要安裝的草稿。
-4. Bot 在回報成功前記錄 mutation audit data。
+3. Bot 會把 skill 建立為「已安裝但停用」。Channel manager 看得到它，但 agent 還不能使用。
+4. Channel manager 確認流程可用後，點 **啟用**，或執行 `/skill enable skill_id:<id-or-slug>`。
+5. Bot 在回報成功前記錄 mutation audit data。
 
 Slash commands 仍保留作為 fallback 與 admin shortcuts。
 
@@ -39,13 +40,15 @@ Slash commands 仍保留作為 fallback 與 admin shortcuts。
 
 | Command | 用途 |
 | --- | --- |
-| `/skill list [query]` | 列出目前 channel/project 可見的 effective skills。 |
-| `/skill get skill_id:<id-or-slug>` | 通過 scope 與 tool 檢查後讀取一個 visible skill。 |
-| `/skill draft` | 用明確的 name/content fields 建立 draft。 |
-| `/skill preview draft_id:<draft>` | 預覽 draft 並顯示 review buttons。 |
-| `/skill install draft_id:<draft>` | Caller 可以管理目標 scope 時，安裝已 review 的 draft。 |
-| `/skill discard draft_id:<draft>` | 拒絕 draft。 |
+| `/skill list [query]` | Manager 會看到目前 channel/project 已安裝的 skills，包含已停用項目；其他使用者只看到 effective skills。 |
+| `/skill get skill_id:<id-or-slug>` | Manager 可在 scope 檢查後讀取一個已安裝 skill；其他使用者只能讀取 effective skills。 |
+| `/skill create` | 用明確的 name/content fields 建立 skill；預設已安裝但停用。 |
+| `/skill draft` | 舊版：建立未安裝的 review draft。 |
+| `/skill preview draft_id:<draft>` | 預覽舊版 draft 並顯示 review buttons。 |
+| `/skill install draft_id:<draft>` | 舊版：caller 可以管理目標 scope 時，安裝已 review 的 draft。 |
+| `/skill discard draft_id:<draft>` | 拒絕舊版 draft。 |
 | `/skill disable skill_id:<id-or-slug> [scope]` | 停用選定 scope 的 installed skill。 |
+| `/skill enable skill_id:<id-or-slug> [scope]` | 啟用選定 scope 已安裝但停用的 skill。 |
 | `/skill restore skill_id:<id-or-slug> [scope]` | 還原選定 scope 的 disabled skill。 |
 | `/skill rollback skill_id:<id-or-slug> version:<version> [scope]` | 回滾到既有版本。 |
 | `/skill history skill_id:<id-or-slug> [scope]` | 針對 authorized scope 顯示近期 lifecycle audit history。 |
@@ -66,7 +69,7 @@ Default channel setup 只 exposes read/use skill tools：
 
 Lifecycle tools 不會因為 model 要求就被信任。Channel lifecycle tools 必須使用 bot 為目前 task 寫入的 authenticated Discord actor context，且 caller 必須有 channel management permission。Server management tools 預設關閉，而且需要 server management context。
 
-Skill 可以宣告 `required_tools`，但這只影響 resolution 與 `missing_tools` 回報。Install skill 絕不會授予 MCP permissions，也不會改變 channel policy。
+Skill 可以宣告 `required_tools`，但這只影響 resolution 與 `missing_tools` 回報。Create、install 或 enable skill 都不會授予 MCP permissions，也不會改變 channel policy。
 
 ## Audit 與 Recovery
 
