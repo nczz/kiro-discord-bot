@@ -65,6 +65,22 @@ Memory、flash memory、steering 與 session cleanup 的操作差異見 [日常�
 Audit data 請使用 slash `/audit`；usage data 請使用 slash `/usage` 或 `/usage-history`。文字 `!audit` 不回傳 audit rows，文字 `!usage` 只會提示改用 slash，因為 Discord 無法讓這類文字回覆變成 private。
 
 Audit rows、audit prompt investigations 與 usage attribution 的行為見 [Audit、用量與隱私](audit-usage-privacy.md)。
+
+## Scoped Skills
+
+使用 scoped skills 可把經 review 的 reusable procedures 存到 server、channel、project，或 channel/project scope。建議以自然語言請 agent 草擬與更新 skill；slash commands 是 fallback 與 admin shortcuts。Scope precedence、bot-tools 行為、audit 與 recovery 見 [Scoped Skills](scoped-skills.md)。
+
+| Command | 用途 |
+| --- | --- |
+| `/skill list [query]` | 列出目前 channel/project 的 effective skills。 |
+| `/skill get skill_id:<id-or-slug>` | 讀取一個 visible skill。 |
+| `/skill draft` | 用明確欄位建立可 review 的 skill draft。 |
+| `/skill preview draft_id:<draft>` | 預覽 draft 並顯示 review buttons。 |
+| `/skill install draft_id:<draft>` | Caller 可管理目標 scope 時安裝已 review 的 draft。 |
+| `/skill discard draft_id:<draft>` | 拒絕 draft。 |
+| `/skill disable` / `/skill restore` / `/skill rollback` | 管理 authorized scope 的 active versions。 |
+| `/skill history skill_id:<id-or-slug> [scope]` | 顯示近期 lifecycle audit history。 |
+
 ## A2A
 
 只有在 NATS 已設定且 channel 有 A2A policy 後才使用 A2A commands。從 NATS server、`.env` 到 Discord policy 的完整 setup 見 [使用 NATS 啟用 A2A](a2a-nats-setup.md)。協議關鍵字見 [A2A 協議模型](a2a-protocol.md)。

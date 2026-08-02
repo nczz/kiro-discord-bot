@@ -22,6 +22,15 @@ func TestCommandErrorCWDAllowlist(t *testing.T) {
 	}
 }
 
+func TestCommandErrorSkillValidationUsesLocale(t *testing.T) {
+	L.Load("zh-TW")
+	defer L.Load("en")
+	msg := commandError(errors.New("required tools must be JSON"))
+	if strings.Contains(msg, "required tools must be JSON") || !strings.Contains(msg, "必須是有效 JSON") {
+		t.Fatalf("skill validation error not localized: %s", msg)
+	}
+}
+
 func TestCommandErrorKiroAuth(t *testing.T) {
 	L.Load("en")
 	msg := commandError(errors.New("initialize: transport closed | stderr: error: You are not logged in, please log in with kiro-cli login"))

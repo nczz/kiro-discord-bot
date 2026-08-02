@@ -18,6 +18,7 @@ Update this file when any of these happen:
 - A release/deploy incident exposes a missing verification signal.
 - A future issue should be opened, but the current change should not start that architecture work.
 - A new architecture layer, shared helper, runtime mode, deployment target, or MCP tool category changes the source of truth documented in steering.
+- The root `AGENTS.md` entrypoint stops matching the active project architecture, security boundaries, verification expectations, or cross-agent source-of-truth map.
 
 Do not hide these decisions only in chat history. Future maintainers need the decision, tradeoff, and trigger conditions in the repository.
 

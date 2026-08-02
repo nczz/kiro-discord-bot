@@ -12,6 +12,8 @@ The bot does not create or synchronize `.kiro/steering/<project>.md` by default.
 
 Use required files only as a team convention. For example, a repository may decide that `AGENTS.md` must exist before production work starts, but that is a project policy, not a bot runtime requirement.
 
+This repository uses that team convention: `AGENTS.md` is the required cross-agent entrypoint for contributors and coding agents. Keep it aligned with `.kiro/steering/project.md` and the public contributor guide.
+
 ## Recommended Naming
 
 Prefer stable, descriptive names:

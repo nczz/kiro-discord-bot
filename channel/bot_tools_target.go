@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/bwmarrin/discordgo"
+
 	"github.com/nczz/kiro-discord-bot/internal/discordmention"
 )
 
@@ -17,6 +19,8 @@ type botToolsTargetState struct {
 	DelegationDepth       int                  `json:"delegation_depth,omitempty"`
 	RequesterID           string               `json:"requester_id,omitempty"`
 	RequesterName         string               `json:"requester_name,omitempty"`
+	CanManageChannel      bool                 `json:"can_manage_channel,omitempty"`
+	CanManageGuild        bool                 `json:"can_manage_guild,omitempty"`
 	AllowedMentionUserIDs []string             `json:"allowed_mention_user_ids,omitempty"`
 	MentionRefs           []discordmention.Ref `json:"mention_refs,omitempty"`
 }
@@ -49,14 +53,14 @@ func writeBotToolsTargetStateOptions(path, targetChannelID string, disableEgress
 }
 
 func writeBotToolsTargetStateWithRefs(path, targetChannelID string, disableEgress bool, refs []discordmention.Ref) error {
-	return writeBotToolsTargetStateWithRequester(path, targetChannelID, disableEgress, refs, false, false, "", "", 0)
+	return writeBotToolsTargetStateWithRequester(path, targetChannelID, disableEgress, refs, false, false, "", "", 0, false, false)
 }
 
 func writeBotToolsTargetStateWithPolicy(path, targetChannelID string, disableEgress bool, refs []discordmention.Ref, remoteA2A bool, allowMemoryWrite bool) error {
-	return writeBotToolsTargetStateWithRequester(path, targetChannelID, disableEgress, refs, remoteA2A, allowMemoryWrite, "", "", 0)
+	return writeBotToolsTargetStateWithRequester(path, targetChannelID, disableEgress, refs, remoteA2A, allowMemoryWrite, "", "", 0, false, false)
 }
 
-func writeBotToolsTargetStateWithRequester(path, targetChannelID string, disableEgress bool, refs []discordmention.Ref, remoteA2A bool, allowMemoryWrite bool, requesterID, requesterName string, delegationDepth int) error {
+func writeBotToolsTargetStateWithRequester(path, targetChannelID string, disableEgress bool, refs []discordmention.Ref, remoteA2A bool, allowMemoryWrite bool, requesterID, requesterName string, delegationDepth int, canManageChannel, canManageGuild bool) error {
 	path = strings.TrimSpace(path)
 	targetChannelID = strings.TrimSpace(targetChannelID)
 	if path == "" || targetChannelID == "" {
@@ -73,6 +77,8 @@ func writeBotToolsTargetStateWithRequester(path, targetChannelID string, disable
 		DelegationDepth:       delegationDepth,
 		RequesterID:           strings.TrimSpace(requesterID),
 		RequesterName:         strings.TrimSpace(requesterName),
+		CanManageChannel:      canManageChannel,
+		CanManageGuild:        canManageGuild,
 		AllowedMentionUserIDs: allowedMentionUserIDs(refs),
 		MentionRefs:           cleanMentionRefs(refs),
 	})
@@ -84,6 +90,49 @@ func writeBotToolsTargetStateWithRequester(path, targetChannelID string, disable
 		return err
 	}
 	return os.Rename(tmp, path)
+}
+
+func botToolsRequesterPermissions(ds *discordgo.Session, userID, targetID, fallbackParentID string) (bool, bool) {
+	userID = strings.TrimSpace(userID)
+	targetID = strings.TrimSpace(targetID)
+	fallbackParentID = strings.TrimSpace(fallbackParentID)
+	if ds == nil || userID == "" || targetID == "" {
+		return false, false
+	}
+	if fallbackParentID != "" && fallbackParentID != targetID {
+		if _, err := ds.State.Channel(targetID); err != nil {
+			if parentManageChannel, parentManageGuild, parentOK := botToolsPermissionsForTarget(ds, userID, fallbackParentID); parentOK {
+				return parentManageChannel, parentManageGuild
+			}
+		}
+	}
+	canManageChannel, canManageGuild, ok := botToolsPermissionsForTarget(ds, userID, targetID)
+	if ok && canManageChannel {
+		return canManageChannel, canManageGuild
+	}
+	if fallbackParentID != "" && fallbackParentID != targetID {
+		parentManageChannel, parentManageGuild, parentOK := botToolsPermissionsForTarget(ds, userID, fallbackParentID)
+		if parentOK && parentManageChannel {
+			return parentManageChannel || canManageChannel, parentManageGuild || canManageGuild
+		}
+	}
+	if ch, err := ds.State.Channel(targetID); err == nil && ch != nil && ch.IsThread() && strings.TrimSpace(ch.ParentID) != "" {
+		parentManageChannel, parentManageGuild, parentOK := botToolsPermissionsForTarget(ds, userID, ch.ParentID)
+		if parentOK {
+			return parentManageChannel || canManageChannel, parentManageGuild || canManageGuild
+		}
+	}
+	return canManageChannel, canManageGuild
+}
+
+func botToolsPermissionsForTarget(ds *discordgo.Session, userID, targetID string) (bool, bool, bool) {
+	perms, err := ds.UserChannelPermissions(userID, targetID)
+	if err != nil {
+		return false, false, false
+	}
+	canManageChannel := perms&int64(discordgo.PermissionAdministrator|discordgo.PermissionManageChannels|discordgo.PermissionManageMessages|discordgo.PermissionManageThreads) != 0
+	canManageGuild := perms&int64(discordgo.PermissionAdministrator|discordgo.PermissionManageGuild) != 0
+	return canManageChannel, canManageGuild, true
 }
 
 func allowedMentionUserIDs(refs []discordmention.Ref) []string {

@@ -142,6 +142,7 @@ Stop and fix before calling work ready when any of these are true:
 
 When code changes behavior, check these documents for drift:
 
+- `AGENTS.md`: cross-agent entrypoint, non-negotiable principles, architecture boundaries, and verification expectations.
 - `.kiro/steering/project.md`: architecture contract, design rules, required verification.
 - `.kiro/steering/discord-mcp.md`: Discord reply behavior, MCP tool usage, egress/security rules.
 - `.kiro/steering/360-review-handoff.md`: quality loop and review process.
@@ -168,6 +169,7 @@ Treat steering files as living project control documents, not static notes. When
 
 Update the right file:
 
+- `AGENTS.md`: cross-agent entrypoint and the shortest current contract every agent must read first.
 - `project.md`: architecture boundaries, design principles, build/run contract, completeness checklist.
 - `360-review-handoff.md`: review process, reuse map, no-go triggers, verification ladder, handoff evidence.
 - `discord-mcp.md`: Discord agent behavior, MCP tool usage, egress/security boundaries.

@@ -23,6 +23,13 @@ On first channel setup, these safe tools are enabled by default:
 | `bot_query_channel_history` | Read | Search or page through stored history for the current channel or thread context. |
 | `bot_memory_list` | Read | List persistent memory rules for the current parent channel. |
 | `bot_memory_add` | Write, non-destructive | Queue an explicitly requested, audit-recorded channel memory rule. |
+| `bot_skills_search` | Read | Search visible scoped skills without exposing raw bot data paths. |
+| `bot_skills_effective_list` | Read | List skills effective for the current channel/project scope. |
+| `bot_skill_get` | Read | Read one visible skill after scope and required-tool checks. |
+| `bot_skills_server_search` | Read | Search visible server-wide skills. |
+| `bot_skills_server_get` | Read | Read one visible server-wide skill. |
+| `bot_skills_server_inventory` | Read | Summarize server-wide skill inventory for authorized context. |
+| `bot_skills_server_effective_for_channel` | Read | Show server skills that would apply to a channel. |
 | `bot_a2a_peers` | Read | List known A2A runtime peers, callable channel refs, visible skills, wakeability, and delivery readiness. |
 | `bot_a2a_policy_get` | Read | Show the current bound channel A2A policy and delivery readiness. |
 | `bot_a2a_task_status` | Read | Read durable A2A TaskStore state and event history for a task or recent outbound tasks. |
@@ -44,6 +51,13 @@ These tools are available but not enabled by default:
 | `bot_query_audit` | Read, sensitive | Query scoped audit timeline rows. |
 | `bot_memory_remove` | Write, destructive | Queue removal of one listed persistent memory rule. |
 | `bot_memory_clear` | Write, destructive | Queue removal of all persistent memory rules for the current channel. |
+
+| `bot_skill_usage_record` | Write, audit | Record that an agent used a specific skill ID/version. |
+| `bot_skill_draft_from_conversation` | Write, non-destructive | Create an inactive review draft from prior channel context. |
+| `bot_skill_import_markdown` / `bot_skill_import_url` / `bot_skill_import_github_repo` | Write, non-destructive | Import external content into an inactive draft; imported code is not executed. |
+| `bot_skill_preview_draft` / `bot_skill_install_draft` / `bot_skill_discard_draft` | Write/admin | Preview, install, or discard review drafts with authenticated actor checks. |
+| `bot_skills_channel_enable` / `bot_skills_channel_disable` / `bot_skills_channel_remove` / `bot_skills_channel_restore` / `bot_skills_channel_rollback` | Write/admin | Manage channel/project skill lifecycle with channel management permission. |
+| `bot_skills_server_draft` / `bot_skills_server_disable` / `bot_skills_server_remove` / `bot_skills_server_restore` / `bot_skills_server_rollback` | Write/admin | Manage server-wide skills; default-off and server-management scoped. |
 
 `/audit <prompt>` temporarily grants only `bot_query_audit` to the private audit investigation agent. That agent cannot use normal Discord egress tools.
 

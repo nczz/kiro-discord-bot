@@ -5,6 +5,8 @@ description: Use for ANY code change, build, debug, or architecture question in 
 
 # kiro-discord-bot — Project Contract
 
+`AGENTS.md` at the repository root is the cross-agent entrypoint. This Kiro steering file is the deeper project contract for architecture, recurring rules, and verification details. If `AGENTS.md`, `.kiro/steering/*`, and docs disagree, stop and resolve the source-of-truth drift before implementation.
+
 ## Build & Run
 
 - Build: `go build -o kiro-discord-bot .`
@@ -64,6 +66,7 @@ docs/release.md  → release and deployment safety checklist
 ## Design Principles（設計原則）
 
 - **Silent mode 是全域設計原則**：所有非使用者主動觸發的通知（idle cleanup、agent 斷線、health restart 等）都必須遵守 silent 設定。silent ON = 靜音，silent OFF = 顯示。
+- **Root AGENTS.md 是跨 agent 入口**：任何 agent 進入專案時先讀 repo root `AGENTS.md`，再依任務讀本檔、`360-review-handoff.md`、`decision-failure-patterns.md` 或 feature-specific docs。`.kiro/steering` 是 Kiro 深層 steering，不應成為唯一跨 engine 契約。
 - **BotConfig 嵌入 ManagerConfig**：新增 Manager 設定只需改 `ManagerConfig` + `main.go` 兩處，不需逐欄位複製。
 - **Adapter 共用 botNotifier**：所有 heartbeat adapter 嵌入 `botNotifier`，Notify / IsSilent 不重複實作。
 - **CWD policy 在 Manager 層統一執行**：`/start`、`/cwd`、thread agents、cron temp agents 都必須走 `ValidateCWD`，不得在 handler 或 heartbeat 層自行繞過。
@@ -115,6 +118,7 @@ docs/release.md  → release and deployment safety checklist
 每次改動完成後，檢查以下項目是否需要同步更新：
 
 - [ ] i18n：`locale/lang/en.json` 和 `zh-TW.json` key 完全對齊
+- [ ] `AGENTS.md`：跨 agent entrypoint、不可違背原則、架構邊界或驗證規則有變時同步
 - [ ] README.md：英文段 + 中文段都更新（env 表格、Project Structure、Notes）
 - [ ] `.env.example`：新增 env var 時同步
 - [ ] `.kiro/steering/project.md`：架構圖或設計原則有變時同步

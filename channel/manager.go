@@ -787,6 +787,8 @@ func (m *Manager) mcpServersForTarget(channelID, targetChannelID string) []acp.M
 		log.Printf("[mcp-policy] load channel=%s: %v", channelID, err)
 		return nil
 	}
+	channelTools, channelAllowAll := m.channelEffectiveMCPTools(policies)
+	projectCWD := m.TargetCWDPath(targetChannelID, channelID)
 	var servers []acp.MCPServerConfig
 	for _, policy := range policies {
 		entry, ok := m.mcpPolicies.CatalogEntry(policy.ServerName)
@@ -795,9 +797,47 @@ func (m *Manager) mcpServersForTarget(channelID, targetChannelID string) []acp.M
 			continue
 		}
 		entry = m.withRuntimeMCPEnv(entry)
-		servers = append(servers, policy.ToACPServer(entry, m.mcpProxyCommand, m.guildID, channelID, targetChannelID))
+		server := policy.ToACPServer(entry, m.mcpProxyCommand, m.guildID, channelID, targetChannelID)
+		if entry.Name == "bot-tools" {
+			rawTools, _ := json.Marshal(channelTools)
+			server.Env["BOT_TOOLS_CHANNEL_ALLOWED_TOOLS_JSON"] = string(rawTools)
+			server.Env["BOT_TOOLS_CHANNEL_ALLOW_ALL_TOOLS"] = fmt.Sprintf("%t", channelAllowAll)
+			if projectCWD != "" {
+				server.Env["BOT_TOOLS_PROJECT_CWD"] = projectCWD
+			}
+		}
+		servers = append(servers, server)
 	}
 	return servers
+}
+
+func (m *Manager) channelEffectiveMCPTools(policies []MCPChannelPolicy) ([]string, bool) {
+	seen := map[string]struct{}{}
+	allowAll := false
+	for _, policy := range policies {
+		if !policy.Enabled {
+			continue
+		}
+		if policy.AllowAllTools {
+			if tools, err := m.mcpPolicies.CachedTools(context.Background(), policy.ServerName); err == nil && len(tools) > 0 {
+				for _, tool := range tools {
+					seen[tool.Name] = struct{}{}
+				}
+				continue
+			}
+			allowAll = true
+			continue
+		}
+		for _, tool := range policy.EffectiveTools() {
+			seen[tool] = struct{}{}
+		}
+	}
+	tools := make([]string, 0, len(seen))
+	for tool := range seen {
+		tools = append(tools, tool)
+	}
+	sort.Strings(tools)
+	return tools, allowAll
 }
 
 func (m *Manager) withRuntimeMCPEnv(entry MCPCatalogEntry) MCPCatalogEntry {

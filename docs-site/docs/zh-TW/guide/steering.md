@@ -12,6 +12,8 @@ bot 預設不建立也不同步 `.kiro/steering/<project>.md`。如果專案已�
 
 如果團隊希望某些 steering 檔案必須存在，那應該視為團隊規範。例如 repo 可以規定正式作業前必須有 `AGENTS.md`，但這不是 bot runtime 的硬性要求。
 
+本 repository 採用這個團隊慣例：`AGENTS.md` 是 contributors 與 coding agents 必讀的跨 agent 入口文件。請讓它與 `.kiro/steering/project.md` 和公開 contributor guide 保持一致。
+
 ## 建議命名
 
 建議使用穩定、明確的檔名：

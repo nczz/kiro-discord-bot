@@ -65,6 +65,22 @@ See [Daily Workflows](daily-workflows.md) for the operational difference between
 Use slash `/audit` for audit data and slash `/usage` or `/usage-history` for usage data. Text `!audit` does not return audit rows, and text `!usage` only returns a slash-only notice, because Discord cannot make those replies private.
 
 See [Audit, Usage, and Privacy](audit-usage-privacy.md) for how audit rows, audit prompt investigations, and usage attribution work.
+
+## Scoped Skills
+
+Use scoped skills to save reviewed reusable procedures for a server, channel, project, or channel/project pair. Prefer natural-language requests for drafting and updating skills; slash commands are fallback and admin shortcuts. See [Scoped Skills](scoped-skills.md) for scope precedence, bot-tools behavior, audit, and recovery.
+
+| Command | Purpose |
+| --- | --- |
+| `/skill list [query]` | List effective skills for the current channel/project. |
+| `/skill get skill_id:<id-or-slug>` | Read one visible skill. |
+| `/skill draft` | Create a reviewable skill draft from explicit fields. |
+| `/skill preview draft_id:<draft>` | Preview a draft and show review buttons. |
+| `/skill install draft_id:<draft>` | Install a reviewed draft when the caller can manage the target scope. |
+| `/skill discard draft_id:<draft>` | Reject a draft. |
+| `/skill disable` / `/skill restore` / `/skill rollback` | Manage active versions for an authorized scope. |
+| `/skill history skill_id:<id-or-slug> [scope]` | Show recent lifecycle audit history. |
+
 ## A2A
 
 Use A2A commands only after NATS is configured and the channel has an A2A policy. For setup from NATS server through Discord policy, see [Enable A2A with NATS](a2a-nats-setup.md). For protocol terms, see [A2A Protocol Model](a2a-protocol.md).

@@ -15,6 +15,7 @@ import (
 	"github.com/nczz/kiro-discord-bot/channel"
 	"github.com/nczz/kiro-discord-bot/heartbeat"
 	"github.com/nczz/kiro-discord-bot/internal/paths"
+	"github.com/nczz/kiro-discord-bot/internal/skills"
 	"github.com/nczz/kiro-discord-bot/stt"
 )
 
@@ -29,6 +30,7 @@ type Bot struct {
 	cronStore           *heartbeat.CronStore
 	cronTask            *heartbeat.CronTask
 	auditRecorder       *audit.Recorder
+	skillsStore         *skills.Store
 	a2aNode             *a2a.Node
 	a2aConfig           a2a.Config
 	a2aPeerStore        *a2a.SQLitePeerStore
@@ -133,6 +135,15 @@ func NewFromConfig(cfg BotConfig) (*Bot, error) {
 		"USAGE_TIMEZONE": cfg.UsageTimezone,
 	})
 
+	skillsStore, err := skills.Open(cfg.DataDir)
+	if err != nil {
+		manager.StopAll()
+		if auditRecorder != nil {
+			auditRecorder.Close()
+		}
+		return nil, fmt.Errorf("open skills store: %w", err)
+	}
+
 	manualPeers := parseBotPeers(cfg.BotPeers)
 	b := &Bot{discord: ds, manager: manager, guildID: cfg.GuildID, dataDir: cfg.DataDir, cronTimezone: cfg.CronTimezone, version: cfg.BotVersion,
 		startedAt:           time.Now(),
@@ -144,6 +155,7 @@ func NewFromConfig(cfg BotConfig) (*Bot, error) {
 		manualPeers:         manualPeers,
 		peerPermCache:       make(map[string]peerPermissionCacheEntry),
 		auditRecorder:       auditRecorder,
+		skillsStore:         skillsStore,
 		a2aNode:             cfg.A2ANode,
 		a2aConfig:           cfg.A2A,
 		a2aInstanceID:       fmt.Sprintf("%s-%d", cfg.A2A.AgentID, time.Now().UnixNano()),
@@ -236,5 +248,8 @@ func (b *Bot) Stop() {
 	}
 	if b.a2aPeerStore != nil {
 		_ = b.a2aPeerStore.Close()
+	}
+	if b.skillsStore != nil {
+		_ = b.skillsStore.Close()
 	}
 }

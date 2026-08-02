@@ -27,6 +27,9 @@ func commandRequiresInitializedChannel(name, args string) bool {
 		default:
 			return false
 		}
+	case "skill":
+		fields := strings.Fields(args)
+		return len(fields) > 0 && fields[0] != "list" && fields[0] != "search" && fields[0] != "get" && fields[0] != "preview"
 	default:
 		return false
 	}
@@ -70,6 +73,10 @@ func slashInitGateArgs(data discordgo.ApplicationCommandInteractionData) string 
 			}
 		}
 		return strings.TrimSpace(action + " " + value)
+	case "skill":
+		if len(data.Options) > 0 {
+			return data.Options[0].Name
+		}
 	}
 	return ""
 }

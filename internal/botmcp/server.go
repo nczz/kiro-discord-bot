@@ -65,6 +65,13 @@ func DefaultSafeToolNames() []string {
 		ToolQueryChannelHistory,
 		ToolMemoryList,
 		ToolMemoryAdd,
+		ToolSkillsSearch,
+		ToolSkillsEffectiveList,
+		ToolSkillGet,
+		ToolSkillsServerSearch,
+		ToolSkillsServerGet,
+		ToolSkillsServerInventory,
+		ToolSkillsServerEffectiveForChannel,
 		ToolA2APeers,
 		ToolA2APolicyGet,
 		ToolA2ATaskStatus,
@@ -590,6 +597,7 @@ func NewServer() *server.MCPServer {
 		},
 	)
 	registerA2ATools(s)
+	registerSkillTools(s)
 	return s
 }
 
@@ -899,6 +907,8 @@ type targetState struct {
 	DelegationDepth       int      `json:"delegation_depth"`
 	RequesterID           string   `json:"requester_id"`
 	RequesterName         string   `json:"requester_name"`
+	CanManageChannel      bool     `json:"can_manage_channel"`
+	CanManageGuild        bool     `json:"can_manage_guild"`
 	AllowedMentionUserIDs []string `json:"allowed_mention_user_ids"`
 }
 

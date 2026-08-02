@@ -7,6 +7,7 @@
 | Surface | 角色 |
 | --- | --- |
 | `docs-site/docs/` | 長篇 user、admin、operator、security、contributor documentation。 |
+| `AGENTS.md` | 跨 agent 入口文件，記錄不可違背原則、架構邊界、source-of-truth map 與 verification expectations。 |
 | `README.md` 與 `README.zh-TW.md` | 專案概覽、快速評估路徑、導向靜態站。 |
 | `INSTALL.md` | 給 agent 與 operator 的精簡安裝 checklist。 |
 | `INSTALL_MCP.md` | 精簡 MCP setup checklist。 |
@@ -15,7 +16,7 @@
 ## Code 變更時
 
 修改以下行為時，必須在同一個 change 更新文件：
-
+- `AGENTS.md` 中的 agent onboarding rules、architecture boundaries、security principles 或 verification expectations。
 - Slash command behavior 或 privacy。
 - Environment variables 或 defaults。
 - MCP tool names、scopes、policies 或 server behavior。

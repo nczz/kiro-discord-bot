@@ -7,6 +7,7 @@ The static site is the canonical documentation surface. Repository markdown file
 | Surface | Role |
 | --- | --- |
 | `docs-site/docs/` | Long-form user, admin, operator, security, and contributor documentation. |
+| `AGENTS.md` | Cross-agent entrypoint for non-negotiable principles, architecture boundaries, source-of-truth map, and verification expectations. |
 | `README.md` and `README.zh-TW.md` | Project overview, fast evaluation path, and links into the site. |
 | `INSTALL.md` | Short install checklist for agents and operators. |
 | `INSTALL_MCP.md` | Short MCP setup checklist. |
@@ -15,7 +16,7 @@ The static site is the canonical documentation surface. Repository markdown file
 ## When Code Changes
 
 Update documentation in the same change when you modify:
-
+- Agent onboarding rules, architecture boundaries, security principles, or verification expectations in `AGENTS.md`.
 - Slash command behavior or privacy.
 - Environment variables or defaults.
 - MCP tool names, scopes, policies, or server behavior.

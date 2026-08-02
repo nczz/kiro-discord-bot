@@ -40,6 +40,32 @@ func commandError(err error) string {
 		return L.Getf("error.kiro_cli_missing", msg)
 	case strings.Contains(lower, "you are not logged in") || strings.Contains(lower, "kiro-cli login"):
 		return L.Getf("error.kiro_auth", msg)
+	case strings.Contains(lower, "skills store is unavailable"):
+		return L.Get("skill.error.store_unavailable")
+	case strings.Contains(lower, "skill draft content is required"):
+		return L.Get("skill.error.content_required")
+	case strings.Contains(lower, "required tools must be json"):
+		return L.Get("skill.error.required_tools_json")
+	case strings.Contains(lower, "risk report must be json"):
+		return L.Get("skill.error.risk_report_json")
+	case strings.Contains(lower, "source message refs must be json"):
+		return L.Get("skill.error.source_message_refs_json")
+	case strings.Contains(lower, "guild scope requires guild_id"):
+		return L.Get("skill.error.guild_scope_requires")
+	case strings.Contains(lower, "channel scope requires guild_id and channel_id"):
+		return L.Get("skill.error.channel_scope_requires")
+	case strings.Contains(lower, "project scope requires project_cwd"):
+		return L.Get("skill.error.project_scope_requires")
+	case strings.Contains(lower, "channel_project scope requires"):
+		return L.Get("skill.error.channel_project_scope_requires")
+	case strings.Contains(lower, "unsupported skill scope"):
+		return L.Get("skill.error.unsupported_scope")
+	case strings.Contains(lower, "is not an active draft"):
+		return L.Get("skill.error.draft_not_active")
+	case strings.Contains(lower, "draft ") && strings.Contains(lower, " expired"):
+		return L.Get("skill.error.draft_expired")
+	case strings.Contains(lower, "materialized skill file drifted"):
+		return L.Get("skill.error.materialized_drift")
 	case strings.Contains(lower, "queue full"):
 		return L.Getf("error.queue_full_action", msg)
 	case strings.Contains(lower, "active job is not cancellable yet"):

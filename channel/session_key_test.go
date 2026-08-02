@@ -156,6 +156,33 @@ func TestTargetCWDPathUsesParentChannelUnlessThreadOverrides(t *testing.T) {
 	}
 }
 
+func TestMCPBotToolsProjectCWDUsesThreadOverride(t *testing.T) {
+	dataDir := t.TempDir()
+	store, err := NewSessionStore(dataDir)
+	if err != nil {
+		t.Fatalf("new session store: %v", err)
+	}
+	m := NewManager(ManagerConfig{Store: store, DataDir: dataDir, GuildID: "guild-1"})
+	defer m.StopAll()
+	m.RegisterBuiltinMCP("bot-tools", []string{"mcp-bot"}, map[string]string{"DATA_DIR": dataDir})
+	if err := m.setChannelSession("channel-1", &Session{SessionID: "channel-session", CWD: "/project-parent"}); err != nil {
+		t.Fatalf("set channel session: %v", err)
+	}
+	if err := m.setThreadSession("thread-1", "channel-1", &Session{SessionID: "thread-session", CWD: "/project-thread"}); err != nil {
+		t.Fatalf("set thread session: %v", err)
+	}
+	if err := m.SetMCPPolicy("channel-1", "manager", "bot-tools", true, "full"); err != nil {
+		t.Fatalf("set mcp policy: %v", err)
+	}
+	servers := m.mcpServersForTarget("channel-1", "thread-1")
+	if len(servers) != 1 {
+		t.Fatalf("servers = %+v", servers)
+	}
+	if got := servers[0].Env["BOT_TOOLS_PROJECT_CWD"]; got != "/project-thread" {
+		t.Fatalf("BOT_TOOLS_PROJECT_CWD = %q, want thread override", got)
+	}
+}
+
 func TestResumeWithoutStoredSessionReturnsTypedError(t *testing.T) {
 	m := newSessionKeyTestManager(t)
 	if _, err := m.Resume("channel-missing"); !errors.Is(err, ErrNoSavedSession) {

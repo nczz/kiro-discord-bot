@@ -679,7 +679,8 @@ func (w *Worker) execute(job *Job) {
 	if job.OnThreadReady != nil {
 		job.OnThreadReady(threadID)
 	}
-	if err := writeBotToolsTargetStateWithRequester(w.botToolsTargetStatePath, threadID, job.DisableBotEgress, job.MentionRefs, job.RemoteA2A, job.AllowRemoteMemoryWrite, job.UserID, job.Username, job.A2ADelegationDepth); err != nil {
+	canManageChannel, canManageGuild := botToolsRequesterPermissions(job.Session, job.UserID, threadID, w.channelID)
+	if err := writeBotToolsTargetStateWithRequester(w.botToolsTargetStatePath, threadID, job.DisableBotEgress, job.MentionRefs, job.RemoteA2A, job.AllowRemoteMemoryWrite, job.UserID, job.Username, job.A2ADelegationDepth, canManageChannel, canManageGuild); err != nil {
 		log.Printf("[worker %s] write bot-tools target state: %v", w.channelID, err)
 	}
 
@@ -1243,7 +1244,8 @@ func (w *Worker) executeInline(job *Job) {
 		})
 	}
 	targetID := job.inlineBotToolsTargetID()
-	if err := writeBotToolsTargetStateWithRequester(w.botToolsTargetStatePath, targetID, job.DisableBotEgress, job.MentionRefs, job.RemoteA2A, job.AllowRemoteMemoryWrite, job.UserID, job.Username, job.A2ADelegationDepth); err != nil {
+	canManageChannel, canManageGuild := botToolsRequesterPermissions(job.Session, job.UserID, targetID, job.ChannelID)
+	if err := writeBotToolsTargetStateWithRequester(w.botToolsTargetStatePath, targetID, job.DisableBotEgress, job.MentionRefs, job.RemoteA2A, job.AllowRemoteMemoryWrite, job.UserID, job.Username, job.A2ADelegationDepth, canManageChannel, canManageGuild); err != nil {
 		log.Printf("[worker %s] write inline bot-tools target state: %v", w.channelID, err)
 	}
 
@@ -1868,7 +1870,8 @@ func (w *Worker) executeFallback(job *Job) {
 		w.cancelMu.Unlock()
 		w.signalIdle()
 	}()
-	if err := writeBotToolsTargetStateWithRequester(w.botToolsTargetStatePath, job.ChannelID, false, job.MentionRefs, false, false, job.UserID, job.Username, 0); err != nil {
+	canManageChannel, canManageGuild := botToolsRequesterPermissions(job.Session, job.UserID, job.ChannelID, "")
+	if err := writeBotToolsTargetStateWithRequester(w.botToolsTargetStatePath, job.ChannelID, false, job.MentionRefs, false, false, job.UserID, job.Username, 0, canManageChannel, canManageGuild); err != nil {
 		log.Printf("[worker %s] write fallback bot-tools target state: %v", w.channelID, err)
 	}
 

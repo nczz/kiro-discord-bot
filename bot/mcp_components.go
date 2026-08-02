@@ -165,7 +165,7 @@ func (b *Bot) handleMCPComponent(ds *discordgo.Session, i *discordgo.Interaction
 
 func webhookEdit(content string, components []discordgo.MessageComponent) *discordgo.WebhookEdit {
 	content = truncateDiscordMessageContent(content, mcpContentLimit)
-	return &discordgo.WebhookEdit{Content: &content, Components: &components}
+	return &discordgo.WebhookEdit{Content: &content, Components: &components, AllowedMentions: &discordgo.MessageAllowedMentions{}}
 }
 
 func truncateDiscordMessageContent(s string, max int) string {

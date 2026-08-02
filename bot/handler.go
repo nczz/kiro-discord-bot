@@ -123,7 +123,7 @@ func isKnownBangCommand(name, content string) bool {
 		return false
 	}
 	switch name {
-	case "resume", "session", "pause", "back", "silent", "thread", "reset", "status", "usage", "doctor", "audit", "mcp", "steering", "cancel", "interrupt",
+	case "resume", "session", "pause", "back", "silent", "thread", "reset", "status", "usage", "doctor", "audit", "mcp", "skill", "steering", "cancel", "interrupt",
 		"close-thread", "compact", "clear", "cwd", "start", "agent", "engine", "model", "models", "memory", "flashmemory", "cron", "help":
 		return true
 	case "remind":
@@ -730,6 +730,9 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 	case content == "!mcp" || strings.HasPrefix(content, "!mcp "):
 		ctx.args = strings.TrimSpace(strings.TrimPrefix(content, "!mcp"))
 		b.cmdMCP(ctx)
+	case content == "!skill" || strings.HasPrefix(content, "!skill "):
+		ctx.args = strings.TrimSpace(strings.TrimPrefix(content, "!skill"))
+		b.cmdSkill(ctx)
 	case content == "!steering" || strings.HasPrefix(content, "!steering "):
 		ctx.args = strings.TrimSpace(strings.TrimPrefix(content, "!steering"))
 		b.cmdSteering(ctx)
@@ -1076,6 +1079,7 @@ func buildSlashCommands() []*discordgo.ApplicationCommand {
 			{Type: discordgo.ApplicationCommandOptionString, Name: "prompt", Description: L.Get("cmd.audit.opt.prompt"), Required: false},
 		}},
 		{Name: "mcp", Description: L.Get("cmd.mcp.desc"), Options: mcpSlashOptions()},
+		{Name: "skill", Description: L.Get("cmd.skill.desc"), Options: skillSlashOptions()},
 		{Name: "steering", Description: L.Get("cmd.steering.desc"), Options: steeringSlashOptions()},
 		{Name: "cancel", Description: L.Get("cmd.cancel.desc")},
 		{Name: "interrupt", Description: L.Get("cmd.interrupt.desc")},
@@ -1291,6 +1295,8 @@ func (b *Bot) handleInteraction(ds *discordgo.Session, i *discordgo.InteractionC
 			b.handleUsageHistoryComponent(ds, i)
 		} else if strings.HasPrefix(customID, a2aComponentPrefix+":") {
 			b.handleA2AComponent(ds, i)
+		} else if strings.HasPrefix(customID, skillComponentPrefix+":") {
+			b.handleSkillComponent(ds, i)
 		} else if strings.HasPrefix(customID, "cronp_") {
 			b.handleCronPromptButton(ds, i)
 		} else if strings.HasPrefix(customID, "cron_") {
@@ -1519,6 +1525,8 @@ func (b *Bot) handleSlashCommand(ds *discordgo.Session, i *discordgo.Interaction
 				return
 			}
 			b.cmdMCP(ctx)
+		case "skill":
+			b.handleSkillSlash(data.Options, ctx)
 		case "a2a":
 			ctx.args = a2aArgsFromSlashOptions(data.Options, i.GuildID, rawChannelID, userID, username, b.userCanManageAuditTarget(ds, userID, rawChannelID))
 			b.cmdA2A(ctx)

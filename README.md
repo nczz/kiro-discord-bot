@@ -42,7 +42,7 @@ Continue with the [full installation guide][install-doc].
 | First-time setup | [Getting Started][getting-started] · [Installation][install-doc] |
 | Daily use | [Command Reference][commands] · [Listen Modes][listen-modes] |
 | Agent engines | [Agent Engines][agent-engines] · [Environment][environment] |
-| Agent context | [Steering Files][steering] · [Core Concepts][core-concepts] |
+| Agent context | [`AGENTS.md`](AGENTS.md) · [Steering Files][steering] · [Core Concepts][core-concepts] |
 | Tool access | [MCP Policy][mcp] · [Bot Tools][bot-tools] · [Discord MCP Server][mcp-discord] · [Media MCP Server][media-mcp] |
 | Operations | [Environment][environment] · [Deployment][deployment] · [Release Runbook][release] |
 | Security and review | [Security Model][security] · [Audit, Usage, and Privacy][audit-usage] |

@@ -4,7 +4,7 @@
 
 把 Discord 頻道綁定到真實專案，選擇 ACP engine，持續累積規則與脈絡，並用 MCP 安全擴充能力。
 
-[快速開始](guide/getting-started.html) · [Agent Engines](guide/agent-engines.html) · [指令參考](guide/commands.html) · [使用 NATS 啟用 A2A](guide/a2a-nats-setup.html) · [English](/)
+[快速開始](guide/getting-started.html) · [Agent Engines](guide/agent-engines.html) · [指令參考](guide/commands.html) · [Scoped Skills](guide/scoped-skills.html) · [使用 NATS 啟用 A2A](guide/a2a-nats-setup.html) · [English](/)
 
 ## 重點
 
@@ -16,7 +16,7 @@
 
 ## 這個網站提供什麼
 
-這裡是 `kiro-discord-bot` 的操作手冊：安裝、頻道初始化、日常使用、steering、MCP 權限、audit 與 usage、管理安全、部署、release、安全審查與疑難排解。
+這裡是 `kiro-discord-bot` 的操作手冊：安裝、頻道初始化、日常使用、steering、scoped skills、MCP 權限、audit 與 usage、管理安全、部署、release、安全審查與疑難排解。
 
 README 保留為精簡入口；完整教學與 runbook 放在這裡。
 
@@ -26,9 +26,9 @@ README 保留為精簡入口；完整教學與 runbook 放在這裡。
 | --- | --- |
 | 第一次評估專案的人 | [快速開始](guide/getting-started.html)、[核心概念](guide/core-concepts.html)、[Agent Engines](guide/agent-engines.html) |
 | 第一次安裝的人 | [安裝](guide/installation.html)、[Agent Engines](guide/agent-engines.html)、[環境變數參考](guide/environment.html)、[部署](guide/deployment.html) |
-| 日常 Discord 使用者 | [指令參考](guide/commands.html)、[監聽模式](guide/listen-modes.html)、[Cron 與提醒](guide/cron-reminders.html) |
-| Channel/admin 管理者 | [管理與安全](guide/admin-security.html)、[MCP 權限](guide/mcp.html)、[Audit、用量與隱私](guide/audit-usage-privacy.html) |
-| MCP 管理者 | [MCP 權限](guide/mcp.html)、[Bot Tools MCP](guide/bot-tools.html)、[Discord MCP](guide/mcp-discord.html)、[Media MCP](guide/media-mcp.html) |
+| 日常 Discord 使用者 | [指令參考](guide/commands.html)、[Scoped Skills](guide/scoped-skills.html)、[監聽模式](guide/listen-modes.html)、[Cron 與提醒](guide/cron-reminders.html) |
+| Channel/admin 管理者 | [管理與安全](guide/admin-security.html)、[Scoped Skills](guide/scoped-skills.html)、[MCP 權限](guide/mcp.html)、[Audit、用量與隱私](guide/audit-usage-privacy.html) |
+| MCP 管理者 | [MCP 權限](guide/mcp.html)、[Bot Tools MCP](guide/bot-tools.html)、[Scoped Skills](guide/scoped-skills.html)、[Discord MCP](guide/mcp-discord.html)、[Media MCP](guide/media-mcp.html) |
 | 生產環境部署者 | [Agent Engines](guide/agent-engines.html)、[部署](guide/deployment.html)、[使用 NATS 啟用 A2A](guide/a2a-nats-setup.html)、[A2A 協議模型](guide/a2a-protocol.html)、[macOS MCP 網路](guide/macos-mcp-networking.html)、[疑難排解](guide/troubleshooting.html) |
 | Release 維護者 | [Release Runbook](guide/release.html)、[貢獻者指南](guide/contributing.html)、[文件維護](guide/docs-maintenance.html) |
 | Security reviewer | [安全模型](guide/security-model.html)、[Audit、用量與隱私](guide/audit-usage-privacy.html)、[環境變數參考](guide/environment.html) |

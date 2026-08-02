@@ -42,7 +42,7 @@ Kiro CLI 與 OMP 都是外部 agent CLI。這個專案會從 Discord 啟動與�
 | 初次設定 | [快速開始][getting-started-zh] · [安裝][install-doc-zh] |
 | 日常使用 | [指令參考][commands-zh] · [監聽模式][listen-modes-zh] |
 | Agent engines | [Agent Engines][agent-engines-zh] · [環境變數][environment-zh] |
-| Agent 脈絡 | [Steering 檔案][steering-zh] · [核心概念][core-concepts-zh] |
+| Agent 脈絡 | [`AGENTS.md`](AGENTS.md) · [Steering 檔案][steering-zh] · [核心概念][core-concepts-zh] |
 | 工具權限 | [MCP 權限][mcp-zh] · [Bot Tools][bot-tools-zh] · [Discord MCP Server][mcp-discord-zh] · [Media MCP Server][media-mcp-zh] |
 | 維運 | [環境變數][environment-zh] · [部署][deployment-zh] · [Release Runbook][release-zh] |
 | 安全與審查 | [安全模型][security-zh] · [Audit、用量與隱私][audit-usage-zh] |

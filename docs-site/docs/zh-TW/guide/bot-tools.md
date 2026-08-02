@@ -23,6 +23,13 @@
 | `bot_query_channel_history` | Read | 搜尋或分頁讀取目前 channel/thread context 的已儲存歷史。 |
 | `bot_memory_list` | Read | 列出目前 parent channel 的 persistent memory rules。 |
 | `bot_memory_add` | Write, non-destructive | 排入使用者明確要求、且已 audit-recorded 的 channel memory rule。 |
+| `bot_skills_search` | Read | 搜尋 visible scoped skills，不暴露 raw bot data paths。 |
+| `bot_skills_effective_list` | Read | 列出目前 channel/project scope 的 effective skills。 |
+| `bot_skill_get` | Read | 通過 scope 與 required-tool checks 後讀取一個 visible skill。 |
+| `bot_skills_server_search` | Read | 搜尋 visible server-wide skills。 |
+| `bot_skills_server_get` | Read | 讀取一個 visible server-wide skill。 |
+| `bot_skills_server_inventory` | Read | 在 authorized context 下摘要 server-wide skill inventory。 |
+| `bot_skills_server_effective_for_channel` | Read | 顯示會套用到 channel 的 server skills。 |
 | `bot_a2a_peers` | Read | 列出已知 A2A runtime peers、可呼叫 channel refs、visible skills、wakeability 與 delivery readiness。 |
 | `bot_a2a_policy_get` | Read | 顯示目前綁定 channel 的 A2A policy 與 delivery readiness。 |
 | `bot_a2a_task_status` | Read | 讀取 durable A2A TaskStore state 與 task 或 recent outbound tasks 的 event history。 |
@@ -44,6 +51,13 @@
 | `bot_query_audit` | Read, sensitive | 查詢 scoped audit timeline rows。 |
 | `bot_memory_remove` | Write, destructive | 排入移除一筆已列出的 persistent memory rule。 |
 | `bot_memory_clear` | Write, destructive | 排入清空目前 channel 所有 persistent memory rules。 |
+
+| `bot_skill_usage_record` | Write, audit | 記錄 agent 使用了特定 skill ID/version。 |
+| `bot_skill_draft_from_conversation` | Write, non-destructive | 從 prior channel context 建立 inactive review draft。 |
+| `bot_skill_import_markdown` / `bot_skill_import_url` / `bot_skill_import_github_repo` | Write, non-destructive | 將外部內容匯入 inactive draft；不執行 imported code。 |
+| `bot_skill_preview_draft` / `bot_skill_install_draft` / `bot_skill_discard_draft` | Write/admin | Preview、install 或 discard review drafts，並檢查 authenticated actor。 |
+| `bot_skills_channel_enable` / `bot_skills_channel_disable` / `bot_skills_channel_remove` / `bot_skills_channel_restore` / `bot_skills_channel_rollback` | Write/admin | 使用 channel management permission 管理 channel/project skill lifecycle。 |
+| `bot_skills_server_draft` / `bot_skills_server_disable` / `bot_skills_server_remove` / `bot_skills_server_restore` / `bot_skills_server_rollback` | Write/admin | 管理 server-wide skills；預設關閉且 server-management scoped。 |
 
 `/audit <prompt>` 會暫時只授權 `bot_query_audit` 給私密 audit investigation agent。該 agent 不能使用一般 Discord egress tools。
 
