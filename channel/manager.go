@@ -1419,7 +1419,7 @@ func (m *Manager) MCPServerView(channelID, serverName string) (MCPServerView, er
 	}, nil
 }
 
-// MCPToolViews returns cached tools for a server with channel allow state.
+// MCPToolViews returns current tools for a server with channel allow state.
 func (m *Manager) MCPToolViews(channelID, serverName string) ([]MCPToolView, error) {
 	if m.mcpPolicies == nil {
 		return nil, errors.New(L.Get("mcp.store_unavailable"))
@@ -1428,9 +1428,17 @@ func (m *Manager) MCPToolViews(channelID, serverName string) ([]MCPToolView, err
 	if err != nil {
 		return nil, err
 	}
-	tools, err := m.mcpPolicies.CachedTools(context.Background(), serverName)
-	if err != nil {
-		return nil, err
+	var tools []MCPToolInfo
+	if serverName == "bot-tools" {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		tools, err = m.mcpPolicies.DiscoverTools(ctx, serverName)
+	}
+	if serverName != "bot-tools" || err != nil {
+		tools, err = m.mcpPolicies.CachedTools(context.Background(), serverName)
+		if err != nil {
+			return nil, err
+		}
 	}
 	allowed := make(map[string]struct{}, len(p.EffectiveTools()))
 	for _, name := range p.EffectiveTools() {
