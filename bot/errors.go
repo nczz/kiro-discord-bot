@@ -44,6 +44,8 @@ func commandError(err error) string {
 		return L.Get("skill.error.store_unavailable")
 	case strings.Contains(lower, "skill draft content is required"):
 		return L.Get("skill.error.content_required")
+	case strings.Contains(lower, "skill draft content must be curated markdown"):
+		return L.Get("skill.error.raw_html_content")
 	case strings.Contains(lower, "required tools must be json"):
 		return L.Get("skill.error.required_tools_json")
 	case strings.Contains(lower, "risk report must be json"):

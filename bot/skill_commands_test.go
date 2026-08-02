@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"net/http"
 	"strings"
 	"testing"
 
@@ -116,6 +117,94 @@ func TestSkillDraftCommandCreatesReviewButtonsAndInstall(t *testing.T) {
 	}
 	if len(results) != 1 || !results[0].Executable || results[0].Slug != "erp-reconcile" {
 		t.Fatalf("installed results=%+v", results)
+	}
+}
+
+func TestPlainSkillInstallConfirmationInstallsOnlyActiveDraft(t *testing.T) {
+	L.Load("en")
+	dataDir := t.TempDir()
+	store, err := skills.Open(dataDir)
+	if err != nil {
+		t.Fatalf("open skills: %v", err)
+	}
+	defer store.Close()
+	sessionStore, err := channel.NewSessionStore(dataDir)
+	if err != nil {
+		t.Fatalf("new session store: %v", err)
+	}
+	manager := channel.NewManager(channel.ManagerConfig{DataDir: dataDir, GuildID: "guild-1", Store: sessionStore})
+	defer manager.StopAll()
+	ds := testPeerPermissionSession(t, []*discordgo.PermissionOverwrite{userMemberManageOverwrite("manager", discordgo.PermissionManageChannels)})
+	if err := ds.State.MemberAdd(&discordgo.Member{GuildID: "guild-1", User: &discordgo.User{ID: "manager", Username: "alice"}}); err != nil {
+		t.Fatalf("MemberAdd manager: %v", err)
+	}
+	rt := &recordingDiscordTransport{}
+	ds.Client = &http.Client{Transport: rt}
+	draft, err := skills.NewDraftFromMarkdown(skills.DraftInput{Name: "Install Reply SOP", ScopeType: skills.ScopeChannel, GuildID: "guild-1", ChannelID: "channel-1", ContentMarkdown: "# Steps\nReply install confirms this draft.", SourceType: skills.SourceConversation, CreatedBy: "agent"})
+	if err != nil {
+		t.Fatalf("new draft: %v", err)
+	}
+	if _, err := store.CreateDraft(t.Context(), draft); err != nil {
+		t.Fatalf("create draft: %v", err)
+	}
+	b := &Bot{discord: ds, manager: manager, skillsStore: store, seen: newSeenMessages()}
+	defer b.seen.Stop()
+	b.handleMessage(ds, &discordgo.MessageCreate{Message: &discordgo.Message{ID: "msg-install", ChannelID: "channel-1", GuildID: "guild-1", Content: "install", Author: &discordgo.User{ID: "manager", Username: "alice"}}})
+	paths, bodies := rt.Snapshot()
+	if len(paths) != 2 || !strings.Contains(paths[1], "/channels/channel-1/messages") || !strings.Contains(bodies[1], "Installed skill") {
+		t.Fatalf("reply paths=%#v bodies=%#v", paths, bodies)
+	}
+	got, err := store.GetVisible(t.Context(), skills.ResolveContext{GuildID: "guild-1", ChannelID: "channel-1"}, "install-reply-sop")
+	if err != nil {
+		t.Fatalf("get visible: %v", err)
+	}
+	if got.SkillID == "" || got.ScopeType != skills.ScopeChannel {
+		t.Fatalf("installed skill=%+v", got)
+	}
+}
+
+func TestPlainSkillInstallConfirmationWorksInsideThread(t *testing.T) {
+	L.Load("zh-TW")
+	defer L.Load("en")
+	dataDir := t.TempDir()
+	store, err := skills.Open(dataDir)
+	if err != nil {
+		t.Fatalf("open skills: %v", err)
+	}
+	defer store.Close()
+	sessionStore, err := channel.NewSessionStore(dataDir)
+	if err != nil {
+		t.Fatalf("new session store: %v", err)
+	}
+	manager := channel.NewManager(channel.ManagerConfig{DataDir: dataDir, GuildID: "guild-1", Store: sessionStore})
+	defer manager.StopAll()
+	ds := testPeerPermissionSession(t, []*discordgo.PermissionOverwrite{userMemberManageOverwrite("manager", discordgo.PermissionManageChannels)})
+	if err := ds.State.MemberAdd(&discordgo.Member{GuildID: "guild-1", User: &discordgo.User{ID: "manager", Username: "alice"}}); err != nil {
+		t.Fatalf("MemberAdd manager: %v", err)
+	}
+	rt := &recordingDiscordTransport{}
+	ds.Client = &http.Client{Transport: rt}
+	draft, err := skills.NewDraftFromMarkdown(skills.DraftInput{Name: "Thread Reply SOP", ScopeType: skills.ScopeChannel, GuildID: "guild-1", ChannelID: "channel-1", ContentMarkdown: "# Steps\nReply install confirms from a thread.", SourceType: skills.SourceConversation, CreatedBy: "agent"})
+	if err != nil {
+		t.Fatalf("new draft: %v", err)
+	}
+	if _, err := store.CreateDraft(t.Context(), draft); err != nil {
+		t.Fatalf("create draft: %v", err)
+	}
+	b := &Bot{discord: ds, manager: manager, skillsStore: store, seen: newSeenMessages()}
+	defer b.seen.Stop()
+	registerThreadParent("thread-1", "channel-1")
+	b.handleMessage(ds, &discordgo.MessageCreate{Message: &discordgo.Message{ID: "msg-thread-install", ChannelID: "thread-1", GuildID: "guild-1", Content: "安裝", Author: &discordgo.User{ID: "manager", Username: "alice"}}})
+	paths, bodies := rt.Snapshot()
+	if len(paths) == 0 || !strings.Contains(paths[len(paths)-1], "/channels/thread-1/messages") || !strings.Contains(bodies[len(bodies)-1], "已為") {
+		t.Fatalf("reply paths=%#v bodies=%#v", paths, bodies)
+	}
+	got, err := store.GetVisible(t.Context(), skills.ResolveContext{GuildID: "guild-1", ChannelID: "channel-1"}, "thread-reply-sop")
+	if err != nil {
+		t.Fatalf("get visible: %v", err)
+	}
+	if got.SkillID == "" || got.ScopeType != skills.ScopeChannel {
+		t.Fatalf("installed skill=%+v", got)
 	}
 }
 

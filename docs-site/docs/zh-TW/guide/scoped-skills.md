@@ -28,9 +28,9 @@ Thread target 繼承 parent channel scope。Project-scoped resolution 會使用 
 
 建議流程以一般 Discord 對話為主：
 
-1. 請 channel agent 把 procedure、先前討論、Markdown、URL 或 GitHub repository 轉成 skill draft。
-2. Agent 透過 bot skill tools 建立 inactive draft，或執行已授權的 channel/project lifecycle change。
-3. Channel manager review draft preview，必要時確認 install。
+1. 請 channel agent 從 procedure、先前討論、Markdown、URL、Gist、GitHub repository 或檔案建立 skill。
+2. Agent 自行研究所有來源、萃取可重用流程，然後用 `bot_skill_create_draft` 提交乾淨 Markdown 與 source refs。
+3. Channel manager review draft preview 後，點 **安裝**、回覆 `安裝`，或使用 `/skill install draft_id:<draft>` 確認要安裝的草稿。
 4. Bot 在回報成功前記錄 mutation audit data。
 
 Slash commands 仍保留作為 fallback 與 admin shortcuts。

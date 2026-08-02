@@ -53,11 +53,10 @@
 | `bot_memory_clear` | Write, destructive | 排入清空目前 channel 所有 persistent memory rules。 |
 
 | `bot_skill_usage_record` | Write, audit | 記錄 agent 使用了特定 skill ID/version。 |
-| `bot_skill_draft_from_conversation` | Write, non-destructive | 從 prior channel context 建立 inactive review draft。 |
-| `bot_skill_import_markdown` / `bot_skill_import_url` / `bot_skill_import_github_repo` | Write, non-destructive | 將外部內容匯入 inactive draft；不執行 imported code。 |
-| `bot_skill_preview_draft` / `bot_skill_install_draft` / `bot_skill_discard_draft` | Write/admin | Preview、install 或 discard review drafts，並檢查 authenticated actor。 |
+| `bot_skill_create_draft` | Write, non-destructive | 對任何「建立技能」意圖建立唯一的 inactive review draft。Agent 必須自行研究 URL/Gist/repo/file，最後只提交整理後的乾淨 Markdown 與 source refs。 |
+| `bot_skill_preview_draft` / `bot_skill_install_draft` / `bot_skill_discard_draft` | Write/admin | Preview、install 或 discard review drafts，並檢查 authenticated actor。只有 agent 呼叫 install/discard 會被拒絕，必須等使用者在 Discord 確認。 |
 | `bot_skills_channel_enable` / `bot_skills_channel_disable` / `bot_skills_channel_remove` / `bot_skills_channel_restore` / `bot_skills_channel_rollback` | Write/admin | 使用 channel management permission 管理 channel/project skill lifecycle。 |
-| `bot_skills_server_draft` / `bot_skills_server_disable` / `bot_skills_server_remove` / `bot_skills_server_restore` / `bot_skills_server_rollback` | Write/admin | 管理 server-wide skills；預設關閉且 server-management scoped。 |
+| `bot_skills_server_disable` / `bot_skills_server_remove` / `bot_skills_server_restore` / `bot_skills_server_rollback` | Write/admin | 管理 server-wide skills；預設關閉且 server-management scoped。 |
 
 `/audit <prompt>` 會暫時只授權 `bot_query_audit` 給私密 audit investigation agent。該 agent 不能使用一般 Discord egress tools。
 

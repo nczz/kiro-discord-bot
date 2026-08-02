@@ -35,6 +35,40 @@ func skillMutationActorFromCmd(ctx cmdCtx, source string) skills.MutationActor {
 	}
 }
 
+func isPlainSkillInstallConfirmation(content string) bool {
+	switch strings.ToLower(strings.TrimSpace(content)) {
+	case "install", "安裝":
+		return true
+	default:
+		return false
+	}
+}
+
+func (b *Bot) handlePlainSkillInstallConfirmation(ctx cmdCtx, content string) bool {
+	if !isPlainSkillInstallConfirmation(content) {
+		return false
+	}
+	if b == nil || b.skillsStore == nil {
+		ctx.reply(L.Get("skill.error.store_unavailable"))
+		return true
+	}
+	drafts, err := b.skillsStore.ActiveDrafts(context.Background(), b.skillResolveContext(ctx), 2)
+	if err != nil {
+		ctx.reply(commandError(err))
+		return true
+	}
+	if len(drafts) == 0 {
+		ctx.reply(L.Get("skill.confirm.no_draft"))
+		return true
+	}
+	if len(drafts) > 1 {
+		ctx.reply(L.Get("skill.confirm.ambiguous"))
+		return true
+	}
+	b.installSkillDraft(ctx, b.skillsStore, drafts[0].DraftID, false, "message", "Discord message skill install confirmation")
+	return true
+}
+
 func skillSlashOptions() []*discordgo.ApplicationCommandOption {
 	str := func(name, desc string, required bool) *discordgo.ApplicationCommandOption {
 		return &discordgo.ApplicationCommandOption{Type: discordgo.ApplicationCommandOptionString, Name: name, Description: desc, Required: required}
@@ -369,6 +403,10 @@ func (b *Bot) cmdSkillPreview(ctx cmdCtx, store *skills.Store, draftID string) {
 }
 
 func (b *Bot) cmdSkillInstall(ctx cmdCtx, store *skills.Store, draftID string, overwrite bool) {
+	b.installSkillDraft(ctx, store, draftID, overwrite, "slash", "Discord /skill install confirmation")
+}
+
+func (b *Bot) installSkillDraft(ctx cmdCtx, store *skills.Store, draftID string, overwrite bool, source, reason string) {
 	draft, err := store.GetDraft(context.Background(), draftID)
 	if err != nil {
 		ctx.reply(commandError(err))
@@ -383,7 +421,7 @@ func (b *Bot) cmdSkillInstall(ctx cmdCtx, store *skills.Store, draftID string, o
 		ctx.reply(commandError(err))
 		return
 	}
-	install, err := store.InstallDraftWithMaterializationAndAudit(context.Background(), draft.DraftID, skillMutationActorFromCmd(ctx, "slash"), "Discord /skill install confirmation", materializedPath, materializedSHA)
+	install, err := store.InstallDraftWithMaterializationAndAudit(context.Background(), draft.DraftID, skillMutationActorFromCmd(ctx, source), reason, materializedPath, materializedSHA)
 	if err != nil {
 		ctx.reply(commandError(err))
 		return

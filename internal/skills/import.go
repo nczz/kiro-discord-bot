@@ -29,6 +29,9 @@ type DraftInput struct {
 }
 
 func NewDraftFromMarkdown(in DraftInput) (Draft, error) {
+	if looksLikeRawHTMLDocument(in.ContentMarkdown) {
+		return Draft{}, fmt.Errorf("skill draft content must be curated markdown, not raw HTML")
+	}
 	content := NormalizeSkillMarkdown(in)
 	tools := in.RequiredTools
 	if len(tools) == 0 {

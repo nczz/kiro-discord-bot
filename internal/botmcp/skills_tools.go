@@ -4,10 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"net"
-	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -24,10 +20,7 @@ const (
 	ToolSkillsEffectiveList             = "bot_skills_effective_list"
 	ToolSkillGet                        = "bot_skill_get"
 	ToolSkillUsageRecord                = "bot_skill_usage_record"
-	ToolSkillDraftFromConversation      = "bot_skill_draft_from_conversation"
-	ToolSkillImportMarkdown             = "bot_skill_import_markdown"
-	ToolSkillImportURL                  = "bot_skill_import_url"
-	ToolSkillImportGitHubRepo           = "bot_skill_import_github_repo"
+	ToolSkillCreateDraft                = "bot_skill_create_draft"
 	ToolSkillPreviewDraft               = "bot_skill_preview_draft"
 	ToolSkillInstallDraft               = "bot_skill_install_draft"
 	ToolSkillDiscardDraft               = "bot_skill_discard_draft"
@@ -40,7 +33,6 @@ const (
 	ToolSkillsServerGet                 = "bot_skills_server_get"
 	ToolSkillsServerInventory           = "bot_skills_server_inventory"
 	ToolSkillsServerEffectiveForChannel = "bot_skills_server_effective_for_channel"
-	ToolSkillsServerDraft               = "bot_skills_server_draft"
 	ToolSkillsServerDisable             = "bot_skills_server_disable"
 	ToolSkillsServerRemove              = "bot_skills_server_remove"
 	ToolSkillsServerRestore             = "bot_skills_server_restore"
@@ -64,32 +56,8 @@ func registerSkillTools(s *server.MCPServer) {
 		result, err := skillUsageRecord(ctx, dataDir(), req)
 		return skillJSONResult(result, err), nil
 	})
-	s.AddTool(skillDraftTool(ToolSkillDraftFromConversation, "Create an inactive skill draft from an explicit user request to preserve the current conversation as a reusable skill. This never installs or enables the skill."), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		result, err := skillDraft(ctx, dataDir(), req, skills.SourceConversation)
-		return skillJSONResult(result, err), nil
-	})
-	s.AddTool(skillDraftTool(ToolSkillImportMarkdown, "Import trusted markdown text as an inactive skill draft. This never installs or enables the skill."), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		result, err := skillDraft(ctx, dataDir(), req, skills.SourceMarkdown)
-		return skillJSONResult(result, err), nil
-	})
-	s.AddTool(skillImportURLTool(ToolSkillImportURL, "Fetch a non-secret HTTP(S) markdown URL and convert it into an inactive skill draft. This never executes source content or installs the skill."), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		content, sourceRef, err := fetchSkillURL(ctx, req.GetString("url", ""), skillImportMaxBytes())
-		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
-		}
-		setStringArg(&req, "content_markdown", content)
-		setStringArg(&req, "source_ref", sourceRef)
-		result, err := skillDraft(ctx, dataDir(), req, skills.SourceURL)
-		return skillJSONResult(result, err), nil
-	})
-	s.AddTool(skillImportURLTool(ToolSkillImportGitHubRepo, "Fetch the README markdown from a GitHub repository URL and convert it into an inactive skill draft. This never clones, executes, installs dependencies, or enables tool code."), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		content, sourceRef, err := fetchGitHubReadme(ctx, req.GetString("url", ""), skillImportMaxBytes())
-		if err != nil {
-			return mcp.NewToolResultError(err.Error()), nil
-		}
-		setStringArg(&req, "content_markdown", content)
-		setStringArg(&req, "source_ref", sourceRef)
-		result, err := skillDraft(ctx, dataDir(), req, skills.SourceGitHubRepo)
+	s.AddTool(skillCreateDraftTool(), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		result, err := skillCreateDraft(ctx, dataDir(), req)
 		return skillJSONResult(result, err), nil
 	})
 	s.AddTool(skillPreviewDraftTool(), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -138,10 +106,6 @@ func registerSkillTools(s *server.MCPServer) {
 	})
 	s.AddTool(skillSearchTool(ToolSkillsServerEffectiveForChannel, "List skills effective for a specific channel in this Discord server without returning full content."), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		result, err := skillEffectiveList(ctx, dataDir(), req)
-		return skillJSONResult(result, err), nil
-	})
-	s.AddTool(skillDraftTool(ToolSkillsServerDraft, "Create an inactive Discord server-wide skill draft. Requires authenticated Discord server management context."), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		result, err := skillServerDraft(ctx, dataDir(), req)
 		return skillJSONResult(result, err), nil
 	})
 	s.AddTool(skillChannelLifecycleTool(ToolSkillsServerDisable, "Disable a Discord server-wide skill. Requires authenticated Discord server management context."), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -245,9 +209,10 @@ func skillDraftTool(name, desc string) mcp.Tool {
 		mcp.WithString("guild_id", mcp.Description("Discord guild/server ID. Defaults to bound bot-tools guild.")),
 		mcp.WithString("channel_id", mcp.Description("Discord parent channel ID. Defaults to bound bot-tools parent channel.")),
 		mcp.WithString("project_cwd", mcp.Description("Project CWD for project/channel_project scope. Must pass allowed roots during install.")),
-		mcp.WithString("content_markdown", mcp.Required(), mcp.Description("Draft source markdown or conversation-derived procedure. Do not include secrets.")),
+		mcp.WithString("content_markdown", mcp.Required(), mcp.Description("Agent-curated clean skill markdown. Inspect external URLs/Gists/repos yourself first; do not pass raw HTML or unreviewed page source.")),
 		mcp.WithString("required_tools", mcp.Description("Comma-separated or JSON array MCP tool names required by this skill.")),
-		mcp.WithString("source_ref", mcp.Description("Optional source reference, such as a Discord message range or URL.")),
+		mcp.WithString("source_type", mcp.Description("Optional audit provenance: conversation, markdown, url, github_repo, or manual. Defaults to conversation.")),
+		mcp.WithString("source_ref", mcp.Description("Optional source reference, such as a Discord message range, URL, Gist, or repository.")),
 		mcp.WithString("source_message_ids", mcp.Description("Optional JSON array or comma-separated Discord message IDs used as source.")),
 		mcp.WithString("risk_level", mcp.Description("low, medium, high, or critical. Defaults to low.")),
 		mcp.WithString("requested_by", mcp.Required(), mcp.Description("Requester identity from Discord context for audit.")),
@@ -258,16 +223,14 @@ func skillDraftTool(name, desc string) mcp.Tool {
 	)
 }
 
-func skillImportURLTool(name, desc string) mcp.Tool {
-	t := skillDraftTool(name, desc)
-	mcp.WithString("url", mcp.Required(), mcp.Description("HTTP(S) markdown or GitHub repository URL to import as untrusted source."))(&t)
-	return t
+func skillCreateDraftTool() mcp.Tool {
+	return skillDraftTool(ToolSkillCreateDraft, "Create one inactive skill draft from agent-curated markdown. Use this for every user request to create/install a skill, including URLs, Gists, repositories, files, and prior conversation: inspect sources with normal agent tools first, then submit only the clean final skill markdown. This tool never fetches URLs, executes source content, installs, or enables the skill.")
 }
 
 func skillPreviewDraftTool() mcp.Tool {
 	return mcp.NewTool(ToolSkillPreviewDraft,
 		mcp.WithDescription("Preview an inactive skill draft by ID without installing it."),
-		mcp.WithString("draft_id", mcp.Required(), mcp.Description("Draft ID returned by a draft/import tool.")),
+		mcp.WithString("draft_id", mcp.Required(), mcp.Description("Draft ID returned by bot_skill_create_draft.")),
 		mcp.WithReadOnlyHintAnnotation(false),
 		mcp.WithDestructiveHintAnnotation(false),
 		mcp.WithIdempotentHintAnnotation(true),
@@ -390,6 +353,16 @@ func skillUsageRecord(ctx context.Context, dataDir string, req mcp.CallToolReque
 	defer store.Close()
 	rc := skillResolveContext(req)
 	return store.RecordUsage(ctx, skills.UsageEvent{SkillID: req.GetString("skill_id", ""), Version: req.GetString("version", ""), GuildID: rc.GuildID, ChannelID: rc.ChannelID, ThreadID: req.GetString("thread_id", ""), ProjectCWDHash: rc.ProjectCWDHash, MessageID: req.GetString("message_id", ""), AgentSessionID: req.GetString("agent_session_id", ""), SelectedBy: req.GetString("selected_by", "")})
+}
+
+func skillCreateDraft(ctx context.Context, dataDir string, req mcp.CallToolRequest) (skills.Draft, error) {
+	sourceType := strings.TrimSpace(req.GetString("source_type", ""))
+	if sourceType == "" {
+		sourceType = skills.SourceConversation
+	} else {
+		sourceType = skills.NormalizeSourceType(sourceType)
+	}
+	return skillDraft(ctx, dataDir, req, sourceType)
 }
 
 func skillDraft(ctx context.Context, dataDir string, req mcp.CallToolRequest, sourceType string) (skills.Draft, error) {
@@ -545,17 +518,6 @@ func skillServerGet(ctx context.Context, dataDir string, req mcp.CallToolRequest
 	}
 	defer store.Close()
 	return store.GetVisible(ctx, skillServerResolveContext(req), req.GetString("skill_id", ""))
-}
-
-func skillServerDraft(ctx context.Context, dataDir string, req mcp.CallToolRequest) (skills.Draft, error) {
-	actor, err := authenticatedServerSkillActor(req, ToolSkillsServerDraft)
-	if err != nil {
-		return skills.Draft{}, err
-	}
-	setStringArg(&req, "scope_type", skills.ScopeGuild)
-	setStringArg(&req, "guild_id", actor.GuildID)
-	setStringArg(&req, "requested_by", firstNonEmptySkill(actor.ActorUsername, actor.ActorUserID))
-	return skillDraft(ctx, dataDir, req, skills.SourceConversation)
 }
 
 func skillServerSetEnabled(ctx context.Context, dataDir string, req mcp.CallToolRequest, enabled bool, action string) (map[string]any, error) {
@@ -734,14 +696,6 @@ func skillDraftTTL() time.Duration {
 	return time.Duration(hours) * time.Hour
 }
 
-func skillImportMaxBytes() int64 {
-	bytes, err := strconv.ParseInt(strings.TrimSpace(os.Getenv("SKILL_IMPORT_MAX_BYTES")), 10, 64)
-	if err != nil || bytes <= 0 {
-		return 1 << 20
-	}
-	return bytes
-}
-
 func parseStringList(raw string) []string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -752,137 +706,6 @@ func parseStringList(raw string) []string {
 		return items
 	}
 	return strings.FieldsFunc(raw, func(r rune) bool { return r == ',' || r == '\n' || r == ';' })
-}
-
-func fetchSkillURL(ctx context.Context, rawURL string, maxBytes int64) (string, string, error) {
-	parsed, err := url.Parse(strings.TrimSpace(rawURL))
-	if err != nil || parsed == nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.User != nil {
-		return "", "", fmt.Errorf("skill import URL must be non-secret HTTP(S)")
-	}
-	if err := validatePublicHTTPURL(ctx, parsed); err != nil {
-		return "", "", err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, parsed.String(), nil)
-	if err != nil {
-		return "", "", err
-	}
-	client := &http.Client{
-		Transport: publicHTTPTransport(),
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 5 {
-				return fmt.Errorf("too many skill import redirects")
-			}
-			return validatePublicHTTPURL(req.Context(), req.URL)
-		},
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", "", fmt.Errorf("fetch skill source: HTTP %d", resp.StatusCode)
-	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
-	if int64(len(data)) > maxBytes {
-		return "", "", fmt.Errorf("skill import source exceeds byte limit")
-	}
-	if err != nil {
-		return "", "", err
-	}
-	return string(data), parsed.Redacted(), nil
-}
-
-func fetchGitHubReadme(ctx context.Context, rawURL string, maxBytes int64) (string, string, error) {
-	parsed, err := url.Parse(strings.TrimSpace(rawURL))
-	if err != nil || parsed == nil || parsed.Scheme != "https" || !strings.EqualFold(parsed.Host, "github.com") || parsed.User != nil {
-		return "", "", fmt.Errorf("github skill import requires a non-secret https://github.com/<owner>/<repo> URL")
-	}
-	parts := strings.Split(strings.Trim(parsed.Path, "/"), "/")
-	if len(parts) < 2 {
-		return "", "", fmt.Errorf("github repository URL must include owner and repo")
-	}
-	owner, repo := parts[0], strings.TrimSuffix(parts[1], ".git")
-	for _, branch := range []string{"main", "master"} {
-		content, source, err := fetchSkillURL(ctx, fmt.Sprintf("https://raw.githubusercontent.com/%s/%s/%s/README.md", owner, repo, branch), maxBytes)
-		if err == nil {
-			return content, source, nil
-		}
-	}
-	return "", "", fmt.Errorf("could not fetch README.md from github repository default branches")
-}
-
-func publicHTTPTransport() *http.Transport {
-	dialer := &net.Dialer{Timeout: 10 * time.Second}
-	return &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
-		DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
-			host, port, err := net.SplitHostPort(address)
-			if err != nil {
-				return nil, err
-			}
-			ips, err := resolvePublicHost(ctx, host)
-			if err != nil {
-				return nil, err
-			}
-			if len(ips) == 0 {
-				return nil, fmt.Errorf("skill import host resolved no public addresses")
-			}
-			return dialer.DialContext(ctx, network, net.JoinHostPort(ips[0].String(), port))
-		},
-	}
-}
-
-func validatePublicHTTPURL(ctx context.Context, u *url.URL) error {
-	if u == nil || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil {
-		return fmt.Errorf("skill import URL must be non-secret HTTP(S)")
-	}
-	if strings.TrimSpace(u.Hostname()) == "" {
-		return fmt.Errorf("skill import URL host is required")
-	}
-	if _, err := resolvePublicHost(ctx, u.Hostname()); err != nil {
-		return err
-	}
-	return nil
-}
-
-func resolvePublicHost(ctx context.Context, host string) ([]net.IP, error) {
-	host = strings.TrimSpace(host)
-	if strings.EqualFold(host, "localhost") {
-		return nil, fmt.Errorf("skill import URL must resolve to public IP addresses")
-	}
-	if ip := net.ParseIP(host); ip != nil {
-		if !publicIP(ip) {
-			return nil, fmt.Errorf("skill import URL must resolve to public IP addresses")
-		}
-		return []net.IP{ip}, nil
-	}
-	addrs, err := net.DefaultResolver.LookupIPAddr(ctx, host)
-	if err != nil {
-		return nil, err
-	}
-	ips := make([]net.IP, 0, len(addrs))
-	for _, addr := range addrs {
-		if !publicIP(addr.IP) {
-			return nil, fmt.Errorf("skill import URL must resolve to public IP addresses")
-		}
-		ips = append(ips, addr.IP)
-	}
-	return ips, nil
-}
-
-func publicIP(ip net.IP) bool {
-	return ip != nil &&
-		!ip.IsLoopback() &&
-		!ip.IsPrivate() &&
-		!ip.IsLinkLocalUnicast() &&
-		!ip.IsLinkLocalMulticast() &&
-		!ip.IsMulticast() &&
-		!ip.IsUnspecified()
-}
-
-func readAllLimited(r interface{ Read([]byte) (int, error) }) ([]byte, error) {
-	return io.ReadAll(r)
 }
 
 func firstNonEmptySkill(values ...string) string {

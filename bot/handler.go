@@ -697,6 +697,9 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 	if isKnownCommand {
 		defer b.recordCommandCompleted(ctx, bangCommand, "message", "completed", "")
 	}
+	if !isKnownCommand && b.handlePlainSkillInstallConfirmation(ctx, content) {
+		return
+	}
 
 	switch {
 	case content == "!resume":
@@ -899,6 +902,9 @@ func (b *Bot) handleThreadMessage(ds *discordgo.Session, m *discordgo.MessageCre
 	}
 	if isKnownCommand {
 		defer b.recordCommandCompleted(ctx, bangCommand, "thread_message", "completed", "")
+	}
+	if !isKnownCommand && b.handlePlainSkillInstallConfirmation(ctx, content) {
+		return
 	}
 
 	// Thread-specific commands

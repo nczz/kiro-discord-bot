@@ -287,6 +287,9 @@ func validateDraft(d Draft) error {
 	if d.ProposedContentMarkdown == "" {
 		return fmt.Errorf("skill draft content is required")
 	}
+	if looksLikeRawHTMLDocument(d.ProposedContentMarkdown) {
+		return fmt.Errorf("skill draft content must be curated markdown, not raw HTML")
+	}
 	if err := ValidateScope(d.ProposedScopeType); err != nil {
 		return err
 	}
@@ -303,6 +306,14 @@ func validateDraft(d Draft) error {
 		return fmt.Errorf("source message refs must be JSON")
 	}
 	return nil
+}
+
+func looksLikeRawHTMLDocument(content string) bool {
+	lower := strings.ToLower(strings.TrimSpace(content))
+	return strings.HasPrefix(lower, "<!doctype html") ||
+		strings.HasPrefix(lower, "<html") ||
+		strings.HasPrefix(lower, "<head") ||
+		strings.HasPrefix(lower, "<body")
 }
 
 func validateScopeFields(scope, guildID, channelID, projectCWD, cwdHash string) error {
@@ -332,9 +343,57 @@ func validateScopeFields(scope, guildID, channelID, projectCWD, cwdHash string) 
 }
 
 func (s *Store) GetDraft(ctx context.Context, draftID string) (Draft, error) {
+	return scanDraft(s.db.QueryRowContext(ctx, `SELECT `+draftColumns+` FROM skill_drafts WHERE draft_id=?`, strings.TrimSpace(draftID)))
+}
+
+func (s *Store) ActiveDrafts(ctx context.Context, rc ResolveContext, limit int) ([]Draft, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("skills store is unavailable")
+	}
+	if limit <= 0 || limit > 20 {
+		limit = 10
+	}
+	rc = normalizeResolveContext(rc)
+	now := time.Now().UTC()
+	rows, err := s.db.QueryContext(ctx, `SELECT `+draftColumns+` FROM skill_drafts
+		WHERE status=?
+		ORDER BY created_at DESC`, StatusDraft)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Draft{}
+	for rows.Next() {
+		d, err := scanDraft(rows)
+		if err != nil {
+			return nil, err
+		}
+		if !d.ExpiresAt.IsZero() && now.After(d.ExpiresAt) {
+			continue
+		}
+		if scopeMatches(d.ProposedScopeType, d.GuildID, d.ChannelID, d.ProjectCWDHash, rc) {
+			out = append(out, d)
+			if len(out) >= limit {
+				break
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+const draftColumns = "draft_id, proposed_skill_id, proposed_slug, proposed_name, proposed_description, proposed_version, proposed_scope_type, guild_id, channel_id, project_cwd_hash, project_cwd, source_type, source_ref, source_message_refs_json, proposed_content_markdown, required_tools_json, risk_report_json, status, created_by, created_at, expires_at"
+
+type draftScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanDraft(scanner draftScanner) (Draft, error) {
 	var d Draft
 	var created, expires string
-	err := s.db.QueryRowContext(ctx, `SELECT draft_id, proposed_skill_id, proposed_slug, proposed_name, proposed_description, proposed_version, proposed_scope_type, guild_id, channel_id, project_cwd_hash, project_cwd, source_type, source_ref, source_message_refs_json, proposed_content_markdown, required_tools_json, risk_report_json, status, created_by, created_at, expires_at FROM skill_drafts WHERE draft_id=?`, strings.TrimSpace(draftID)).Scan(&d.DraftID, &d.ProposedSkillID, &d.ProposedSlug, &d.ProposedName, &d.ProposedDescription, &d.ProposedVersion, &d.ProposedScopeType, &d.GuildID, &d.ChannelID, &d.ProjectCWDHash, &d.ProjectCWD, &d.SourceType, &d.SourceRef, &d.SourceMessageRefsJSON, &d.ProposedContentMarkdown, &d.RequiredToolsJSON, &d.RiskReportJSON, &d.Status, &d.CreatedBy, &created, &expires)
+	err := scanner.Scan(&d.DraftID, &d.ProposedSkillID, &d.ProposedSlug, &d.ProposedName, &d.ProposedDescription, &d.ProposedVersion, &d.ProposedScopeType, &d.GuildID, &d.ChannelID, &d.ProjectCWDHash, &d.ProjectCWD, &d.SourceType, &d.SourceRef, &d.SourceMessageRefsJSON, &d.ProposedContentMarkdown, &d.RequiredToolsJSON, &d.RiskReportJSON, &d.Status, &d.CreatedBy, &created, &expires)
 	if err != nil {
 		return Draft{}, err
 	}

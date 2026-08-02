@@ -28,9 +28,9 @@ Thread targets inherit the parent channel scope. Project-scoped resolution uses 
 
 The preferred workflow is conversational:
 
-1. Ask the channel agent to turn a procedure, prior discussion, Markdown, URL, or GitHub repository into a skill draft.
-2. The agent uses bot skill tools to create an inactive draft or a permitted channel/project lifecycle change.
-3. A channel manager reviews the draft preview and confirms install when required.
+1. Ask the channel agent to create a skill from a procedure, prior discussion, Markdown, URL, Gist, GitHub repository, or file.
+2. The agent researches any sources itself, extracts the reusable procedure, and calls `bot_skill_create_draft` with only clean curated Markdown plus source refs.
+3. Channel manager reviews the draft preview, then clicks **Install**, replies `install`, or uses `/skill install draft_id:<draft>` to confirm the intended draft.
 4. The bot records mutation audit data before reporting success.
 
 Slash commands remain fallback and admin shortcuts.
