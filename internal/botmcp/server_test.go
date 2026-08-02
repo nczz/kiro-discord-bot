@@ -14,6 +14,9 @@ import (
 	"strings"
 	"testing"
 
+	mcpclient "github.com/mark3labs/mcp-go/client"
+	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/mark3labs/mcp-go/server"
 	"github.com/nczz/kiro-discord-bot/a2a"
 	"github.com/nczz/kiro-discord-bot/audit"
 	"github.com/nczz/kiro-discord-bot/heartbeat"
@@ -135,16 +138,8 @@ func TestDefaultSafeToolNamesExcludeDestructiveTools(t *testing.T) {
 	if !seen[ToolCurrentTime] || !seen[ToolResolveDateRange] {
 		t.Fatalf("time helper tools should be default-enabled for safe date answers: %+v", tools)
 	}
-	if !seen[ToolA2ADelegate] {
-		t.Fatalf("A2A delegate should be default-enabled after requester binding: %+v", tools)
-	}
-	if !seen[ToolA2ARuntimePreflight] {
-		t.Fatalf("A2A runtime preflight should be default-enabled for read-only cutover checks: %+v", tools)
-	}
-	for _, tool := range []string{ToolA2APeers, ToolA2APolicyGet, ToolA2ATaskStatus, ToolA2ARuntimePreflight, ToolA2APolicyPlan, ToolA2ATrustPeer, ToolA2APolicyApply, ToolA2ADelegate, ToolA2ACancel, ToolA2AInputReply, ToolA2AAuthReply} {
-		if !seen[tool] {
-			t.Fatalf("A2A MCP tool %s should be default-enabled behind bound-context/policy gates: %+v", tool, tools)
-		}
+	if seen[ToolA2ADelegate] || seen[ToolA2ARuntimePreflight] {
+		t.Fatalf("A2A tools should not be default-enabled when A2A is disabled: %+v", tools)
 	}
 	if seen[ToolQueryAudit] {
 		t.Fatalf("audit query tool must not be default-enabled outside manager-authorized /audit prompt jobs: %+v", tools)
@@ -159,6 +154,65 @@ func TestDefaultSafeToolNamesExcludeDestructiveTools(t *testing.T) {
 	if len(auditTools) != 1 || auditTools[0] != ToolQueryAudit {
 		t.Fatalf("audit prompt tools = %+v, want only %s", auditTools, ToolQueryAudit)
 	}
+
+	a2aTools := DefaultSafeToolNamesForA2A(true)
+	a2aSeen := map[string]bool{}
+	for _, tool := range a2aTools {
+		a2aSeen[tool] = true
+	}
+	for _, tool := range []string{ToolA2APeers, ToolA2APolicyGet, ToolA2ATaskStatus, ToolA2ARuntimePreflight, ToolA2APolicyPlan, ToolA2ATrustPeer, ToolA2APolicyApply, ToolA2ADelegate, ToolA2ACancel, ToolA2AInputReply, ToolA2AAuthReply} {
+		if !a2aSeen[tool] {
+			t.Fatalf("A2A MCP tool %s should be default-enabled only when A2A is enabled: %+v", tool, a2aTools)
+		}
+	}
+}
+
+func TestNewServerWithOptionsGatesA2ATools(t *testing.T) {
+	disabled := listToolNames(t, NewServerWithOptions(ServerOptions{}))
+	if disabled[ToolA2ADelegate] || disabled[ToolA2APeers] {
+		t.Fatalf("disabled A2A server exposed A2A tools: %+v", disabled)
+	}
+	enabled := listToolNames(t, NewServerWithOptions(ServerOptions{A2AEnabled: true}))
+	if !enabled[ToolA2ADelegate] || !enabled[ToolA2APeers] {
+		t.Fatalf("enabled A2A server missing A2A tools: %+v", enabled)
+	}
+}
+
+func TestNewServerFromEnvDerivesA2AFromRuntimeEnv(t *testing.T) {
+	t.Setenv("KIRO_BOT_A2A_ENABLED", "")
+	t.Setenv("NATS_URL", "nats://127.0.0.1:4222")
+	t.Setenv("A2A_AGENT_ID", "local-agent")
+	tools := listToolNames(t, NewServerFromEnv())
+	if !tools[ToolA2ADelegate] || !tools[ToolA2APeers] {
+		t.Fatalf("A2A runtime env did not expose A2A tools: %+v", tools)
+	}
+}
+
+func listToolNames(t *testing.T, srv *server.MCPServer) map[string]bool {
+	t.Helper()
+	client, err := mcpclient.NewInProcessClient(srv)
+	if err != nil {
+		t.Fatalf("new in-process client: %v", err)
+	}
+	defer client.Close()
+	if err := client.Start(context.Background()); err != nil {
+		t.Fatalf("start client: %v", err)
+	}
+	initReq := mcp.InitializeRequest{}
+	initReq.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
+	initReq.Params.ClientInfo = mcp.Implementation{Name: "botmcp-test", Version: "1"}
+	if _, err := client.Initialize(context.Background(), initReq); err != nil {
+		t.Fatalf("initialize client: %v", err)
+	}
+	result, err := client.ListTools(context.Background(), mcp.ListToolsRequest{})
+	if err != nil {
+		t.Fatalf("list tools: %v", err)
+	}
+	out := map[string]bool{}
+	for _, tool := range result.Tools {
+		out[tool.Name] = true
+	}
+	return out
 }
 
 func TestMemoryOwnerChannelIDUsesBoundParentForThreadTarget(t *testing.T) {

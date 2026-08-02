@@ -1591,6 +1591,24 @@ func TestSlashCommandsIncludeAgentAndUsage(t *testing.T) {
 	}
 }
 
+func TestSlashCommandsOmitA2AWhenDisabled(t *testing.T) {
+	for _, cmd := range buildSlashCommandsWithA2A(false) {
+		if cmd.Name == "a2a" {
+			t.Fatalf("A2A command registered when disabled: %+v", cmd)
+		}
+	}
+	found := false
+	for _, cmd := range buildSlashCommandsWithA2A(true) {
+		if cmd.Name == "a2a" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("A2A command missing when enabled")
+	}
+}
+
 func TestA2AConfirmationResponseUsesLocale(t *testing.T) {
 	L.Load("zh-TW")
 	got := formatA2AResponse(botmcp.A2AToolResponse{OK: true, RequiresConfirmation: true, ConfirmationSummary: "啟用 A2A", ChangeID: "change-1", ConfirmationToken: "token-1"})

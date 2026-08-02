@@ -179,6 +179,7 @@
   "egress.reason.unsupported_format": "file format is not supported for safe text extraction",
   "egress.reason.image_too_large": "image exceeds upload size or dimension limits",
   "egress.reason.invalid_image": "image format validation failed",
+  "a2a.disabled": "A2A is disabled on this bot. Configure NATS_URL and A2A_AGENT_ID to enable A2A commands and tools.",
   "cmd.a2a.desc": "Manage local A2A peer delegation for this channel",
   "cmd.a2a.sub.peers": "Show available A2A bots and this channel policy",
   "cmd.a2a.sub.setup": "Guided one-step setup for a peer bot",

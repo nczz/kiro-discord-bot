@@ -65,7 +65,7 @@ Default channel setup exposes read/use skill tools only:
 
 Lifecycle tools are not trusted because a model asks for them. Channel lifecycle tools require the authenticated Discord actor context written by the bot for the current task and the caller's channel management permission. Server management tools are default-off and require server management context.
 
-A skill can declare `required_tools`, but this only affects resolution and `missing_tools` reporting. Creating, installing, or enabling a skill never grants MCP permissions or changes channel policy.
+A skill can declare `required_tools`, but this only affects resolution and `missing_tools` reporting. Creating, installing, or enabling a skill never grants MCP permissions or changes channel policy. Broad runtime requirements such as `shell` or concrete host commands such as `curl` are checked against validated runtime command availability before they are reported missing; MCP context absence alone is not treated as a broken shell capability.
 
 ## Audit and Recovery
 

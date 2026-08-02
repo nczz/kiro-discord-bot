@@ -65,7 +65,7 @@ Default channel setup 只 exposes read/use skill tools：
 
 Lifecycle tools 不會因為 model 要求就被信任。Channel lifecycle tools 必須使用 bot 為目前 task 寫入的 authenticated Discord actor context，且 caller 必須有 channel management permission。Server management tools 預設關閉，而且需要 server management context。
 
-Skill 可以宣告 `required_tools`，但這只影響 resolution 與 `missing_tools` 回報。Create、install 或 enable skill 都不會授予 MCP permissions，也不會改變 channel policy。
+Skill 可以宣告 `required_tools`，但這只影響 resolution 與 `missing_tools` 回報。Create、install 或 enable skill 都不會授予 MCP permissions，也不會改變 channel policy。`shell` 這類大範圍 runtime requirement 或 `curl` 這類具體 host command，會先比對已驗證的 runtime command availability；不會只因 MCP context 看不到就回報 shell capability 壞掉。
 
 ## Audit 與 Recovery
 

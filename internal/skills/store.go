@@ -8,8 +8,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -1182,6 +1184,7 @@ func normalizeResolveContext(rc ResolveContext) ResolveContext {
 		rc.ProjectCWDHash = ProjectCWDHash(rc.ProjectCWD)
 	}
 	rc.EffectiveTools = normalizeToolNames(rc.EffectiveTools)
+	rc.RuntimeTools = normalizeToolNames(rc.RuntimeTools)
 	return rc
 }
 
@@ -1218,8 +1221,18 @@ func missingTools(required []string, rc ResolveContext) []string {
 	for _, tool := range rc.EffectiveTools {
 		allowed[tool] = true
 	}
+	runtime := make(map[string]bool, len(rc.RuntimeTools))
+	for _, tool := range rc.RuntimeTools {
+		runtime[strings.ToLower(strings.TrimSpace(tool))] = true
+	}
 	var missing []string
 	for _, tool := range required {
+		if runtimeToolName(tool) {
+			if !runtimeToolSatisfied(tool, runtime) {
+				missing = append(missing, tool)
+			}
+			continue
+		}
 		if rc.ReadOnlyPolicy && destructiveToolName(tool) {
 			missing = append(missing, tool)
 			continue
@@ -1229,6 +1242,70 @@ func missingTools(required []string, rc ResolveContext) []string {
 		}
 	}
 	return normalizeToolNames(missing)
+}
+
+var (
+	defaultRuntimeToolCapabilitiesOnce sync.Once
+	defaultRuntimeToolCapabilities     []string
+)
+
+func DefaultRuntimeToolCapabilities() []string {
+	defaultRuntimeToolCapabilitiesOnce.Do(func() {
+		defaultRuntimeToolCapabilities = runtimeToolCapabilities(exec.LookPath)
+	})
+	return append([]string(nil), defaultRuntimeToolCapabilities...)
+}
+
+var runtimeToolCandidates = []string{"sh", "bash", "zsh", "curl", "python", "python3", "node", "npm", "git", "go"}
+
+func runtimeToolCapabilities(lookup func(string) (string, error)) []string {
+	seen := map[string]bool{}
+	var tools []string
+	for _, candidate := range runtimeToolCandidates {
+		if _, err := lookup(candidate); err != nil {
+			continue
+		}
+		seen[candidate] = true
+		tools = append(tools, candidate)
+	}
+	if seen["sh"] || seen["bash"] || seen["zsh"] {
+		tools = append(tools, "shell")
+	}
+	if seen["python"] || seen["python3"] {
+		tools = append(tools, "python")
+	}
+	return normalizeToolNames(tools)
+}
+
+func runtimeToolName(tool string) bool {
+	tool = strings.ToLower(strings.TrimSpace(tool))
+	if tool == "shell" {
+		return true
+	}
+	for _, candidate := range runtimeToolCandidates {
+		if tool == candidate {
+			return true
+		}
+	}
+	return false
+}
+
+func runtimeToolSatisfied(tool string, runtime map[string]bool) bool {
+	tool = strings.ToLower(strings.TrimSpace(tool))
+	if tool == "" {
+		return true
+	}
+	if runtime[tool] {
+		return true
+	}
+	switch tool {
+	case "shell":
+		return runtime["shell"] || runtime["bash"] || runtime["sh"] || runtime["zsh"]
+	case "python":
+		return runtime["python"] || runtime["python3"]
+	default:
+		return false
+	}
 }
 
 func destructiveToolName(tool string) bool {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -130,9 +131,10 @@ func NewFromConfig(cfg BotConfig) (*Bot, error) {
 		return nil, fmt.Errorf("open usage database: %w", err)
 	}
 	manager.RegisterBuiltinMCP("bot-tools", []string{"mcp-bot"}, map[string]string{
-		"DATA_DIR":       cfg.DataDir,
-		"CRON_TIMEZONE":  cfg.CronTimezone,
-		"USAGE_TIMEZONE": cfg.UsageTimezone,
+		"DATA_DIR":             cfg.DataDir,
+		"CRON_TIMEZONE":        cfg.CronTimezone,
+		"USAGE_TIMEZONE":       cfg.UsageTimezone,
+		"KIRO_BOT_A2A_ENABLED": strconv.FormatBool(cfg.A2A.Enabled()),
 	})
 
 	skillsStore, err := skills.Open(cfg.DataDir)

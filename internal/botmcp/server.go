@@ -27,7 +27,7 @@ import (
 
 // Run starts the built-in bot tools MCP server over stdio.
 func Run() error {
-	return server.ServeStdio(NewServer(), server.WithErrorLogger(log.New(os.Stderr, "[mcp-bot] ", log.LstdFlags)))
+	return server.ServeStdio(NewServerFromEnv(), server.WithErrorLogger(log.New(os.Stderr, "[mcp-bot] ", log.LstdFlags)))
 }
 
 const (
@@ -54,7 +54,11 @@ const (
 // DefaultSafeToolNames returns the bot-tools allowlist enabled during first channel setup.
 // New tools must opt into this list deliberately; being non-destructive is not enough.
 func DefaultSafeToolNames() []string {
-	return []string{
+	return DefaultSafeToolNamesForA2A(false)
+}
+
+func DefaultSafeToolNamesForA2A(a2aEnabled bool) []string {
+	tools := []string{
 		ToolDataSummary,
 		ToolListChannelData,
 		ToolCurrentTime,
@@ -72,21 +76,26 @@ func DefaultSafeToolNames() []string {
 		ToolSkillsServerGet,
 		ToolSkillsServerInventory,
 		ToolSkillsServerEffectiveForChannel,
-		ToolA2APeers,
-		ToolA2APolicyGet,
-		ToolA2ATaskStatus,
-		ToolA2ARuntimePreflight,
-		ToolA2APolicyPlan,
-		ToolA2ATrustPeer,
-		ToolA2ADelegate,
-		ToolA2APolicyApply,
-		ToolA2ACancel,
-		ToolA2AInputReply,
-		ToolA2AAuthReply,
 		ToolCreateCron,
 		ToolUpdateCron,
 		ToolCreateReminder,
 	}
+	if a2aEnabled {
+		tools = append(tools,
+			ToolA2APeers,
+			ToolA2APolicyGet,
+			ToolA2ATaskStatus,
+			ToolA2ARuntimePreflight,
+			ToolA2APolicyPlan,
+			ToolA2ATrustPeer,
+			ToolA2ADelegate,
+			ToolA2APolicyApply,
+			ToolA2ACancel,
+			ToolA2AInputReply,
+			ToolA2AAuthReply,
+		)
+	}
+	return tools
 }
 
 // AuditPromptToolNames returns the private, temporary bot-tools allowlist used
@@ -95,8 +104,20 @@ func AuditPromptToolNames() []string {
 	return []string{ToolQueryAudit}
 }
 
+type ServerOptions struct {
+	A2AEnabled bool
+}
+
 // NewServer builds the built-in bot tools MCP server.
 func NewServer() *server.MCPServer {
+	return NewServerWithOptions(ServerOptions{A2AEnabled: true})
+}
+
+func NewServerFromEnv() *server.MCPServer {
+	return NewServerWithOptions(ServerOptions{A2AEnabled: envBoolLocal("KIRO_BOT_A2A_ENABLED", false) || a2aConfigFromEnv().Enabled()})
+}
+
+func NewServerWithOptions(opts ServerOptions) *server.MCPServer {
 	s := server.NewMCPServer("bot-tools", "1.0.0", server.WithToolCapabilities(false))
 	cronTZ := cronpolicy.TimezoneName(os.Getenv("CRON_TIMEZONE"))
 	s.AddTool(
@@ -596,7 +617,9 @@ func NewServer() *server.MCPServer {
 			return mcp.NewToolResultText(string(raw)), nil
 		},
 	)
-	registerA2ATools(s)
+	if opts.A2AEnabled {
+		registerA2ATools(s)
+	}
 	registerSkillTools(s)
 	return s
 }

@@ -473,6 +473,7 @@ func skillServerResolveContext(req mcp.CallToolRequest) skills.ResolveContext {
 	return skills.ResolveContext{
 		GuildID:        firstNonEmptySkill(os.Getenv("BOT_TOOLS_GUILD_ID"), req.GetString("guild_id", "")),
 		EffectiveTools: allowed,
+		RuntimeTools:   skills.DefaultRuntimeToolCapabilities(),
 		AllowAllTools:  allowAll,
 	}
 }
@@ -590,6 +591,7 @@ func skillResolveContext(req mcp.CallToolRequest) skills.ResolveContext {
 		TargetID:       firstNonEmptySkill(os.Getenv("BOT_TOOLS_TARGET_CHANNEL_ID"), req.GetString("target_id", "")),
 		ProjectCWD:     firstNonEmptySkill(os.Getenv("BOT_TOOLS_PROJECT_CWD"), req.GetString("project_cwd", "")),
 		EffectiveTools: allowed,
+		RuntimeTools:   skills.DefaultRuntimeToolCapabilities(),
 		AllowAllTools:  allowAll,
 	}
 }

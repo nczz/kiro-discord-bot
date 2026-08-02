@@ -80,7 +80,7 @@ Use scoped skills to save reviewed reusable procedures for a server, channel, pr
 
 ## A2A
 
-Use A2A commands only after NATS is configured and the channel has an A2A policy. For setup from NATS server through Discord policy, see [Enable A2A with NATS](a2a-nats-setup.md). For protocol terms, see [A2A Protocol Model](a2a-protocol.md).
+Use A2A commands only after NATS is configured and the channel has an A2A policy. Bots with A2A disabled do not register `/a2a` or `bot_a2a_*` MCP tools, so ordinary sessions do not spend context on unavailable delegation surfaces. For setup from NATS server through Discord policy, see [Enable A2A with NATS](a2a-nats-setup.md). For protocol terms, see [A2A Protocol Model](a2a-protocol.md).
 
 | Command | Purpose |
 | --- | --- |

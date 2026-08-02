@@ -1610,7 +1610,7 @@ func (m *Manager) EnableDefaultBotTools(channelID, userID string) error {
 	p.ReadOnly = false
 	p.AllowAllTools = false
 	p.AllowDestructive = false
-	p.AllowedTools = botmcp.DefaultSafeToolNames()
+	p.AllowedTools = botmcp.DefaultSafeToolNamesForA2A(m.a2aConfig.Enabled())
 	p.UpdatedBy = userID
 	if err := validateMCPPolicyExposesTools(p); err != nil {
 		return err

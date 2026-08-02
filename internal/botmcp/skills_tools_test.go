@@ -46,7 +46,7 @@ func TestSkillMCPCreateInventoryEnableSearchAndGet(t *testing.T) {
 		"scope_type":       skills.ScopeChannelProject,
 		"project_cwd":      project,
 		"content_markdown": "# When to use\nUse for ERP Excel files.",
-		"required_tools":   `["read","python"]`,
+		"required_tools":   `["read","erp-private-api"]`,
 		"requested_by":     "alice user_id=user-1",
 	}))
 	if err != nil {
@@ -78,7 +78,7 @@ func TestSkillMCPCreateInventoryEnableSearchAndGet(t *testing.T) {
 		t.Fatalf("search: %v", err)
 	}
 	results := search["results"].([]skills.ResolvedSkill)
-	if len(results) != 1 || results[0].ContentMarkdown != "" || results[0].Executable || len(results[0].MissingTools) != 1 || results[0].MissingTools[0] != "python" {
+	if len(results) != 1 || results[0].ContentMarkdown != "" || results[0].Executable || len(results[0].MissingTools) != 1 || results[0].MissingTools[0] != "erp-private-api" {
 		t.Fatalf("search results = %+v", results)
 	}
 	got, err := skillGet(ctx, dataDir, skillReq(map[string]any{"skill_id": "erp-excel", "project_cwd": project}))

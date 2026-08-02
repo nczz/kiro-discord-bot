@@ -61,6 +61,76 @@ func TestStoreResolveScopePrecedenceAndRequiredTools(t *testing.T) {
 	}
 }
 
+func TestStoreResolveShellRequiredToolUsesRuntimeValidation(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open skills store: %v", err)
+	}
+	defer store.Close()
+	d := draftFor(t, "Shell SOP", ScopeGuild, "guild-1", "", "", []string{"shell", "curl"})
+	if _, err := store.CreateDraft(ctx, d); err != nil {
+		t.Fatalf("create draft: %v", err)
+	}
+	if _, err := store.InstallDraft(ctx, d.DraftID, "admin"); err != nil {
+		t.Fatalf("install draft: %v", err)
+	}
+
+	resolved, err := store.Resolve(ctx, ResolveContext{GuildID: "guild-1", RuntimeTools: []string{"shell", "curl"}, ReadOnlyPolicy: true})
+	if err != nil {
+		t.Fatalf("resolve runtime tools: %v", err)
+	}
+	shell := mustFindSkill(t, resolved, "shell-sop")
+	if !shell.Executable || len(shell.MissingTools) != 0 {
+		t.Fatalf("runtime shell/curl should satisfy required tools: %+v", shell)
+	}
+
+	resolved, err = store.Resolve(ctx, ResolveContext{GuildID: "guild-1", RuntimeTools: []string{"shell"}, ReadOnlyPolicy: true})
+	if err != nil {
+		t.Fatalf("resolve partial runtime tools: %v", err)
+	}
+	shell = mustFindSkill(t, resolved, "shell-sop")
+	if shell.Executable || len(shell.MissingTools) != 1 || shell.MissingTools[0] != "curl" {
+		t.Fatalf("missing curl should still be reported: %+v", shell)
+	}
+
+	resolved, err = store.Resolve(ctx, ResolveContext{GuildID: "guild-1", AllowAllTools: true})
+	if err != nil {
+		t.Fatalf("resolve allow-all without runtime tools: %v", err)
+	}
+	shell = mustFindSkill(t, resolved, "shell-sop")
+	if shell.Executable || len(shell.MissingTools) != 2 {
+		t.Fatalf("MCP allow-all must not satisfy runtime-only shell/curl: %+v", shell)
+	}
+}
+
+func TestRuntimeToolCapabilitiesCollapseShellAndPythonAliases(t *testing.T) {
+	lookup := func(name string) (string, error) {
+		switch name {
+		case "sh", "python3":
+			return "/bin/" + name, nil
+		default:
+			return "", os.ErrNotExist
+		}
+	}
+	got := strings.Join(runtimeToolCapabilities(lookup), ",")
+	for _, want := range []string{"python", "python3", "shell", "sh"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("runtime tools = %q, missing %q", got, want)
+		}
+	}
+}
+
+func TestConcreteShellRuntimeRequirementsStayExact(t *testing.T) {
+	runtime := map[string]bool{"shell": true, "sh": true}
+	if !runtimeToolSatisfied("shell", runtime) {
+		t.Fatal("generic shell should be satisfied by sh")
+	}
+	if runtimeToolSatisfied("bash", runtime) {
+		t.Fatal("concrete bash requirement must not be satisfied by generic shell/sh")
+	}
+}
+
 func TestSearchOmitsContentAndGetVisibleIncludesContent(t *testing.T) {
 	ctx := context.Background()
 	store, err := Open(t.TempDir())

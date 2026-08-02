@@ -569,7 +569,7 @@ func (b *Bot) handleSkillComponent(ds *discordgo.Session, i *discordgo.Interacti
 
 func (b *Bot) skillResolveContext(ctx cmdCtx) skills.ResolveContext {
 	effective, allowAll, readOnly := b.effectiveMCPTools(ctx.channelID)
-	return skills.ResolveContext{GuildID: ctx.guildID, ChannelID: ctx.channelID, ParentChannelID: ctx.channelID, TargetID: ctx.targetID, ProjectCWD: b.targetSkillCWD(ctx), EffectiveTools: effective, AllowAllTools: allowAll, ReadOnlyPolicy: readOnly}
+	return skills.ResolveContext{GuildID: ctx.guildID, ChannelID: ctx.channelID, ParentChannelID: ctx.channelID, TargetID: ctx.targetID, ProjectCWD: b.targetSkillCWD(ctx), EffectiveTools: effective, RuntimeTools: skills.DefaultRuntimeToolCapabilities(), AllowAllTools: allowAll, ReadOnlyPolicy: readOnly}
 }
 
 func (b *Bot) targetSkillCWD(ctx cmdCtx) string {

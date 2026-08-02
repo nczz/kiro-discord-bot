@@ -112,6 +112,7 @@ type ResolveContext struct {
 	ProjectCWD      string   `json:"project_cwd,omitempty"`
 	ProjectCWDHash  string   `json:"project_cwd_hash,omitempty"`
 	EffectiveTools  []string `json:"effective_tools,omitempty"`
+	RuntimeTools    []string `json:"runtime_tools,omitempty"`
 	AllowAllTools   bool     `json:"allow_all_tools,omitempty"`
 	ReadOnlyPolicy  bool     `json:"read_only_policy,omitempty"`
 }

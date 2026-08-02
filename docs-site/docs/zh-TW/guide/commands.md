@@ -80,7 +80,7 @@ Audit rows、audit prompt investigations 與 usage attribution 的行為見 [Aud
 
 ## A2A
 
-只有在 NATS 已設定且 channel 有 A2A policy 後才使用 A2A commands。從 NATS server、`.env` 到 Discord policy 的完整 setup 見 [使用 NATS 啟用 A2A](a2a-nats-setup.md)。協議關鍵字見 [A2A 協議模型](a2a-protocol.md)。
+只有在 NATS 已設定且 channel 有 A2A policy 後才使用 A2A commands。未啟用 A2A 的 bot 不會註冊 `/a2a` 或 `bot_a2a_*` MCP tools，避免一般 session 浪費 context 在不可用的委派介面上。從 NATS server、`.env` 到 Discord policy 的完整 setup 見 [使用 NATS 啟用 A2A](a2a-nats-setup.md)。協議關鍵字見 [A2A 協議模型](a2a-protocol.md)。
 
 | Command | 用途 |
 | --- | --- |

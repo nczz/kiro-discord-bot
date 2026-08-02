@@ -1057,6 +1057,10 @@ func (b *Bot) handleThreadMessage(ds *discordgo.Session, m *discordgo.MessageCre
 }
 
 func buildSlashCommands() []*discordgo.ApplicationCommand {
+	return buildSlashCommandsWithA2A(true)
+}
+
+func buildSlashCommandsWithA2A(a2aEnabled bool) []*discordgo.ApplicationCommand {
 	commands := []*discordgo.ApplicationCommand{
 		{Name: "start", Description: L.Get("cmd.start.desc"), Options: []*discordgo.ApplicationCommandOption{
 			{Type: discordgo.ApplicationCommandOptionString, Name: "cwd", Description: L.Get("cmd.start.opt.cwd"), Required: true},
@@ -1159,7 +1163,9 @@ func buildSlashCommands() []*discordgo.ApplicationCommand {
 				}},
 			{Type: discordgo.ApplicationCommandOptionString, Name: "value", Description: L.Get("cmd.flashmemory.opt.value"), Required: false},
 		}},
-		{Name: "a2a", Description: L.Get("cmd.a2a.desc"), Options: a2aSlashOptions()},
+	}
+	if a2aEnabled {
+		commands = append(commands, &discordgo.ApplicationCommand{Name: "a2a", Description: L.Get("cmd.a2a.desc"), Options: a2aSlashOptions()})
 	}
 	for _, cmd := range commands {
 		applySlashCommandPolicy(cmd)
@@ -1211,7 +1217,7 @@ func (b *Bot) registerSlashCommands() {
 	if _, err := b.discord.ApplicationCommandBulkOverwrite(b.discord.State.User.ID, "", []*discordgo.ApplicationCommand{}); err != nil {
 		log.Printf("[slash] clear global commands: %v", err)
 	}
-	created, err := b.discord.ApplicationCommandBulkOverwrite(b.discord.State.User.ID, guildID, buildSlashCommands())
+	created, err := b.discord.ApplicationCommandBulkOverwrite(b.discord.State.User.ID, guildID, buildSlashCommandsWithA2A(b.a2aConfig.Enabled()))
 	if err != nil {
 		log.Printf("[slash] bulk overwrite error: %v", err)
 		return
@@ -1528,6 +1534,10 @@ func (b *Bot) handleSlashCommand(ds *discordgo.Session, i *discordgo.Interaction
 		case "skill":
 			b.handleSkillSlash(data.Options, ctx)
 		case "a2a":
+			if !b.a2aConfig.Enabled() {
+				ctx.reply(L.Get("a2a.disabled"))
+				return
+			}
 			ctx.args = a2aArgsFromSlashOptions(data.Options, i.GuildID, rawChannelID, userID, username, b.userCanManageAuditTarget(ds, userID, rawChannelID))
 			b.cmdA2A(ctx)
 		case "steering":

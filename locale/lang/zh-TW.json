@@ -173,6 +173,7 @@
   "egress.reason.unsupported_format": "檔案格式不支援安全文字提取",
   "egress.reason.image_too_large": "圖片超過可上傳的大小或尺寸上限",
   "egress.reason.invalid_image": "圖片格式驗證失敗",
+  "a2a.disabled": "此 bot 未啟用 A2A。設定 NATS_URL 與 A2A_AGENT_ID 後才會註冊 A2A 指令與工具。",
   "cmd.a2a.desc": "管理此頻道的本機 A2A peer 委派",
   "cmd.a2a.sub.peers": "查看可協作的 A2A bot 與此頻道政策",
   "cmd.a2a.sub.setup": "一步設定此頻道與另一個 bot 協作",
