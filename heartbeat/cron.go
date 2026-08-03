@@ -50,12 +50,16 @@ type CronTask struct {
 	parser   cron.Parser
 	running  sync.Map // job ID → bool
 	guildID  string
+	timeout  time.Duration
 }
 
-func NewCronTask(store *CronStore, deps CronDeps, dataDir string, tz string, guildID string) *CronTask {
+func NewCronTask(store *CronStore, deps CronDeps, dataDir string, tz string, guildID string, timeoutMin int) *CronTask {
 	loc, err := time.LoadLocation(tz)
 	if err != nil {
 		loc = time.Now().Location()
+	}
+	if timeoutMin <= 0 {
+		timeoutMin = 5
 	}
 	return &CronTask{
 		store:    store,
@@ -64,6 +68,7 @@ func NewCronTask(store *CronStore, deps CronDeps, dataDir string, tz string, gui
 		location: loc,
 		parser:   cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow),
 		guildID:  guildID,
+		timeout:  time.Duration(timeoutMin) * time.Minute,
 	}
 }
 
@@ -217,7 +222,7 @@ func (c *CronTask) execute(job *CronJob, now time.Time) {
 	defer c.deps.StopTempAgent(agent)
 
 	// Ask
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), c.timeout)
 	defer cancel()
 
 	threadName := "⏰ " + job.Name

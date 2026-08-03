@@ -148,6 +148,7 @@ BOT_PEERS=...
 | --- | --- | --- |
 | `HEARTBEAT_SEC` | `60` | 背景維護 tick 秒數。 |
 | `CRON_TIMEZONE` | 空 | 排程任務時區。 |
+| `CRON_TIMEOUT_MIN` | `5` | 排程任務 agent 執行逾時分鐘數。小於 `1` 會退回 `5`。 |
 | `USAGE_TIMEZONE` | `CRON_TIMEZONE`，再退回本機預設 | `/usage` 今日、本週、本月統計時區。 |
 | `USAGE_RETENTION_MONTHS` | `0` | 線上 SQLite usage 保留月數。`0` 表示全部保留；不影響封存的舊 JSONL 遷移備份。 |
 | `ATTACHMENT_RETAIN_DAYS` | `7` | 已下載 Discord attachment 保留天數。 |

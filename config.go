@@ -30,6 +30,7 @@ type Config struct {
 	HeartbeatSec         int
 	AttRetainDays        int
 	AttachmentMaxBytes   int64
+	CronTimeoutMin       int
 	CronTimezone         string
 	UsageTimezone        string
 	UsageRetentionMonths int
@@ -80,6 +81,7 @@ func loadConfig() *Config {
 		HeartbeatSec:         envInt("HEARTBEAT_SEC", 60),
 		AttRetainDays:        envInt("ATTACHMENT_RETAIN_DAYS", 7),
 		AttachmentMaxBytes:   int64(envInt("ATTACHMENT_MAX_MB", 25)) * 1024 * 1024,
+		CronTimeoutMin:       envInt("CRON_TIMEOUT_MIN", 5),
 		CronTimezone:         envOr("CRON_TIMEZONE", ""),
 		UsageTimezone:        envOr("USAGE_TIMEZONE", envOr("CRON_TIMEZONE", "")),
 		UsageRetentionMonths: envInt("USAGE_RETENTION_MONTHS", 0),

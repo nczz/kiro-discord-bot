@@ -74,6 +74,7 @@ type BotConfig struct {
 	AttRetainDays      int
 	AttachmentMaxBytes int64
 	CronTimezone       string
+	CronTimeoutMin     int
 	DownloadTimeoutSec int
 	STTEnabled         bool
 	STTProvider        string
@@ -186,7 +187,7 @@ func NewFromConfig(cfg BotConfig) (*Bot, error) {
 	b.safeEgress = safeEgress
 	manager.SetSafeEgressDrain(safeEgress.DrainChannel)
 	hb.Register(safeEgress)
-	cronTask := heartbeat.NewCronTask(cronStore, &cronAdapter{n}, cfg.DataDir, cfg.CronTimezone, cfg.GuildID)
+	cronTask := heartbeat.NewCronTask(cronStore, &cronAdapter{n}, cfg.DataDir, cfg.CronTimezone, cfg.GuildID, cfg.CronTimeoutMin)
 	cronTask.RecalcAll()
 	hb.Register(cronTask)
 	b.cronTask = cronTask

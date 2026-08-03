@@ -77,6 +77,7 @@ var envSpecs = []envEntry{
 	// Locale & Time
 	{Name: "BOT_LOCALE", Group: "locale"},
 	{Name: "CRON_TIMEZONE", Group: "locale"},
+	{Name: "CRON_TIMEOUT_MIN", Group: "locale"},
 	{Name: "USAGE_TIMEZONE", Group: "locale"},
 	{Name: "USAGE_RETENTION_MONTHS", Group: "locale"},
 

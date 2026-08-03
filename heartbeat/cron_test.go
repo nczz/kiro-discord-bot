@@ -28,6 +28,8 @@ type fakeCronDeps struct {
 	notifyMentionMsg     string
 	notifyMentionUser    string
 	askJobID             string
+	askDeadline          time.Time
+	askDeadlineSet       bool
 	askSent              bool
 	askSentSet           bool
 	noThread             bool
@@ -52,7 +54,11 @@ func (f *fakeCronDeps) ChannelCWD(string) string {
 	return f.channelCWD
 }
 
-func (f *fakeCronDeps) AskAgentInThread(_ context.Context, _ *acp.Agent, job *CronJob, _, _ string) (string, string, bool, error) {
+func (f *fakeCronDeps) AskAgentInThread(ctx context.Context, _ *acp.Agent, job *CronJob, _, _ string) (string, string, bool, error) {
+	if deadline, ok := ctx.Deadline(); ok {
+		f.askDeadline = deadline
+		f.askDeadlineSet = true
+	}
 	f.askJobID = job.ID
 	threadID := "thread-1"
 	if f.noThread {
@@ -87,13 +93,64 @@ func (f *fakeCronDeps) NotifyMention(channelID, msg, userID string) {
 	f.notifyMentionUser = userID
 }
 
+func TestNewCronTaskAppliesConfiguredTimeoutAndDefault(t *testing.T) {
+	store, err := NewCronStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	task := NewCronTask(store, &fakeCronDeps{}, t.TempDir(), "Asia/Taipei", "guild-1", 2)
+	if task.timeout != 2*time.Minute {
+		t.Fatalf("timeout = %s, want 2m", task.timeout)
+	}
+
+	task = NewCronTask(store, &fakeCronDeps{}, t.TempDir(), "Asia/Taipei", "guild-1", 0)
+	if task.timeout != 5*time.Minute {
+		t.Fatalf("zero timeout fallback = %s, want 5m", task.timeout)
+	}
+
+	task = NewCronTask(store, &fakeCronDeps{}, t.TempDir(), "Asia/Taipei", "guild-1", -1)
+	if task.timeout != 5*time.Minute {
+		t.Fatalf("negative timeout fallback = %s, want 5m", task.timeout)
+	}
+}
+
+func TestCronExecuteUsesConfiguredTimeout(t *testing.T) {
+	store, err := NewCronStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	deps := &fakeCronDeps{}
+	task := NewCronTask(store, deps, t.TempDir(), "Asia/Taipei", "guild-1", 1)
+	job := &CronJob{
+		ID:        "job-1",
+		Name:      "Daily",
+		ChannelID: "channel-1",
+		GuildID:   "guild-1",
+		Schedule:  "0 0 * * *",
+		Prompt:    "Run",
+		Enabled:   true,
+	}
+
+	before := time.Now().Add(time.Minute)
+	task.execute(job, time.Date(2026, 5, 28, 12, 0, 0, 0, task.location))
+	after := time.Now().Add(time.Minute)
+
+	if !deps.askDeadlineSet {
+		t.Fatal("AskAgentInThread context had no deadline")
+	}
+	if deps.askDeadline.Before(before.Add(-5*time.Second)) || deps.askDeadline.After(after.Add(5*time.Second)) {
+		t.Fatalf("deadline = %s, want about one minute from execution window [%s, %s]", deps.askDeadline, before, after)
+	}
+}
+
 func TestCronExecuteRecordsAgentUsage(t *testing.T) {
 	store, err := NewCronStore(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	deps := &fakeCronDeps{}
-	task := NewCronTask(store, deps, t.TempDir(), "Asia/Taipei", "guild-1")
+	task := NewCronTask(store, deps, t.TempDir(), "Asia/Taipei", "guild-1", 5)
 	job := &CronJob{
 		ID:          "job-1",
 		Name:        "Daily",
@@ -131,7 +188,7 @@ func TestCronExecuteUsesCurrentChannelCWD(t *testing.T) {
 		t.Fatal(err)
 	}
 	deps := &fakeCronDeps{channelCWD: "/projects/current"}
-	task := NewCronTask(store, deps, t.TempDir(), "Asia/Taipei", "guild-1")
+	task := NewCronTask(store, deps, t.TempDir(), "Asia/Taipei", "guild-1", 5)
 	job := &CronJob{
 		ID:        "job-1",
 		Name:      "Daily",
@@ -156,7 +213,7 @@ func TestCronExecuteBlocksUninitializedChannel(t *testing.T) {
 		t.Fatal(err)
 	}
 	deps := &fakeCronDeps{uninitialized: true}
-	task := NewCronTask(store, deps, t.TempDir(), "Asia/Taipei", "guild-1")
+	task := NewCronTask(store, deps, t.TempDir(), "Asia/Taipei", "guild-1", 5)
 	job := &CronJob{
 		ID:        "job-1",
 		Name:      "Daily",
@@ -183,7 +240,7 @@ func TestCronExecuteMarksResponseNotSentWhenSetupFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	deps := &fakeCronDeps{askErr: context.Canceled, askSentSet: true, noThread: true}
-	task := NewCronTask(store, deps, t.TempDir(), "Asia/Taipei", "guild-1")
+	task := NewCronTask(store, deps, t.TempDir(), "Asia/Taipei", "guild-1", 5)
 	job := &CronJob{
 		ID:        "job-1",
 		Name:      "Daily",
@@ -209,7 +266,7 @@ func TestCronExecuteRecordsUnsentAgentResponse(t *testing.T) {
 		t.Fatal(err)
 	}
 	deps := &fakeCronDeps{askSentSet: true}
-	task := NewCronTask(store, deps, t.TempDir(), "Asia/Taipei", "guild-1")
+	task := NewCronTask(store, deps, t.TempDir(), "Asia/Taipei", "guild-1", 5)
 	job := &CronJob{
 		ID:        "job-1",
 		Name:      "Daily",
@@ -238,7 +295,7 @@ func TestCronExecuteOneShotReminderUsesMentionNotification(t *testing.T) {
 		t.Fatal(err)
 	}
 	deps := &fakeCronDeps{}
-	task := NewCronTask(store, deps, t.TempDir(), "Asia/Taipei", "guild-1")
+	task := NewCronTask(store, deps, t.TempDir(), "Asia/Taipei", "guild-1", 5)
 	now := time.Date(2026, 7, 6, 14, 30, 0, 0, task.location)
 	job := &CronJob{
 		ID:        "reminder-1",
@@ -276,7 +333,7 @@ func TestCronBuildPromptDisplaysHistoryInCronTimezone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	task := NewCronTask(store, &fakeCronDeps{}, t.TempDir(), "Asia/Taipei", "guild-1")
+	task := NewCronTask(store, &fakeCronDeps{}, t.TempDir(), "Asia/Taipei", "guild-1", 5)
 	job := &CronJob{
 		ID:        "job-1",
 		Name:      "Daily",
@@ -306,7 +363,7 @@ func TestCronRecalcAllPreservesOverdueNextRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	task := NewCronTask(store, &fakeCronDeps{}, t.TempDir(), "Asia/Taipei", "guild-1")
+	task := NewCronTask(store, &fakeCronDeps{}, t.TempDir(), "Asia/Taipei", "guild-1", 5)
 	now := time.Date(2026, 6, 11, 12, 0, 0, 0, task.location)
 	overdue := time.Date(2026, 6, 11, 9, 0, 0, 0, task.location).Format(time.RFC3339)
 	job := &CronJob{
@@ -342,7 +399,7 @@ func TestCronRecalcAllRefreshesFutureNextRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	task := NewCronTask(store, &fakeCronDeps{}, t.TempDir(), "Asia/Taipei", "guild-1")
+	task := NewCronTask(store, &fakeCronDeps{}, t.TempDir(), "Asia/Taipei", "guild-1", 5)
 	now := time.Date(2026, 6, 11, 12, 0, 0, 0, task.location)
 	staleFuture := time.Date(2026, 6, 20, 9, 0, 0, 0, task.location).Format(time.RFC3339)
 	want := time.Date(2026, 6, 12, 9, 0, 0, 0, task.location).Format(time.RFC3339)
@@ -392,7 +449,7 @@ func TestCronTaskRunIngestsPendingWhenNoJobsExist(t *testing.T) {
 			CreatedBy: "agent",
 		},
 	})
-	task := NewCronTask(store, &fakeCronDeps{}, dir, "Asia/Taipei", "guild-1")
+	task := NewCronTask(store, &fakeCronDeps{}, dir, "Asia/Taipei", "guild-1", 5)
 
 	if !task.ShouldRun(time.Now()) {
 		t.Fatal("cron task should run even with no stored jobs so pending actions can be ingested")
@@ -445,7 +502,7 @@ func TestCronTaskRunIngestsPendingUpdateAndRecalculatesChangedSchedule(t *testin
 		ChannelID: "channel-1",
 		Update:    &CronUpdate{Schedule: &newSchedule},
 	})
-	task := NewCronTask(store, &fakeCronDeps{}, dir, "Asia/Taipei", "guild-1")
+	task := NewCronTask(store, &fakeCronDeps{}, dir, "Asia/Taipei", "guild-1", 5)
 
 	if err := task.Run(); err != nil {
 		t.Fatal(err)

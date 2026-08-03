@@ -105,6 +105,7 @@ func main() {
 		AttRetainDays:      cfg.AttRetainDays,
 		AttachmentMaxBytes: cfg.AttachmentMaxBytes,
 		CronTimezone:       cfg.CronTimezone,
+		CronTimeoutMin:     cfg.CronTimeoutMin,
 		DownloadTimeoutSec: cfg.DownloadTimeoutSec,
 		BotPeers:           cfg.BotPeers,
 		Audit: audit.Config{

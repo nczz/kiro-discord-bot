@@ -148,6 +148,7 @@ Do not share `DATA_DIR` between bot identities. Audit DBs, the usage SQLite DB a
 | --- | --- | --- |
 | `HEARTBEAT_SEC` | `60` | Background maintenance tick. |
 | `CRON_TIMEZONE` | empty | Time zone for scheduled jobs. |
+| `CRON_TIMEOUT_MIN` | `5` | Cron job agent execution timeout, in minutes. Values below `1` fall back to `5`. |
 | `USAGE_TIMEZONE` | `CRON_TIMEZONE`, then local default | Time zone for `/usage` day, week, and month windows. |
 | `USAGE_RETENTION_MONTHS` | `0` | Online SQLite usage retention in months. `0` keeps all rows; archived legacy JSONL migration backups are unaffected. |
 | `ATTACHMENT_RETAIN_DAYS` | `7` | Retention for downloaded Discord attachments. |

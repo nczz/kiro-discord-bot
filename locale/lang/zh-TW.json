@@ -681,6 +681,7 @@
   "doctor.env.desc.SKIP_PREFLIGHT": "跳過 preflight（非空=跳過）",
   "doctor.env.desc.BOT_LOCALE": "語系 en/zh-TW [預設: en]",
   "doctor.env.desc.CRON_TIMEZONE": "bot business timezone，用於 cron、reminder、agent 可見目前時間與時間輔助工具 [預設: 服務行程本地時區]",
+  "doctor.env.desc.CRON_TIMEOUT_MIN": "排程任務 agent 執行逾時分鐘數 [預設: 5]",
   "doctor.env.desc.USAGE_TIMEZONE": "用量報表時區 [預設: 同 CRON_TIMEZONE，再 fallback 到服務行程本地時區]",
   "doctor.env.desc.USAGE_RETENTION_MONTHS": "用量保留月份 [預設: 0=永久]",
   "doctor.env.desc.BOT_PEERS": "多 bot peer 設定",

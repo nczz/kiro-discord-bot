@@ -689,6 +689,7 @@
   "doctor.env.desc.SKIP_PREFLIGHT": "skip preflight check (non-empty = skip)",
   "doctor.env.desc.BOT_LOCALE": "locale: en, zh-TW [default: en]",
   "doctor.env.desc.CRON_TIMEZONE": "bot business timezone for cron, reminders, agent-visible current datetime, and time helper tools [default: service process local timezone]",
+  "doctor.env.desc.CRON_TIMEOUT_MIN": "cron job agent execution timeout in minutes [default: 5]",
   "doctor.env.desc.USAGE_TIMEZONE": "usage report timezone [default: CRON_TIMEZONE, then service process local timezone]",
   "doctor.env.desc.USAGE_RETENTION_MONTHS": "usage retention months [default: 0 = forever]",
   "doctor.env.desc.BOT_PEERS": "multi-bot peer config",
