@@ -480,6 +480,7 @@
   "cron.exec.running": "⏰ %s執行中：**%s**",
   "cron.exec.running_link": "**%s** → <#%s>",
   "cron.exec.failed": "❌ %s **%s** 失敗：%s",
+  "cron.exec.timeout_reason": "執行超過 %d 分鐘，已取消",
   "cron.exec.start_failed": "❌ %s **%s** 啟動失敗：%s",
   "cron.progress": "🔄 %s（%d秒 · %d 工具）",
   "cron.progress.done": "✅ 完成（%d秒 · %d 工具）",

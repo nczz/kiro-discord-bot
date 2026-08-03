@@ -199,6 +199,13 @@ func (a *cronAdapter) AskAgentInThread(ctx context.Context, agent *acp.Agent, jo
 	}
 
 	startTime := time.Now()
+	timeoutMsg := L.Get("worker.timeout.short")
+	if deadline, ok := ctx.Deadline(); ok {
+		if seconds := int(time.Until(deadline).Round(time.Second) / time.Second); seconds > 0 {
+			timeoutMsg = L.Getf("worker.timeout", seconds)
+		}
+	}
+
 	var toolCount atomic.Int32
 
 	// Use done channel to block until completion
@@ -272,8 +279,10 @@ func (a *cronAdapter) AskAgentInThread(ctx context.Context, agent *acp.Agent, jo
 
 			if askErr != nil {
 				errMsg := askErr.Error()
+				resultErr := askErr
 				if ctx.Err() == context.DeadlineExceeded {
-					errMsg = L.Get("worker.timeout.short")
+					errMsg = timeoutMsg
+					resultErr = ctx.Err()
 				}
 				if statusMsgID != "" {
 					_, _ = editDiscordText(ds, threadID, statusMsgID, L.Getf("cron.progress.failed", elapsed, count))
@@ -283,7 +292,7 @@ func (a *cronAdapter) AskAgentInThread(ctx context.Context, agent *acp.Agent, jo
 				if sendErr != nil {
 					log.Printf("[cron] failed to send agent error response thread=%s: %v", threadID, sendErr)
 				}
-				done <- result{responseSent: sentCount > 0 && sendErr == nil, err: askErr}
+				done <- result{responseSent: sentCount > 0 && sendErr == nil, err: resultErr}
 				return
 			}
 			if response == "" {
@@ -323,7 +332,7 @@ func (a *cronAdapter) AskAgentInThread(ctx context.Context, agent *acp.Agent, jo
 		}
 		errMsg := ctx.Err().Error()
 		if ctx.Err() == context.DeadlineExceeded {
-			errMsg = L.Get("worker.timeout.short")
+			errMsg = timeoutMsg
 		}
 		elapsed := int(time.Since(startTime).Seconds())
 		count := toolCount.Load()

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nczz/kiro-discord-bot/acp"
+	L "github.com/nczz/kiro-discord-bot/locale"
 )
 
 type fakeCronDeps struct {
@@ -24,6 +25,9 @@ type fakeCronDeps struct {
 	recordStatus         string
 	responseCalls        int
 	responseSent         bool
+	responseContent      string
+	notifyChannel        string
+	notifyMsg            string
 	notifyMentionChannel string
 	notifyMentionMsg     string
 	notifyMentionUser    string
@@ -81,12 +85,16 @@ func (f *fakeCronDeps) RecordAgentUsage(_ *acp.Agent, job *CronJob, threadID, st
 	f.recordStatus = status
 }
 
-func (f *fakeCronDeps) RecordAgentResponse(_ *acp.Agent, _ *CronJob, _, _, _ string, responseSent bool) {
+func (f *fakeCronDeps) RecordAgentResponse(_ *acp.Agent, _ *CronJob, _, _, content string, responseSent bool) {
 	f.responseCalls++
+	f.responseContent = content
 	f.responseSent = responseSent
 }
+func (f *fakeCronDeps) Notify(channelID, msg string) {
+	f.notifyChannel = channelID
+	f.notifyMsg = msg
+}
 
-func (f *fakeCronDeps) Notify(string, string) {}
 func (f *fakeCronDeps) NotifyMention(channelID, msg, userID string) {
 	f.notifyMentionChannel = channelID
 	f.notifyMentionMsg = msg
@@ -141,6 +149,39 @@ func TestCronExecuteUsesConfiguredTimeout(t *testing.T) {
 	}
 	if deps.askDeadline.Before(before.Add(-5*time.Second)) || deps.askDeadline.After(after.Add(5*time.Second)) {
 		t.Fatalf("deadline = %s, want about one minute from execution window [%s, %s]", deps.askDeadline, before, after)
+	}
+}
+
+func TestCronExecuteLocalizesTimeoutFailure(t *testing.T) {
+	L.Load("zh-TW")
+	t.Cleanup(func() { L.Load("en") })
+
+	store, err := NewCronStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	deps := &fakeCronDeps{askErr: context.DeadlineExceeded}
+	task := NewCronTask(store, deps, t.TempDir(), "Asia/Taipei", "guild-1", 10)
+	job := &CronJob{
+		ID:        "job-1",
+		Name:      "Daily",
+		ChannelID: "channel-1",
+		GuildID:   "guild-1",
+		Schedule:  "0 0 * * *",
+		Prompt:    "Run",
+		Enabled:   true,
+	}
+
+	task.execute(job, time.Date(2026, 5, 28, 12, 0, 0, 0, task.location))
+
+	if strings.Contains(deps.notifyMsg, "context deadline exceeded") {
+		t.Fatalf("parent notification leaked raw context error: %q", deps.notifyMsg)
+	}
+	if !strings.Contains(deps.notifyMsg, "執行超過 10 分鐘，已取消") {
+		t.Fatalf("parent notification = %q, want localized timeout reason", deps.notifyMsg)
+	}
+	if deps.responseContent != "執行超過 10 分鐘，已取消" {
+		t.Fatalf("recorded response = %q, want localized timeout reason", deps.responseContent)
 	}
 }
 

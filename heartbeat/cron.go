@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -237,9 +238,9 @@ func (c *CronTask) execute(job *CronJob, now time.Time) {
 	}
 
 	if err != nil {
-		response = err.Error()
+		response = c.userFacingError(err)
 		status = "error"
-		c.deps.Notify(job.ChannelID, L.Getf("cron.exec.failed", label, job.Name, err.Error()))
+		c.deps.Notify(job.ChannelID, L.Getf("cron.exec.failed", label, job.Name, response))
 	}
 	c.deps.RecordAgentUsage(agent, job, usedThreadID, status)
 	c.deps.RecordAgentResponse(agent, job, usedThreadID, status, response, responseSent)
@@ -252,6 +253,21 @@ func (c *CronTask) execute(job *CronJob, now time.Time) {
 		_ = c.store.Update(job)
 	}
 	c.finishJob(job, now)
+}
+
+func (c *CronTask) userFacingError(err error) string {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return L.Getf("cron.exec.timeout_reason", c.timeoutMinutes())
+	}
+	return err.Error()
+}
+
+func (c *CronTask) timeoutMinutes() int {
+	minutes := int(c.timeout / time.Minute)
+	if minutes <= 0 {
+		return 5
+	}
+	return minutes
 }
 
 func (c *CronTask) buildPrompt(job *CronJob, history []CronHistory) string {
