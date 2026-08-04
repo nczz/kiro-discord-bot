@@ -900,7 +900,7 @@ Append one subsection per completed phase.
 ### RC documentation alignment follow-up
 
 - Status: validation passed; pending commit.
-- Decision: align public release/docs-site and A2A source docs with runtime-first peer/delegation behavior after `322b777`: `bot_a2a_peers` reports active peer-policy perspective, `bot_a2a_delegate` may use explicit `delegate_targets` or known channel/thread runtime targets, retired expert trust/policy fields are rejected by `bot_a2a_trust_peer`, and macOS launchd deployments must re-sign Darwin binaries after replacement.
+- Decision: align public release/docs-site and A2A source docs with runtime-first peer/delegation behavior after `322b777`: `bot_a2a_peers` reports active peer-policy perspective, `bot_a2a_delegate` requires explicit outbound `delegate_targets` for the target runtime/channel and skill, retired expert trust/policy fields are rejected by `bot_a2a_trust_peer`, and macOS launchd deployments must re-sign Darwin binaries after replacement.
 - Validation:
   - Focused A2A docs/code contract tests: `go test ./a2a ./channel ./internal/botmcp ./bot ./audit ./locale -run 'Test.*A2A|TestDoctor.*A2A'` passed.
   - Docs site regenerated and verified: `cd docs-site && npm run build`; `cd docs-site && npm run verify` passed (`60` generated HTML files checked).

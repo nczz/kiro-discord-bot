@@ -518,8 +518,8 @@ func TestA2AToolsDelegateRejectsNonRuntimePeerBeforePublishing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Delegate: %v", err)
 	}
-	if got.OK || got.ErrorCode != a2a.ErrorUnauthorizedTarget || !strings.Contains(got.Message, "known channel/thread runtime") {
-		t.Fatalf("Delegate to non-runtime peer = %+v, want unauthorized_target runtime guidance", got)
+	if got.OK || got.ErrorCode != a2a.ErrorUnauthorizedTarget || !strings.Contains(got.Message, "delegate_targets") {
+		t.Fatalf("Delegate to non-runtime peer = %+v, want unauthorized_target delegate_targets guidance", got)
 	}
 }
 
@@ -714,7 +714,7 @@ func TestA2AToolsDelegateOmittedSkillReasonInfersCrossChannelMirror(t *testing.T
 		t.Fatalf("NewA2AService: %v", err)
 	}
 	defer svc.Close()
-	if err := svc.policies.Save(ctx, a2a.ChannelA2APolicy{GuildID: "guild-1", ChannelID: "channel-1", Enabled: true, RuntimeAgentID: "adam-n200-m5-main", BotAgentID: "adam-n200", ChannelRef: "m5-main"}, "manager"); err != nil {
+	if err := svc.policies.Save(ctx, a2a.ChannelA2APolicy{GuildID: "guild-1", ChannelID: "channel-1", Enabled: true, RuntimeAgentID: "adam-n200-m5-main", BotAgentID: "adam-n200", ChannelRef: "m5-main", DelegateTargets: []a2a.DelegateTargetPolicy{{RuntimeAgentID: "peer-n100-erp", ChannelRef: "erp-support", SkillID: "erp-support/general_task"}}}, "manager"); err != nil {
 		t.Fatalf("Save policy: %v", err)
 	}
 	card := a2a.AgentCard{Name: "peer-n100-erp", Version: "1.0.0", SupportedInterfaces: []a2a.A2AInterface{{URL: "nats://nats.example.internal:4222", ProtocolBinding: a2a.ProtocolBindingNATS, ProtocolVersion: a2a.ProtocolVersion}}, Skills: []a2a.AgentSkill{{ID: "erp-support/general_task", Name: "General"}}}
@@ -1115,22 +1115,22 @@ func TestA2AToolsTrustPeerDefaultsInboundConsent(t *testing.T) {
 	if !summary.InboundAllowed || summary.InboundReason != "allowed by current channel inbound policy" {
 		t.Fatalf("peer summary inbound = %+v, want receiver consent visible", summary)
 	}
-	if !summary.DelegationAllowed || !summary.Wakeable || summary.HiddenSkillCount != 0 {
-		t.Fatalf("peer summary = %+v, want direct runtime delegation capability", summary)
+	if summary.DelegationAllowed || summary.Wakeable || summary.HiddenSkillCount != 2 {
+		t.Fatalf("peer summary = %+v, want inbound consent without outbound delegation capability", summary)
 	}
-	if !containsString(summary.Skills, "ch-2cbaf623/general_task") || !containsString(summary.Skills, "ch-2cbaf623/review") {
-		t.Fatalf("peer summary skills = %+v, want exposed direct runtime skills", summary.Skills)
+	if len(summary.Skills) != 0 {
+		t.Fatalf("peer summary skills = %+v, want hidden until channel policy delegates them", summary.Skills)
 	}
-	if !strings.Contains(summary.DelegationReason, "direct runtime delegation available") {
-		t.Fatalf("peer delegation reason = %q, want direct runtime guidance", summary.DelegationReason)
+	if summary.DelegationReason != "missing runtime delegate target or skill" {
+		t.Fatalf("peer delegation reason = %q, want missing delegate target guidance", summary.DelegationReason)
 	}
 
 	delegated, err := svc.Delegate(ctx, A2AToolRequest{GuildID: "111111111111111111", ChannelID: "222222222222222222", RequestedBy: "alice", RequestedByID: "user-1", TargetAgent: "remote-bot-ch-2cbaf623", Message: "ping"})
 	if err != nil {
 		t.Fatalf("Delegate after inbound trust: %v", err)
 	}
-	if !delegated.OK || !delegated.RequiresConfirmation {
-		t.Fatalf("Delegate after inbound trust = %+v, want queued confirmation without local outbound policy", delegated)
+	if delegated.OK || delegated.ErrorCode != a2a.ErrorUnauthorizedTarget || !strings.Contains(delegated.Message, "delegate_targets") {
+		t.Fatalf("Delegate after inbound trust = %+v, want unauthorized without local outbound policy", delegated)
 	}
 }
 

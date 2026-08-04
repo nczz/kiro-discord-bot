@@ -426,20 +426,13 @@ func peerDelegationCapability(policy a2a.ChannelA2APolicy, peer a2a.PeerTrustDis
 	if !policy.Enabled {
 		return nil, "channel A2A policy disabled"
 	}
-	if runtimeOnly && ordinaryRuntimePeerSummary(peer) {
-		if len(skills) == 0 {
-			return nil, "target peer does not expose a delegate skill"
-		}
-		return append([]string(nil), skills...), "direct runtime delegation available; remote channel policy remains authoritative"
+	if runtimeOnly && len(skills) == 0 {
+		return nil, "target peer does not expose a delegate skill"
 	}
 	if runtimeOnly {
 		return nil, "missing runtime delegate target or skill"
 	}
 	return nil, "missing delegate target or skill"
-}
-
-func ordinaryRuntimePeerSummary(peer a2a.PeerTrustDisplay) bool {
-	return strings.TrimSpace(string(peer.AgentID)) != "" && (strings.TrimSpace(peer.Runtime) == "channel" || strings.TrimSpace(peer.Runtime) == "thread" || strings.TrimSpace(peer.ChannelRef) != "")
 }
 
 func visiblePeerSkills(policy a2a.ChannelA2APolicy, peer a2a.PeerTrustDisplay, skills []string, mode a2a.RuntimeIDMode) []string {
@@ -451,7 +444,7 @@ func visiblePeerSkills(policy a2a.ChannelA2APolicy, peer a2a.PeerTrustDisplay, s
 	for _, skill := range skills {
 		agent := string(peer.AgentID)
 		if runtimeOnly {
-			if policyDelegatesExactRuntime(policy, agent, skill) || policyDelegatesSameDiscordChannelRuntime(policy, peer, skill) {
+			if policyDelegatesExactRuntime(policy, agent, skill, peer.ChannelRef) || policyDelegatesSameDiscordChannelRuntime(policy, peer, skill) {
 				out = append(out, skill)
 			}
 			continue
@@ -486,15 +479,19 @@ func policyDelegatesSameDiscordChannelPeerRow(policy a2a.ChannelA2APolicy, peer 
 	}, skill)
 }
 
-func policyDelegatesExactRuntime(policy a2a.ChannelA2APolicy, agent, skill string) bool {
+func policyDelegatesExactRuntime(policy a2a.ChannelA2APolicy, agent, skill, targetChannelRef string) bool {
 	for _, target := range policy.DelegateTargets {
-		if strings.TrimSpace(target.RuntimeAgentID) == "" {
+		targetAgent := strings.TrimSpace(target.RuntimeAgentID)
+		if targetAgent == "" {
+			targetAgent = strings.TrimSpace(target.AgentID)
+		}
+		if targetAgent == "" || !stringListAllows([]string{targetAgent}, agent) {
 			continue
 		}
-		if !stringListAllows([]string{target.RuntimeAgentID}, agent) {
+		if !skillListAllows([]string{target.SkillID}, skill) {
 			continue
 		}
-		if skillListAllows([]string{target.SkillID}, skill) {
+		if target.RuntimeAgentID != "" || target.ChannelRef == "" || targetChannelRef == "" || target.ChannelRef == targetChannelRef || target.ChannelRef == "*" {
 			return true
 		}
 	}
@@ -782,8 +779,8 @@ func (s *A2AService) Delegate(ctx context.Context, req A2AToolRequest) (A2AToolR
 	if err != nil {
 		return responseError(err), nil
 	}
-	if !delegated && !exactRuntimePolicy && !ordinaryExplicitRuntimeTarget(req, peer) {
-		return responseError(fmt.Errorf("%w: target must be a known channel/thread runtime or be allowed by expert delegation policy", errorCode(a2a.ErrorUnauthorizedTarget))), nil
+	if !delegated && !exactRuntimePolicy {
+		return responseError(fmt.Errorf("%w: target must be allowed by current channel delegate_targets policy", errorCode(a2a.ErrorUnauthorizedTarget))), nil
 	}
 	req.SkillID = effectiveSkill
 	message := strings.TrimSpace(req.Message)
@@ -1492,7 +1489,7 @@ func (s *A2AService) resolveDelegateTarget(policy a2a.ChannelA2APolicy, req A2AT
 	if ref := policyRuntimeTargetChannelRef(policy, agent, effectiveSkill); ref != "" {
 		targetRef = ref
 	}
-	exact := policyDelegatesExactRuntime(policy, agent, effectiveSkill)
+	exact := policyDelegatesExactRuntime(policy, agent, effectiveSkill, targetRef)
 	delegated := policyDelegatesRuntime(policy, agent, effectiveSkill, targetRef) || policyDelegatesSameDiscordChannelPeerRow(policy, peer, effectiveSkill)
 	return targetRef, effectiveSkill, delegated, exact, nil
 }
