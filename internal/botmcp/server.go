@@ -275,7 +275,7 @@ func NewServerWithOptions(opts ServerOptions) *server.MCPServer {
 		},
 	)
 	s.AddTool(
-		writeTool(ToolSendMessage, "Send a separate Discord message through the bot-controlled safe egress queue. This tool is not part of the default channel allowlist. Do not use it for ordinary replies or final answers; normal assistant text is already delivered, split, and displayed by the bot. Use this only when a channel manager explicitly enabled it and the user explicitly asks to send an extra Discord message, notify another target, hand off to another bot, or perform scheduled/cron egress. The main bot redacts secrets before delivery.", false),
+		writeTool(ToolSendMessage, "Send a separate Discord message through the bot-controlled safe egress queue. This tool is not part of the default channel allowlist. Do not use it for ordinary replies or final answers; normal assistant text is already delivered, split, and displayed by the bot. Use this only when a channel manager explicitly enabled it and the user explicitly asks to send an extra Discord message, notify another target, hand off to another bot, or perform scheduled/cron egress. The main bot redacts secrets before delivery. A successful response means the action was queued only; delivery happens asynchronously after this tool returns.", false),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			if botToolsEgressDisabled() {
 				return mcp.NewToolResultError("Discord egress is disabled for this private audit job."), nil
@@ -293,11 +293,11 @@ func NewServerWithOptions(opts ServerOptions) *server.MCPServer {
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
-			return mcp.NewToolResultText(fmt.Sprintf("Message queued for safe Discord delivery (%s).", id)), nil
+			return mcp.NewToolResultText(queuedSafeDeliveryResult("Message", id)), nil
 		},
 	)
 	s.AddTool(
-		writeTool(ToolSendFile, "Send a bot-local file through the bot-controlled safe egress queue. The file_path must be readable by the kiro-discord-bot process on this host/VM; do not pass paths from another MCP server, Docker container, browser profile namespace, remote host, or any tool-returned artifact namespace unless they are explicitly mounted into the bot filesystem. If another tool returns an HTTP(S) image URL, pass that URL directly to bot_send_image_url instead of saving, downloading, transcribing, base64-encoding, or converting it into a local artifact path. Text files are redacted and uploaded as sanitized copies. JPEG/PNG images are validated and uploaded as copied temp files without OCR redaction or metadata stripping. Documents with extractable readable text (PDF, DOCX, XLSX) are converted to text, redacted, and uploaded as sanitized .txt copies; original binary documents are never uploaded back.", false),
+		writeTool(ToolSendFile, "Send a bot-local file through the bot-controlled safe egress queue. Resolve files to absolute host paths before calling this tool: use the absolute path returned by the file-writing/read tool or run realpath, and do not pass a bare filename or relative path when an absolute path is available. The tool normalizes readable relative paths to absolute paths before queueing so later safe-egress delivery does not reinterpret them from the bot deployment directory. The file_path must be readable on the kiro-discord-bot host/VM; do not pass paths from another MCP server, Docker container, browser profile namespace, remote host, or any tool-returned artifact namespace unless they are explicitly mounted into the bot filesystem. If another tool returns an HTTP(S) image URL, pass that URL directly to bot_send_image_url instead of saving, downloading, transcribing, base64-encoding, or converting it into a local artifact path. Text files are redacted and uploaded as sanitized copies. JPEG/PNG images are validated and uploaded as copied temp files without OCR redaction or metadata stripping. Documents with extractable readable text (PDF, DOCX, XLSX) are converted to text, redacted, and uploaded as sanitized .txt copies; original binary documents are never uploaded back. A successful response means the file was queued only; delivery/redaction/upload happens asynchronously after this tool returns.", false),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			if botToolsEgressDisabled() {
 				return mcp.NewToolResultError("File egress is disabled for this private audit job."), nil
@@ -307,10 +307,11 @@ func NewServerWithOptions(opts ServerOptions) *server.MCPServer {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			filePath, _ := req.RequireString("file_path")
-			if err := validateBotSendFilePath(filePath); err != nil {
+			filePath, err := resolveBotSendFilePath(filePath)
+			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
-			content, _ := req.RequireString("content")
+			content := secrets.RedactEnv(req.GetString("content", ""))
 			id, err := botegress.WritePending(dataDir(), botegress.Action{
 				Action:    botegress.ActionSendFile,
 				ChannelID: deliveryChannelID(channelID),
@@ -320,11 +321,11 @@ func NewServerWithOptions(opts ServerOptions) *server.MCPServer {
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
-			return mcp.NewToolResultText(fmt.Sprintf("File queued for safe Discord delivery (%s).", id)), nil
+			return mcp.NewToolResultText(queuedSafeDeliveryResult("File", id)), nil
 		},
 	)
 	s.AddTool(
-		writeTool(ToolSendImageURL, "Send a JPEG/PNG image from a non-secret HTTP(S) URL through the bot-controlled safe egress queue. Use this whenever another tool returns an image URL; do not download, transcribe, or base64-encode the image in the agent. The bot fetches the URL server-side, rejects URL credentials, validates the fetched bytes, and does not require the URL path to include an image filename.", false),
+		writeTool(ToolSendImageURL, "Send a JPEG/PNG image from a non-secret HTTP(S) URL through the bot-controlled safe egress queue. Use this whenever another tool returns an image URL; do not download, transcribe, or base64-encode the image in the agent. The bot fetches the URL server-side, rejects URL credentials, validates the fetched bytes, and queues a bot-owned absolute temp file path for safe delivery. A successful response means the image was queued only; delivery/upload happens asynchronously after this tool returns.", false),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			if botToolsEgressDisabled() {
 				return mcp.NewToolResultError("Image URL egress is disabled for this private audit job."), nil
@@ -351,7 +352,7 @@ func NewServerWithOptions(opts ServerOptions) *server.MCPServer {
 				_ = os.Remove(filepath.Dir(filePath))
 				return mcp.NewToolResultError(err.Error()), nil
 			}
-			return mcp.NewToolResultText(fmt.Sprintf("Image queued for safe Discord delivery (%s).", id)), nil
+			return mcp.NewToolResultText(queuedSafeDeliveryResult("Image", id)), nil
 		},
 	)
 	s.AddTool(
@@ -643,7 +644,7 @@ func writeTool(name, description string, destructive bool) mcp.Tool {
 	case ToolSendFile:
 		for _, opt := range []mcp.ToolOption{
 			mcp.WithString("channel_id", mcp.Required(), mcp.Description("Discord channel ID from context")),
-			mcp.WithString("file_path", mcp.Required(), mcp.Description("Path to a file readable by the kiro-discord-bot process on this host/VM. Do not pass paths from another MCP server, Docker container, browser profile namespace, remote host, or any tool-returned artifact namespace unless explicitly mounted into the bot filesystem. If an HTTP(S) image URL is available, pass it directly to bot_send_image_url instead of using this local-file tool. Text files stay text; JPEG/PNG images are validated and uploaded as copied temp files; PDF, DOCX, and XLSX with extractable readable text are extracted to redacted .txt copies.")),
+			mcp.WithString("file_path", mcp.Required(), mcp.Description("Path to a file readable on the kiro-discord-bot host/VM. Prefer an absolute path from the file-writing/read tool result or realpath; relative paths are normalized to absolute before queueing, but bare filenames are easy for agents to confuse with the bot deployment directory. Do not pass paths from another MCP server, Docker container, browser profile namespace, remote host, or any tool-returned artifact namespace unless explicitly mounted into the bot filesystem. If an HTTP(S) image URL is available, pass it directly to bot_send_image_url instead of using this local-file tool. Text files stay text; JPEG/PNG images are validated and uploaded as copied temp files; PDF, DOCX, and XLSX with extractable readable text are extracted to redacted .txt copies. A queue response is not proof that Discord upload already happened.")),
 			mcp.WithString("content", mcp.Description("Optional message content to send with the sanitized file")),
 		} {
 			opt(&t)
@@ -1207,19 +1208,32 @@ func remoteA2AMemoryWriteAllowed() bool {
 	return state.AllowMemoryWrite
 }
 
-func validateBotSendFilePath(filePath string) error {
+func resolveBotSendFilePath(filePath string) (string, error) {
 	filePath = strings.TrimSpace(filePath)
 	if filePath == "" {
-		return fmt.Errorf("file_path is required")
+		return "", fmt.Errorf("file_path is required")
 	}
-	info, err := os.Stat(filePath)
+	abs, err := filepath.Abs(filePath)
 	if err != nil {
-		return fmt.Errorf("file_path is not readable by the bot process: %w%s", err, imageURLHandoffHint())
+		return "", fmt.Errorf("resolve file_path: %w%s", err, imageURLHandoffHint())
+	}
+	info, err := os.Stat(abs)
+	if err != nil {
+		return "", fmt.Errorf("file_path is not readable before queueing%s", imageURLHandoffHint())
 	}
 	if info.IsDir() {
-		return fmt.Errorf("file_path must be a file, not a directory%s", imageURLHandoffHint())
+		return "", fmt.Errorf("file_path must be a file, not a directory%s", imageURLHandoffHint())
 	}
-	return nil
+	return abs, nil
+}
+
+func validateBotSendFilePath(filePath string) error {
+	_, err := resolveBotSendFilePath(filePath)
+	return err
+}
+
+func queuedSafeDeliveryResult(kind, id string) string {
+	return fmt.Sprintf("%s accepted into safe Discord delivery queue (%s). This confirms queueing only; redaction, upload, and delivery happen asynchronously after this tool returns.", kind, id)
 }
 
 func imageURLHandoffHint() string {

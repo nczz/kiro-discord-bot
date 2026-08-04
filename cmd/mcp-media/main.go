@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -125,12 +126,15 @@ func newMediaServer(reg *Registry, jobs *MediaJobStore, jobTimeout, syncTimeout,
 	s.AddTool(
 		mcp.NewTool("start_image_edit",
 			mcp.WithDescription("Start an asynchronous image edit job and immediately return a job_id. Poll with get_media_job until status is succeeded or failed."),
-			mcp.WithString("image_path", mcp.Required(), mcp.Description("Absolute path to the source image")),
+			mcp.WithString("image_path", mcp.Required(), mcp.Description("Absolute path to the source image on the mcp-media host filesystem")),
 			mcp.WithString("prompt", mcp.Required(), mcp.Description("Edit instructions")),
 			mcp.WithString("model", mcp.Description("Model ID. Default: "+reg.defaultImage)),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			imgPath, _ := req.RequireString("image_path")
+			imgPath, err := requireAbsoluteMediaPath(req.GetString("image_path", ""), "image_path")
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
 			prompt, _ := req.RequireString("prompt")
 			model := req.GetString("model", "")
 			p, m, err := reg.Image(model)
@@ -153,12 +157,15 @@ func newMediaServer(reg *Registry, jobs *MediaJobStore, jobTimeout, syncTimeout,
 			mcp.WithDescription("Start an asynchronous video generation job and immediately return a job_id. Use this when you explicitly want job-style control from the beginning. Poll with get_media_job until status is succeeded or failed."),
 			mcp.WithString("prompt", mcp.Required(), mcp.Description("Video description")),
 			mcp.WithString("model", mcp.Description("Model ID. Default: "+reg.defaultVideo)),
-			mcp.WithString("image_path", mcp.Description("Optional source image for image-to-video")),
+			mcp.WithString("image_path", mcp.Description("Optional absolute path to a source image on the mcp-media host filesystem for image-to-video")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			prompt, _ := req.RequireString("prompt")
 			model := req.GetString("model", "")
-			imgPath := req.GetString("image_path", "")
+			imgPath, err := optionalAbsoluteMediaPath(req.GetString("image_path", ""), "image_path")
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
 			p, m, err := reg.Video(model)
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
@@ -273,12 +280,15 @@ func newMediaServer(reg *Registry, jobs *MediaJobStore, jobTimeout, syncTimeout,
 	s.AddTool(
 		mcp.NewTool("edit_image",
 			mcp.WithDescription("Edit an existing image through a managed media job. If it finishes quickly, returns the local file path. If it is still running before the MCP client timeout, returns a job_id; then use get_media_job to retrieve the saved path. Do not retry the same request after receiving a job_id."),
-			mcp.WithString("image_path", mcp.Required(), mcp.Description("Absolute path to the source image")),
+			mcp.WithString("image_path", mcp.Required(), mcp.Description("Absolute path to the source image on the mcp-media host filesystem")),
 			mcp.WithString("prompt", mcp.Required(), mcp.Description("Edit instructions (e.g. 'remove the background', 'change the color to blue')")),
 			mcp.WithString("model", mcp.Description("Model ID. Default: "+reg.defaultImage)),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			imgPath, _ := req.RequireString("image_path")
+			imgPath, err := requireAbsoluteMediaPath(req.GetString("image_path", ""), "image_path")
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
 			prompt, _ := req.RequireString("prompt")
 			model := req.GetString("model", "")
 			p, m, err := reg.Image(model)
@@ -305,12 +315,15 @@ func newMediaServer(reg *Registry, jobs *MediaJobStore, jobTimeout, syncTimeout,
 			mcp.WithDescription("Generate a video through a managed media job. If it finishes quickly, returns the local file path. If it is still running before the MCP client timeout, returns a job_id; then use get_media_job to retrieve the saved path. Do not retry the same request after receiving a job_id."),
 			mcp.WithString("prompt", mcp.Required(), mcp.Description("Video description")),
 			mcp.WithString("model", mcp.Description("Model ID. Default: "+reg.defaultVideo)),
-			mcp.WithString("image_path", mcp.Description("Optional source image for image-to-video")),
+			mcp.WithString("image_path", mcp.Description("Optional absolute path to a source image on the mcp-media host filesystem for image-to-video")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			prompt, _ := req.RequireString("prompt")
 			model := req.GetString("model", "")
-			imgPath := req.GetString("image_path", "")
+			imgPath, err := optionalAbsoluteMediaPath(req.GetString("image_path", ""), "image_path")
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
 			p, m, err := reg.Video(model)
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
@@ -442,6 +455,25 @@ func newMediaServer(reg *Registry, jobs *MediaJobStore, jobTimeout, syncTimeout,
 	)
 
 	return s
+}
+
+func requireAbsoluteMediaPath(path, field string) (string, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "", fmt.Errorf("%s is required", field)
+	}
+	if !filepath.IsAbs(path) {
+		return "", fmt.Errorf("%s must be an absolute path on the mcp-media host filesystem", field)
+	}
+	return path, nil
+}
+
+func optionalAbsoluteMediaPath(path, field string) (string, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "", nil
+	}
+	return requireAbsoluteMediaPath(path, field)
 }
 
 func envDuration(name string, fallback time.Duration) time.Duration {

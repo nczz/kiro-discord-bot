@@ -586,18 +586,22 @@ func TestReadOnlyToolAnnotations(t *testing.T) {
 }
 
 func TestSendFileToolDocumentsLocalPathBoundary(t *testing.T) {
-	tool := writeTool(ToolSendFile, "Send a bot-local file through the bot-controlled safe egress queue. The file_path must be readable by the kiro-discord-bot process on this host/VM; do not pass paths from another MCP server, Docker container, browser profile namespace, remote host, or any tool-returned artifact namespace unless they are explicitly mounted into the bot filesystem. If another tool returns an HTTP(S) image URL, pass that URL directly to bot_send_image_url instead of saving, downloading, transcribing, base64-encoding, or converting it into a local artifact path. Text files are redacted and uploaded as sanitized copies. JPEG/PNG images are validated and uploaded as copied temp files without OCR redaction or metadata stripping. Documents with extractable readable text (PDF, DOCX, XLSX) are converted to text, redacted, and uploaded as sanitized .txt copies; original binary documents are never uploaded back.", false)
+	tool := writeTool(ToolSendFile, "Send a bot-local file through the bot-controlled safe egress queue. Resolve files to absolute host paths before calling this tool: use the absolute path returned by the file-writing/read tool or run realpath, and do not pass a bare filename or relative path when an absolute path is available. The tool normalizes readable relative paths to absolute paths before queueing so later safe-egress delivery does not reinterpret them from the bot deployment directory. The file_path must be readable on the kiro-discord-bot host/VM; do not pass paths from another MCP server, Docker container, browser profile namespace, remote host, or any tool-returned artifact namespace unless they are explicitly mounted into the bot filesystem. If another tool returns an HTTP(S) image URL, pass that URL directly to bot_send_image_url instead of saving, downloading, transcribing, base64-encoding, or converting it into a local artifact path. Text files are redacted and uploaded as sanitized copies. JPEG/PNG images are validated and uploaded as copied temp files without OCR redaction or metadata stripping. Documents with extractable readable text (PDF, DOCX, XLSX) are converted to text, redacted, and uploaded as sanitized .txt copies; original binary documents are never uploaded back. A successful response means the file was queued only; delivery/redaction/upload happens asynchronously after this tool returns.", false)
 
-	if !strings.Contains(tool.Description, "bot-local file") || !strings.Contains(tool.Description, "Docker container") || !strings.Contains(tool.Description, "HTTP(S) image URL") {
-		t.Fatalf("send file description should document local path boundary and image URL handoff: %q", tool.Description)
+	for _, want := range []string{"bot-local file", "absolute host paths", "normalizes readable relative paths", "Docker container", "HTTP(S) image URL", "queued only"} {
+		if !strings.Contains(tool.Description, want) {
+			t.Fatalf("send file description missing %q: %q", want, tool.Description)
+		}
 	}
 	filePath, ok := tool.InputSchema.Properties["file_path"].(map[string]any)
 	if !ok {
 		t.Fatalf("file_path schema missing: %+v", tool.InputSchema.Properties)
 	}
 	desc, _ := filePath["description"].(string)
-	if !strings.Contains(desc, "readable by the kiro-discord-bot process") || !strings.Contains(desc, "tool-returned artifact") || !strings.Contains(desc, "bot_send_image_url") {
-		t.Fatalf("file_path description should document bot-local path boundary and image URL handoff: %q", desc)
+	for _, want := range []string{"absolute path", "normalized to absolute", "tool-returned artifact", "bot_send_image_url", "queue response is not proof"} {
+		if !strings.Contains(desc, want) {
+			t.Fatalf("file_path description missing %q: %q", want, desc)
+		}
 	}
 }
 
@@ -611,6 +615,70 @@ func TestValidateBotSendFilePathRejectsNonLocalImageResourcePath(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("error missing %q: %s", want, got)
 		}
+	}
+}
+
+func TestValidateBotSendFilePathDoesNotExposeResolvedMissingPath(t *testing.T) {
+	dir := t.TempDir()
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := os.Chdir(oldwd); err != nil {
+			t.Fatalf("restore cwd: %v", err)
+		}
+	}()
+
+	err = validateBotSendFilePath("missing.png")
+	if err == nil {
+		t.Fatal("validateBotSendFilePath accepted missing relative file")
+	}
+	got := err.Error()
+	if strings.Contains(got, dir) || strings.Contains(got, filepath.Join(dir, "missing.png")) {
+		t.Fatalf("error exposes resolved host path %q in %q", dir, got)
+	}
+	if !strings.Contains(got, "not readable") || !strings.Contains(got, "bot_send_image_url") {
+		t.Fatalf("error should keep actionable non-secret guidance: %q", got)
+	}
+}
+
+func TestResolveBotSendFilePathNormalizesReadableRelativePath(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "proposal.md")
+	if err := os.WriteFile(file, []byte("proposal"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := os.Chdir(oldwd); err != nil {
+			t.Fatalf("restore cwd: %v", err)
+		}
+	}()
+
+	got, err := resolveBotSendFilePath("proposal.md")
+	if err != nil {
+		t.Fatalf("resolve relative file: %v", err)
+	}
+	gotInfo, err := os.Stat(got)
+	if err != nil {
+		t.Fatalf("stat resolved path: %v", err)
+	}
+	wantInfo, err := os.Stat(file)
+	if err != nil {
+		t.Fatalf("stat original path: %v", err)
+	}
+	if !os.SameFile(gotInfo, wantInfo) {
+		t.Fatalf("resolved path = %q, want same file as %q", got, file)
 	}
 }
 

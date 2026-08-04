@@ -90,6 +90,43 @@ func TestGenerateVideoHandlerReturnsJobIDForRunningManagedJob(t *testing.T) {
 	}
 }
 
+func TestGenerateVideoRejectsRelativeImagePath(t *testing.T) {
+	provider := &blockingVideoProvider{
+		result: &MediaResult{Path: "/tmp/generated.mp4", MimeType: "video/mp4"},
+	}
+	reg := NewRegistry()
+	reg.RegisterVideo(provider)
+	jobs := NewMediaJobStore(time.Hour, 0)
+	server := newMediaServer(reg, jobs, time.Minute, time.Minute, 10*time.Millisecond)
+
+	client, err := mcpclient.NewInProcessClient(server)
+	if err != nil {
+		t.Fatalf("new in-process client: %v", err)
+	}
+	defer client.Close()
+	if err := client.Start(context.Background()); err != nil {
+		t.Fatalf("start client: %v", err)
+	}
+	initReq := mcp.InitializeRequest{}
+	initReq.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
+	initReq.Params.ClientInfo = mcp.Implementation{Name: "mcp-media-test", Version: "1"}
+	if _, err := client.Initialize(context.Background(), initReq); err != nil {
+		t.Fatalf("initialize client: %v", err)
+	}
+
+	req := mcp.CallToolRequest{}
+	req.Params.Name = "generate_video"
+	req.Params.Arguments = map[string]any{"prompt": "make a launch clip", "image_path": "relative.png"}
+	result, err := client.CallTool(context.Background(), req)
+	if err != nil {
+		t.Fatalf("call generate_video: %v", err)
+	}
+	text := toolResultText(t, result)
+	if !result.IsError || !strings.Contains(text, "absolute path on the mcp-media host filesystem") {
+		t.Fatalf("relative image_path result IsError=%v text=%q", result.IsError, text)
+	}
+}
+
 func toolResultText(t *testing.T, result *mcp.CallToolResult) string {
 	t.Helper()
 	var b strings.Builder
