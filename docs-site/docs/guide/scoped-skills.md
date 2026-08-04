@@ -63,6 +63,11 @@ Default channel setup exposes read/use skill tools only:
 - `bot_skills_server_inventory`
 - `bot_skills_server_effective_for_channel`
 
+
+Each agent prompt also receives a bounded **Effective Skills** hint block when readable, executable skills exist for the current guild/channel/project context. The block contains only skill IDs, names, scope/version, and concise usage hints; it is not the full procedure and is not authoritative instruction text. When the user's request matches a hint, the agent should call `bot_skill_get` for the full `SKILL.md` before applying the skill. Disabled skills, skills missing required tools, and invisible scopes are not injected.
+
+If more effective skills exist than the prompt hint limit, the agent should use `bot_skills_search` for broader discovery.
+
 Lifecycle tools are not trusted because a model asks for them. Channel lifecycle tools require the authenticated Discord actor context written by the bot for the current task and the caller's channel management permission. Server management tools are default-off and require server management context.
 
 A skill can declare `required_tools`, but this only affects resolution and `missing_tools` reporting. Creating, installing, or enabling a skill never grants MCP permissions or changes channel policy. Broad runtime requirements such as `shell` or concrete host commands such as `curl` are checked against validated runtime command availability before they are reported missing; MCP context absence alone is not treated as a broken shell capability.

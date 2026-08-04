@@ -130,6 +130,7 @@ type Worker struct {
 	onMentionRefs   func([]discordmention.Ref)
 
 	memoryPrefix func() string // returns memory+flash prefix to inject into prompts
+	skillPrefix  func(targetID string) string
 
 	isSilent func() bool // returns true if silent mode is on (compact tool output)
 
@@ -222,6 +223,9 @@ func (w *Worker) SetBotToolsTargetStatePath(path string) { w.botToolsTargetState
 // OnMemoryPrefixFunc sets a callback that returns memory rules to prepend to prompts.
 func (w *Worker) OnMemoryPrefixFunc(fn func() string) { w.memoryPrefix = fn }
 
+// OnSkillPrefixFunc sets a callback that returns effective skill hints to prepend to prompts.
+func (w *Worker) OnSkillPrefixFunc(fn func(targetID string) string) { w.skillPrefix = fn }
+
 // SetUsageStore sets the append-only usage ledger used for report commands.
 func (w *Worker) SetUsageStore(store *UsageStore) { w.usage = store }
 
@@ -283,11 +287,10 @@ func (g a2aDelegateFinalGuard) finalResponse(response string) string {
 	}
 	statusTarget := L.Get("a2a.delegate.guard.local_id_placeholder")
 	if id := strings.TrimSpace(g.localID); id != "" {
-		statusTarget = EscapeDiscordMarkdown(id)
+		statusTarget = id
 	}
 	return L.Getf("a2a.delegate.guard.unconfirmed", statusTarget)
 }
-
 func extractA2ADelegateLocalID(raw string) string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -977,6 +980,12 @@ func (w *Worker) execute(job *Job) {
 		w.historyPrefix = ""
 	}
 
+	// Inject effective skill hints as data-only candidates before memory rules.
+	if w.skillPrefix != nil {
+		if sp := w.skillPrefix(threadID); sp != "" {
+			prompt = sp + prompt
+		}
+	}
 	// Inject memory rules (after thread title extraction, before sending to agent)
 	if w.memoryPrefix != nil {
 		if mp := w.memoryPrefix(); mp != "" {
@@ -1491,6 +1500,15 @@ func (w *Worker) executeInline(job *Job) {
 	if w.historyPrefix != "" {
 		prompt = w.historyPrefix + prompt
 		w.historyPrefix = ""
+	}
+	if w.skillPrefix != nil {
+		targetID := job.ChannelID
+		if t := job.inlineBotToolsTargetID(); t != "" {
+			targetID = t
+		}
+		if sp := w.skillPrefix(targetID); sp != "" {
+			prompt = sp + prompt
+		}
 	}
 	if w.memoryPrefix != nil {
 		if mp := w.memoryPrefix(); mp != "" {

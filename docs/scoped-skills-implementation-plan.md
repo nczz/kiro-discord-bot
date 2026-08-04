@@ -13,12 +13,13 @@
 1. **SQLite 是 authoritative source**：skill catalog、版本、scope install、draft、mutation audit、usage audit 都存在 bot 的 SQLite store。
 2. **project-local `SKILL.md` 是 materialized copy**：方便 agent 和使用者 review，但不是主資料源。
 3. **自然語言優先，slash 是 fallback/admin shortcut**：使用者可直接請 agent 新增、啟用、更新、移除頻道 skills；`/skill` 指令保留但不作為主要體感。
-4. **channel skills MCP 預設全開**：`bot-skills-channel` 在有 authenticated Discord actor context 與頻道管理權限時，可新增、啟用、更新、停用、移除、回復目前 channel/thread/project scopes。
+4. **channel skills MCP 預設 read/use-only，lifecycle 需明確授權**：預設 safe bot tools 只暴露搜尋、effective list、get 與 server read tools；建立、啟用、更新、停用、移除、回復等 lifecycle tools 需 channel policy 明確允許，且 mutation 仍必須通過 authenticated Discord actor context 與頻道管理權限。
 5. **server skills MCP 預設 read/use-only**：`bot-skills-server` 可讀/用 guild skills；建立、更新、移除、跨頻道管理需 server admin 明確開啟 management tools。
 6. **skill 可宣告工具需求，但不能自己擴權**：`required_tools` 只能被 resolver 檢查；是否允許工具仍由既有 MCP policy 決定。
 7. **所有 mutation 都可稽核、可回復**：mutation 需要 Discord actor、source message/session、before/after version/content SHA、result/error、hash chain；remove 是 soft-delete。
 8. **tool package execution 不進 MVP**：外部 repo 若包含工具實作，第一版只記錄為未啟用的 detected tool package，不執行、不安裝。
 9. **A2A `AgentSkill` 是輸出/映射層，不是 skill registry 主模型**：skill registry 應獨立存在，後續可映射到 A2A expose/delegate metadata。
+10. **effective skill hints 是提示索引，不是完整技能注入**：每輪 prompt 可注入 bounded metadata/usage hints，幫助 agent 判斷何時呼叫 `bot_skill_get`；提示不得包含完整 procedure、不得取代 MCP scope visibility，也不得讓 skill text 變成權限或 system-level instruction。
 ## 1. 背景與既有架構接點
 
 本規格必須沿用現有架構，不重複造輪。

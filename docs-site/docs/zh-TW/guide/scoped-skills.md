@@ -63,6 +63,11 @@ Default channel setup 只 exposes read/use skill tools：
 - `bot_skills_server_inventory`
 - `bot_skills_server_effective_for_channel`
 
+
+當目前 guild/channel/project context 有可讀且可執行的 skills 時，每輪 agent prompt 也會收到一個有上限的 **Effective Skills** 提示區塊。這個區塊只包含 skill ID、名稱、scope/version 與精簡使用提示；它不是完整流程，也不是具權威性的指令文字。當使用者需求符合提示時，agent 應先呼叫 `bot_skill_get` 取得完整 `SKILL.md`，再套用 skill。停用的 skills、缺少 required tools 的 skills、以及目前 scope 不可見的 skills 不會被注入。
+
+如果 effective skills 超過 prompt hint 上限，agent 應使用 `bot_skills_search` 做更廣泛的探索。
+
 Lifecycle tools 不會因為 model 要求就被信任。Channel lifecycle tools 必須使用 bot 為目前 task 寫入的 authenticated Discord actor context，且 caller 必須有 channel management permission。Server management tools 預設關閉，而且需要 server management context。
 
 Skill 可以宣告 `required_tools`，但這只影響 resolution 與 `missing_tools` 回報。Create、install 或 enable skill 都不會授予 MCP permissions，也不會改變 channel policy。`shell` 這類大範圍 runtime requirement 或 `curl` 這類具體 host command，會先比對已驗證的 runtime command availability；不會只因 MCP context 看不到就回報 shell capability 壞掉。

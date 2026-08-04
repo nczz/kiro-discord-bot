@@ -259,6 +259,7 @@ type fakeWorkerAgent struct {
 	contextUsage   float64
 	sessionReuse   string
 	askPrompts     []string
+	asyncContent   []acp.PromptContent
 }
 
 type recordingAuditSink struct {
@@ -287,8 +288,9 @@ func (f *fakeWorkerAgent) Ask(_ context.Context, prompt string, _ func(string)) 
 
 func (f *fakeWorkerAgent) AskAsync(string, acp.AsyncCallbacks) {}
 
-func (f *fakeWorkerAgent) AskAsyncMulti(_ []acp.PromptContent, cb acp.AsyncCallbacks) {
+func (f *fakeWorkerAgent) AskAsyncMulti(content []acp.PromptContent, cb acp.AsyncCallbacks) {
 	f.mu.Lock()
+	f.asyncContent = append([]acp.PromptContent(nil), content...)
 	f.callbacks = cb
 	f.mu.Unlock()
 }
@@ -915,6 +917,47 @@ func TestWorkerEnqueueFull(t *testing.T) {
 	}
 	if err := w.Enqueue(&Job{MessageID: "m2"}); err == nil {
 		t.Fatal("second enqueue should fail when buffer is full")
+	}
+}
+
+func TestWorkerInlineInjectsSkillPrefixBeforePrompt(t *testing.T) {
+	L.Load("en")
+	rt := &recordingRoundTripper{}
+	ds := testDiscordSession(rt)
+	agent := &fakeWorkerAgent{}
+	w := newWorker("ch1", agent, 1, 30, 1, 1440, nil, "")
+	var targets []string
+	w.OnSkillPrefixFunc(func(targetID string) string {
+		targets = append(targets, targetID)
+		return "[Effective Skills]\n"
+	})
+	w.OnMemoryPrefixFunc(func() string {
+		return "[Memory Rules]\n"
+	})
+
+	w.executeInline(&Job{
+		ChannelID:    "ch1",
+		MessageID:    "m1",
+		Prompt:       "hello",
+		Session:      ds,
+		DeliveryMode: DeliveryInline,
+	})
+	agent.mu.Lock()
+	content := append([]acp.PromptContent(nil), agent.asyncContent...)
+	agent.mu.Unlock()
+	if len(targets) != 1 || targets[0] != "ch1" {
+		t.Fatalf("skill prefix targets = %#v, want ch1", targets)
+	}
+	if len(content) != 1 || content[0].Type != "text" {
+		t.Fatalf("prompt content = %+v, want one text block", content)
+	}
+	want := "[Memory Rules]\n[Effective Skills]\nhello"
+	if content[0].Text != want {
+		t.Fatalf("prompt text = %q, want %q", content[0].Text, want)
+	}
+	cb := agent.Callbacks()
+	if cb.OnComplete != nil {
+		cb.OnComplete("ok", nil)
 	}
 }
 
