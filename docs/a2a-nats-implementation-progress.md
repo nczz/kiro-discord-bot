@@ -46,8 +46,8 @@ At the start of each continuation:
 
 ## Current state
 
-- Program state: A2A runtime-first NATS binding is implemented through the latest trust/setup guidance fix (`a8f3bd4`) and is ready for release-candidate validation after this cleanup pass.
-- Current phase: release cleanup. No implementation phase remains open; code changes should be limited to production hardening, docs alignment, secret hygiene, and release-readiness verification.
+- Program state: A2A runtime-first NATS binding is implemented through the peer delegation state clarification (`322b777`) and is in release documentation alignment.
+- Current phase: release cleanup/documentation alignment. No implementation phase remains open; code changes should be limited to production hardening, docs alignment, secret hygiene, and release-readiness verification.
 - Production posture: `NATS_URL == ""` remains the no-op rollback path. Production runtime rollout target is `A2A_RUNTIME_ID_MODE=runtime`; `dual` is a bounded legacy-drain mode only. Hardened production requires `NATS_CREDS_FILE` with `A2A_PRODUCTION_SECURITY=true`; internal lightweight token deployments are a documented lower-security profile only with private/firewalled TLS listeners and `A2A_PRODUCTION_SECURITY=false`.
 - Documentation hygiene: live environment paths, hostnames, Discord IDs, task IDs, hashes, and service-specific smoke artifacts are intentionally redacted from this repository ledger. Keep raw rollout evidence in private operator notes, not in tracked release docs.
 
@@ -58,8 +58,8 @@ At the start of each continuation:
 | 0-9 | Original bot-level A2A NATS implementation | done | `0d720d2` through `21e4173` | Archived implementation context; A2A still no-ops when `NATS_URL` is empty. |
 | R0-R6 | Runtime-first identity, policy authority, routing, and cutover checks | done | `b0471a4` plus runtime validation entries below | Runtime policy rows are the local authority; runtime mode rejects bot-level targets. |
 | R7-R8 | Cutover preflight and internal lightweight rollout model | done | Sanitized evidence log below | Release docs distinguish hardened creds from internal lightweight token profile. |
-| R9-R30 | Runtime peer UX, exact policy trust, status, continuation, executor-owned Discord transcript, co-present, metadata aliases, and trust confirmation fixes | done | Sanitized evidence log below; latest committed guidance fix `a8f3bd4` | No open A2A runtime feature phase; continue only release cleanup or operator-authorized rollout validation. |
-| RC | Release cleanup and readiness verification | in_progress | pending commit | Environment/docs/code cleanup, secret-hygiene scan, focused tests, full regression. |
+| R9-R30 | Runtime peer UX, exact policy trust, status, continuation, executor-owned Discord transcript, co-present, metadata aliases, trust confirmation, and peer delegation state fixes | done | Sanitized evidence log below; latest committed peer delegation clarification `322b777` | No open A2A runtime feature phase; continue only release cleanup or operator-authorized rollout validation. |
+| RC | Release cleanup and readiness verification | in_progress | pending documentation alignment commit | Environment/docs/code cleanup, secret-hygiene scan, focused tests, full regression. |
 
 ## Evidence log
 
@@ -895,6 +895,18 @@ Append one subsection per completed phase.
 - Runtime settings touched: no env, DATA_DIR, Docker volume, or database changed. Deployment touched only local and <remote-test-host> bot binaries/services.
 - Rollback boundary: restore the timestamped pre-cleanup binary on the affected host or revert this cleanup commit; `NATS_URL=""` remains the no-op A2A rollback. No database or live policy migration was performed.
 - Next phase: monitor the deployed cleanup build; no implementation phase is open.
+
+
+### RC documentation alignment follow-up
+
+- Status: validation passed; pending commit.
+- Decision: align public release/docs-site and A2A source docs with runtime-first peer/delegation behavior after `322b777`: `bot_a2a_peers` reports active peer-policy perspective, `bot_a2a_delegate` may use explicit `delegate_targets` or known channel/thread runtime targets, retired expert trust/policy fields are rejected by `bot_a2a_trust_peer`, and macOS launchd deployments must re-sign Darwin binaries after replacement.
+- Validation:
+  - Focused A2A docs/code contract tests: `go test ./a2a ./channel ./internal/botmcp ./bot ./audit ./locale -run 'Test.*A2A|TestDoctor.*A2A'` passed.
+  - Docs site regenerated and verified: `cd docs-site && npm run build`; `cd docs-site && npm run verify` passed (`60` generated HTML files checked).
+  - `git diff --check` passed.
+- Runtime settings touched: no env, DATA_DIR, Docker volume, database, or live service change.
+- Rollback boundary: revert this documentation-only commit; `NATS_URL=""` remains the A2A no-op rollback path.
 
 ## Master goal prompt
 

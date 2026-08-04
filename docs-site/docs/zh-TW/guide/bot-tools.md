@@ -32,7 +32,7 @@
 | `bot_skills_server_effective_for_channel` | Read | 顯示會套用到 channel 的 server skills。 |
 | `bot_a2a_peers` | Read | 列出已知 A2A runtime peers、可呼叫 channel refs、visible skills、wakeability 與 delivery readiness。 |
 | `bot_a2a_task_status` | Read | 讀取 durable A2A TaskStore state 與 task 或 recent outbound tasks 的 event history。 |
-| `bot_a2a_trust_peer` | Write, non-destructive | 只帶 `target_agent` 時，直接允許一個已知 runtime 傳工作到此頻道；進階 trust 變更仍需 confirmation。 |
+| `bot_a2a_trust_peer` | Write, non-destructive | 只帶 `target_agent` 時，直接允許一個已知 runtime 傳工作到此頻道；進階 trust/policy fields 會在這個工具上被拒絕。 |
 | `bot_a2a_delegate` | Write, non-destructive | 用 `target_agent` 與 `message` 對另一個 bot/channel 排入一般 task；仍套用 policy、quota 與必要 remote confirmation checks。 |
 | `bot_a2a_cancel` | Write, destructive | requester 或 channel manager 可取消 nonterminal A2A task。 |
 | `bot_a2a_input_reply` | Write, non-destructive | 對 `TASK_STATE_INPUT_REQUIRED` 的 task 傳送使用者提供的 input。 |

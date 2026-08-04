@@ -32,7 +32,7 @@ On first channel setup, these safe tools are enabled by default:
 | `bot_skills_server_effective_for_channel` | Read | Show server skills that would apply to a channel. |
 | `bot_a2a_peers` | Read | List known A2A runtime peers, callable channel refs, visible skills, wakeability, and delivery readiness. |
 | `bot_a2a_task_status` | Read | Read durable A2A TaskStore state and event history for a task or recent outbound tasks. |
-| `bot_a2a_trust_peer` | Write, non-destructive | Immediately allow one known runtime to send work into this channel when called with only `target_agent`; expert trust changes still require confirmation. |
+| `bot_a2a_trust_peer` | Write, non-destructive | Immediately allow one known runtime to send work into this channel when called with only `target_agent`; expert trust/policy fields are rejected on this tool. |
 | `bot_a2a_delegate` | Write, non-destructive | Queue a normal task to another bot/channel with `target_agent` and `message`; policy, quota, and optional remote confirmation checks still apply. |
 | `bot_a2a_cancel` | Write, destructive | Cancel a nonterminal A2A task when requested by the requester or a channel manager. |
 | `bot_a2a_input_reply` | Write, non-destructive | Send user-provided input for a task in `TASK_STATE_INPUT_REQUIRED`. |

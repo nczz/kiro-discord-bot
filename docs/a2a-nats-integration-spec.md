@@ -762,7 +762,7 @@ Validation：
 - `max_concurrent` range: 0..64; `0` means unlimited。
 - `accept_from_runtimes` entries are runtime IDs or explicit wildcard `*`。
 - `accept_skills` entries are skill slugs, not arbitrary text。
-- `delegate_targets` entries are `{runtime_agent_id, skill_id}` pairs chosen by manager。
+- `delegate_targets` entries are `{runtime_agent_id, agent_id, channel_ref, skill_id}` records chosen by manager; `runtime_agent_id` is preferred for exact runtime grants, while `agent_id`/`channel_ref` remain only for migration and explicit channel-scoped targets。
 - `remote_tool_policy_json.allow_memory_write` defaults false and is the only policy field that may enable remote A2A jobs to use memory-write bot tools。
 - legacy `accept_from`/`delegate_to`/`delegate_skills` are read for compatibility only; new setup writes canonical runtime fields。
 - `expose_skills[].id` subject-safe skill slug。
@@ -1135,7 +1135,7 @@ The tool implementation validates：
 
 - target exists in peer store。
 - skill exists and input modes match。
-- current channel policy `delegate_targets` allows the target runtime + skill pair。
+- current channel policy either explicitly allows the target through `delegate_targets`, or the request names a known channel/thread runtime target; remote receiver policy remains authoritative。
 - legacy `delegate_to`/`delegate_skills` may populate a migration preview, but cannot authorize a different runtime on the same bot。
 - attachment/media use matches `delegate_media`。
 - channel policy allows outbound delegation from this Discord channel。

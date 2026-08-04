@@ -17,6 +17,19 @@ RUN_ACP_SMOKE=1 KIRO_CLI=$(which kiro-cli) scripts/release-preflight.sh
 RUN_OMP_SMOKE=1 OMP_PATH=$(which omp) scripts/release-preflight.sh
 ```
 
+若修改 A2A NATS 行為或 rollout configuration，也執行：
+
+```bash
+go test ./a2a ./channel ./internal/botmcp ./bot ./audit ./locale -run 'Test.*A2A|TestDoctor.*A2A'
+python3 - <<'PY'
+from pathlib import Path
+rollout = Path('docs/a2a-nats-rollout.md').read_text()
+for required in ['local two-bot smoke', 'same-channel co-present smoke', 'cross-server proxy smoke', 'NATS restart smoke', 'credential revocation smoke']:
+    assert required in rollout
+print('a2a-rollout-guide-ok')
+PY
+```
+
 ## 2. Review Diff
 
 Tag 前確認：
@@ -74,8 +87,17 @@ macOS launchd hosts：
 
 1. 替換 local install directory 下的 binaries。
 2. 保留 `.env`、data 與 launchd plist。
-3. `launchctl kickstart -k` service。
-4. 確認 `Bot running as ...` 與 `/doctor`。
+3. 重啟前先重新簽署替換後的 Darwin binaries，避免 macOS AppleSystemPolicy 殺掉 MCP child process，導致 agent 只看到 `Transport closed`：
+
+   ```bash
+   for bin in kiro-discord-bot mcp-discord mcp-media mcp-discord-server mcp-media-server; do
+     [ -e "$bin" ] && codesign --force --sign - "$bin"
+   done
+   ```
+
+   請在 install directory 內、複製 release binaries 後執行；簽署會改變已安裝檔案 hash，所以需要和 release asset 比對時要先比對再簽。
+4. `launchctl kickstart -k` service。
+5. 確認 `Bot running as ...`、`/doctor`，且在有啟用 `mcp-discord` 時執行 MCP smoke，例如 `/mcp manage` 或簡單 agent reply。
 
 ## 6. Post-deploy Checks
 
@@ -86,12 +108,15 @@ macOS launchd hosts：
 - 如果 cron 有變更，跑一個安全的 `/cron-run`。
 - 如果 thread 行為有變更，開新任務並在 thread 內延續。
 - 如果 engine 行為有變更，在每個 enabled engine 的 channel/thread scope 測 `/engine`、`/models`、`/model`、`/agent`、`/status` 與 `/usage`。
+- 如果 A2A NATS 有變更或正在啟用，請完成 [A2A NATS rollout gates](../../guide/a2a-nats-rollout.md)：local two-bot smoke、same-channel co-present smoke、cross-server proxy smoke、NATS restart smoke、credential revocation smoke 與 rollback smoke。
 
 完整 channel/thread 與 Kiro/OMP checklist 請使用 [操作矩陣](operation-matrix.md)。
 
 ## 7. Rollback
 
 新 release 通過 live checks 前，保留上一版 binaries。Rollback 只應還原 binaries；不要刪除 `DATA_DIR`、Docker volumes、`.kiro/` 或 `.env`。
+
+A2A rollback 時，將 `NATS_URL=""`，restart 或 drain bot，保留 `DATA_DIR` 下的 A2A stores/audit rows 供 postmortem，執行 `/doctor`，並驗證簡單的非 A2A Discord reply。
 
 Rollback 後重啟 service 並跑 `/doctor`。
 

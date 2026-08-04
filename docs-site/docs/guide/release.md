@@ -87,8 +87,17 @@ For macOS launchd hosts:
 
 1. Replace binaries under the local install directory.
 2. Keep `.env`, data, and launchd plist intact.
-3. `launchctl kickstart -k` the service.
-4. Confirm `Bot running as ...` and `/doctor`.
+3. Re-sign the replaced Darwin binaries before restart so macOS AppleSystemPolicy does not kill MCP child processes with `Transport closed`:
+
+   ```bash
+   for bin in kiro-discord-bot mcp-discord mcp-media mcp-discord-server mcp-media-server; do
+     [ -e "$bin" ] && codesign --force --sign - "$bin"
+   done
+   ```
+
+   Run this from the install directory after copying the release binaries; signing changes the installed file hash, so compare hashes before signing when you need release-asset parity.
+4. `launchctl kickstart -k` the service.
+5. Confirm `Bot running as ...`, `/doctor`, and an MCP smoke such as `/mcp manage` or a simple agent reply when `mcp-discord` is enabled.
 
 ## 6. Post-deploy Checks
 
