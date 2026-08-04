@@ -85,15 +85,15 @@ Use A2A commands only after NATS is configured and the channel has an A2A policy
 | Command | Purpose |
 | --- | --- |
 | `/a2a peers` | List visible runtime peers, skills, trust, stale/online status, and delivery readiness. |
-| `/a2a trust peer_agent:<runtime>` | Plan or apply high-level peer trust. Defaults to bidirectional general-task trust and requires confirmation before applying. |
-| `/a2a ask peer_agent:<runtime> message:<text>` | Queue a general delegated task for a trusted runtime. |
-| `/a2a delegate target_agent:<runtime> skill_id:<skill> message:<text> reason:<reason>` | Queue a task for an explicit runtime/skill target after policy and confirmation checks. |
+| `/a2a allow peer_agent:<runtime>` | Immediately allow that exact runtime to send work into this channel. |
+| `/a2a ask peer_agent:<runtime> message:<text>` | Queue a normal delegated task for a runtime. |
 | `/a2a status [task]` | Inspect durable task state and events. A queued task is not complete until status reaches a terminal state. |
 | `/a2a cancel task:<task>` | Request cancellation for a remote A2A task. |
 | `/a2a reply task:<task> input:<text>` | Provide input when a task is `TASK_STATE_INPUT_REQUIRED`. |
 | `/a2a authorize task:<task> approve:true_or_false` | Approve or deny when a task is `TASK_STATE_AUTH_REQUIRED`. |
+| `/a2a revoke peer_agent:<runtime>` | Stop allowing that exact runtime to send work into this channel. |
 
-Policy subcommands such as `/a2a enable`, `/a2a disable`, `/a2a expose`, `/a2a accept-from`, and `/a2a delegate-to` are advanced surfaces. Prefer `/a2a trust` for normal bidirectional peer setup.
+Expert policy changes are intentionally kept out of the normal `/a2a` slash surface. Use the manager-scoped bot-tools policy workflow when changing capabilities, delegation targets, transcript sharing, or policy-wide limits.
 
 
 ## Scheduling

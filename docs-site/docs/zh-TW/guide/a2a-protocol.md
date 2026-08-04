@@ -13,7 +13,7 @@
 | Routing identity | Runtime agent ID，不是 Discord bot account。 |
 | Discovery | Runtime AgentCards 透過 JetStream KV；heartbeats 透過 NATS liveness subjects。 |
 | Correctness boundary | JetStream 加 SQLite task/policy stores。 |
-| Delivery default | Executor-owned Discord transcript，加 safe proxy result visibility。 |
+| Delivery default | 同一個 Discord channel/thread 使用對話協作；不同或未知 channel 時，receiver 會在自己的 Discord channel/thread 開始工作，並把結果回傳。 |
 | Security default | `NATS_URL` 為空時 A2A 停用。Remote work 需要 policy，通常也需要 confirmation。 |
 
 ## 心智模型
@@ -25,6 +25,16 @@ NATS-visible AgentID = runtime_agent_id
 ```
 
 一個 bot process 可以發布多個 runtime peers，每個 enabled/discoverable channel 或 thread policy 各一個。遠端 peer 應委派到 runtime peer，而不是整個 bot process。
+
+## 一般使用流程
+
+先在相關頻道執行 `/a2a peers`，複製清單中你要協作的 bot/頻道 ID。
+
+Receiver 端同意很簡單：在接收工作的頻道執行 `/a2a allow peer_agent:<來自 /a2a peers 的 bot/頻道 ID>`，或直接告訴 bot 允許該 bot/頻道委派。一般 consent 在不放大既有 skill restriction 時會直接套用到該精確 bot/頻道 runtime；不是 wildcard bot-prefix grant，也不是 bidirectional trust。
+
+Sender 端委派也維持高階語意：執行 `/a2a ask peer_agent:<來自 /a2a peers 的 bot/頻道 ID> message:<任務>`，或用自然語言請 bot 委派任務。一般委派不需要能力 ID、目標頻道標籤或回覆模式欄位。若有多個目標符合，bot 會要求釐清，而不是猜測。
+
+同一個 Discord guild+channel/thread 代表對話協作：receiver policy 與 Discord permissions 都允許時，雙方可共享同一段 transcript。不同 channel 則由 receiver 在自己的 channel/thread 開始工作，結果再回到 requester。已 queue 的 delegation 不代表 accepted 或 completed；請用 `/a2a status` 或 `bot_a2a_task_status` 查權威狀態。
 
 ## 關鍵字表
 
@@ -40,7 +50,7 @@ NATS-visible AgentID = runtime_agent_id
 | AgentCard | Runtime peer 的公開 sanitized 描述，包含 supported binding、skills 與 display metadata。 |
 | AgentSkill | Runtime expose 的能力，例如 `task` 或更細的 skill ID。 |
 | Peer | 已發現的 runtime AgentCard 加上本地 trust/status metadata。 |
-| Trust | 本地 policy，允許 peer runtime 進行 inbound、outbound 或 bidirectional task。 |
+| Trust | 針對 peer runtime 的本地 consent policy。Receiver-side trust 預設為 inbound delegation consent；outbound 或 bidirectional grant 是明確的進階選擇。 |
 | Policy | Per-channel A2A 規則：enabled、discoverable、accepted senders、exposed skills、delegate targets、visibility、transcript mode、quotas 與 tool policy。 |
 | `delegate_targets` | Outbound allowlist，由 `{runtime_agent_id, skill_id}` pairs 組成。 |
 | `accept_from_runtimes` | Inbound allowlist，列出可送 task 進來的 remote runtime IDs。 |
@@ -210,8 +220,8 @@ Legacy fields 如 `accept_from`、`delegate_to`、`delegate_skills` 只作 compa
 
 | Mode | 責任 |
 | --- | --- |
-| Delegator/proxy | Requester bot 回報 remote status/result。安全跨 server 預設。 |
-| Executor-owned | Executor bot 在自己的 channel/thread 執行真正 worker transcript。 |
+| Same-channel collaboration | 同一個 Discord guild+channel/thread。Policy 與 Discord permissions 都允許時，兩個 bot 可共享對話 transcript。 |
+| Receiver-owned work | 不同或未知 channel。Executor bot 在自己的 Discord channel/thread 工作，並把結果回傳給 requester。 |
 | Transparent | Result visibility 較少中介，但仍受 policy 控制。 |
 | Co-present | Policy 與 permissions 都允許時，executor 與 delegator 可共享 Discord channel/thread transcript。 |
 
@@ -234,9 +244,9 @@ A2A 不會繞過既有 bot 邊界：
 | --- | --- |
 | `/doctor` | 檢查 A2A enabled state、auth mode、runtime mode、peer status 與 readiness，且不暴露 secrets。 |
 | `/a2a peers` | 列出可見 peer runtimes、skills、trust、staleness 與 delivery readiness。 |
-| `/a2a trust` | 高階 trust setup，需 confirmation。 |
-| `/a2a ask` | 對 trusted peer 送出 general task。 |
-| `/a2a delegate` | 對指定 target runtime 與 skill 送出 task。 |
+| `/a2a allow` | 允許 peer runtime 委派工作到此頻道；預設是 inbound consent。 |
+| `/a2a ask` | 對 peer runtime 送出一般 task。 |
+| `/a2a revoke` | 停止允許 peer runtime 委派工作到此頻道。 |
 | `/a2a status` | 查看 durable local task state 與 events。 |
 | `bot_a2a_*` tools | Agent-facing MCP surface，用於 policy、delegation、status 與 peer inspection。 |
 

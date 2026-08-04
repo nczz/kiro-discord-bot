@@ -226,35 +226,20 @@ sudo systemctl status kiro-discord-bot
 /a2a peers
 ```
 
-信任一個 peer runtime 來執行 general tasks：
+允許一個 peer runtime 將一般任務送進這個 channel：
 
 ```text
-/a2a trust peer_agent:<peer-runtime-agent-id>
+/a2a allow peer_agent:<peer-runtime-agent-id>
 ```
 
-預設 trust flow 是 bidirectional、general-task only，且會先產生 plan。確認後才會套用。
-
-若要較安全的 proxy-only delivery：
-
-```text
-/a2a trust peer_agent:<peer-runtime-agent-id> mode:safe
-```
-
-若要直接同 channel 或同 thread 回覆，使用 co-present mode：
-
-```text
-/a2a trust peer_agent:<peer-runtime-agent-id> mode:co_present
-```
+這個 receiver-side consent 會立即套用到 exact runtime ID。它不是 wildcard bot-prefix grant、不是雙向 trust，也不設定 co-present reply mode。
 
 Co-present 需要雙方 policy、Discord send permissions 與 delivery readiness 都成立。`trusted=true` 本身不夠。
 
-進階 agent 也可以使用內建 `bot-tools` MCP tools：
+Agents 可以使用內建高階 `bot-tools` MCP tools：
 
 - `bot_a2a_peers`
-- `bot_a2a_policy_get`
 - `bot_a2a_trust_peer`
-- `bot_a2a_policy_plan`
-- `bot_a2a_policy_apply`
 - `bot_a2a_delegate`
 - `bot_a2a_task_status`
 
@@ -262,17 +247,12 @@ Co-present 需要雙方 policy、Discord send permissions 與 delivery readiness
 
 ## 發送測試任務
 
-套用 trust 後，發送 delegated task：
+套用 consent 後，發送 delegated task：
 
 ```text
 /a2a ask peer_agent:<peer-runtime-agent-id> message:"Please reply with a short A2A smoke-test confirmation."
 ```
 
-或指定 skill：
-
-```text
-/a2a delegate target_agent:<peer-runtime-agent-id> skill_id:task message:"Review this channel setup and reply with OK." reason:"A2A smoke test"
-```
 
 查看狀態：
 
@@ -313,7 +293,7 @@ Co-present 需要雙方 policy、Discord send permissions 與 delivery readiness
 | Startup 因缺少 `A2A_AGENT_ID` 失敗 | 設了 `NATS_URL` 但沒有穩定 agent ID | 設定 `A2A_AGENT_ID`。 |
 | Startup 拒絕 token-only production | `A2A_PRODUCTION_SECURITY=true` 但沒有 `NATS_CREDS_FILE` | 使用 NKey/JWT creds，或明確選擇 internal lightweight profile。 |
 | 看不到 peer | peer card 未發布、ACL 問題、KV stale、runtime mode 錯誤 | 執行 `/doctor`、`/a2a peers`，並檢查 NATS logs。 |
-| Delegation 被拒絕 | Policy 不允許 sender、skill 或 target | 執行 `/a2a peers` 與 `/a2a trust`，或用 bot-tools 檢查 policy。 |
+| Delegation 被拒絕 | Policy 不允許 sender、skill 或 target | 執行 `/a2a peers` 與 `/a2a allow`，或用 bot-tools 檢查 readiness。 |
 | Co-present 不生效 | 缺少 `co_present_from_runtimes`、target channel allowlist 或 Discord send permission | 查看 `/doctor` 或 `/a2a peers` 的 delivery readiness。 |
 | Events 延遲 | JetStream redelivery 或 remote runtime 延遲 | 查看 `/a2a status`；idempotency 應避免重複 terminal delivery。 |
 

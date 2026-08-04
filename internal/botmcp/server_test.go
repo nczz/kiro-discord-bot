@@ -160,9 +160,14 @@ func TestDefaultSafeToolNamesExcludeDestructiveTools(t *testing.T) {
 	for _, tool := range a2aTools {
 		a2aSeen[tool] = true
 	}
-	for _, tool := range []string{ToolA2APeers, ToolA2APolicyGet, ToolA2ATaskStatus, ToolA2ARuntimePreflight, ToolA2APolicyPlan, ToolA2ATrustPeer, ToolA2APolicyApply, ToolA2ADelegate, ToolA2ACancel, ToolA2AInputReply, ToolA2AAuthReply} {
+	for _, tool := range []string{ToolA2APeers, ToolA2ATaskStatus, ToolA2ATrustPeer, ToolA2ADelegate, ToolA2ACancel, ToolA2AInputReply, ToolA2AAuthReply} {
 		if !a2aSeen[tool] {
 			t.Fatalf("A2A MCP tool %s should be default-enabled only when A2A is enabled: %+v", tool, a2aTools)
+		}
+	}
+	for _, tool := range []string{ToolA2APolicyGet, ToolA2ARuntimePreflight, ToolA2APolicyPlan, ToolA2APolicyApply} {
+		if a2aSeen[tool] {
+			t.Fatalf("expert A2A MCP tool %s must not be default-enabled for normal agents: %+v", tool, a2aTools)
 		}
 	}
 }
@@ -175,6 +180,11 @@ func TestNewServerWithOptionsGatesA2ATools(t *testing.T) {
 	enabled := listToolNames(t, NewServerWithOptions(ServerOptions{A2AEnabled: true}))
 	if !enabled[ToolA2ADelegate] || !enabled[ToolA2APeers] {
 		t.Fatalf("enabled A2A server missing A2A tools: %+v", enabled)
+	}
+	for _, tool := range []string{ToolA2APolicyGet, ToolA2ARuntimePreflight, ToolA2APolicyPlan, ToolA2APolicyApply} {
+		if enabled[tool] {
+			t.Fatalf("retired expert A2A tool %s should not be registered: %+v", tool, enabled)
+		}
 	}
 }
 
@@ -877,6 +887,23 @@ func TestA2ARequestContextUsesBoundRequesterState(t *testing.T) {
 	req.RequestedByID = "mallory"
 	if err := svc.validateContext(req, false); err == nil {
 		t.Fatal("spoofed requester accepted despite bound target state")
+	}
+}
+
+func TestAuthenticatedA2AMCPManageChannelsUsesTargetState(t *testing.T) {
+	if authenticatedA2AMCPManageChannels() {
+		t.Fatal("manage_channels accepted without target state")
+	}
+
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "target.json")
+	if err := os.WriteFile(statePath, []byte(`{"target_channel_id":"channel-1","can_manage_channel":true}`), 0644); err != nil {
+		t.Fatalf("write target state: %v", err)
+	}
+	t.Setenv("BOT_TOOLS_TARGET_STATE_PATH", statePath)
+
+	if !authenticatedA2AMCPManageChannels() {
+		t.Fatal("manage_channels not derived from authenticated target state")
 	}
 }
 

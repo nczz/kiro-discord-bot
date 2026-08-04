@@ -31,13 +31,9 @@
 | `bot_skills_server_inventory` | Read | 在 authorized context 下摘要 server-wide skill inventory。 |
 | `bot_skills_server_effective_for_channel` | Read | 顯示會套用到 channel 的 server skills。 |
 | `bot_a2a_peers` | Read | 列出已知 A2A runtime peers、可呼叫 channel refs、visible skills、wakeability 與 delivery readiness。 |
-| `bot_a2a_policy_get` | Read | 顯示目前綁定 channel 的 A2A policy 與 delivery readiness。 |
 | `bot_a2a_task_status` | Read | 讀取 durable A2A TaskStore state 與 task 或 recent outbound tasks 的 event history。 |
-| `bot_a2a_runtime_preflight` | Read | 檢查 guild-scoped A2A runtime cutover readiness，不套用 policy 或 service changes。 |
-| `bot_a2a_policy_plan` | Read | 規劃 A2A policy change 並回傳 confirmation challenge；不套用變更。 |
-| `bot_a2a_trust_peer` | Write, non-destructive | 對單一 peer runtime 規劃或套用 high-level trust grant；套用需 confirmation。 |
-| `bot_a2a_delegate` | Write, non-destructive | 通過 outbound policy、quota 與 confirmation checks 後，排入 approved remote A2A task。 |
-| `bot_a2a_policy_apply` | Write, non-destructive | 在 manager validation 與 fresh token 後套用 confirmed A2A policy diff。 |
+| `bot_a2a_trust_peer` | Write, non-destructive | 只帶 `target_agent` 時，直接允許一個已知 runtime 傳工作到此頻道；進階 trust 變更仍需 confirmation。 |
+| `bot_a2a_delegate` | Write, non-destructive | 用 `target_agent` 與 `message` 對另一個 bot/channel 排入一般 task；仍套用 policy、quota 與必要 remote confirmation checks。 |
 | `bot_a2a_cancel` | Write, destructive | requester 或 channel manager 可取消 nonterminal A2A task。 |
 | `bot_a2a_input_reply` | Write, non-destructive | 對 `TASK_STATE_INPUT_REQUIRED` 的 task 傳送使用者提供的 input。 |
 | `bot_a2a_auth_reply` | Write, non-destructive | 對 `TASK_STATE_AUTH_REQUIRED` 的 task approve 或 deny，不攜帶 raw long-lived credentials。 |
@@ -72,13 +68,13 @@ Persistent memory 是 parent-channel scope。`bot_memory_add` 只在使用者明
 
 ## A2A Bot Tools
 
-`bot_a2a_*` tools 預設啟用，但每次呼叫仍綁定目前 Discord guild/channel context，且必須通過目前 A2A policy、manager permission、confirmation-token、quota 與 runtime-readiness checks。
+預設 `bot_a2a_*` tools 會綁定目前 Discord guild/channel context，且必須通過目前 A2A policy、已驗證的 manager permission（需要時）、quota 與 runtime-readiness checks。Expert A2A policy planning/apply tools 已從 bot-tools 退役；一般 receiver-side `bot_a2a_trust_peer` consent 只帶 `target_agent` 時會立即套用。
 
-宣稱另一個 bot 可以接工作前，先用 `bot_a2a_peers` 檢查。`trusted=true` 只代表 trust display state；direct same-thread collaboration 還需要相關 runtime policy 的 `deliveryReadiness.coPresentReady`。
+宣稱另一個 bot 可以接工作前，先用 `bot_a2a_peers` 檢查。`trusted=true` 只代表 trust display state；same-channel collaboration 仍需要 receiver policy 與 Discord permission readiness。
 
-使用 `bot_a2a_policy_plan` 或 `bot_a2a_trust_peer` 提出變更。套用 policy 需要 `bot_a2a_policy_apply`，或在 `bot_a2a_trust_peer` 帶入 fresh confirmation token；requester 也必須有 Manage Channels permission。
+針對「允許 X 委派」這類 receiver-side consent，使用 `bot_a2a_trust_peer`，且只帶 `target_agent`。它會針對 exact runtime 套用 immediate inbound allowlist consent。這個高階工具不再接受 relationship、skill、channel reference、result visibility 或 transcript fields。
 
-`bot_a2a_delegate` 只用於已核准的 outbound work。成功呼叫只代表 task 已 durable queued，不代表已 accepted 或 completed。回報成功前，使用 `bot_a2a_task_status` 搭配 `local_id`、`task_id` 或 `message_id` 查權威狀態。
+Sender-side delegation 一般使用 `bot_a2a_delegate`，只帶 `target_agent` 與 `message`。同一個 Discord channel/thread 代表對話協作；不同 channel 代表 receiver 在自己的 channel/thread 工作，並把結果回傳。成功呼叫只代表 task 已 durable queued，不代表 accepted 或 completed。回報成功前，使用 `bot_a2a_task_status` 搭配 `local_id`、`task_id` 或 `message_id` 查權威狀態。
 
 Continuation 場景中，只有 task 在 `TASK_STATE_INPUT_REQUIRED` 時使用 `bot_a2a_input_reply`；只有 task 在 `TASK_STATE_AUTH_REQUIRED` 時使用 `bot_a2a_auth_reply`。一般操作不要直接檢查或編輯 `data/a2a/*.sqlite`。
 

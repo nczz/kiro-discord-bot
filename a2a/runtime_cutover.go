@@ -241,13 +241,6 @@ func (r *RuntimeCutoverReport) checkEnabledPolicy(cfg Config, policy ChannelA2AP
 			r.addIssue(issue)
 		}
 	}
-	if len(policy.AcceptSkills) == 0 {
-		issue := base
-		issue.Severity = RuntimeCutoverSeverityBlocker
-		issue.Code = "missing_accept_skills"
-		issue.Message = "runtime cutover requires explicit accepted skills"
-		r.addIssue(issue)
-	}
 	if len(policy.AcceptFrom) > 0 {
 		issue := base
 		issue.Severity = RuntimeCutoverSeverityWarning

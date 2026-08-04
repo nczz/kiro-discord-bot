@@ -172,10 +172,8 @@ Every publisher MUST declare a stable `Nats-Msg-Id` before implementation:
 | Tool | Permission | Required validation | Result |
 |---|---|---|---|
 | `bot_a2a_peers` | normal user | bound guild/channel context | redacted peer/skill list |
-| `bot_a2a_policy_get` | normal user | bound channel context | user-friendly policy summary |
 | `bot_a2a_task_status` | requester or manager | task belongs to channel/user scope | task state summary |
-| `bot_a2a_policy_plan` | ManageChannels | diff is scoped to current channel | confirmation challenge |
-| `bot_a2a_policy_apply` | ManageChannels | fresh confirmation token and idempotent `changeId` | applied policy diff |
+| `bot_a2a_trust_peer` | ManageChannels | exact peer runtime is known; no expert fields | immediate inbound receiver consent |
 | `bot_a2a_delegate` | normal user, policy-gated | outbound policy, egress labels, media policy, confirmation when required | task accepted/rejected status |
 | `bot_a2a_cancel` | requester or manager | nonterminal task, known executor | cancel control published |
 | `bot_a2a_input_reply` | requester or manager | `TASK_STATE_INPUT_REQUIRED`, nonce fresh, safe egress labels | input control published |
@@ -185,10 +183,10 @@ Every publisher MUST declare a stable `Nats-Msg-Id` before implementation:
 Default setup semantics:
 
 - Stored policy defaults stay safe proxy/delegator.
-- Trust UX may default to `auto`: verified same Discord guild/channel runtime peers can use `transparent` + `co_present`; unknown/cross-location peers stay safe. Direct policy setup without explicit `co_present` stays safe because it does not prove peer Discord location.
+- `bot_a2a_trust_peer` is simple receiver consent only: `target_agent` adds one exact runtime to `accept_from_runtimes`, does not widen `accept_skills`, and rejects expert relationship/skill/channel/transcript/result fields.
 - `bot_a2a_delegate` with no `setup_mode` uses stored policy; explicit `auto`, `safe`, or `co_present` is required to override delivery per request.
 - Policy/status UX must describe local co-present gates only; remote executor admission and Discord permissions remain separately validated.
-- Confirmation tokens returned by `bot_a2a_trust_peer` must be applicable either by re-calling `bot_a2a_trust_peer` with the token or by calling `bot_a2a_policy_apply` with the returned `change_id` and `confirmation_token`; both paths must apply the exact planned policy or reject as stale.
+- Retired policy plan/apply/readiness bot-tools must not be registered in the normal MCP surface.
 
 Slash fallback commands MUST call the same internal service methods; no separate policy path is allowed.
 
@@ -757,9 +755,9 @@ go test ./a2a -run 'TestA2AIntegration(TargetedDelegation|DuplicateDelivery|Canc
 
 **Touched files/symbols**:
 
-- Modify `internal/botmcp/server.go`: register `bot_a2a_peers`, `bot_a2a_policy_get`, `bot_a2a_task_status`, `bot_a2a_policy_plan`, `bot_a2a_policy_apply`, `bot_a2a_delegate`, `bot_a2a_cancel`, `bot_a2a_input_reply`, `bot_a2a_auth_reply`.
+- Modify `internal/botmcp/server.go`: register `bot_a2a_peers`, `bot_a2a_task_status`, `bot_a2a_trust_peer`, `bot_a2a_delegate`, `bot_a2a_cancel`, `bot_a2a_input_reply`, `bot_a2a_auth_reply`.
 - Add `internal/botmcp/a2a_tools.go` if `server.go` would become unmaintainable.
-- Modify `bot/commands.go`: slash fallbacks `/a2a peers/status/delegate/cancel/enable/disable/ref/expose/unexpose/accept-from/deny-from/delegate-to/undelegate-to/max-concurrent/transcript-mode/transcript-from/reply/authorize`.
+- Modify `bot/commands.go`: slash fallbacks `/a2a peers/allow/ask/status/cancel/reply/authorize/revoke`.
 - Modify `bot/interaction_policy.go`: signed confirmation/button/modals for A2A.
 - Modify `locale/lang/en.json`, `locale/lang/zh-TW.json`.
 

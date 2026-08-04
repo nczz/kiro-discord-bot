@@ -731,8 +731,9 @@ func normalizeLegacyDefaultBotToolsPolicy(p MCPChannelPolicy) MCPChannelPolicy {
 }
 
 func normalizeLegacyA2ABotToolsPolicy(p MCPChannelPolicy) MCPChannelPolicy {
-	tools := normalizeStrings(p.AllowedTools)
+	tools := removeRetiredA2ABotTools(normalizeStrings(p.AllowedTools))
 	if len(tools) == 0 || !containsAnyString(tools, a2aBotToolNames()) {
+		p.AllowedTools = tools
 		return p
 	}
 	for _, tool := range a2aBotToolNames() {
@@ -744,19 +745,45 @@ func normalizeLegacyA2ABotToolsPolicy(p MCPChannelPolicy) MCPChannelPolicy {
 	return p
 }
 
+func removeRetiredA2ABotTools(tools []string) []string {
+	return removeStringSet(tools, retiredA2ABotToolNames())
+}
+
+func removeStringSet(values []string, retired []string) []string {
+	if len(values) == 0 || len(retired) == 0 {
+		return values
+	}
+	blocked := map[string]bool{}
+	for _, value := range retired {
+		blocked[strings.TrimSpace(value)] = true
+	}
+	out := values[:0]
+	for _, value := range values {
+		if !blocked[strings.TrimSpace(value)] {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
 func a2aBotToolNames() []string {
 	return []string{
 		botmcp.ToolA2APeers,
-		botmcp.ToolA2APolicyGet,
 		botmcp.ToolA2ATaskStatus,
-		botmcp.ToolA2ARuntimePreflight,
-		botmcp.ToolA2APolicyPlan,
 		botmcp.ToolA2ATrustPeer,
-		botmcp.ToolA2APolicyApply,
 		botmcp.ToolA2ADelegate,
 		botmcp.ToolA2ACancel,
 		botmcp.ToolA2AInputReply,
 		botmcp.ToolA2AAuthReply,
+	}
+}
+
+func retiredA2ABotToolNames() []string {
+	return []string{
+		botmcp.ToolA2APolicyGet,
+		botmcp.ToolA2ARuntimePreflight,
+		botmcp.ToolA2APolicyPlan,
+		botmcp.ToolA2APolicyApply,
 	}
 }
 

@@ -1303,7 +1303,7 @@ func TestWorkerThreadReplacesUnconfirmedA2ADelegateFinalSuccess(t *testing.T) {
 	_, bodies := rt.Snapshot()
 	var final string
 	for _, body := range bodies {
-		if strings.Contains(body, "A2A delegation request was queued") {
+		if strings.Contains(body, "A2A request was queued") {
 			final = body
 		}
 	}
@@ -1313,7 +1313,7 @@ func TestWorkerThreadReplacesUnconfirmedA2ADelegateFinalSuccess(t *testing.T) {
 	if strings.Contains(final, "已經委派給 AlphaBot") {
 		t.Fatalf("guard response leaked false success text: %q", final)
 	}
-	if !strings.Contains(final, "not confirmed") || !strings.Contains(final, "local-abc") || !strings.Contains(final, "/a2a status") {
+	if !strings.Contains(final, "has not accepted or finished") || !strings.Contains(final, "local-abc") || !strings.Contains(final, "/a2a status") {
 		t.Fatalf("guard response = %q, want status guidance with local id", final)
 	}
 }
@@ -1322,7 +1322,7 @@ func TestWorkerA2ADelegateFinalGuardUsesLocale(t *testing.T) {
 	L.Load("zh-TW")
 	guard := a2aDelegateFinalGuard{delegated: true, localID: "local-abc"}
 	got := guard.finalResponse("已經委派給 AlphaBot 了")
-	if !strings.Contains(got, "A2A 委託請求已排入佇列") || !strings.Contains(got, "local-abc") {
+	if !strings.Contains(got, "A2A 請求已排入佇列") || !strings.Contains(got, "local-abc") {
 		t.Fatalf("localized guard response = %q", got)
 	}
 	if strings.Contains(got, "delegation request was queued") {

@@ -85,15 +85,15 @@ Audit rows、audit prompt investigations 與 usage attribution 的行為見 [Aud
 | Command | 用途 |
 | --- | --- |
 | `/a2a peers` | 列出可見 runtime peers、skills、trust、stale/online status 與 delivery readiness。 |
-| `/a2a trust peer_agent:<runtime>` | Plan 或 apply 高階 peer trust。預設為 bidirectional general-task trust，套用前需要 confirmation。 |
-| `/a2a ask peer_agent:<runtime> message:<text>` | 對 trusted runtime 排入 general delegated task。 |
-| `/a2a delegate target_agent:<runtime> skill_id:<skill> message:<text> reason:<reason>` | Policy 與 confirmation checks 通過後，對明確 runtime/skill target 排入 task。 |
+| `/a2a allow peer_agent:<runtime>` | 直接允許該精確 runtime 傳工作到此頻道。 |
+| `/a2a ask peer_agent:<runtime> message:<text>` | 對 runtime 排入一般 delegated task。 |
 | `/a2a status [task]` | 查看 durable task state 與 events。Queued task 不代表完成，必須到 terminal state。 |
 | `/a2a cancel task:<task>` | 要求取消 remote A2A task。 |
 | `/a2a reply task:<task> input:<text>` | 當 task 是 `TASK_STATE_INPUT_REQUIRED` 時提供 input。 |
 | `/a2a authorize task:<task> approve:true_or_false` | 當 task 是 `TASK_STATE_AUTH_REQUIRED` 時 approve 或 deny。 |
+| `/a2a revoke peer_agent:<runtime>` | 停止允許該精確 runtime 傳工作到此頻道。 |
 
-`/a2a enable`、`/a2a disable`、`/a2a expose`、`/a2a accept-from`、`/a2a delegate-to` 等 policy subcommands 是進階介面。一般 bidirectional peer setup 優先使用 `/a2a trust`。
+進階 policy changes 刻意不放在一般 `/a2a` slash surface。要變更 capabilities、delegation targets、transcript sharing 或 policy-wide limits 時，使用 manager-scoped bot-tools policy workflow。
 
 
 ## 排程

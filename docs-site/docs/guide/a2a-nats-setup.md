@@ -226,35 +226,20 @@ First list visible peers:
 /a2a peers
 ```
 
-Trust one peer runtime for general tasks:
+Allow one peer runtime to send normal tasks into this channel:
 
 ```text
-/a2a trust peer_agent:<peer-runtime-agent-id>
+/a2a allow peer_agent:<peer-runtime-agent-id>
 ```
 
-The default trust flow is bidirectional, general-task only, and plans first. Confirm the plan before it is applied.
-
-For safer proxy-only delivery, use:
-
-```text
-/a2a trust peer_agent:<peer-runtime-agent-id> mode:safe
-```
-
-For direct same-channel or same-thread replies, use co-present mode:
-
-```text
-/a2a trust peer_agent:<peer-runtime-agent-id> mode:co_present
-```
+This receiver-side consent applies immediately to the exact runtime ID. It is not a wildcard bot-prefix grant, not bidirectional trust, and does not configure co-present reply mode.
 
 Co-present requires matching policy, Discord send permissions, and delivery readiness on both sides. `trusted=true` alone is not enough.
 
-Advanced agents can also use the built-in `bot-tools` MCP tools:
+Agents can use the built-in high-level `bot-tools` MCP tools:
 
 - `bot_a2a_peers`
-- `bot_a2a_policy_get`
 - `bot_a2a_trust_peer`
-- `bot_a2a_policy_plan`
-- `bot_a2a_policy_apply`
 - `bot_a2a_delegate`
 - `bot_a2a_task_status`
 
@@ -262,17 +247,12 @@ Do not edit `data/a2a/*.sqlite` directly.
 
 ## Send a Test Task
 
-After trust is applied, send a delegated task:
+After consent is applied, send a delegated task:
 
 ```text
 /a2a ask peer_agent:<peer-runtime-agent-id> message:"Please reply with a short A2A smoke-test confirmation."
 ```
 
-Or use an explicit skill:
-
-```text
-/a2a delegate target_agent:<peer-runtime-agent-id> skill_id:task message:"Review this channel setup and reply with OK." reason:"A2A smoke test"
-```
 
 Then inspect status:
 
@@ -313,7 +293,7 @@ Use safe/proxy first. Move to co-present only when both operators expect direct 
 | Startup fails with missing `A2A_AGENT_ID` | `NATS_URL` is set without a stable agent ID | Set `A2A_AGENT_ID`. |
 | Startup rejects token-only production | `A2A_PRODUCTION_SECURITY=true` without `NATS_CREDS_FILE` | Use NKey/JWT creds or intentionally choose the internal lightweight profile. |
 | Peer is not visible | Peer card not published, ACL issue, stale KV, or wrong runtime mode | Run `/doctor`, `/a2a peers`, and inspect NATS logs. |
-| Delegation is rejected | Policy does not allow sender, skill, or target | Run `/a2a peers` and `/a2a trust`, or inspect policy with bot-tools. |
+| Delegation is rejected | Policy does not allow sender, skill, or target | Run `/a2a peers` and `/a2a allow`, or inspect readiness with bot-tools. |
 | Co-present does not work | Missing `co_present_from_runtimes`, target channel allowlist, or Discord send permission | Check delivery readiness in `/doctor` or `/a2a peers`. |
 | Events appear delayed | JetStream redelivery or remote runtime delay | Check `/a2a status`; idempotency should prevent duplicate terminal delivery. |
 

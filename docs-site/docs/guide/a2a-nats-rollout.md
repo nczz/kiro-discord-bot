@@ -140,7 +140,7 @@ Startup:
 2. Start persistent stores under `DATA_DIR`.
 3. Start the bot with A2A disabled or with production credential material present.
 4. Confirm `/doctor` shows A2A enabled/disabled, auth material presence, retention, quotas, and no raw tokens or credential paths.
-5. Enable per-channel policy through `bot_a2a_policy_plan` and `bot_a2a_policy_apply`; require manager confirmation.
+5. Enable per-channel receiver consent with `/a2a allow peer_agent:<runtime>` or `bot_a2a_trust_peer` using only `target_agent`; retired expert bot-tools policy apply surfaces must not be used for rollout.
 
 Shutdown:
 

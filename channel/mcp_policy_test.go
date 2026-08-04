@@ -788,19 +788,27 @@ func TestCustomBotToolsPolicyWithA2ADelegateGainsA2AControlTools(t *testing.T) {
 		botmcp.ToolA2ADelegate,
 		botmcp.ToolA2ACancel,
 		botmcp.ToolA2AInputReply,
+		botmcp.ToolA2APolicyPlan,
+		botmcp.ToolA2APolicyApply,
 	}
 
 	got := normalizeLegacyDefaultBotToolsPolicy(p)
 	for _, want := range []string{
-		botmcp.ToolA2APolicyGet,
+		botmcp.ToolA2APeers,
 		botmcp.ToolA2ATaskStatus,
-		botmcp.ToolA2APolicyPlan,
-		botmcp.ToolA2APolicyApply,
-		botmcp.ToolA2ARuntimePreflight,
 		botmcp.ToolA2ATrustPeer,
+		botmcp.ToolA2ADelegate,
+		botmcp.ToolA2ACancel,
+		botmcp.ToolA2AInputReply,
+		botmcp.ToolA2AAuthReply,
 	} {
 		if !containsString(got.EffectiveTools(), want) {
 			t.Fatalf("custom A2A allowlist did not gain %s: %+v", want, got.EffectiveTools())
+		}
+	}
+	for _, retired := range []string{botmcp.ToolA2APolicyGet, botmcp.ToolA2ARuntimePreflight, botmcp.ToolA2APolicyPlan, botmcp.ToolA2APolicyApply} {
+		if containsString(got.EffectiveTools(), retired) {
+			t.Fatalf("custom A2A allowlist retained retired tool %s: %+v", retired, got.EffectiveTools())
 		}
 	}
 	if containsString(got.EffectiveTools(), botmcp.ToolSendMessage) || containsString(got.EffectiveTools(), botmcp.ToolQueryAudit) {

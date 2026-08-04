@@ -1570,10 +1570,10 @@ func TestSlashCommandsIncludeAgentAndUsage(t *testing.T) {
 		}
 		if cmd.Name == "a2a" {
 			foundA2A = true
-			if len(cmd.Options) != 22 {
-				t.Fatalf("/a2a should expose 22 subcommands, got %+v", cmd.Options)
+			if len(cmd.Options) != 8 {
+				t.Fatalf("/a2a should expose 8 subcommands, got %+v", cmd.Options)
 			}
-			if cmd.Options[0].Name != "peers" || cmd.Options[1].Name != "setup" || cmd.Options[2].Name != "trust" || cmd.Options[3].Name != "ask" || cmd.Options[5].Name != "delegate" {
+			if cmd.Options[0].Name != "peers" || cmd.Options[1].Name != "allow" || cmd.Options[2].Name != "ask" || cmd.Options[7].Name != "revoke" {
 				t.Fatalf("/a2a subcommands = %+v", cmd.Options)
 			}
 			continue
@@ -1633,7 +1633,7 @@ func TestA2ALocaleConfirmationResponse(t *testing.T) {
 func TestA2AFormatTaskResponseIsHumanReadable(t *testing.T) {
 	L.Load("en")
 	got := formatA2AResponse(botmcp.A2AToolResponse{OK: true, Message: "A2A task sent", Task: &botmcp.A2ATaskSummary{LocalID: "local-1", TaskID: "task-1", MessageID: "msg-1", FromAgent: "local-bot", ToAgent: "remote-bot", ChannelRef: "d80-main", SkillID: "general/task", ResultVisibility: "proxy", DiscordTranscriptMode: "delegator", State: a2a.TaskStateSubmitted, Revision: 2, Events: []botmcp.A2ATaskEventSummary{{Revision: 2, EventType: "status", State: a2a.TaskStateSubmitted, Content: "<@123> **queued**\n- State: `TASK_STATE_COMPLETED`"}}}})
-	for _, want := range []string{"**A2A task sent**", "State", "local-bot", "remote-bot", "d80-main", "general/task", "visibility=`proxy`", "Events", "\\*\\*queued\\*\\*", "/a2a status"} {
+	for _, want := range []string{"**A2A task sent**", "State", "local-bot", "remote-bot", "d80-main", "general/task", "Reply settings: `proxy`/`delegator`", "Events", "\\*\\*queued\\*\\*", "/a2a status"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("formatA2AResponse task = %q, missing %q", got, want)
 		}
@@ -1652,7 +1652,7 @@ func TestA2AFormatTaskResponseIsHumanReadable(t *testing.T) {
 func TestA2AFormatRejectedTaskIncludesPolicyRetryGuidance(t *testing.T) {
 	L.Load("en")
 	got := formatA2AResponse(botmcp.A2AToolResponse{OK: true, Message: "A2A task loaded", Task: &botmcp.A2ATaskSummary{LocalID: "local-1", TaskID: "task-1", FromAgent: "local-bot", ToAgent: "remote-bot", State: a2a.TaskStateRejected, ErrorCode: a2a.ErrorSenderNotAllowed, ErrorMessage: "sender is not accepted"}})
-	for _, want := range []string{"sender is not accepted", "executor rejected this sender", "apply the peer A2A policy", "/a2a status"} {
+	for _, want := range []string{"sender is not accepted", "the other bot rejected this sender", "must allow this bot", "/a2a status"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("formatA2AResponse rejected task = %q, missing %q", got, want)
 		}
@@ -1685,12 +1685,12 @@ func TestA2ASetupSlashDefaultsHumanFlow(t *testing.T) {
 	if payload.Request.TranscriptMode != "co_present" || payload.Request.ShareDiscordContext == nil || !*payload.Request.ShareDiscordContext {
 		t.Fatalf("setup UX defaults = %+v", payload.Request)
 	}
-	if payload.Request.TargetChannelRef != payload.Request.ChannelRef {
-		t.Fatalf("setup target runtime default = %+v", payload.Request)
+	if payload.Request.TargetChannelRef != "" {
+		t.Fatalf("setup should not default target runtime to current channel = %+v", payload.Request)
 	}
 }
 
-func TestA2ATrustSlashDefaultsGeneralTaskAutoBidirectional(t *testing.T) {
+func TestA2ATrustSlashDefaultsInboundAutoWithoutSkill(t *testing.T) {
 	raw := a2aArgsFromSlashOptions([]*discordgo.ApplicationCommandInteractionDataOption{{
 		Name: "trust",
 		Options: []*discordgo.ApplicationCommandInteractionDataOption{
@@ -1704,12 +1704,29 @@ func TestA2ATrustSlashDefaultsGeneralTaskAutoBidirectional(t *testing.T) {
 	if payload.Subcommand != "trust" || payload.Request.TargetAgent != "remote-bot-ch-2cbaf623" {
 		t.Fatalf("trust payload target = %+v", payload)
 	}
-	if payload.Request.SkillID != "task" || payload.Request.TrustRelationship != "bidirectional" || payload.Request.SetupMode != "auto" {
+	if payload.Request.SkillID != "" || payload.Request.TrustRelationship != "inbound" || payload.Request.SetupMode != "auto" {
 		t.Fatalf("trust defaults = %+v", payload.Request)
 	}
 }
 
-func TestA2ASetupSlashAutoCrossRuntimeUsesProxy(t *testing.T) {
+func TestA2ADelegateSlashKeepsSkillAndReasonOptional(t *testing.T) {
+	raw := a2aArgsFromSlashOptions([]*discordgo.ApplicationCommandInteractionDataOption{{
+		Name: "delegate",
+		Options: []*discordgo.ApplicationCommandInteractionDataOption{
+			{Name: "target_agent", Type: discordgo.ApplicationCommandOptionString, Value: "remote-bot-ch-2cbaf623"},
+			{Name: "message", Type: discordgo.ApplicationCommandOptionString, Value: "ping"},
+		},
+	}}, "guild-1", "channel-1", "user-1", "alice", false)
+	var payload a2aSlashPayload
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Request.SkillID != "" || payload.Request.Reason != "" || payload.Request.TargetChannelRef != "" {
+		t.Fatalf("delegate should preserve optional resolver fields = %+v", payload.Request)
+	}
+}
+
+func TestA2ASetupSlashAutoCrossRuntimeDefersDeliveryDefaults(t *testing.T) {
 	raw := a2aArgsFromSlashOptions([]*discordgo.ApplicationCommandInteractionDataOption{{
 		Name: "setup",
 		Options: []*discordgo.ApplicationCommandInteractionDataOption{
@@ -1724,8 +1741,8 @@ func TestA2ASetupSlashAutoCrossRuntimeUsesProxy(t *testing.T) {
 	if payload.Request.SetupMode != "auto" || payload.Request.TargetChannelRef != "erp-support" {
 		t.Fatalf("setup target runtime = %+v", payload.Request)
 	}
-	if payload.Request.ResultVisibility != "proxy" || payload.Request.TranscriptMode != "delegator" || payload.Request.ShareDiscordContext != nil {
-		t.Fatalf("cross-runtime auto defaults = %+v", payload.Request)
+	if payload.Request.ResultVisibility != "" || payload.Request.TranscriptMode != "" || payload.Request.ShareDiscordContext != nil {
+		t.Fatalf("cross-runtime auto should defer delivery defaults to bot-tools = %+v", payload.Request)
 	}
 }
 
@@ -1780,7 +1797,7 @@ func TestA2ATranscriptModeSafeClearsContextSharing(t *testing.T) {
 func TestA2APolicyFormatterIncludesPolicyMutationFields(t *testing.T) {
 	L.Load("en")
 	got := formatA2APolicy("Preview", a2a.ChannelA2APolicy{Enabled: true, ChannelRef: "d80-test", ResultVisibility: "transparent", DiscordTranscriptMode: "co_present", ShareDiscordContext: true, AcceptFrom: []string{"remote-bot"}, AcceptFromRuntimes: []string{"remote-bot-main"}, AcceptSkills: []string{"task"}, ExposeSkills: []a2a.SkillPolicy{{ID: "task"}}, DelegateTo: []string{"remote-bot"}, DelegateSkills: []string{"task"}, DelegateTargets: []a2a.DelegateTargetPolicy{{RuntimeAgentID: "remote-bot-main", SkillID: "task"}}, CoPresentFromRuntimes: []string{"remote-bot-main"}, CoPresentTargetChannels: []string{"222222222222222222"}, MaxConcurrent: 3})
-	for _, want := range []string{"Result visibility", "Trusted general-task runtimes", "`remote-bot-main inbound default_task`", "`remote-bot-main outbound default_task`", "Local capabilities exposed", "`task`", "Max concurrent inbound tasks: 3", "Local co-present policy gates: configured locally", "Co-present runtime allowlist: `remote-bot-main`", "Additional same-guild co-present targets: `222222222222222222`"} {
+	for _, want := range []string{"Result handling", "Bot channels allowed to send work", "`remote-bot-main inbound default_task`", "`remote-bot-main outbound default_task`", "Local capabilities shown to other bots", "`task`", "Max simultaneous received tasks: 3", "Shared-reply readiness: ready locally", "Shared-reply allowed bot channels: `remote-bot-main`", "Extra channels for shared replies: `222222222222222222`"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("formatA2APolicy = %q, missing %q", got, want)
 		}
@@ -1802,7 +1819,7 @@ func TestA2APeersFormatterShowsRuntimeContext(t *testing.T) {
 		DelegationReason:  "allowed",
 		Skills:            []string{"backend-support/task"},
 	}}, nil)
-	for _, want := range []string{"Available A2A runtimes", "Backend Support", "m5bot-backend-support", "bot `m5bot`", "channel `backend-support`", "allowed"} {
+	for _, want := range []string{"Bots/channels this Discord channel can work with", "Backend Support", "m5bot-backend-support", "bot `m5bot`", "label `backend-support`", "allowed"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("formatA2APeers = %q, missing %q", got, want)
 		}
@@ -1877,6 +1894,25 @@ func TestA2AConfirmationComponentsStoreTokenForButtonApply(t *testing.T) {
 	}
 	if strings.Contains(formatA2AResponse(resp), "token-1") {
 		t.Fatalf("button confirmation response leaked token")
+	}
+}
+
+func TestA2AConfirmationRoutingClassifiesDelegateAsRequesterApproval(t *testing.T) {
+	for _, subcommand := range []string{"ask", "delegate"} {
+		if !isA2ADelegateConfirmation(subcommand) {
+			t.Fatalf("%s confirmation should replay Delegate without manager-only policy apply", subcommand)
+		}
+		if isA2ATrustConfirmation(subcommand) {
+			t.Fatalf("%s confirmation must not route to TrustPeer", subcommand)
+		}
+	}
+	for _, subcommand := range []string{"allow", "trust"} {
+		if !isA2ATrustConfirmation(subcommand) {
+			t.Fatalf("%s confirmation should route to TrustPeer", subcommand)
+		}
+		if isA2ADelegateConfirmation(subcommand) {
+			t.Fatalf("%s confirmation must not route to Delegate", subcommand)
+		}
 	}
 }
 
@@ -2521,7 +2557,7 @@ func TestBuildPromptInjectsCurrentDatetimeGuidance(t *testing.T) {
 		"過去7天 => range_type=relative_days days=7 direction=past",
 		"Do not calculate weekdays, month boundaries, or relative ranges from model memory",
 		"Do not inspect or mutate raw bot state files or databases",
-		"Use the exposed bot MCP tools",
+		"Use available exposed bot MCP tools",
 		"bot_a2a_task_status",
 	} {
 		if !strings.Contains(got, want) {

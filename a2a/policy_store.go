@@ -80,7 +80,46 @@ func OpenPolicyStore(dataDir string, agentID AgentID) (*SQLitePolicyStore, error
 	if err != nil {
 		return nil, err
 	}
+	if err := normalizePolicyStoreForRuntimeAllowlist(context.Background(), db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	return &SQLitePolicyStore{db: db, agentID: agentID}, nil
+}
+
+func normalizePolicyStoreForRuntimeAllowlist(ctx context.Context, db *sql.DB) error {
+	const migrationName = "runtime_allowlist_frontend_v1"
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS a2a_policy_normalizations (
+		name TEXT PRIMARY KEY,
+		applied_at TEXT NOT NULL
+	)`); err != nil {
+		return err
+	}
+	var applied int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(1) FROM a2a_policy_normalizations WHERE name=?`, migrationName).Scan(&applied); err != nil {
+		return err
+	}
+	if applied > 0 {
+		return tx.Commit()
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE channel_a2a_policy SET
+		accept_from_json='[]',
+		delegate_to_json='[]',
+		delegate_skills_json='[]',
+		co_present_from_json='[]',
+		auto_delegate_enabled=0,
+		remote_tool_policy_json='{"allow_memory_write":false}'`); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO a2a_policy_normalizations(name, applied_at) VALUES(?, ?)`, migrationName, time.Now().UTC().Format(sqliteTimeFormat)); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *SQLitePolicyStore) Close() error { return closeSQL(s.db) }
@@ -424,7 +463,7 @@ func (p ChannelA2APolicy) ValidateInboundRuntime(fromRuntime AgentID, skillID st
 		return fmt.Errorf("%w: skill %q is invalid", errorCodeError(ErrorUnknownSkill), skillID)
 	}
 	if !acceptSkillAllowsTaskDefault(p.AcceptSkills, slug) {
-		return fmt.Errorf("%w: skill %s is not accepted by default_task policy", errorCodeError(ErrorSkillNotAllowed), slug)
+		return fmt.Errorf("%w: skill %s is not accepted by channel policy", errorCodeError(ErrorSkillNotAllowed), slug)
 	}
 	return nil
 }
@@ -454,10 +493,10 @@ func stringListAllowsValue(list []string, value string) bool {
 
 func acceptSkillAllowsTaskDefault(list []string, slug string) bool {
 	slug = strings.TrimSpace(slug)
-	if stringListAllowsValue(list, slug) {
+	if len(list) == 0 {
 		return true
 	}
-	return slug == "task" && len(list) == 0
+	return stringListAllowsValue(list, slug)
 }
 
 type errorCodeError ErrorCode

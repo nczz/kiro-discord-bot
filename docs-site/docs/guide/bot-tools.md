@@ -31,13 +31,9 @@ On first channel setup, these safe tools are enabled by default:
 | `bot_skills_server_inventory` | Read | Summarize server-wide skill inventory for authorized context. |
 | `bot_skills_server_effective_for_channel` | Read | Show server skills that would apply to a channel. |
 | `bot_a2a_peers` | Read | List known A2A runtime peers, callable channel refs, visible skills, wakeability, and delivery readiness. |
-| `bot_a2a_policy_get` | Read | Show the current bound channel A2A policy and delivery readiness. |
 | `bot_a2a_task_status` | Read | Read durable A2A TaskStore state and event history for a task or recent outbound tasks. |
-| `bot_a2a_runtime_preflight` | Read | Check guild-scoped A2A runtime cutover readiness without applying policy or service changes. |
-| `bot_a2a_policy_plan` | Read | Plan an A2A policy change and return a confirmation challenge; applies nothing. |
-| `bot_a2a_trust_peer` | Write, non-destructive | Plan or apply a high-level trust grant for one peer runtime after confirmation. |
-| `bot_a2a_delegate` | Write, non-destructive | Queue an approved remote A2A task after outbound policy, quota, and confirmation checks. |
-| `bot_a2a_policy_apply` | Write, non-destructive | Apply a confirmed A2A policy diff after manager validation and a fresh token. |
+| `bot_a2a_trust_peer` | Write, non-destructive | Immediately allow one known runtime to send work into this channel when called with only `target_agent`; expert trust changes still require confirmation. |
+| `bot_a2a_delegate` | Write, non-destructive | Queue a normal task to another bot/channel with `target_agent` and `message`; policy, quota, and optional remote confirmation checks still apply. |
 | `bot_a2a_cancel` | Write, destructive | Cancel a nonterminal A2A task when requested by the requester or a channel manager. |
 | `bot_a2a_input_reply` | Write, non-destructive | Send user-provided input for a task in `TASK_STATE_INPUT_REQUIRED`. |
 | `bot_a2a_auth_reply` | Write, non-destructive | Approve or deny a task in `TASK_STATE_AUTH_REQUIRED` without carrying raw long-lived credentials. |
@@ -72,13 +68,13 @@ Use `bot_create_reminder` for one-time delayed reminders such as "in 10 minutes"
 
 ## A2A Bot Tools
 
-The `bot_a2a_*` tools are default-enabled, but each call is still bound to the current Discord guild/channel context and must pass the current A2A policy, manager permission, confirmation-token, quota, and runtime-readiness checks.
+The default `bot_a2a_*` tools are bound to the current Discord guild/channel context and must pass the current A2A policy, authenticated manager permission where required, quota, and runtime-readiness checks. Expert A2A policy planning/apply tools are retired from bot-tools; normal receiver-side `bot_a2a_trust_peer` consent applies immediately with only `target_agent`.
 
-Use `bot_a2a_peers` before claiming another bot can receive work. `trusted=true` only describes trust display state; direct same-thread collaboration also requires `deliveryReadiness.coPresentReady` on the relevant runtime policy.
+Use `bot_a2a_peers` before claiming another bot can receive work. `trusted=true` only describes trust display state; same-channel collaboration also requires receiver policy and Discord permission readiness.
 
-Use `bot_a2a_policy_plan` or `bot_a2a_trust_peer` to propose changes. Applying policy requires `bot_a2a_policy_apply` or a confirmed `bot_a2a_trust_peer` call with a fresh confirmation token and requester Manage Channels permission.
+For receiver-side consent such as "allow X to delegate", use `bot_a2a_trust_peer` with only `target_agent`. It applies immediate inbound allowlist consent for the exact runtime. Relationship, skill, channel reference, result visibility, and transcript fields are no longer accepted on this high-level tool.
 
-Use `bot_a2a_delegate` only for approved outbound work. A successful call means the task was durably queued, not accepted or completed. Use `bot_a2a_task_status` with `local_id`, `task_id`, or `message_id` for authoritative state before reporting success.
+For sender-side delegation, use `bot_a2a_delegate` with `target_agent` and `message` for normal tasks. Same Discord channel/thread means conversation collaboration; a different channel means the receiver works in its own channel/thread and returns the result. A successful call means the task was durably queued, not accepted or completed. Use `bot_a2a_task_status` with `local_id`, `task_id`, or `message_id` for authoritative state before reporting success.
 
 For continuations, use `bot_a2a_input_reply` only when the task is in `TASK_STATE_INPUT_REQUIRED`, and `bot_a2a_auth_reply` only when the task is in `TASK_STATE_AUTH_REQUIRED`. Do not inspect or edit `data/a2a/*.sqlite` directly for normal operation.
 

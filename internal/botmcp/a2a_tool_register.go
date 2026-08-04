@@ -12,26 +12,14 @@ func registerA2ATools(s *server.MCPServer) {
 		tool mcp.Tool
 		call func(context.Context, *A2AService, A2AToolRequest) (A2AToolResponse, error)
 	}{
-		{a2aReadTool(ToolA2APeers, "List known A2A peer agents, callable runtime/channel refs, wakeability, visible skills, and current policy deliveryReadiness. Do not treat trusted=true as enough for transparent/co_present; verify deliveryReadiness and the opposite bot's inbound policy before claiming bidirectional direct replies."), func(ctx context.Context, svc *A2AService, req A2AToolRequest) (A2AToolResponse, error) {
+		{a2aReadTool(ToolA2APeers, "List bots/channels this Discord channel can work with. Use this before asking another bot. The trusted display flag is not permission by itself; check delegationAllowed/deliveryReadiness and verify task status after sending."), func(ctx context.Context, svc *A2AService, req A2AToolRequest) (A2AToolResponse, error) {
 			return svc.Peers(ctx, req)
-		}},
-		{a2aReadTool(ToolA2APolicyGet, "Show the current bound channel A2A policy plus deliveryReadiness. Agents must distinguish safe/proxy authorization from transparent/co_present readiness; trusted/accept_from alone is not enough for direct same-thread replies."), func(ctx context.Context, svc *A2AService, req A2AToolRequest) (A2AToolResponse, error) {
-			return svc.PolicyGet(ctx, req)
-		}},
-		{a2aRuntimePreflightTool(), func(ctx context.Context, svc *A2AService, req A2AToolRequest) (A2AToolResponse, error) {
-			return svc.RuntimePreflight(ctx, req)
 		}},
 		{a2aTaskStatusTool(), func(ctx context.Context, svc *A2AService, req A2AToolRequest) (A2AToolResponse, error) {
 			return svc.TaskStatus(ctx, req)
 		}},
-		{a2aPolicyPlanTool(), func(ctx context.Context, svc *A2AService, req A2AToolRequest) (A2AToolResponse, error) {
-			return svc.PolicyPlan(ctx, req)
-		}},
 		{a2aTrustPeerTool(), func(ctx context.Context, svc *A2AService, req A2AToolRequest) (A2AToolResponse, error) {
 			return svc.TrustPeer(ctx, req)
-		}},
-		{a2aWriteTool(ToolA2APolicyApply, "Apply a confirmed A2A policy diff after ManageChannels validation and a fresh confirmation token.", false, true), func(ctx context.Context, svc *A2AService, req A2AToolRequest) (A2AToolResponse, error) {
-			return svc.PolicyApply(ctx, req)
 		}},
 		{a2aDelegateTool(), func(ctx context.Context, svc *A2AService, req A2AToolRequest) (A2AToolResponse, error) {
 			return svc.Delegate(ctx, req)
@@ -54,9 +42,7 @@ func registerA2ATools(s *server.MCPServer) {
 			}
 			defer svc.Close()
 			toolReq := svc.normalizeBoundContext(a2aRequestFromMCP(req))
-			if spec.tool.Name == ToolA2ATaskStatus {
-				toolReq.ManageChannels = false
-			}
+			toolReq.ManageChannels = authenticatedA2AMCPManageChannels()
 			resp, err := spec.call(ctx, svc, toolReq)
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
@@ -79,7 +65,7 @@ func a2aReadTool(name, description string) mcp.Tool {
 }
 
 func a2aTaskStatusTool() mcp.Tool {
-	t := a2aReadTool(ToolA2ATaskStatus, "Authoritative A2A progress source: read TaskStore state and event history for one task or recent outbound tasks in the bound Discord channel. Use this for delegation status/progress; audit rows are only historical timeline evidence and may lag terminal state. For tasks admitted/completed as transparent/co_present, result text may be omitted because the executor-owned shared Discord transcript is authoritative; confirm accepted/rejected/completed state before reporting outcome, and do not repost omitted result text unless the user explicitly asks.")
+	t := a2aReadTool(ToolA2ATaskStatus, "Check the authoritative progress for one sent A2A task, or recent sent tasks in this Discord channel. Use this before telling the user another bot accepted, rejected, finished, or will reply. If shared-thread result text is omitted, the other bot already owns that Discord reply; do not repost it unless the user asks.")
 	for _, opt := range []mcp.ToolOption{
 		mcp.WithString("task_id", mcp.Description("Remote A2A task ID. If no task matches, the value is also tried as a NATS message_id/Discord correlation ID.")),
 		mcp.WithString("local_id", mcp.Description("Local durable task ID returned by bot_a2a_delegate.")),
@@ -90,46 +76,24 @@ func a2aTaskStatusTool() mcp.Tool {
 	return t
 }
 
-func a2aPolicyPlanTool() mcp.Tool {
-	t := a2aReadTool(ToolA2APolicyPlan, "Plan an A2A policy change for the current bound Discord channel and return a confirmation challenge; applies nothing. For direct same-thread replies, explicitly set setup_mode=co_present or set result_visibility=transparent, transcript_mode=co_present, share_discord_context=true, and co_present_from/co_present_from_runtimes.")
-	addA2APolicyFields(&t)
-	mcp.WithBoolean("manage_channels", mcp.Required(), mcp.Description("Server-provided ManageChannels permission result for the requester."))(&t)
-	return t
-}
-
 func a2aTrustPeerTool() mcp.Tool {
-	t := a2aWriteTool(ToolA2ATrustPeer, "High-level trust grant for one peer runtime. Plans by default and applies only with a fresh confirmation_token. Apply a returned trust_peer plan by re-calling bot_a2a_trust_peer or by calling bot_a2a_policy_apply with the returned change_id and confirmation_token. Defaults to bidirectional general_task with auto setup: same Discord guild/channel peers use transparent/co_present, otherwise safe/delegator/proxy. Agents must not hand-edit accept_skills, delegate_skills, or delegate_targets for normal text delegation. If the user asks for direct same-thread replies or co-present collaboration, verify deliveryReadiness.coPresentReady on both bots; trusted=true is insufficient.", false, true)
-	for _, opt := range []mcp.ToolOption{
-		mcp.WithString("target_agent", mcp.Required(), mcp.Description("Peer runtime agent ID to trust for general text A2A tasks.")),
-		mcp.WithString("relationship", mcp.Description("bidirectional, inbound, or outbound. Default bidirectional.")),
-		mcp.WithString("capability", mcp.Description("Only general_task/default_task/task is supported by this high-level tool. Use bot_a2a_policy_plan for strict skill ACLs.")),
-		mcp.WithString("skill_id", mcp.Description("Optional task skill alias; defaults to task and canonicalizes */task as general_task.")),
-		mcp.WithString("target_channel_ref", mcp.Description("Optional target runtime channel_ref retained for display/routing compatibility.")),
-		mcp.WithString("setup_mode", mcp.Description("auto, safe, or co_present. Default auto; same Discord guild/channel peer cards use transparent/co_present, otherwise safe/delegator/proxy. Use co_present when the user asks for direct same-thread replies; use safe for proxy/delegator only.")),
-	} {
-		opt(&t)
-	}
-	return t
-}
-
-func a2aRuntimePreflightTool() mcp.Tool {
-	t := a2aReadTool(ToolA2ARuntimePreflight, "Check guild-scoped A2A runtime cutover readiness without applying policy or service changes.")
-	mcp.WithBoolean("manage_channels", mcp.Required(), mcp.Description("Server-provided ManageChannels permission result for the requester."))(&t)
+	t := a2aWriteTool(ToolA2ATrustPeer, "Allow one known bot/channel runtime to send normal text work into this Discord channel. This tool only accepts target_agent and applies simple receiver-side inbound consent; expert policy changes are retired from bot-tools.", false, true)
+	mcp.WithString("target_agent", mcp.Required(), mcp.Description("Bot/channel runtime ID from bot_a2a_peers to allow for normal text tasks."))(&t)
 	return t
 }
 
 func a2aDelegateTool() mcp.Tool {
-	t := a2aWriteTool(ToolA2ADelegate, "Queue a task for an approved remote A2A peer skill after outbound policy, quota, and confirmation checks. A successful tool call means the request was durably queued, not accepted or completed; use bot_a2a_task_status with local_id to confirm terminal accepted/rejected/completed state before reporting success. The response includes selected result_visibility/discord_transcript_mode and why it was chosen. If transparent/co_present is selected, the target bot's inbound policy must also have deliveryReadiness.coPresentReady=true; otherwise expect policy_denied such as result_visibility not allowed.", false, false)
+	t := a2aWriteTool(ToolA2ADelegate, "Send a normal text task to a known bot/channel. For typical user requests, provide only target_agent and message; omit skill_id, reason, target_channel_ref, and setup_mode. A successful call only means the request was queued. Use bot_a2a_task_status with local_id before reporting accepted/rejected/completed status; the receiving bot may still reject it.", false, false)
 	for _, opt := range []mcp.ToolOption{
-		mcp.WithString("target_agent", mcp.Required(), mcp.Description("Approved remote A2A agent ID.")),
-		mcp.WithString("skill_id", mcp.Required(), mcp.Description("Approved remote skill ID.")),
-		mcp.WithString("message", mcp.Required(), mcp.Description("Task text to send to the remote agent after redaction and policy checks.")),
-		mcp.WithString("reason", mcp.Required(), mcp.Description("User-visible reason for audit.")),
-		mcp.WithString("target_channel_ref", mcp.Description("Optional target runtime channel_ref; defaults to the current channel runtime.")),
-		mcp.WithString("target_channel_id", mcp.Description("Optional Discord target channel ID used to derive channel_ref as discord-<id>.")),
-		mcp.WithString("target_thread_id", mcp.Description("Optional Discord target thread ID used to derive channel_ref as discord-<id>.")),
-		mcp.WithString("setup_mode", mcp.Description("auto, safe, or co_present. Default uses the channel policy; explicit auto may choose transparent/co_present for verified same Discord channel peers. Use safe to force proxy/delegator when the target bot is not co-present-ready.")),
-		mcp.WithBoolean("requires_confirmation", mcp.Description("Set true when remote data egress or sensitive skill confirmation is needed.")),
+		mcp.WithString("target_agent", mcp.Required(), mcp.Description("Bot/channel ID from bot_a2a_peers.")),
+		mcp.WithString("skill_id", mcp.Description("Leave empty for normal text tasks; inferred from the peer when possible.")),
+		mcp.WithString("message", mcp.Required(), mcp.Description("Task text to send to the other bot after redaction and policy checks.")),
+		mcp.WithString("reason", mcp.Description("Optional user-visible audit reason.")),
+		mcp.WithString("target_channel_ref", mcp.Description("Leave empty unless the tool reports ambiguity or the user names a specific target channel label.")),
+		mcp.WithString("target_channel_id", mcp.Description("Optional Discord channel ID when the user explicitly names a target channel.")),
+		mcp.WithString("target_thread_id", mcp.Description("Optional Discord thread ID when the user explicitly names a target thread.")),
+		mcp.WithString("setup_mode", mcp.Description("Leave empty for auto. safe keeps replies here; co_present shares the same Discord thread when allowed.")),
+		mcp.WithBoolean("requires_confirmation", mcp.Description("Set true only when remote data egress or sensitive work needs explicit user approval.")),
 		mcp.WithString("confirmation_token", mcp.Description("Fresh token returned by a prior confirmation challenge.")),
 	} {
 		opt(&t)
@@ -153,16 +117,16 @@ func a2aWriteTool(name, description string, destructive bool, idempotent bool) m
 		mcp.WithBoolean("approve", mcp.Description("Approve an auth-required task when true; false denies or requires deny_reason.")),
 		mcp.WithString("deny_reason", mcp.Description("Reason for auth denial.")),
 		mcp.WithString("reason", mcp.Description("Requester-visible reason for audit.")),
-		mcp.WithString("change_id", mcp.Description("Policy change ID returned by bot_a2a_policy_plan.")),
-		mcp.WithString("confirmation_token", mcp.Description("Fresh confirmation token returned by bot_a2a_policy_plan or bot_a2a_delegate.")),
-		mcp.WithBoolean("manage_channels", mcp.Description("Server-provided ManageChannels permission result for the requester.")),
+		mcp.WithString("confirmation_token", mcp.Description("Fresh confirmation token returned by bot_a2a_delegate.")),
 	} {
 		opt(&t)
 	}
-	if name == ToolA2APolicyApply {
-		addA2APolicyFields(&t)
-	}
 	return t
+}
+
+func authenticatedA2AMCPManageChannels() bool {
+	state, ok := currentTargetState()
+	return ok && state.CanManageChannel
 }
 
 func addA2AContextFields(t *mcp.Tool) {
@@ -172,37 +136,6 @@ func addA2AContextFields(t *mcp.Tool) {
 		mcp.WithString("requested_by", mcp.Required(), mcp.Description("Requester display name from Discord context.")),
 		mcp.WithString("requested_by_id", mcp.Required(), mcp.Description("Requester Discord user ID from bound context.")),
 		mcp.WithNumber("limit", mcp.Description("Maximum task rows to return, 1-50.")),
-	} {
-		opt(t)
-	}
-}
-
-func addA2APolicyFields(t *mcp.Tool) {
-	for _, opt := range []mcp.ToolOption{
-		mcp.WithBoolean("enable", mcp.Description("Enable or disable A2A for this channel.")),
-		mcp.WithString("channel_ref", mcp.Description("Stable subject-safe channel reference.")),
-		mcp.WithString("target_agent", mcp.Description("Remote agent for setup-style policy changes; when provided with skill_id, delegate_targets is populated.")),
-		mcp.WithString("skill_id", mcp.Description("Remote skill for setup-style policy changes; defaults are applied by clients.")),
-		mcp.WithString("target_channel_ref", mcp.Description("Target runtime channel_ref for bot+channel scoped delegation.")),
-		mcp.WithString("target_channel_id", mcp.Description("Discord target channel ID used to derive target channel_ref.")),
-		mcp.WithString("target_thread_id", mcp.Description("Discord target thread ID used to derive target channel_ref.")),
-		mcp.WithString("setup_mode", mcp.Description("auto, safe, or co_present setup defaults. co_present is an atomic UX preset: transparent result visibility, shared Discord context, and co-present allowlists must all be configured.")),
-		mcp.WithArray("accept_from", mcp.Description("Inbound agent IDs to accept.")),
-		mcp.WithArray("accept_from_runtimes", mcp.Description("Inbound runtime agent IDs to accept in runtime mode.")),
-		mcp.WithArray("accept_skills", mcp.Description("Inbound skill IDs to accept.")),
-		mcp.WithArray("expose_skills", mcp.Description("Local skill IDs to expose.")),
-		mcp.WithArray("delegate_to", mcp.Description("Outbound agent IDs to delegate to.")),
-		mcp.WithArray("delegate_skills", mcp.Description("Outbound skill IDs to delegate.")),
-		mcp.WithArray("delegate_media_types", mcp.Description("Allowed delegated attachment MIME types.")),
-		mcp.WithNumber("delegate_max_bytes", mcp.Description("Maximum delegated media bytes.")),
-		mcp.WithNumber("max_concurrent", mcp.Description("Maximum concurrent inbound tasks; zero is unlimited.")),
-		mcp.WithString("result_visibility", mcp.Description("proxy or transparent.")),
-		mcp.WithString("transcript_mode", mcp.Description("delegator, mirror, or co_present.")),
-		mcp.WithBoolean("share_discord_context", mcp.Description("Allow co-present Discord context sharing when policy also permits it.")),
-		mcp.WithArray("co_present_from", mcp.Description("Delegator agent IDs allowed for co-present transcript.")),
-		mcp.WithArray("co_present_from_runtimes", mcp.Description("Delegator runtime agent IDs allowed for co-present transcript in runtime mode.")),
-		mcp.WithArray("co_present_target_channels", mcp.Description("Discord channel/thread IDs or * where same-guild co-present replies may be posted.")),
-		mcp.WithBoolean("allow_memory_write", mcp.Description("Allow remote A2A jobs to use bot memory write tools.")),
 	} {
 		opt(t)
 	}

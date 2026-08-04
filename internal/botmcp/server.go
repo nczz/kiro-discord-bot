@@ -83,13 +83,9 @@ func DefaultSafeToolNamesForA2A(a2aEnabled bool) []string {
 	if a2aEnabled {
 		tools = append(tools,
 			ToolA2APeers,
-			ToolA2APolicyGet,
 			ToolA2ATaskStatus,
-			ToolA2ARuntimePreflight,
-			ToolA2APolicyPlan,
 			ToolA2ATrustPeer,
 			ToolA2ADelegate,
-			ToolA2APolicyApply,
 			ToolA2ACancel,
 			ToolA2AInputReply,
 			ToolA2AAuthReply,

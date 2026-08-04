@@ -13,7 +13,7 @@ This project does not expose a public A2A HTTP server. It implements a custom in
 | Routing identity | Runtime agent ID, not Discord bot account. |
 | Discovery | Runtime AgentCards through JetStream KV; heartbeats through NATS liveness subjects. |
 | Correctness boundary | JetStream plus SQLite task/policy stores. |
-| Delivery default | Executor-owned Discord transcript with safe proxy result visibility. |
+| Delivery default | Same Discord channel/thread uses conversation collaboration. A different or unknown channel lets the receiver work in its own Discord channel/thread and return the result. |
 | Security default | A2A disabled while `NATS_URL` is empty. Remote work requires policy and usually confirmation. |
 
 ## Mental Model
@@ -25,6 +25,16 @@ NATS-visible AgentID = runtime_agent_id
 ```
 
 One bot process can publish multiple runtime peers, one per enabled/discoverable channel or thread policy. A remote peer should delegate to the runtime peer, not to the bot process as a whole.
+
+## Normal User Flow
+
+First run `/a2a peers` in the relevant channel and copy the bot/channel ID shown for the channel you want.
+
+Receiver-side consent is simple: in the receiving channel, run `/a2a allow peer_agent:<bot/channel ID from /a2a peers>` or tell the bot to allow that bot/channel to delegate. Normal consent applies immediately for that exact bot/channel runtime when it does not widen an existing skill restriction; it is not a wildcard bot-prefix grant and not bidirectional trust.
+
+Sender-side delegation is also high level: run `/a2a ask peer_agent:<bot/channel ID from /a2a peers> message:<task>` or ask the bot to delegate the task in natural language. Normal delegation does not require a capability ID, target channel label, or reply-mode fields. If multiple targets match, the bot asks for disambiguation instead of guessing.
+
+Same Discord guild+channel/thread means conversation collaboration: both sides can share the same transcript when receiver policy and Discord permissions allow it. A different channel means the receiver starts work in its own channel/thread and the result returns to the requester. A queued delegation is not acceptance or completion; check `/a2a status` or `bot_a2a_task_status` for authoritative state.
 
 ## Keyword Glossary
 
@@ -40,7 +50,7 @@ One bot process can publish multiple runtime peers, one per enabled/discoverable
 | AgentCard | Public sanitized description of a runtime peer, its supported binding, skills, and display metadata. |
 | AgentSkill | A capability exposed by a runtime, such as `task` or a more specific skill ID. |
 | Peer | A discovered runtime AgentCard plus local trust/status metadata. |
-| Trust | Local policy granting inbound, outbound, or bidirectional task permissions for a peer runtime. |
+| Trust | Local policy granting consent for a peer runtime. Receiver-side trust defaults to inbound delegation consent; outbound or bidirectional grants are explicit expert choices. |
 | Policy | Per-channel A2A rules: enabled, discoverable, accepted senders, exposed skills, delegate targets, visibility, transcript mode, quotas, and tool policy. |
 | `delegate_targets` | Outbound allowlist of `{runtime_agent_id, skill_id}` pairs. |
 | `accept_from_runtimes` | Inbound allowlist of remote runtime IDs. |
@@ -210,8 +220,8 @@ Legacy fields such as `accept_from`, `delegate_to`, and `delegate_skills` are co
 
 | Mode | Responsibility |
 | --- | --- |
-| Delegator/proxy | Requester bot reports remote status/result. Safe cross-server default. |
-| Executor-owned | Executor bot runs the real worker transcript in its own channel/thread. |
+| Same-channel collaboration | Same Discord guild+channel/thread. The bots can share the conversation transcript when both policy and Discord permissions allow it. |
+| Receiver-owned work | Different or unknown channel. The executor bot works in its own Discord channel/thread and returns the result to the requester. |
 | Transparent | Result visibility is less mediated, but policy still controls delivery. |
 | Co-present | Executor and delegator can share a Discord channel/thread transcript when both policy and permissions allow it. |
 
@@ -234,9 +244,9 @@ A2A does not bypass existing bot boundaries:
 | --- | --- |
 | `/doctor` | Check A2A enabled state, auth mode, runtime mode, peer status, and readiness without exposing secrets. |
 | `/a2a peers` | List visible peer runtimes, skills, trust, staleness, and delivery readiness. |
-| `/a2a trust` | High-level trust setup with confirmation. |
-| `/a2a ask` | Send a general task to a trusted peer. |
-| `/a2a delegate` | Send a task to an explicit target runtime and skill. |
+| `/a2a allow` | Allow a peer runtime to delegate into this channel; inbound consent is the default. |
+| `/a2a ask` | Send a normal task to a peer runtime. |
+| `/a2a revoke` | Stop allowing a peer runtime to delegate into this channel. |
 | `/a2a status` | Inspect durable local task state and events. |
 | `bot_a2a_*` tools | Agent-facing MCP surface for policy, delegation, status, and peer inspection. |
 

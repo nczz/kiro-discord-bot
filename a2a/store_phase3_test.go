@@ -228,6 +228,7 @@ func TestPolicyStoreValidationAndPersistence(t *testing.T) {
 		t.Fatalf("unexpected discoverable policies: %+v", discoverable)
 	}
 	bad := policy
+
 	bad.ChannelID = "other"
 	bad.ShareDiscordContext = true
 	bad.DiscordTranscriptMode = "mirror"
@@ -284,6 +285,60 @@ func TestPolicyStoreValidationAndPersistence(t *testing.T) {
 	}
 	if gotDelegator.AcceptFrom[0] != "adam-n200-backend-renamed" || gotDelegator.AcceptFromRuntimes[0] != "adam-n200-backend-renamed" || gotDelegator.DelegateTo[0] != "adam-n200-backend-renamed" || gotDelegator.DelegateTargets[0].RuntimeAgentID != "adam-n200-backend-renamed" || gotDelegator.CoPresentFrom[0] != "adam-n200-backend-renamed" || gotDelegator.CoPresentFromRuntimes[0] != "adam-n200-backend-renamed" {
 		t.Fatalf("runtime references were not rewritten: %+v", gotDelegator)
+	}
+}
+func TestPolicyStoreOpenNormalizesLegacyFrontendAllowlists(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	db, err := openA2ASQLite(dir, "policy.sqlite", policyStoreMigrations())
+	if err != nil {
+		t.Fatalf("open raw policy store: %v", err)
+	}
+	rawStore := &SQLitePolicyStore{db: db, agentID: "adam-n200"}
+	if err := rawStore.Save(ctx, ChannelA2APolicy{
+		GuildID:                 "guild",
+		ChannelID:               "channel",
+		Enabled:                 true,
+		RuntimeAgentID:          "adam-n200-channel",
+		BotAgentID:              "adam-n200",
+		ChannelRef:              "backend",
+		AcceptFrom:              []string{"legacy-bot"},
+		AcceptFromRuntimes:      []string{"runtime-bot"},
+		AcceptSkills:            []string{"task"},
+		DelegateTo:              []string{"legacy-bot"},
+		DelegateSkills:          []string{"review"},
+		DelegateTargets:         []DelegateTargetPolicy{{RuntimeAgentID: "runtime-bot", ChannelRef: "backend", SkillID: "general/task"}},
+		CoPresentFrom:           []string{"legacy-bot"},
+		AutoDelegateEnabled:     true,
+		RemoteToolPolicy:        RemoteToolPolicy{AllowMemoryWrite: true},
+		ResultVisibility:        "proxy",
+		DiscordTranscriptMode:   "delegator",
+		ShareDiscordContext:     false,
+		Discoverable:            true,
+		DelegateMedia:           DelegateMediaPolicy{},
+		CoPresentFromRuntimes:   []string{"runtime-bot"},
+		CoPresentTargetChannels: []string{"other"},
+	}, "manager"); err != nil {
+		t.Fatalf("save raw policy: %v", err)
+	}
+	if err := rawStore.Close(); err != nil {
+		t.Fatalf("close raw policy store: %v", err)
+	}
+
+	store, err := OpenPolicyStore(dir, "adam-n200")
+	if err != nil {
+		t.Fatalf("OpenPolicyStore: %v", err)
+	}
+	defer store.Close()
+	got, err := store.Get(ctx, "guild", "channel")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if len(got.AcceptFrom) != 0 || len(got.AcceptSkills) != 1 || got.AcceptSkills[0] != "task" || len(got.DelegateTo) != 0 || len(got.DelegateSkills) != 0 || len(got.CoPresentFrom) != 0 || got.AutoDelegateEnabled || got.RemoteToolPolicy.AllowMemoryWrite {
+		t.Fatalf("legacy frontend allowlists or skill restriction were not normalized safely: %+v", got)
+	}
+	if len(got.AcceptFromRuntimes) != 1 || got.AcceptFromRuntimes[0] != "runtime-bot" || len(got.DelegateTargets) != 1 || got.DelegateTargets[0].RuntimeAgentID != "runtime-bot" || got.DelegateTargets[0].SkillID != "general/task" || len(got.CoPresentFromRuntimes) != 1 || got.CoPresentFromRuntimes[0] != "runtime-bot" || len(got.CoPresentTargetChannels) != 1 {
+		t.Fatalf("runtime allowlist fields were not preserved: %+v", got)
 	}
 }
 
@@ -417,18 +472,15 @@ func phase3TaskRow(message string) TaskRow {
 	return TaskRow{MessageID: MessageID(message), FromAgent: "adam-n200", ToAgent: "eve-local", ChannelID: "channel", GuildID: "guild", ChannelRef: "backend", SkillID: "review"}
 }
 
-func TestValidateInboundRuntimeTrustedSenderDefaultsTaskSkill(t *testing.T) {
+func TestValidateInboundRuntimeTrustedSenderDefaultsAllSkills(t *testing.T) {
 	policy := ChannelA2APolicy{
 		Enabled:            true,
 		AcceptFromRuntimes: []string{"peer-runtime"},
 	}
-	for _, skillID := range []string{"task", "general/task", "ch-2cbaf623/task"} {
+	for _, skillID := range []string{"task", "general/task", "ch-2cbaf623/task", "danger/admin"} {
 		if err := policy.ValidateInboundRuntime("peer-runtime", skillID); err != nil {
 			t.Fatalf("ValidateInboundRuntime(%q): %v", skillID, err)
 		}
-	}
-	if err := policy.ValidateInboundRuntime("peer-runtime", "danger/admin"); err == nil {
-		t.Fatalf("ValidateInboundRuntime accepted non-task skill with empty accept_skills")
 	}
 }
 
