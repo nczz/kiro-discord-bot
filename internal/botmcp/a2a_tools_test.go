@@ -166,6 +166,66 @@ func TestA2AToolsPeersRuntimeModeListsWakeableRuntimeAndHidesLegacyBot(t *testin
 		t.Fatalf("migrated runtime peer = %+v, want same-channel legacy delegation to remain allowed", migrated)
 	}
 }
+
+func TestA2AToolsPeersUsesPolicyTaskWhenPeerCardHasNoSkills(t *testing.T) {
+	ctx := context.Background()
+	svc, err := NewA2AService(A2AServiceConfig{
+		DataDir:            t.TempDir(),
+		Config:             a2a.Config{AgentID: "adam-n200", RuntimeIDMode: a2a.RuntimeIDModeRuntime, RequireConfirmationForRemote: true},
+		BoundGuildID:       "111111111111111111",
+		BoundChannelID:     "222222222222222222",
+		ConfirmationSecret: "test-secret",
+		ConnectNATS:        false,
+	})
+	if err != nil {
+		t.Fatalf("NewA2AService: %v", err)
+	}
+	defer svc.Close()
+
+	if err := svc.policies.Save(ctx, a2a.ChannelA2APolicy{
+		GuildID:        "111111111111111111",
+		ChannelID:      "222222222222222222",
+		Enabled:        true,
+		Discoverable:   true,
+		RuntimeAgentID: "adam-n200-main",
+		BotAgentID:     "adam-n200",
+		ChannelRef:     "main",
+		DelegateTargets: []a2a.DelegateTargetPolicy{{
+			RuntimeAgentID: "peer-n100-empty",
+			ChannelRef:     "empty",
+			SkillID:        "task",
+		}},
+	}, "manager"); err != nil {
+		t.Fatalf("Save policy: %v", err)
+	}
+	card := a2a.AgentCard{Name: "peer-n100-empty", Description: "runtime without advertised skills", Version: "1.0.0", SupportedInterfaces: []a2a.A2AInterface{{URL: "nats://nats.example.internal:4222", ProtocolBinding: a2a.ProtocolBindingNATS, ProtocolVersion: a2a.ProtocolVersion}}}
+	if _, err := svc.peers.UpsertExtendedCard(ctx, "peer-n100-empty", card, a2a.ExtendedAgentCard{Runtime: "channel", BotAgentID: "peer-n100", ChannelRef: "empty", DisplayName: "Empty Skills", DiscordGuildID: "111111111111111111", DiscordChannelID: "222222222222222222"}, false, "peer-host-peer-n100-empty", "online", time.Now().Add(time.Hour)); err != nil {
+		t.Fatalf("Upsert runtime card: %v", err)
+	}
+
+	resp, err := svc.Peers(ctx, A2AToolRequest{GuildID: "111111111111111111", ChannelID: "222222222222222222", RequestedBy: "alice", RequestedByID: "user-1"})
+	if err != nil {
+		t.Fatalf("Peers: %v", err)
+	}
+	if len(resp.Peers) != 1 {
+		t.Fatalf("Peers = %+v, want one runtime peer", resp.Peers)
+	}
+	summary := resp.Peers[0]
+	if !summary.DelegationAllowed || !summary.Wakeable || summary.DelegationReason != "allowed" || summary.HiddenSkillCount != 0 {
+		t.Fatalf("peer summary = %+v, want policy-authorized default task delegation", summary)
+	}
+	if len(summary.Skills) != 1 || summary.Skills[0] != "task" {
+		t.Fatalf("peer skills = %+v, want policy default task even without peer card skills", summary.Skills)
+	}
+	delegated, err := svc.Delegate(ctx, A2AToolRequest{GuildID: "111111111111111111", ChannelID: "222222222222222222", RequestedBy: "alice", RequestedByID: "user-1", TargetAgent: "peer-n100-empty", Message: "ping"})
+	if err != nil {
+		t.Fatalf("Delegate: %v", err)
+	}
+	if !delegated.RequiresConfirmation || !strings.Contains(delegated.ConfirmationSummary, "peer-n100-empty@empty/task") {
+		t.Fatalf("Delegate = %+v, want default task confirmation from policy target", delegated)
+	}
+}
+
 func TestA2AToolsPeersReportsCurrentChannelPerspective(t *testing.T) {
 	ctx := context.Background()
 	svc, err := NewA2AService(A2AServiceConfig{
@@ -1121,7 +1181,7 @@ func TestA2AToolsTrustPeerDefaultsInboundConsent(t *testing.T) {
 	if len(summary.Skills) != 0 {
 		t.Fatalf("peer summary skills = %+v, want hidden until channel policy delegates them", summary.Skills)
 	}
-	if summary.DelegationReason != "missing runtime delegate target or skill" {
+	if summary.DelegationReason != "missing runtime delegate target" {
 		t.Fatalf("peer delegation reason = %q, want missing delegate target guidance", summary.DelegationReason)
 	}
 

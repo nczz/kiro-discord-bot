@@ -908,6 +908,18 @@ Append one subsection per completed phase.
 - Runtime settings touched: no env, DATA_DIR, Docker volume, database, or live service change.
 - Rollback boundary: revert this documentation-only commit; `NATS_URL=""` remains the A2A no-op rollback path.
 
+### Runtime delegate skill default follow-up
+
+- Status: validation passed; pending commit.
+- Decision: outbound A2A authorization is owned by `delegate_targets`, not by whether a peer card advertises a skill. `bot_a2a_peers` should report policy-derived callable skills and default missing normal-task capability to `task`; `bot_a2a_delegate` should not reject a policy-authorized target only because the peer card has an empty `skills` list.
+- Validation:
+  - Focused skill-default regression: `go test ./internal/botmcp -run 'TestA2AToolsPeers(UsesPolicyTaskWhenPeerCardHasNoSkills|RuntimeModeListsWakeableRuntimeAndHidesLegacyBot|ReportsCurrentChannelPerspective)|TestA2AToolsDelegate'` passed.
+  - A2A contract tests: `go test ./a2a ./channel ./internal/botmcp ./bot ./audit ./locale -run 'Test.*A2A|TestDoctor.*A2A'` passed.
+  - Go compile/static checks: `go build ./...`; `go vet ./...` passed.
+  - Docs site regenerated and verified: `cd docs-site && npm run verify` passed (`60` generated HTML files checked).
+- Runtime settings touched: none.
+- Rollback boundary: revert this follow-up commit; `NATS_URL=""` remains the A2A no-op rollback path.
+
 ## Master goal prompt
 
 Use this prompt when starting or resuming the full implementation program:

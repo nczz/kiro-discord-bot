@@ -762,7 +762,7 @@ Validation：
 - `max_concurrent` range: 0..64; `0` means unlimited。
 - `accept_from_runtimes` entries are runtime IDs or explicit wildcard `*`。
 - `accept_skills` entries are skill slugs, not arbitrary text。
-- `delegate_targets` entries are `{runtime_agent_id, agent_id, channel_ref, skill_id}` records chosen by manager; `runtime_agent_id` is preferred for exact runtime grants, while `agent_id`/`channel_ref` remain only for migration and explicit channel-scoped targets。
+- `delegate_targets` entries are `{runtime_agent_id, agent_id, channel_ref, skill_id}` records chosen by manager; `runtime_agent_id` is preferred for exact runtime grants, while `agent_id`/`channel_ref` remain only for migration and explicit channel-scoped targets. Empty, omitted, or unadvertised task capability resolves to `skill_id="task"` and is not an authorization blocker。
 - `remote_tool_policy_json.allow_memory_write` defaults false and is the only policy field that may enable remote A2A jobs to use memory-write bot tools。
 - legacy `accept_from`/`delegate_to`/`delegate_skills` are read for compatibility only; new setup writes canonical runtime fields。
 - `expose_skills[].id` subject-safe skill slug。
@@ -1134,8 +1134,8 @@ Expose an internal structured capability to the local agent when A2A is enabled�
 The tool implementation validates：
 
 - target exists in peer store。
-- skill exists and input modes match。
-- current channel policy explicitly allows the target runtime/channel and skill through `delegate_targets`; remote receiver policy remains authoritative。
+- skill defaults to the normal `task` capability when omitted or not advertised by the peer card; peer skill advertisement is not an outbound authorization prerequisite。
+- current channel policy explicitly allows the target runtime/channel through `delegate_targets`; remote receiver policy remains authoritative。
 - legacy `delegate_to`/`delegate_skills` may populate a migration preview, but cannot authorize a different runtime on the same bot。
 - attachment/media use matches `delegate_media`。
 - channel policy allows outbound delegation from this Discord channel。
@@ -1292,7 +1292,7 @@ Add A2A tools to the built-in `bot-tools` MCP server。They follow existing bot-
 
 | Tool | Type | Purpose |
 |---|---|---|
-| `bot_a2a_peers` | Read | list known peer agents from the current runtime perspective: active inbound runtimes allowed to ask this channel, separate legacy inbound agent grants, explicit outbound targets, per-peer inbound authorization, and skills callable by `bot_a2a_delegate`; remote receiver policy remains authoritative |
+| `bot_a2a_peers` | Read | list known peer agents from the current runtime perspective: active inbound runtimes allowed to ask this channel, separate legacy inbound agent grants, explicit outbound targets, per-peer inbound authorization, and policy-derived callable skills for `bot_a2a_delegate`; missing peer-card skills default to `task`; remote receiver policy remains authoritative |
 | `bot_a2a_task_status` | Read | show one task or recent channel A2A tasks |
 | `bot_a2a_trust_peer` | Write, security-sensitive | immediately allow one exact runtime to send normal work into this channel |
 | `bot_a2a_delegate` | Write, security-sensitive | publish a policy-gated A2A task or return a confirmation challenge |
@@ -1304,7 +1304,7 @@ Tool safety rules：
 
 1. Tools require explicit `guild_id`, `channel_id`, `requested_by`, and `requested_by_id` from Discord context; user-supplied IDs are rejected if they do not match bound context。
 2. `bot_a2a_trust_peer` accepts only simple receiver consent: `target_agent`, current bound channel context, and authenticated ManageChannels state. Expert policy fields are rejected instead of creating confirmation plans。
-3. `bot_a2a_delegate` requires explicit outbound `delegate_targets` policy for the target runtime/channel and skill; remote receiver policy remains authoritative and the call may require confirmation for remote data egress, attachments, sensitive skills, or transparent/co-present delivery。
+3. `bot_a2a_delegate` requires explicit outbound `delegate_targets` policy for the target runtime/channel; omitted or unadvertised skills default to `task`. Remote receiver policy remains authoritative and the call may require confirmation for remote data egress, attachments, sensitive skills, or transparent/co-present delivery。
 4. `bot_a2a_cancel` accepts requester or manager only。
 5. `bot_a2a_input_reply` accepts requester or manager only, requires the task to be in `TASK_STATE_INPUT_REQUIRED`, redacts/logs metadata under the same egress policy, and publishes one idempotent `input_reply` control。
 6. `bot_a2a_auth_reply` accepts requester or manager only, requires the task to be in `TASK_STATE_AUTH_REQUIRED`, never carries raw long-lived credentials, and publishes one idempotent `auth_reply` control with approve/deny plus scoped confirmation metadata。

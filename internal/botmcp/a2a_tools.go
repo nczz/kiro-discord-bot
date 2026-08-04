@@ -426,11 +426,8 @@ func peerDelegationCapability(policy a2a.ChannelA2APolicy, peer a2a.PeerTrustDis
 	if !policy.Enabled {
 		return nil, "channel A2A policy disabled"
 	}
-	if runtimeOnly && len(skills) == 0 {
-		return nil, "target peer does not expose a delegate skill"
-	}
 	if runtimeOnly {
-		return nil, "missing runtime delegate target or skill"
+		return nil, "missing runtime delegate target"
 	}
 	return nil, "missing delegate target or skill"
 }
@@ -452,6 +449,44 @@ func visiblePeerSkills(policy a2a.ChannelA2APolicy, peer a2a.PeerTrustDisplay, s
 		if policyDelegatesRuntime(policy, agent, skill, policy.ChannelRef) {
 			out = append(out, skill)
 		}
+	}
+	if runtimeOnly {
+		for _, skill := range visiblePolicyTargetSkills(policy, peer) {
+			if !skillListAllows(out, skill) {
+				out = append(out, skill)
+			}
+		}
+	}
+	return out
+}
+
+func visiblePolicyTargetSkills(policy a2a.ChannelA2APolicy, peer a2a.PeerTrustDisplay) []string {
+	agent := strings.TrimSpace(string(peer.AgentID))
+	if agent == "" {
+		return nil
+	}
+	out := make([]string, 0, len(policy.DelegateTargets))
+	for _, target := range policy.DelegateTargets {
+		targetAgent := strings.TrimSpace(target.RuntimeAgentID)
+		if targetAgent == "" {
+			targetAgent = strings.TrimSpace(target.AgentID)
+		}
+		if targetAgent == "" || !stringListAllows([]string{targetAgent}, agent) {
+			if strings.TrimSpace(peer.BotAgentID) == "" || strings.TrimSpace(peer.DiscordChannelID) == "" || strings.TrimSpace(peer.DiscordChannelID) != strings.TrimSpace(policy.ChannelID) {
+				continue
+			}
+			if strings.TrimSpace(target.RuntimeAgentID) == "" || !strings.HasPrefix(strings.TrimSpace(target.RuntimeAgentID), strings.TrimSpace(peer.BotAgentID)+"-") {
+				continue
+			}
+		}
+		if target.ChannelRef != "" && target.ChannelRef != "*" && strings.TrimSpace(peer.ChannelRef) != "" && target.ChannelRef != peer.ChannelRef {
+			continue
+		}
+		skill := strings.TrimSpace(target.SkillID)
+		if skill == "" {
+			skill = "task"
+		}
+		out = appendUnique(out, skill)
 	}
 	return out
 }
@@ -1165,16 +1200,20 @@ func (s *A2AService) applyPolicyDiff(policy a2a.ChannelA2APolicy, req A2AToolReq
 	} else {
 		policy.DelegateTo = appendUnique(policy.DelegateTo, req.DelegateTo...)
 		policy.DelegateSkills = appendUnique(policy.DelegateSkills, req.DelegateSkills...)
-		if (len(req.DelegateTo) > 0 || strings.TrimSpace(req.TargetAgent) != "") && strings.TrimSpace(req.SkillID) != "" {
+		if len(req.DelegateTo) > 0 || strings.TrimSpace(req.TargetAgent) != "" {
 			agents := req.DelegateTo
 			if len(agents) == 0 {
 				agents = []string{req.TargetAgent}
+			}
+			targetSkill := strings.TrimSpace(req.SkillID)
+			if targetSkill == "" {
+				targetSkill = "task"
 			}
 			for _, agent := range agents {
 				policy.DelegateTargets = upsertDelegateTarget(policy.DelegateTargets, a2a.DelegateTargetPolicy{
 					AgentID:    strings.TrimSpace(agent),
 					ChannelRef: req.targetRuntimeRef(policy.ChannelRef),
-					SkillID:    strings.TrimSpace(req.SkillID),
+					SkillID:    targetSkill,
 				})
 			}
 		}
@@ -1470,6 +1509,9 @@ func (s *A2AService) resolveDelegateTarget(policy a2a.ChannelA2APolicy, req A2AT
 	effectiveSkill := ""
 	if requestedSkill != "" {
 		effectiveSkill = canonicalPeerSkill(peer, requestedSkill, targetRef)
+		if effectiveSkill == "" {
+			effectiveSkill = requestedSkill
+		}
 	} else if skill, ok, ambiguous := singleDelegateTargetSkill(candidates); ambiguous {
 		return "", "", false, false, fmt.Errorf("%w: skill_id is ambiguous for %s; specify skill_id", errorCode(a2a.ErrorUnknownSkill), agent)
 	} else if ok {
@@ -1479,9 +1521,9 @@ func (s *A2AService) resolveDelegateTarget(policy a2a.ChannelA2APolicy, req A2AT
 		}
 	} else {
 		effectiveSkill = canonicalPeerDefaultTaskSkill(peer, targetRef)
-	}
-	if effectiveSkill == "" {
-		return "", "", false, false, fmt.Errorf("%w: target peer does not expose a default task skill; specify skill_id", errorCode(a2a.ErrorUnknownSkill))
+		if effectiveSkill == "" {
+			effectiveSkill = "task"
+		}
 	}
 	if targetRef == "" {
 		targetRef = skillChannelRef(effectiveSkill)
@@ -1726,7 +1768,11 @@ func legacyDelegateAllowsTaskDefault(policy a2a.ChannelA2APolicy, agent, skill, 
 }
 
 func upsertDelegateTarget(targets []a2a.DelegateTargetPolicy, next a2a.DelegateTargetPolicy) []a2a.DelegateTargetPolicy {
-	if next.SkillID == "" || (next.AgentID == "" && next.RuntimeAgentID == "") {
+	next.SkillID = strings.TrimSpace(next.SkillID)
+	if next.SkillID == "" {
+		next.SkillID = "task"
+	}
+	if next.AgentID == "" && next.RuntimeAgentID == "" {
 		return targets
 	}
 	for i, target := range targets {

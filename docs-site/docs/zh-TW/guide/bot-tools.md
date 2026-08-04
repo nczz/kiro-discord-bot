@@ -30,7 +30,7 @@
 | `bot_skills_server_get` | Read | 讀取一個 visible server-wide skill。 |
 | `bot_skills_server_inventory` | Read | 在 authorized context 下摘要 server-wide skill inventory。 |
 | `bot_skills_server_effective_for_channel` | Read | 顯示會套用到 channel 的 server skills。 |
-| `bot_a2a_peers` | Read | 列出已知 A2A runtime peers、可呼叫 channel refs、visible skills、wakeability 與 delivery readiness。 |
+| `bot_a2a_peers` | Read | 列出已知 A2A runtime peers、可呼叫 channel refs、policy-derived callable skills、wakeability 與 delivery readiness。 |
 | `bot_a2a_task_status` | Read | 讀取 durable A2A TaskStore state 與 task 或 recent outbound tasks 的 event history。 |
 | `bot_a2a_trust_peer` | Write, non-destructive | 只帶 `target_agent` 時，直接允許一個已知 runtime 傳工作到此頻道；進階 trust/policy fields 會在這個工具上被拒絕。 |
 | `bot_a2a_delegate` | Write, non-destructive | 用 `target_agent` 與 `message` 對另一個 bot/channel 排入一般 task；仍套用 policy、quota 與必要 remote confirmation checks。 |
@@ -70,11 +70,11 @@ Persistent memory 是 parent-channel scope。`bot_memory_add` 只在使用者明
 
 預設 `bot_a2a_*` tools 會綁定目前 Discord guild/channel context，且必須通過目前 A2A policy、已驗證的 manager permission（需要時）、quota 與 runtime-readiness checks。Expert A2A policy planning/apply tools 已從 bot-tools 退役；一般 receiver-side `bot_a2a_trust_peer` consent 只帶 `target_agent` 時會立即套用。
 
-宣稱另一個 bot 可以接工作前，先用 `bot_a2a_peers` 檢查。回應內容以目前 Discord guild/channel runtime 為視角：`peerPolicy.enabled=true` 代表 policy summary 目前有效，`peerPolicy.inboundAllowedRuntimes` 表示哪些 exact runtimes 可送工作進此 channel，`peerPolicy.legacyInboundAllowedAgents` 另外列出舊版 bot-agent 授權，`peerPolicy.outboundDelegateTargets` 表示明確 outbound targets，單一 peer 的 `inboundAllowed=true` 表示該 peer 可送工作進來，`delegationAllowed=true` 表示目前 channel policy 明確允許對該 runtime 與列出的 skills 呼叫 `bot_a2a_delegate`。Remote runtime 仍可能因自己的 receiver policy、quota 或 delivery checks 拒絕。`trusted=true` 只代表 trust display state；same-channel collaboration 仍需要 receiver policy 與 Discord permission readiness。
+宣稱另一個 bot 可以接工作前，先用 `bot_a2a_peers` 檢查。回應內容以目前 Discord guild/channel runtime 為視角：`peerPolicy.enabled=true` 代表 policy summary 目前有效，`peerPolicy.inboundAllowedRuntimes` 表示哪些 exact runtimes 可送工作進此 channel，`peerPolicy.legacyInboundAllowedAgents` 另外列出舊版 bot-agent 授權，`peerPolicy.outboundDelegateTargets` 表示明確 outbound targets，單一 peer 的 `inboundAllowed=true` 表示該 peer 可送工作進來，`delegationAllowed=true` 表示目前 channel policy 明確允許對該 runtime 呼叫 `bot_a2a_delegate`。Peer 的 `skills` array 來自 outbound policy；如果 peer card 沒有宣告 callable skill，會以一般任務能力 `task` 回報，不會阻擋 delegation。Remote runtime 仍可能因自己的 receiver policy、quota 或 delivery checks 拒絕。`trusted=true` 只代表 trust display state；same-channel collaboration 仍需要 receiver policy 與 Discord permission readiness。
 
 針對「允許 X 委派」這類 receiver-side consent，使用 `bot_a2a_trust_peer`，且只帶 `target_agent`。它會針對 exact runtime 套用 immediate inbound allowlist consent。這個高階工具不再接受 relationship、skill、channel reference、result visibility 或 transcript fields。
 
-Sender-side delegation 一般使用 `bot_a2a_delegate`，只帶 `target_agent` 與 `message`。目標 runtime/skill 必須被目前 channel 的 outbound A2A policy 允許；同一個 Discord channel/thread 代表對話協作，不同 channel 代表 receiver 在自己的 channel/thread 工作並把結果回傳。成功呼叫只代表 task 已 durable queued，不代表 accepted 或 completed。回報成功前，使用 `bot_a2a_task_status` 搭配 `local_id`、`task_id` 或 `message_id` 查權威狀態。
+Sender-side delegation 一般使用 `bot_a2a_delegate`，只帶 `target_agent` 與 `message`。目標 runtime/channel 必須被目前 channel 的 outbound A2A policy 允許；省略或未宣告的 skill 預設為一般 `task` 能力。同一個 Discord channel/thread 代表對話協作，不同 channel 代表 receiver 在自己的 channel/thread 工作並把結果回傳。成功呼叫只代表 task 已 durable queued，不代表 accepted 或 completed。回報成功前，使用 `bot_a2a_task_status` 搭配 `local_id`、`task_id` 或 `message_id` 查權威狀態。
 
 Continuation 場景中，只有 task 在 `TASK_STATE_INPUT_REQUIRED` 時使用 `bot_a2a_input_reply`；只有 task 在 `TASK_STATE_AUTH_REQUIRED` 時使用 `bot_a2a_auth_reply`。一般操作不要直接檢查或編輯 `data/a2a/*.sqlite`。
 
