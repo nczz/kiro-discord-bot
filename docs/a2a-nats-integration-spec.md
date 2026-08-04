@@ -1292,7 +1292,7 @@ Add A2A tools to the built-in `bot-tools` MCP server。They follow existing bot-
 
 | Tool | Type | Purpose |
 |---|---|---|
-| `bot_a2a_peers` | Read | list known peer agents and exposed skills, redacted for current channel policy |
+| `bot_a2a_peers` | Read | list known peer agents from the current runtime perspective: active inbound runtimes allowed to ask this channel, separate legacy inbound agent grants, explicit outbound targets, per-peer inbound authorization, and skills callable by `bot_a2a_delegate`; remote receiver policy remains authoritative |
 | `bot_a2a_task_status` | Read | show one task or recent channel A2A tasks |
 | `bot_a2a_trust_peer` | Write, security-sensitive | immediately allow one exact runtime to send normal work into this channel |
 | `bot_a2a_delegate` | Write, security-sensitive | publish a policy-gated A2A task or return a confirmation challenge |
@@ -1304,7 +1304,7 @@ Tool safety rules：
 
 1. Tools require explicit `guild_id`, `channel_id`, `requested_by`, and `requested_by_id` from Discord context; user-supplied IDs are rejected if they do not match bound context。
 2. `bot_a2a_trust_peer` accepts only simple receiver consent: `target_agent`, current bound channel context, and authenticated ManageChannels state. Expert policy fields are rejected instead of creating confirmation plans。
-3. `bot_a2a_delegate` requires outbound `delegate_targets` policy and may require confirmation for remote data egress, attachments, sensitive skills, or transparent/co-present delivery。
+3. `bot_a2a_delegate` may use explicit outbound `delegate_targets` policy or a known channel/thread runtime target; remote receiver policy remains authoritative and the call may require confirmation for remote data egress, attachments, sensitive skills, or transparent/co-present delivery。
 4. `bot_a2a_cancel` accepts requester or manager only。
 5. `bot_a2a_input_reply` accepts requester or manager only, requires the task to be in `TASK_STATE_INPUT_REQUIRED`, redacts/logs metadata under the same egress policy, and publishes one idempotent `input_reply` control。
 6. `bot_a2a_auth_reply` accepts requester or manager only, requires the task to be in `TASK_STATE_AUTH_REQUIRED`, never carries raw long-lived credentials, and publishes one idempotent `auth_reply` control with approve/deny plus scoped confirmation metadata。

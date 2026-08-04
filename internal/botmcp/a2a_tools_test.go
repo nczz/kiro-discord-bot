@@ -166,6 +166,73 @@ func TestA2AToolsPeersRuntimeModeListsWakeableRuntimeAndHidesLegacyBot(t *testin
 		t.Fatalf("migrated runtime peer = %+v, want same-channel legacy delegation to remain allowed", migrated)
 	}
 }
+func TestA2AToolsPeersReportsCurrentChannelPerspective(t *testing.T) {
+	ctx := context.Background()
+	svc, err := NewA2AService(A2AServiceConfig{
+		DataDir:      t.TempDir(),
+		Config:       a2a.Config{AgentID: "local-bot", RuntimeIDMode: a2a.RuntimeIDModeRuntime, TaskTimeoutSec: 60},
+		BoundGuildID: "111111111111111111",
+		ConnectNATS:  false,
+	})
+	if err != nil {
+		t.Fatalf("NewA2AService: %v", err)
+	}
+	defer svc.Close()
+	if err := svc.policies.Save(ctx, a2a.ChannelA2APolicy{
+		GuildID:            "111111111111111111",
+		ChannelID:          "222222222222222222",
+		Enabled:            true,
+		Discoverable:       true,
+		RuntimeAgentID:     "local-bot-channel-1",
+		BotAgentID:         "local-bot",
+		ChannelRef:         "main",
+		AcceptFromRuntimes: []string{"peer-bot-support"},
+		AcceptSkills:       []string{"task"},
+		DelegateTargets: []a2a.DelegateTargetPolicy{{
+			RuntimeAgentID: "peer-bot-support",
+			ChannelRef:     "support",
+			SkillID:        "support/task",
+		}},
+	}, "manager"); err != nil {
+		t.Fatalf("Save channel-1 policy: %v", err)
+	}
+	if err := svc.policies.Save(ctx, a2a.ChannelA2APolicy{
+		GuildID:        "111111111111111111",
+		ChannelID:      "333333333333333333",
+		Enabled:        false,
+		Discoverable:   false,
+		RuntimeAgentID: "local-bot-channel-2",
+		BotAgentID:     "local-bot",
+		ChannelRef:     "other",
+	}, "manager"); err != nil {
+		t.Fatalf("Save channel-2 policy: %v", err)
+	}
+	card := a2a.AgentCard{Name: "peer-bot-support", Description: "support runtime", Version: "1.0.0", SupportedInterfaces: []a2a.A2AInterface{{URL: "nats://nats.example.internal:4222", ProtocolBinding: a2a.ProtocolBindingNATS, ProtocolVersion: a2a.ProtocolVersion}}, Skills: []a2a.AgentSkill{{ID: "support/task", Name: "Task", Description: "task"}}}
+	if _, err := svc.peers.UpsertExtendedCard(ctx, "peer-bot-support", card, a2a.ExtendedAgentCard{Runtime: "channel", BotAgentID: "peer-bot", ChannelRef: "support", DisplayName: "Support", DiscordGuildID: "111111111111111111", DiscordChannelID: "444444444444444444"}, false, "peer-bot-support", "online", time.Now().Add(time.Hour)); err != nil {
+		t.Fatalf("Upsert runtime peer: %v", err)
+	}
+
+	fromMain, err := svc.Peers(ctx, A2AToolRequest{GuildID: "111111111111111111", ChannelID: "222222222222222222", RequestedBy: "alice", RequestedByID: "user-1"})
+	if err != nil {
+		t.Fatalf("Peers main: %v", err)
+	}
+	fromOther, err := svc.Peers(ctx, A2AToolRequest{GuildID: "111111111111111111", ChannelID: "333333333333333333", RequestedBy: "alice", RequestedByID: "user-1"})
+	if err != nil {
+		t.Fatalf("Peers other: %v", err)
+	}
+	if fromMain.PeerPolicy == nil || !fromMain.PeerPolicy.Enabled || fromMain.PeerPolicy.CurrentRuntimeAgentID != "local-bot-channel-1" || !containsString(fromMain.PeerPolicy.InboundAllowedRuntimes, "peer-bot-support") || len(fromMain.PeerPolicy.OutboundDelegateTargets) != 1 {
+		t.Fatalf("main peer policy = %+v, want channel-1 inbound and outbound perspective", fromMain.PeerPolicy)
+	}
+	if len(fromMain.Peers) != 1 || !fromMain.Peers[0].InboundAllowed || !fromMain.Peers[0].DelegationAllowed {
+		t.Fatalf("main peer summary = %+v, want inbound and outbound allowed from channel-1 perspective", fromMain.Peers)
+	}
+	if fromOther.PeerPolicy == nil || fromOther.PeerPolicy.Enabled || fromOther.PeerPolicy.CurrentRuntimeAgentID != "local-bot-channel-2" || len(fromOther.PeerPolicy.InboundAllowedRuntimes) != 0 || len(fromOther.PeerPolicy.OutboundDelegateTargets) != 0 {
+		t.Fatalf("other peer policy = %+v, want channel-2-local empty policy perspective", fromOther.PeerPolicy)
+	}
+	if len(fromOther.Peers) != 1 || fromOther.Peers[0].InboundAllowed || fromOther.Peers[0].DelegationAllowed {
+		t.Fatalf("other peer summary = %+v, want peer not inbound-authorized for channel-2", fromOther.Peers)
+	}
+}
 
 func TestA2AToolsPeersRuntimeModeHidesStaleRuntimeRows(t *testing.T) {
 	ctx := context.Background()
@@ -991,7 +1058,7 @@ func TestA2AToolsTrustPeerDefaultsInboundConsent(t *testing.T) {
 	defer svc.Close()
 
 	peerCard := a2a.AgentCard{Name: "remote-bot-ch-2cbaf623", Description: "runtime", Version: "1.0.0", SupportedInterfaces: []a2a.A2AInterface{{URL: "nats://nats.example.internal:4222", ProtocolBinding: a2a.ProtocolBindingNATS, ProtocolVersion: a2a.ProtocolVersion}}, Skills: []a2a.AgentSkill{{ID: "ch-2cbaf623/general_task", Name: "Task", Description: "task"}, {ID: "ch-2cbaf623/review", Name: "Review", Description: "review"}}}
-	peerExt := a2a.ExtendedAgentCard{ChannelRef: "ch-2cbaf623", DiscordGuildID: "111111111111111111", DiscordChannelID: "222222222222222222"}
+	peerExt := a2a.ExtendedAgentCard{ChannelRef: "ch-2cbaf623", Runtime: "channel", DiscordGuildID: "111111111111111111", DiscordChannelID: "222222222222222222"}
 	if _, err := svc.peers.UpsertExtendedCard(ctx, "remote-bot-ch-2cbaf623", peerCard, peerExt, false, "peer-instance", "online", time.Now().Add(time.Hour)); err != nil {
 		t.Fatalf("Upsert peer: %v", err)
 	}
@@ -1034,6 +1101,30 @@ func TestA2AToolsTrustPeerDefaultsInboundConsent(t *testing.T) {
 	if !stringListAllows(stored.AcceptFromRuntimes, "remote-bot-ch-2cbaf623") || len(stored.AcceptSkills) != 0 {
 		t.Fatalf("stored inbound policy = %+v, want direct persisted runtime consent", stored)
 	}
+	peers, err := svc.Peers(ctx, A2AToolRequest{GuildID: "111111111111111111", ChannelID: "222222222222222222", RequestedBy: "alice", RequestedByID: "user-1"})
+	if err != nil {
+		t.Fatalf("Peers after inbound trust: %v", err)
+	}
+	if len(peers.Peers) != 1 {
+		t.Fatalf("Peers after inbound trust = %+v, want one runtime peer", peers.Peers)
+	}
+	if peers.PeerPolicy == nil || peers.PeerPolicy.CurrentRuntimeAgentID == "" || !containsString(peers.PeerPolicy.InboundAllowedRuntimes, "remote-bot-ch-2cbaf623") {
+		t.Fatalf("Peers peer policy = %+v, want current runtime inbound consent summary", peers.PeerPolicy)
+	}
+	summary := peers.Peers[0]
+	if !summary.InboundAllowed || summary.InboundReason != "allowed by current channel inbound policy" {
+		t.Fatalf("peer summary inbound = %+v, want receiver consent visible", summary)
+	}
+	if !summary.DelegationAllowed || !summary.Wakeable || summary.HiddenSkillCount != 0 {
+		t.Fatalf("peer summary = %+v, want direct runtime delegation capability", summary)
+	}
+	if !containsString(summary.Skills, "ch-2cbaf623/general_task") || !containsString(summary.Skills, "ch-2cbaf623/review") {
+		t.Fatalf("peer summary skills = %+v, want exposed direct runtime skills", summary.Skills)
+	}
+	if !strings.Contains(summary.DelegationReason, "direct runtime delegation available") {
+		t.Fatalf("peer delegation reason = %q, want direct runtime guidance", summary.DelegationReason)
+	}
+
 	delegated, err := svc.Delegate(ctx, A2AToolRequest{GuildID: "111111111111111111", ChannelID: "222222222222222222", RequestedBy: "alice", RequestedByID: "user-1", TargetAgent: "remote-bot-ch-2cbaf623", Message: "ping"})
 	if err != nil {
 		t.Fatalf("Delegate after inbound trust: %v", err)

@@ -140,6 +140,7 @@ type A2AToolResponse struct {
 	DeliveryReadiness    *A2APolicyDeliveryReadiness `json:"deliveryReadiness,omitempty"`
 	RuntimePreflight     *a2a.RuntimeCutoverReport   `json:"runtimePreflight,omitempty"`
 	Peers                []A2APeerSummary            `json:"peers,omitempty"`
+	PeerPolicy           *A2APeerPolicySummary       `json:"peerPolicy,omitempty"`
 	Tasks                []A2ATaskSummary            `json:"tasks,omitempty"`
 	Task                 *A2ATaskSummary             `json:"task,omitempty"`
 	Metadata             map[string]interface{}      `json:"metadata,omitempty"`
@@ -154,6 +155,8 @@ type A2APeerSummary struct {
 	Stale             bool     `json:"stale"`
 	Skills            []string `json:"skills"`
 	HiddenSkillCount  int      `json:"hiddenSkillCount,omitempty"`
+	InboundAllowed    bool     `json:"inboundAllowed"`
+	InboundReason     string   `json:"inboundReason,omitempty"`
 	DelegationAllowed bool     `json:"delegationAllowed"`
 	ProtocolBinding   string   `json:"protocolBinding,omitempty"`
 	ProtocolVersion   string   `json:"protocolVersion,omitempty"`
@@ -166,6 +169,23 @@ type A2APeerSummary struct {
 	DiscordGuildID    string   `json:"discordGuildId,omitempty"`
 	DiscordChannelID  string   `json:"discordChannelId,omitempty"`
 	DiscordThreadID   string   `json:"discordThreadId,omitempty"`
+}
+
+type A2APeerPolicySummary struct {
+	Enabled                    bool                       `json:"enabled"`
+	CurrentRuntimeAgentID      string                     `json:"currentRuntimeAgentId,omitempty"`
+	CurrentChannelRef          string                     `json:"currentChannelRef,omitempty"`
+	InboundAllowedRuntimes     []string                   `json:"inboundAllowedRuntimes,omitempty"`
+	LegacyInboundAllowedAgents []string                   `json:"legacyInboundAllowedAgents,omitempty"`
+	InboundAcceptedSkills      []string                   `json:"inboundAcceptedSkills,omitempty"`
+	OutboundDelegateTargets    []A2ADelegateTargetSummary `json:"outboundDelegateTargets,omitempty"`
+}
+
+type A2ADelegateTargetSummary struct {
+	RuntimeAgentID string `json:"runtimeAgentId,omitempty"`
+	AgentID        string `json:"agentId,omitempty"`
+	ChannelRef     string `json:"channelRef,omitempty"`
+	SkillID        string `json:"skillId,omitempty"`
 }
 
 type A2APolicyDeliveryReadiness struct {
@@ -325,12 +345,16 @@ func (s *A2AService) Peers(ctx context.Context, req A2AToolRequest) (A2AToolResp
 				continue
 			}
 		}
-		visibleSkills := visiblePeerSkills(policy, row, row.SkillIDs, s.cfg.Config.RuntimeIDMode)
-		delegationAllowed := len(visibleSkills) > 0
-		reason := peerDelegationReason(row, policy, visibleSkills, runtimeOnly)
-		peers = append(peers, A2APeerSummary{AgentID: string(row.AgentID), Name: row.Name, BotAgentID: row.BotAgentID, Trusted: row.Trusted, Online: row.Online, Stale: row.Stale, Skills: visibleSkills, HiddenSkillCount: len(row.SkillIDs) - len(visibleSkills), DelegationAllowed: delegationAllowed, DelegationReason: reason, Runtime: row.Runtime, ChannelRef: row.ChannelRef, DisplayName: peerDisplayName(row), DiscordGuildID: row.DiscordGuildID, DiscordChannelID: row.DiscordChannelID, DiscordThreadID: row.DiscordThreadID, Wakeable: delegationAllowed && row.Runtime == "channel" && !row.Stale, ProtocolBinding: row.SupportedBinding, ProtocolVersion: row.ProtocolVersion, SignatureStatus: row.SignatureStatus})
+		callableSkills, reason := peerDelegationCapability(policy, row, row.SkillIDs, s.cfg.Config.RuntimeIDMode)
+		delegationAllowed := len(callableSkills) > 0
+		hiddenSkillCount := len(row.SkillIDs) - len(callableSkills)
+		if hiddenSkillCount < 0 {
+			hiddenSkillCount = 0
+		}
+		inboundAllowed, inboundReason := peerInboundCapability(policy, row)
+		peers = append(peers, A2APeerSummary{AgentID: string(row.AgentID), Name: row.Name, BotAgentID: row.BotAgentID, Trusted: row.Trusted, Online: row.Online, Stale: row.Stale, Skills: callableSkills, HiddenSkillCount: hiddenSkillCount, InboundAllowed: inboundAllowed, InboundReason: inboundReason, DelegationAllowed: delegationAllowed, DelegationReason: reason, Runtime: row.Runtime, ChannelRef: row.ChannelRef, DisplayName: peerDisplayName(row), DiscordGuildID: row.DiscordGuildID, DiscordChannelID: row.DiscordChannelID, DiscordThreadID: row.DiscordThreadID, Wakeable: delegationAllowed && row.Runtime == "channel" && !row.Stale, ProtocolBinding: row.SupportedBinding, ProtocolVersion: row.ProtocolVersion, SignatureStatus: row.SignatureStatus})
 	}
-	return A2AToolResponse{OK: true, Message: "A2A peers listed", Peers: peers, DeliveryReadiness: ptrPolicyDeliveryReadiness(policy)}, nil
+	return A2AToolResponse{OK: true, Message: "A2A peers listed", Peers: peers, PeerPolicy: peerPolicySummary(policy), DeliveryReadiness: ptrPolicyDeliveryReadiness(policy)}, nil
 }
 
 func peerDisplayName(peer a2a.PeerTrustDisplay) string {
@@ -344,6 +368,78 @@ func peerDisplayName(peer a2a.PeerTrustDisplay) string {
 		return peer.Description
 	}
 	return peer.Name
+}
+func peerPolicySummary(policy a2a.ChannelA2APolicy) *A2APeerPolicySummary {
+	targets := make([]A2ADelegateTargetSummary, 0, len(policy.DelegateTargets))
+	for _, target := range policy.DelegateTargets {
+		targets = append(targets, A2ADelegateTargetSummary{
+			RuntimeAgentID: strings.TrimSpace(target.RuntimeAgentID),
+			AgentID:        strings.TrimSpace(target.AgentID),
+			ChannelRef:     strings.TrimSpace(target.ChannelRef),
+			SkillID:        strings.TrimSpace(target.SkillID),
+		})
+	}
+	summary := &A2APeerPolicySummary{
+		Enabled:               policy.Enabled,
+		CurrentRuntimeAgentID: strings.TrimSpace(policy.RuntimeAgentID),
+		CurrentChannelRef:     strings.TrimSpace(policy.ChannelRef),
+	}
+	if !policy.Enabled {
+		return summary
+	}
+	summary.InboundAllowedRuntimes = append([]string(nil), policy.AcceptFromRuntimes...)
+	summary.LegacyInboundAllowedAgents = append([]string(nil), policy.AcceptFrom...)
+	summary.InboundAcceptedSkills = append([]string(nil), policy.AcceptSkills...)
+	summary.OutboundDelegateTargets = targets
+	return summary
+}
+
+func peerInboundCapability(policy a2a.ChannelA2APolicy, peer a2a.PeerTrustDisplay) (bool, string) {
+	if !policy.Enabled {
+		return false, "channel A2A policy disabled"
+	}
+	allowed := policy.AcceptFromRuntimes
+	if len(allowed) == 0 {
+		allowed = policy.AcceptFrom
+	}
+	if len(allowed) == 0 {
+		return false, "no inbound runtime allowlist"
+	}
+	if stringListAllows(allowed, string(peer.AgentID)) {
+		return true, "allowed by current channel inbound policy"
+	}
+	return false, "not accepted by current channel policy"
+}
+
+func peerDelegationCapability(policy a2a.ChannelA2APolicy, peer a2a.PeerTrustDisplay, skills []string, mode a2a.RuntimeIDMode) ([]string, string) {
+	visibleSkills := visiblePeerSkills(policy, peer, skills, mode)
+	if len(visibleSkills) > 0 {
+		return visibleSkills, "allowed"
+	}
+	if peer.Stale {
+		return nil, "peer stale"
+	}
+	runtimeOnly := mode == a2a.RuntimeIDModeRuntime
+	if runtimeOnly && peer.Runtime != "channel" && peer.Runtime != "thread" {
+		return nil, "not a runtime peer"
+	}
+	if !policy.Enabled {
+		return nil, "channel A2A policy disabled"
+	}
+	if runtimeOnly && ordinaryRuntimePeerSummary(peer) {
+		if len(skills) == 0 {
+			return nil, "target peer does not expose a delegate skill"
+		}
+		return append([]string(nil), skills...), "direct runtime delegation available; remote channel policy remains authoritative"
+	}
+	if runtimeOnly {
+		return nil, "missing runtime delegate target or skill"
+	}
+	return nil, "missing delegate target or skill"
+}
+
+func ordinaryRuntimePeerSummary(peer a2a.PeerTrustDisplay) bool {
+	return strings.TrimSpace(string(peer.AgentID)) != "" && (strings.TrimSpace(peer.Runtime) == "channel" || strings.TrimSpace(peer.Runtime) == "thread" || strings.TrimSpace(peer.ChannelRef) != "")
 }
 
 func visiblePeerSkills(policy a2a.ChannelA2APolicy, peer a2a.PeerTrustDisplay, skills []string, mode a2a.RuntimeIDMode) []string {
@@ -388,25 +484,6 @@ func policyDelegatesSameDiscordChannelPeerRow(policy a2a.ChannelA2APolicy, peer 
 		BotAgentID:       peer.ExtendedCard.BotAgentID,
 		DiscordChannelID: peer.ExtendedCard.DiscordChannelID,
 	}, skill)
-}
-
-func peerDelegationReason(peer a2a.PeerTrustDisplay, policy a2a.ChannelA2APolicy, visibleSkills []string, runtimeOnly bool) string {
-	if len(visibleSkills) > 0 {
-		return "allowed"
-	}
-	if peer.Stale {
-		return "peer stale"
-	}
-	if runtimeOnly && peer.Runtime != "channel" && peer.Runtime != "thread" {
-		return "not a runtime peer"
-	}
-	if !policy.Enabled {
-		return "channel A2A policy disabled"
-	}
-	if runtimeOnly {
-		return "missing runtime delegate target or skill"
-	}
-	return "missing delegate target or skill"
 }
 
 func policyDelegatesExactRuntime(policy a2a.ChannelA2APolicy, agent, skill string) bool {

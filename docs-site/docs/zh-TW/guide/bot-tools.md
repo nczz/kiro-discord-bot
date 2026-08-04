@@ -70,7 +70,7 @@ Persistent memory 是 parent-channel scope。`bot_memory_add` 只在使用者明
 
 預設 `bot_a2a_*` tools 會綁定目前 Discord guild/channel context，且必須通過目前 A2A policy、已驗證的 manager permission（需要時）、quota 與 runtime-readiness checks。Expert A2A policy planning/apply tools 已從 bot-tools 退役；一般 receiver-side `bot_a2a_trust_peer` consent 只帶 `target_agent` 時會立即套用。
 
-宣稱另一個 bot 可以接工作前，先用 `bot_a2a_peers` 檢查。`trusted=true` 只代表 trust display state；same-channel collaboration 仍需要 receiver policy 與 Discord permission readiness。
+宣稱另一個 bot 可以接工作前，先用 `bot_a2a_peers` 檢查。回應內容以目前 Discord guild/channel runtime 為視角：`peerPolicy.enabled=true` 代表 policy summary 目前有效，`peerPolicy.inboundAllowedRuntimes` 表示哪些 exact runtimes 可送工作進此 channel，`peerPolicy.legacyInboundAllowedAgents` 另外列出舊版 bot-agent 授權，`peerPolicy.outboundDelegateTargets` 表示明確 outbound targets，單一 peer 的 `inboundAllowed=true` 表示該 peer 可送工作進來，`delegationAllowed=true` 表示目前 channel 可以對列出的 runtime 與 skills 呼叫 `bot_a2a_delegate`。Remote runtime 仍可能因自己的 receiver policy、quota 或 delivery checks 拒絕。`trusted=true` 只代表 trust display state；same-channel collaboration 仍需要 receiver policy 與 Discord permission readiness。
 
 針對「允許 X 委派」這類 receiver-side consent，使用 `bot_a2a_trust_peer`，且只帶 `target_agent`。它會針對 exact runtime 套用 immediate inbound allowlist consent。這個高階工具不再接受 relationship、skill、channel reference、result visibility 或 transcript fields。
 
