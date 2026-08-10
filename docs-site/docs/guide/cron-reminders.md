@@ -30,7 +30,7 @@ The built-in `bot_create_reminder` tool is for one-time delayed reminders. It wr
 
 Use the split intentionally:
 
-- `bot_create_reminder`: "in 10 minutes", "tomorrow 09:00", "remind ChunBot once".
+- `bot_create_reminder`: "in 10 minutes", "tomorrow 09:00", "2026-08-13 14:25", "8/13 14:25", "remind ChunBot once".
 - `bot_create_cron`: "every day at 09:00", "weekly report", "run this periodically".
 
 ## Good Operating Practice

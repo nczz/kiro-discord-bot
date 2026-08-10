@@ -123,6 +123,59 @@ func TestNewCronTaskAppliesConfiguredTimeoutAndDefault(t *testing.T) {
 	}
 }
 
+func TestParseTimeAcceptsCanonicalAbsoluteFormats(t *testing.T) {
+	loc, err := time.LoadLocation("Asia/Taipei")
+	if err != nil {
+		t.Fatalf("load timezone: %v", err)
+	}
+	want := time.Date(2999, 8, 13, 14, 25, 0, 0, loc)
+	for _, input := range []string{
+		"2999-08-13T14:25:00+08:00",
+		"2999-08-13 14:25",
+		"2999/08/13 14:25",
+		"2999年8月13日 14:25",
+	} {
+		got, err := ParseTime(input, loc)
+		if err != nil {
+			t.Fatalf("ParseTime(%q): %v", input, err)
+		}
+		if !got.Equal(want) {
+			t.Fatalf("ParseTime(%q) = %s, want %s", input, got, want)
+		}
+	}
+}
+
+func TestParseTimeAcceptsMonthDayInCronTimezone(t *testing.T) {
+	loc, err := time.LoadLocation("Asia/Taipei")
+	if err != nil {
+		t.Fatalf("load timezone: %v", err)
+	}
+	now := time.Now().In(loc)
+	want := time.Date(now.Year(), 8, 13, 14, 25, 0, 0, loc)
+	if want.Before(now) {
+		want = want.AddDate(1, 0, 0)
+	}
+	for _, input := range []string{"8/13 14:25", "8月13日 14:25"} {
+		got, err := ParseTime(input, loc)
+		if err != nil {
+			t.Fatalf("ParseTime(%q): %v", input, err)
+		}
+		if !got.Equal(want) {
+			t.Fatalf("ParseTime(%q) = %s, want %s", input, got, want)
+		}
+	}
+}
+
+func TestParseTimeRejectsPastAbsoluteDate(t *testing.T) {
+	loc, err := time.LoadLocation("Asia/Taipei")
+	if err != nil {
+		t.Fatalf("load timezone: %v", err)
+	}
+	if _, err := ParseTime("2000-01-01 09:00", loc); err == nil {
+		t.Fatal("expected past absolute reminder time to be rejected")
+	}
+}
+
 func TestCronExecuteUsesConfiguredTimeout(t *testing.T) {
 	store, err := NewCronStore(t.TempDir())
 	if err != nil {

@@ -30,7 +30,7 @@ Create/delete 會先寫成 pending action，再透過 bot 正常 maintenance loo
 
 請刻意區分：
 
-- `bot_create_reminder`：「10 分鐘後」、「明天 09:00」、「提醒 ChunBot 一次」。
+- `bot_create_reminder`：「10 分鐘後」、「明天 09:00」、「2026-08-13 14:25」、「8/13 14:25」、「提醒 ChunBot 一次」。
 - `bot_create_cron`：「每天 09:00」、「每週報告」、「週期性執行」。
 
 ## 維運原則

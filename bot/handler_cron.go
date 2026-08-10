@@ -244,6 +244,10 @@ func (b *Bot) handleCronButton(ds *discordgo.Session, i *discordgo.InteractionCr
 		respondInteraction(ds, i, L.Get("cron.not_found"))
 		return
 	}
+	if oneShotCronActionUnsupported(job, action) {
+		respondInteraction(ds, i, L.Get("cron.one_shot_action_unsupported"))
+		return
+	}
 
 	switch action {
 	case "pause":
@@ -251,7 +255,7 @@ func (b *Bot) handleCronButton(ds *discordgo.Session, i *discordgo.InteractionCr
 		_ = b.cronStore.Update(job)
 		b.updateCronCard(ds, i, job, L.Getf("cron.paused", job.Name))
 	case "resume":
-		if !b.manager.ChannelInitialized(job.ChannelID) {
+		if (!job.OneShot || job.UseAgent) && !b.manager.ChannelInitialized(job.ChannelID) {
 			respondInteraction(ds, i, L.Getf("setup.required.command", "/cron"))
 			return
 		}
@@ -337,6 +341,10 @@ func (b *Bot) handleCronButton(ds *discordgo.Session, i *discordgo.InteractionCr
 	}
 }
 
+func oneShotCronActionUnsupported(job *heartbeat.CronJob, action string) bool {
+	return job != nil && job.OneShot && (action == "run" || action == "edit")
+}
+
 func (b *Bot) cronLocationOrLocal() *time.Location {
 	if b.cronTimezone != "" {
 		if loc, err := time.LoadLocation(b.cronTimezone); err == nil {
@@ -349,11 +357,11 @@ func (b *Bot) cronLocationOrLocal() *time.Location {
 // buildCronCard renders a job's content and buttons for display.
 func buildCronCard(job *heartbeat.CronJob, loc *time.Location) (string, []discordgo.MessageComponent) {
 	status := "✅"
-	if !job.Enabled {
-		status = "⏸️"
-	}
 	if job.OneShot {
 		status = "🔔"
+	}
+	if !job.Enabled {
+		status = "⏸️"
 	}
 
 	lastRun := L.Get("cron.list.last_run_none")
@@ -369,8 +377,13 @@ func buildCronCard(job *heartbeat.CronJob, loc *time.Location) (string, []discor
 		}
 	}
 
-	schedDesc := "`" + job.Schedule + "` " + heartbeat.DescribeSchedule(job.Schedule)
-	content := L.Getf("cron.list.item", status, job.Name, schedDesc, lastRun, nextRun, truncate(job.Prompt, 100))
+	var content string
+	if job.OneShot {
+		content = L.Getf("cron.list.reminder_item", status, job.Name, nextRun, lastRun, truncate(job.Prompt, 100))
+	} else {
+		schedDesc := "`" + job.Schedule + "` " + heartbeat.DescribeSchedule(job.Schedule)
+		content = L.Getf("cron.list.item", status, job.Name, schedDesc, lastRun, nextRun, truncate(job.Prompt, 100))
+	}
 
 	var buttons []discordgo.MessageComponent
 	if job.Enabled {
@@ -382,11 +395,13 @@ func buildCronCard(job *heartbeat.CronJob, loc *time.Location) (string, []discor
 			Label: L.Get("cron.btn.resume"), Style: discordgo.SuccessButton, CustomID: "cron_resume_" + job.ID,
 		})
 	}
-	buttons = append(buttons,
-		discordgo.Button{Label: L.Get("cron.btn.run"), Style: discordgo.PrimaryButton, CustomID: "cron_run_" + job.ID},
-		discordgo.Button{Label: L.Get("cron.btn.edit"), Style: discordgo.SecondaryButton, CustomID: "cron_edit_" + job.ID},
-		discordgo.Button{Label: L.Get("cron.btn.delete"), Style: discordgo.DangerButton, CustomID: "cron_delete_" + job.ID},
-	)
+	if !job.OneShot {
+		buttons = append(buttons,
+			discordgo.Button{Label: L.Get("cron.btn.run"), Style: discordgo.PrimaryButton, CustomID: "cron_run_" + job.ID},
+			discordgo.Button{Label: L.Get("cron.btn.edit"), Style: discordgo.SecondaryButton, CustomID: "cron_edit_" + job.ID},
+		)
+	}
+	buttons = append(buttons, discordgo.Button{Label: L.Get("cron.btn.delete"), Style: discordgo.DangerButton, CustomID: "cron_delete_" + job.ID})
 
 	return content, []discordgo.MessageComponent{discordgo.ActionsRow{Components: buttons}}
 }

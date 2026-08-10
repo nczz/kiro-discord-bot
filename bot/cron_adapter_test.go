@@ -211,3 +211,61 @@ func TestBuildCronCardDisplaysRunsInCronTimezone(t *testing.T) {
 		t.Fatalf("cron card leaked UTC timestamps:\n%s", content)
 	}
 }
+
+func TestBuildCronCardRendersOneShotReminderWithoutCronControls(t *testing.T) {
+	L.Load("en")
+	loc, err := time.LoadLocation("Asia/Taipei")
+	if err != nil {
+		t.Fatalf("load timezone: %v", err)
+	}
+	job := &heartbeat.CronJob{
+		ID:      "reminder-1",
+		Name:    "North drill reminder",
+		Enabled: true,
+		OneShot: true,
+		Prompt:  "Check mobile network drill",
+		NextRun: "2026-08-13T06:25:00Z",
+	}
+
+	content, components := buildCronCard(job, loc)
+
+	if !strings.Contains(content, "Reminder time: 08/13 14:25") || strings.Contains(content, "Schedule: ``") {
+		t.Fatalf("one-shot reminder card should render reminder time without empty cron schedule:\n%s", content)
+	}
+	if len(components) != 1 {
+		t.Fatalf("components = %+v, want one actions row", components)
+	}
+	row, ok := components[0].(discordgo.ActionsRow)
+	if !ok {
+		t.Fatalf("component type = %T, want ActionsRow", components[0])
+	}
+	if len(row.Components) != 2 {
+		t.Fatalf("one-shot reminder controls = %+v, want pause/resume plus delete only", row.Components)
+	}
+	for _, component := range row.Components {
+		button, ok := component.(discordgo.Button)
+		if !ok {
+			t.Fatalf("component type = %T, want Button", component)
+		}
+		if strings.Contains(button.CustomID, "cron_run_") || strings.Contains(button.CustomID, "cron_edit_") {
+			t.Fatalf("one-shot reminder should not expose recurring cron control %q", button.CustomID)
+		}
+	}
+}
+
+func TestOneShotCronActionUnsupportedBlocksStaleRunEditButtons(t *testing.T) {
+	oneShot := &heartbeat.CronJob{OneShot: true}
+	for _, action := range []string{"run", "edit"} {
+		if !oneShotCronActionUnsupported(oneShot, action) {
+			t.Fatalf("one-shot action %q should be blocked", action)
+		}
+	}
+	for _, action := range []string{"pause", "resume", "delete"} {
+		if oneShotCronActionUnsupported(oneShot, action) {
+			t.Fatalf("one-shot action %q should remain allowed", action)
+		}
+	}
+	if oneShotCronActionUnsupported(&heartbeat.CronJob{}, "run") {
+		t.Fatal("recurring cron run should remain allowed")
+	}
+}

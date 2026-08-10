@@ -2516,7 +2516,7 @@ func TestBuildPromptDocumentsCronOwnerChannelScope(t *testing.T) {
 	if !strings.Contains(got, "For cron management tools, use channel_id as the owning parent channel ID") {
 		t.Fatalf("prompt missing cron owner scope guidance:\n%s", got)
 	}
-	if !strings.Contains(got, "For one-time delayed reminders, use bot_create_reminder; for recurring schedules, use bot_create_cron.") {
+	if !strings.Contains(got, "For one-time reminders, use bot_create_reminder; for recurring schedules, use bot_create_cron.") || !strings.Contains(got, "do not degrade it to tomorrow") {
 		t.Fatalf("prompt missing reminder tool guidance:\n%s", got)
 	}
 	if !strings.Contains(got, "first use bot_list_cron, then bot_update_cron") || !strings.Contains(got, "enabled=false") || !strings.Contains(got, "deletion requires bot_delete_cron") {

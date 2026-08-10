@@ -64,7 +64,7 @@ Recurring cron 管理在 runtime 中是 channel scope；thread ID 會依需要�
 
 Persistent memory 是 parent-channel scope。`bot_memory_add` 只在使用者明確說「記住」時預設可用，會拒絕看似 secret 的文字，透過 pending bot-side queue 寫入，並在 main bot 套用前先記錄 audit event。`bot_memory_remove` 與 `bot_memory_clear` 預設不啟用。
 
-「10 分鐘後提醒我」、「明天 09:00 提醒某人」這類一次性提醒應使用 `bot_create_reminder`。每天、每週或週期性自動化才使用 `bot_create_cron`。
+「10 分鐘後提醒我」、「明天 09:00 提醒某人」、「2026-08-13 14:25」、「8/13 14:25」這類一次性提醒應使用 `bot_create_reminder`。每天、每週或週期性自動化才使用 `bot_create_cron`。
 
 ## A2A Bot Tools
 

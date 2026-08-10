@@ -64,7 +64,7 @@ Thread IDs are normalized to the parent channel for recurring cron management wh
 
 Persistent memory is parent-channel scoped. `bot_memory_add` is default-enabled only for explicit "remember this" requests, rejects secret-like text, writes through the pending bot-side queue, and records an audit event before the main bot applies it. `bot_memory_remove` and `bot_memory_clear` are not default-enabled.
 
-Use `bot_create_reminder` for one-time delayed reminders such as "in 10 minutes" or "tomorrow at 09:00". Use `bot_create_cron` only for recurring jobs such as daily, weekly, or periodic automation.
+Use `bot_create_reminder` for one-time reminders such as "in 10 minutes", "tomorrow at 09:00", "2026-08-13 14:25", or "8/13 14:25". Use `bot_create_cron` only for recurring jobs such as daily, weekly, or periodic automation.
 
 ## A2A Bot Tools
 

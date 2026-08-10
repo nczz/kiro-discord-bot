@@ -43,11 +43,11 @@ func ScheduleFieldDescription(tz string) string {
 // ReminderToolDescription returns the bot_create_reminder tool description.
 func ReminderToolDescription(tz string) string {
 	tz = TimezoneName(tz)
-	return fmt.Sprintf("Create a one-time Discord reminder delivered by the bot scheduler. Use for one-time delayed reminders such as 'in 10 minutes', 'two hours later', 'tomorrow 09:00', or 'at 18:30'. Do not use this for recurring schedules; use bot_create_cron for daily, weekly, or periodic tasks. Reminder times are interpreted in the bot cron timezone %s.", tz)
+	return fmt.Sprintf("Create a one-time Discord reminder delivered by the bot scheduler. Use for one-time reminders such as 'in 10 minutes', 'two hours later', 'tomorrow 09:00', '2026-08-13 14:25', or '8/13 14:25'. If the user gives a specific date, convert it to an explicit date/time in the bot cron timezone %s before calling this tool; do not degrade a dated request to 'tomorrow'. Do not use this for recurring schedules; use bot_create_cron for daily, weekly, or periodic tasks.", tz)
 }
 
 // ReminderTimeFieldDescription returns the JSON schema description for one-time reminder time fields.
 func ReminderTimeFieldDescription(tz string) string {
 	tz = TimezoneName(tz)
-	return fmt.Sprintf("One-time reminder time in the bot cron timezone %s. Supported examples include '+30m', '+2h', '10分鐘後', '2 hours later', '18:30', and 'tomorrow 09:00'.", tz)
+	return fmt.Sprintf("One-time reminder time in the bot cron timezone %s. Prefer canonical RFC3339 for dated requests, e.g. '2026-08-13T14:25:00+08:00'. Supported examples also include '2026-08-13 14:25', '8/13 14:25', '8月13日 14:25', '+30m', '+2h', '10分鐘後', '2 hours later', '18:30', and 'tomorrow 09:00'.", tz)
 }
