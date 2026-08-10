@@ -94,24 +94,25 @@ type AuditSink interface {
 
 // Worker manages a per-channel job queue and executes jobs sequentially.
 type Worker struct {
-	channelID         string
-	agent             workerAgent
-	queue             chan *Job
-	askTimeoutSec     int
-	streamUpdateSec   int
-	threadArchive     int // auto-archive duration in minutes
-	escalationGrace   time.Duration
-	stopGrace         time.Duration
-	stopCh            chan struct{}
-	idleCh            chan struct{} // signaled when agent finishes a task
-	stopped           sync.Once
-	started           sync.Once
-	logger            *ChatLogger
-	usage             *UsageStore
-	audit             AuditSink
-	model             string
-	engine            string
-	autoCompactPrimed bool
+	channelID                    string
+	agent                        workerAgent
+	queue                        chan *Job
+	askTimeoutSec                int
+	streamUpdateSec              int
+	threadArchive                int // auto-archive duration in minutes
+	escalationGrace              time.Duration
+	stopGrace                    time.Duration
+	stopCh                       chan struct{}
+	idleCh                       chan struct{} // signaled when agent finishes a task
+	stopped                      sync.Once
+	started                      sync.Once
+	logger                       *ChatLogger
+	usage                        *UsageStore
+	audit                        AuditSink
+	model                        string
+	engine                       string
+	autoCompactPrimed            bool
+	autoCompactIneffectiveStreak int
 
 	cancelMu sync.Mutex
 	cancelFn context.CancelFunc
@@ -1526,6 +1527,7 @@ func (w *Worker) autoCompactIfNeeded(parentCtx context.Context, job *Job, thread
 	usage := w.agent.ContextUsage()
 	unknownLoadedSession := usage == 0 && !w.autoCompactPrimed && w.agent.SessionReuseMethod() != "" && w.agent.SessionReuseMethod() != "new"
 	if usage < autoCompactContextThreshold && !unknownLoadedSession {
+		w.autoCompactIneffectiveStreak = 0
 		return false, nil
 	}
 	w.autoCompactPrimed = true
@@ -1561,6 +1563,7 @@ func (w *Worker) autoCompactIfNeeded(parentCtx context.Context, job *Job, thread
 		after = w.agent.ContextUsage()
 	}
 	if err != nil {
+		w.autoCompactIneffectiveStreak = 0
 		log.Printf("[worker %s] auto compact failed | msg=%s ctx=%.0f%% err=%v", w.channelID, msgID, usage, err)
 		w.recordUsageMetrics(job, threadID, "command:auto-compact", "error", metrics)
 		if notify != nil {
@@ -1574,10 +1577,13 @@ func (w *Worker) autoCompactIfNeeded(parentCtx context.Context, job *Job, thread
 		return true, err
 	}
 	if after >= autoCompactContextThreshold && (usage >= autoCompactContextThreshold || unknownLoadedSession) {
-		log.Printf("[worker %s] auto compact ineffective | msg=%s ctx_before=%.0f%% ctx_after=%.0f%% unknown_loaded=%t", w.channelID, msgID, usage, after, unknownLoadedSession)
+		w.autoCompactIneffectiveStreak++
+		log.Printf("[worker %s] auto compact ineffective | msg=%s ctx_before=%.0f%% ctx_after=%.0f%% unknown_loaded=%t streak=%d", w.channelID, msgID, usage, after, unknownLoadedSession, w.autoCompactIneffectiveStreak)
 		w.recordUsageMetrics(job, threadID, "command:auto-compact", "warning", metrics)
 		if notify != nil {
-			if unknownLoadedSession {
+			if w.autoCompactIneffectiveStreak >= 2 {
+				notify("⚠️ " + L.Getf("context.auto_compact_ineffective_repeated", w.autoCompactIneffectiveStreak, after))
+			} else if unknownLoadedSession {
 				notify("⚠️ " + L.Getf("context.auto_compact_ineffective_unknown", after))
 			} else {
 				notify("⚠️ " + L.Getf("context.auto_compact_ineffective", usage, after))
@@ -1590,6 +1596,7 @@ func (w *Worker) autoCompactIfNeeded(parentCtx context.Context, job *Job, thread
 		w.auditJobEvent("agent_auto_compact_ineffective", job, threadID, "warning", metadata)
 		return true, nil
 	}
+	w.autoCompactIneffectiveStreak = 0
 	log.Printf("[worker %s] auto compact done | msg=%s ctx_before=%.0f%% ctx_after=%.0f%%", w.channelID, msgID, usage, after)
 	w.recordUsageMetrics(job, threadID, "command:auto-compact", "success", metrics)
 	if notify != nil {

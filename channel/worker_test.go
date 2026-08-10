@@ -1724,7 +1724,7 @@ func TestAutoCompactRunsBeforeHighContextTask(t *testing.T) {
 		t.Fatalf("Ask prompts = %#v, want /compact", prompts)
 	}
 	joined := strings.Join(notices, "\n")
-	if !strings.Contains(joined, "98%") || !strings.Contains(joined, "42%") {
+	if !strings.Contains(joined, "automatically compacting the current session now") || !strings.Contains(joined, "98%") || !strings.Contains(joined, "42%") {
 		t.Fatalf("auto compact notices = %#v, want before/after usage", notices)
 	}
 }
@@ -1761,6 +1761,63 @@ func TestAutoCompactWarnsWhenContextStillHigh(t *testing.T) {
 	events := auditSink.Snapshot()
 	if len(events) != 1 || events[0].Type != "agent_auto_compact_ineffective" || events[0].Status != "warning" {
 		t.Fatalf("audit events = %+v, want ineffective warning", events)
+	}
+}
+
+func TestAutoCompactRepeatedIneffectiveSuggestsClear(t *testing.T) {
+	L.Load("en")
+	agent := &fakeWorkerAgent{
+		contextUsage: 90.067,
+		metrics:      acp.TurnMetrics{ContextUsage: 90.067},
+	}
+	w := newWorker("ch1", agent, 1, 30, 1, 1440, nil, "")
+	var notices []string
+	for i := range 2 {
+		compacted, err := w.autoCompactIfNeeded(context.Background(), &Job{MessageID: fmt.Sprintf("msg-%d", i+1)}, "", func(msg string) {
+			notices = append(notices, msg)
+		})
+		if err != nil {
+			t.Fatalf("auto compact %d error: %v", i+1, err)
+		}
+		if !compacted {
+			t.Fatalf("expected auto compact %d to run", i+1)
+		}
+	}
+	joined := strings.Join(notices, "\n")
+	if !strings.Contains(joined, "ineffective 2 times in a row") || !strings.Contains(joined, "/clear") {
+		t.Fatalf("auto compact notices = %#v, want repeated ineffective guidance", notices)
+	}
+	agent.mu.Lock()
+	prompts := append([]string(nil), agent.askPrompts...)
+	agent.mu.Unlock()
+	if len(prompts) != 2 || prompts[0] != "/compact" || prompts[1] != "/compact" {
+		t.Fatalf("Ask prompts = %#v, want two /compact prompts", prompts)
+	}
+}
+
+func TestAutoCompactLowContextResetsIneffectiveStreak(t *testing.T) {
+	L.Load("en")
+	agent := &fakeWorkerAgent{
+		contextUsage: 90.067,
+		metrics:      acp.TurnMetrics{ContextUsage: 90.067},
+	}
+	w := newWorker("ch1", agent, 1, 30, 1, 1440, nil, "")
+	var notices []string
+	for _, usage := range []float64{90.067, 89, 90.067} {
+		agent.contextUsage = usage
+		compacted, err := w.autoCompactIfNeeded(context.Background(), &Job{MessageID: "msg-1"}, "", func(msg string) {
+			notices = append(notices, msg)
+		})
+		if err != nil {
+			t.Fatalf("auto compact error: %v", err)
+		}
+		if usage >= autoCompactContextThreshold && !compacted {
+			t.Fatalf("expected auto compact to run for usage %.0f", usage)
+		}
+	}
+	joined := strings.Join(notices, "\n")
+	if strings.Contains(joined, "ineffective 2 times in a row") {
+		t.Fatalf("auto compact notices = %#v, did not want stale repeated guidance", notices)
 	}
 }
 
