@@ -1817,6 +1817,44 @@ func TestAutoCompactRunsOnceForRestoredUnknownContext(t *testing.T) {
 	}
 }
 
+func TestAutoCompactWarnsWhenRestoredUnknownContextStillHigh(t *testing.T) {
+	L.Load("en")
+	agent := &fakeWorkerAgent{
+		sessionReuse: "load",
+		metrics:      acp.TurnMetrics{ContextUsage: 90.067},
+	}
+	auditSink := &recordingAuditSink{}
+	w := newWorker("ch1", agent, 1, 30, 1, 1440, nil, "")
+	w.SetAuditSink(auditSink)
+	var notices []string
+	compacted, err := w.autoCompactIfNeeded(context.Background(), &Job{
+		GuildID:   "g1",
+		ChannelID: "ch1",
+		UserID:    "u1",
+		Username:  "user",
+		MessageID: "msg-1",
+	}, "", func(msg string) {
+		notices = append(notices, msg)
+	})
+	if err != nil {
+		t.Fatalf("auto compact error: %v", err)
+	}
+	if !compacted {
+		t.Fatal("expected auto compact to run")
+	}
+	joined := strings.Join(notices, "\n")
+	if !strings.Contains(joined, "restored session context is still high") || !strings.Contains(joined, "90%") || strings.Contains(joined, "0% →") {
+		t.Fatalf("auto compact notices = %#v, want unknown-session ineffective warning", notices)
+	}
+	events := auditSink.Snapshot()
+	if len(events) != 1 || events[0].Type != "agent_auto_compact_ineffective" || events[0].Status != "warning" {
+		t.Fatalf("audit events = %+v, want ineffective warning", events)
+	}
+	if got := events[0].Metadata["unknown_loaded_session"]; got != true {
+		t.Fatalf("unknown_loaded_session metadata = %#v, want true", got)
+	}
+}
+
 func TestAutoCompactRecordsUsage(t *testing.T) {
 	L.Load("en")
 	store := NewUsageStore(t.TempDir(), "Asia/Taipei", 0)

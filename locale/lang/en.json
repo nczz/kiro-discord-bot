@@ -527,6 +527,7 @@
   "context.auto_compact_done_unknown": "Auto compact finished: context now %.0f%%. Continuing with the task.",
   "context.auto_compact_failed": "Auto compact at %.0f%% failed: %v. Continuing, but the agent may still refuse; use `/clear` if this repeats.",
   "context.auto_compact_ineffective": "Auto compact finished, but context is still high: %.0f%% → %.0f%%. Continuing, but use `/clear` if this repeats.",
+  "context.auto_compact_ineffective_unknown": "Auto compact finished, but restored session context is still high: %.0f%%. Continuing, but use `/clear` if this repeats.",
   "cmd.close.desc": "Close the thread agent",
   "cmd.close_thread.desc": "Close a thread agent by thread ID",
   "cmd.close_thread.opt.thread_id": "Thread ID to close",

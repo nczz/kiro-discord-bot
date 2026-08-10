@@ -519,6 +519,7 @@
   "context.auto_compact_done_unknown": "Auto compact 完成：目前 context %.0f%%。繼續處理任務。",
   "context.auto_compact_failed": "Context %.0f%% 時 auto compact 失敗：%v。仍會繼續嘗試；若反覆發生請用 `/clear`。",
   "context.auto_compact_ineffective": "Auto compact 完成，但 context 仍偏高：%.0f%% → %.0f%%。仍會繼續嘗試；若反覆發生請用 `/clear`。",
+  "context.auto_compact_ineffective_unknown": "Auto compact 完成，但已恢復 session 的 context 仍偏高：%.0f%%。仍會繼續嘗試；若反覆發生請用 `/clear`。",
   "cmd.close.desc": "關閉討論串 agent",
   "cmd.close_thread.desc": "依 thread ID 關閉討論串 agent",
   "cmd.close_thread.opt.thread_id": "要關閉的 thread ID",
