@@ -1573,6 +1573,19 @@ func (w *Worker) autoCompactIfNeeded(parentCtx context.Context, job *Job, thread
 		w.auditJobEvent("agent_auto_compact_failed", job, threadID, "error", metadata)
 		return true, err
 	}
+	if usage >= autoCompactContextThreshold && after >= autoCompactContextThreshold {
+		log.Printf("[worker %s] auto compact ineffective | msg=%s ctx_before=%.0f%% ctx_after=%.0f%%", w.channelID, msgID, usage, after)
+		w.recordUsageMetrics(job, threadID, "command:auto-compact", "warning", metrics)
+		if notify != nil {
+			notify("⚠️ " + L.Getf("context.auto_compact_ineffective", usage, after))
+		}
+		metadata := MetricsMetadata(metrics)
+		metadata["context_usage_before"] = usage
+		metadata["context_usage_after"] = after
+		metadata["unknown_loaded_session"] = unknownLoadedSession
+		w.auditJobEvent("agent_auto_compact_ineffective", job, threadID, "warning", metadata)
+		return true, nil
+	}
 	log.Printf("[worker %s] auto compact done | msg=%s ctx_before=%.0f%% ctx_after=%.0f%%", w.channelID, msgID, usage, after)
 	w.recordUsageMetrics(job, threadID, "command:auto-compact", "success", metrics)
 	if notify != nil {

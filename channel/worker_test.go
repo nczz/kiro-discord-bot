@@ -1729,6 +1729,41 @@ func TestAutoCompactRunsBeforeHighContextTask(t *testing.T) {
 	}
 }
 
+func TestAutoCompactWarnsWhenContextStillHigh(t *testing.T) {
+	L.Load("en")
+	agent := &fakeWorkerAgent{
+		contextUsage: 90.067,
+		metrics:      acp.TurnMetrics{ContextUsage: 90.067},
+	}
+	auditSink := &recordingAuditSink{}
+	w := newWorker("ch1", agent, 1, 30, 1, 1440, nil, "")
+	w.SetAuditSink(auditSink)
+	var notices []string
+	compacted, err := w.autoCompactIfNeeded(context.Background(), &Job{
+		GuildID:   "g1",
+		ChannelID: "ch1",
+		UserID:    "u1",
+		Username:  "user",
+		MessageID: "msg-1",
+	}, "", func(msg string) {
+		notices = append(notices, msg)
+	})
+	if err != nil {
+		t.Fatalf("auto compact error: %v", err)
+	}
+	if !compacted {
+		t.Fatal("expected auto compact to run")
+	}
+	joined := strings.Join(notices, "\n")
+	if !strings.Contains(joined, "still high") || !strings.Contains(joined, "90% → 90%") {
+		t.Fatalf("auto compact notices = %#v, want ineffective warning", notices)
+	}
+	events := auditSink.Snapshot()
+	if len(events) != 1 || events[0].Type != "agent_auto_compact_ineffective" || events[0].Status != "warning" {
+		t.Fatalf("audit events = %+v, want ineffective warning", events)
+	}
+}
+
 func TestAutoCompactSkipsBelowThreshold(t *testing.T) {
 	agent := &fakeWorkerAgent{contextUsage: 89}
 	w := newWorker("ch1", agent, 1, 30, 1, 1440, nil, "")

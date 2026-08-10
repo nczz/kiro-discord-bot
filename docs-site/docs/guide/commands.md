@@ -12,7 +12,7 @@ Commands are available as slash commands. Most also have `!` text-command equiva
 | `/doctor` | Run deployment, permission, and ACP diagnostics for the current target. |
 | `/reset` | Restart the current channel or thread agent. |
 | `/clear` | Clear conversation history for the current target. |
-| `/compact` | Ask the active engine to compact conversation context where supported. |
+| `/compact` | Ask the active engine to compact conversation context where supported; if usage stays high, use `/clear` to start a clean target session. |
 
 In a parent channel, `/clear` clears the active agent session and the bot-local channel chat log used for future session continuity. In a Discord thread, `/clear` clears the active thread agent session when one is running, truncates the bot-local `thread-<id>` chat log, and clears saved ACP session metadata so `/reset` cannot reload the previous agent session. The local thread cleanup still runs when no active in-memory thread agent exists. Discord messages that remain visible in the thread may still be used to rebuild context on future turns, so delete or edit details that should not be retained. Memory rules, flash memory, steering, and project files still apply.
 
