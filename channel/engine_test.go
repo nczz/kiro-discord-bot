@@ -1,9 +1,13 @@
 package channel
 
 import (
+	"errors"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nczz/kiro-discord-bot/acp"
 )
@@ -99,12 +103,108 @@ func newEngineTestManager(t *testing.T, defEngine string) *Manager {
 	if err != nil {
 		t.Fatalf("store: %v", err)
 	}
+	dataDir := t.TempDir()
 	return &Manager{
-		store:          store,
-		defaultEngine:  parseDialect(defEngine),
-		enabledEngines: parseEnabledEngines(defEngine, "kiro,omp"),
-		kiroCLI:        "kiro-cli",
-		ompPath:        "omp",
+		store:               store,
+		logger:              NewChatLogger(dataDir),
+		dataDir:             dataDir,
+		workers:             make(map[string]*Worker),
+		agents:              make(map[string]*acp.Agent),
+		threadAgents:        make(map[string]*threadAgentEntry),
+		channelLastActivity: make(map[string]time.Time),
+		defaultEngine:       parseDialect(defEngine),
+		enabledEngines:      parseEnabledEngines(defEngine, "kiro,omp"),
+		kiroCLI:             "kiro-cli",
+		ompPath:             "omp",
+	}
+}
+
+func fakeACPBinary(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	src := filepath.Join(dir, "fake-acp.go")
+	bin := filepath.Join(dir, "fake-acp")
+	code := `package main
+
+import (
+	"bufio"
+	"encoding/json"
+	"fmt"
+	"os"
+	"strings"
+)
+
+func main() {
+	if len(os.Args) >= 5 && os.Args[1] == "chat" && os.Args[2] == "--list-models" && os.Args[3] == "-f" && os.Args[4] == "json" {
+		fmt.Println(` + "`" + `{"default_model":"model-a","models":[{"model_name":"Model A","model_id":"model-a","description":"Alpha","rate_multiplier":1,"rate_unit":"x"}]}` + "`" + `)
+		return
+	}
+	if path := os.Getenv("FAKE_ACP_ARGS_FILE"); path != "" {
+		args := strings.Join(os.Args[1:], "\n")
+		_ = os.WriteFile(path, []byte(args), 0644)
+	}
+	if os.Getenv("FAKE_ACP_FAIL_KIRO_MODEL") != "" && strings.Contains("\n"+strings.Join(os.Args[1:], "\n")+"\n", "\n--model\nmodel-a\n") {
+		fmt.Fprintln(os.Stderr, "The model 'model-a' is not available")
+		os.Exit(1)
+	}
+	scanner := bufio.NewScanner(os.Stdin)
+	enc := json.NewEncoder(os.Stdout)
+	for scanner.Scan() {
+		var req map[string]any
+		if err := json.Unmarshal(scanner.Bytes(), &req); err != nil {
+			continue
+		}
+		method, _ := req["method"].(string)
+		if method == "session/set_config_option" && os.Getenv("FAKE_ACP_FAIL_MODEL_CONFIG") != "" {
+			_ = enc.Encode(map[string]any{
+				"jsonrpc": "2.0",
+				"id": req["id"],
+				"error": map[string]any{"code": -32603, "message": "model unavailable"},
+			})
+			continue
+		}
+		result := map[string]any{}
+		switch method {
+		case "initialize":
+			result = map[string]any{
+				"protocolVersion": 1,
+				"agentInfo": map[string]string{"name": "fake-acp", "version": "test"},
+			}
+		case "session/new", "session/load":
+			result = map[string]any{"sessionId": "sid-test"}
+		}
+		_ = enc.Encode(map[string]any{"jsonrpc": "2.0", "id": req["id"], "result": result})
+	}
+}
+`
+	if err := os.WriteFile(src, []byte(code), 0644); err != nil {
+		t.Fatalf("write fake acp: %v", err)
+	}
+	cmd := exec.Command("go", "build", "-o", bin, src)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("build fake acp: %v\n%s", err, out)
+	}
+	return bin
+}
+
+func TestAgentStartModelErrorMatchesOnlyModelSelectionFailures(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "omp config stage", err: errors.New("session/set_config_option model: rpc error -32603"), want: true},
+		{name: "model unavailable", err: errors.New("The model 'openai-codex/gpt-5.6-luna' is not available"), want: true},
+		{name: "unknown model", err: errors.New("unknown model \"missing\""), want: true},
+		{name: "mcp model wording", err: errors.New("mcp model context server failed during initialize"), want: false},
+		{name: "nil", err: nil, want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := agentStartModelError(tc.err); got != tc.want {
+				t.Fatalf("agentStartModelError(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
 	}
 }
 
@@ -148,6 +248,201 @@ func TestEngineForThreadInheritance(t *testing.T) {
 	_ = m.store.Set(m.sessionKey(sessionTargetThread, "th1"), &Session{Engine: "kiro"})
 	if d, bin := m.engineForThread("th1", "chP"); d != acp.DialectKiro || bin != "kiro-cli" {
 		t.Fatalf("thread override kiro should win, got %v %s", d, bin)
+	}
+}
+
+func TestSwitchEngineClearsModelOnSuccessfulEngineChange(t *testing.T) {
+	m := newEngineTestManager(t, "omp")
+	fake := fakeACPBinary(t)
+	m.kiroCLI = fake
+	m.ompPath = fake
+	cwd := t.TempDir()
+	m.defaultCWD = cwd
+	if err := m.setChannelSession("ch1", &Session{
+		CWD:       cwd,
+		Model:     "openai-codex/gpt-5.6-luna",
+		Engine:    "omp",
+		SessionID: "old-session",
+	}); err != nil {
+		t.Fatalf("set channel session: %v", err)
+	}
+
+	if err := m.SwitchEngine("ch1", "kiro"); err != nil {
+		t.Fatalf("SwitchEngine: %v", err)
+	}
+	t.Cleanup(func() { m.StopAll() })
+	got, ok := m.getChannelSession("ch1")
+	if !ok {
+		t.Fatal("channel session should remain after switch")
+	}
+	if got.Engine != "kiro" || got.Model != "" {
+		t.Fatalf("switched session = %+v, want kiro with cleared model", got)
+	}
+}
+
+func TestSwitchThreadEngineClearsThreadModelOnSuccessfulEngineChange(t *testing.T) {
+	m := newEngineTestManager(t, "omp")
+	fake := fakeACPBinary(t)
+	m.kiroCLI = fake
+	m.ompPath = fake
+	cwd := t.TempDir()
+	m.defaultCWD = cwd
+	if err := m.setChannelSession("parent", &Session{CWD: cwd, Engine: "omp"}); err != nil {
+		t.Fatalf("set parent session: %v", err)
+	}
+	if err := m.setThreadSession("thread", "parent", &Session{
+		CWD:       cwd,
+		Model:     "openai-codex/gpt-5.6-luna",
+		Engine:    "omp",
+		SessionID: "old-thread-session",
+	}); err != nil {
+		t.Fatalf("set thread session: %v", err)
+	}
+
+	if err := m.SwitchThreadEngine("thread", "parent", "kiro"); err != nil {
+		t.Fatalf("SwitchThreadEngine: %v", err)
+	}
+	t.Cleanup(func() { m.StopAll() })
+	got, ok := m.getThreadSession("thread")
+	if !ok {
+		t.Fatal("thread session should remain after switch")
+	}
+	if got.Engine != "kiro" || got.Model != "" {
+		t.Fatalf("switched thread session = %+v, want kiro with cleared model", got)
+	}
+}
+
+func TestRestartClearsUnavailableKiroStartupModel(t *testing.T) {
+	m := newEngineTestManager(t, "kiro")
+	fake := fakeACPBinary(t)
+	m.kiroCLI = fake
+	cwd := t.TempDir()
+	argsFile := filepath.Join(t.TempDir(), "args.txt")
+	t.Setenv("FAKE_ACP_ARGS_FILE", argsFile)
+	m.defaultCWD = cwd
+	if err := m.setChannelSession("ch1", &Session{
+		CWD:       cwd,
+		Model:     "missing-model",
+		Engine:    "kiro",
+		SessionID: "old-session",
+	}); err != nil {
+		t.Fatalf("set channel session: %v", err)
+	}
+
+	if err := m.Restart("ch1"); err != nil {
+		t.Fatalf("Restart: %v", err)
+	}
+	t.Cleanup(func() { m.StopAll() })
+	got, ok := m.getChannelSession("ch1")
+	if !ok {
+		t.Fatal("channel session should remain after restart")
+	}
+	if got.Model != "" {
+		t.Fatalf("restart should clear unavailable startup model, got %+v", got)
+	}
+	args, err := os.ReadFile(argsFile)
+	if err != nil {
+		t.Fatalf("read fake acp args: %v", err)
+	}
+	if strings.Contains(string(args), "--model") || strings.Contains(string(args), "missing-model") {
+		t.Fatalf("agent should restart without unavailable model, args:\n%s", args)
+	}
+}
+
+func TestThreadEngineOverrideDoesNotInheritOrClearParentModel(t *testing.T) {
+	m := newEngineTestManager(t, "omp")
+	fake := fakeACPBinary(t)
+	m.kiroCLI = fake
+	m.ompPath = fake
+	cwd := t.TempDir()
+	argsFile := filepath.Join(t.TempDir(), "args.txt")
+	t.Setenv("FAKE_ACP_ARGS_FILE", argsFile)
+	m.defaultCWD = cwd
+	if err := m.setChannelSession("parent", &Session{
+		CWD:    cwd,
+		Engine: "omp",
+		Model:  "openai-codex/gpt-5.6-luna",
+	}); err != nil {
+		t.Fatalf("set parent session: %v", err)
+	}
+	if err := m.setThreadSession("thread", "parent", &Session{
+		CWD:    cwd,
+		Engine: "kiro",
+	}); err != nil {
+		t.Fatalf("set thread session: %v", err)
+	}
+
+	if err := m.ResetThreadAgent("thread"); err != nil {
+		t.Fatalf("ResetThreadAgent: %v", err)
+	}
+	t.Cleanup(func() { m.StopAll() })
+	parent, _ := m.getChannelSession("parent")
+	if parent.Model != "openai-codex/gpt-5.6-luna" {
+		t.Fatalf("thread startup should not clear parent model, got parent %+v", parent)
+	}
+	thread, _ := m.getThreadSession("thread")
+	if thread.Model != "" {
+		t.Fatalf("thread should not persist inherited cross-engine model, got %+v", thread)
+	}
+	args, err := os.ReadFile(argsFile)
+	if err != nil {
+		t.Fatalf("read fake acp args: %v", err)
+	}
+	if strings.Contains(string(args), "--model") || strings.Contains(string(args), "openai-codex/gpt-5.6-luna") {
+		t.Fatalf("thread override should start without parent OMP model, args:\n%s", args)
+	}
+}
+
+func TestSwitchModelReportsStartupModelFailure(t *testing.T) {
+	m := newEngineTestManager(t, "kiro")
+	fake := fakeACPBinary(t)
+	m.kiroCLI = fake
+	cwd := t.TempDir()
+	t.Setenv("FAKE_ACP_FAIL_KIRO_MODEL", "1")
+	m.defaultCWD = cwd
+	if err := m.setChannelSession("ch1", &Session{
+		CWD:    cwd,
+		Engine: "kiro",
+		Model:  "old-model",
+	}); err != nil {
+		t.Fatalf("set channel session: %v", err)
+	}
+
+	restarted, err := m.SwitchModel("ch1", "model-a")
+	if err == nil {
+		t.Fatal("SwitchModel should report explicit startup model failure")
+	}
+	if !restarted {
+		t.Fatal("SwitchModel should report that it attempted restart")
+	}
+	got, _ := m.getChannelSession("ch1")
+	if got.Model != "old-model" {
+		t.Fatalf("failed explicit model switch should restore old model, got %+v", got)
+	}
+}
+
+func TestRestartRetriesOmpStartupModelErrorWithoutModel(t *testing.T) {
+	m := newEngineTestManager(t, "omp")
+	fake := fakeACPBinary(t)
+	m.ompPath = fake
+	cwd := t.TempDir()
+	t.Setenv("FAKE_ACP_FAIL_MODEL_CONFIG", "1")
+	m.defaultCWD = cwd
+	m.defaultModel = "openai-codex/gpt-5.6-luna"
+	if err := m.setChannelSession("ch1", &Session{CWD: cwd, Engine: "omp"}); err != nil {
+		t.Fatalf("set channel session: %v", err)
+	}
+
+	if err := m.Restart("ch1"); err != nil {
+		t.Fatalf("Restart should retry without unavailable OMP model: %v", err)
+	}
+	t.Cleanup(func() { m.StopAll() })
+	got, ok := m.getChannelSession("ch1")
+	if !ok {
+		t.Fatal("channel session should remain after restart")
+	}
+	if got.Model != "" {
+		t.Fatalf("retry should persist empty model after OMP startup model failure, got %+v", got)
 	}
 }
 

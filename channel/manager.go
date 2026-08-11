@@ -1205,6 +1205,10 @@ func (m *Manager) ListStoredSessions() []SessionView {
 
 // Restart stops the current agent and immediately starts a new one.
 func (m *Manager) Restart(channelID string) error {
+	return m.restart(channelID, true)
+}
+
+func (m *Manager) restart(channelID string, allowStartupModelFallback bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -1216,7 +1220,7 @@ func (m *Manager) Restart(channelID string) error {
 			log.Printf("[manager] save session on restart: %v", err)
 		}
 	}
-	_, err := m.startAgentAndWorker(channelID)
+	_, err := m.startAgentAndWorkerWithModelFallback(channelID, allowStartupModelFallback)
 	return err
 }
 
@@ -1885,7 +1889,7 @@ func (m *Manager) SwitchModel(channelID, model string) (bool, error) {
 	if err := m.SetModel(channelID, model); err != nil {
 		return false, err
 	}
-	if err := m.Restart(channelID); err != nil {
+	if err := m.restart(channelID, false); err != nil {
 		if oldCopy != nil {
 			_ = m.setChannelSession(channelID, oldCopy)
 		}
@@ -1986,6 +1990,72 @@ func (m *Manager) validateModelForThread(threadID, parentChannelID, model string
 		return fmt.Errorf("model validation requires an active %s thread agent; start the thread agent first or use `/models` while it is running", dialect.String())
 	}
 	return m.validateModelID(model)
+}
+
+func (m *Manager) validateStartupModel(dialect acp.Dialect, model string) error {
+	model = strings.TrimSpace(model)
+	if model == "" || dialect != acp.DialectKiro {
+		return nil
+	}
+	return m.validateModelID(model)
+}
+
+func (m *Manager) logStartupModelIgnored(dialect acp.Dialect, model, scope, targetID string, err error) {
+	log.Printf("[manager] ignoring %s startup model %q for %s on %s: %v", scope, model, targetID, dialect.String(), err)
+}
+
+func agentStartModelError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	if strings.Contains(msg, "session/set_config_option model") {
+		return true
+	}
+	for _, phrase := range []string{
+		"model unavailable",
+		"model is not available",
+		"model not available",
+		"model not found",
+		"unknown model",
+		"invalid model",
+	} {
+		if strings.Contains(msg, phrase) {
+			return true
+		}
+	}
+	if strings.Contains(msg, "model") && strings.Contains(msg, "not available") {
+		return true
+	}
+	return false
+}
+
+func (m *Manager) clearChannelStartupModel(channelID string) {
+	sess, ok := m.getChannelSession(channelID)
+	if !ok || sess == nil {
+		return
+	}
+	cp := *sess
+	cp.Model = ""
+	cp.SessionID = ""
+	cp.AgentName = ""
+	if err := m.setChannelSession(channelID, &cp); err != nil {
+		log.Printf("[manager] clear channel startup model: %v", err)
+	}
+}
+
+func (m *Manager) clearThreadStartupModel(threadID, parentChannelID string) {
+	sess, ok := m.getThreadSession(threadID)
+	if !ok || sess == nil {
+		return
+	}
+	cp := *sess
+	cp.Model = ""
+	cp.SessionID = ""
+	cp.AgentName = ""
+	if err := m.setThreadSession(threadID, parentChannelID, &cp); err != nil {
+		log.Printf("[manager] clear thread startup model: %v", err)
+	}
 }
 
 func (m *Manager) cliModels() ([]acp.ModelEntry, string, error) {
@@ -2408,17 +2478,25 @@ func (m *Manager) ensureWorker(channelID string) (*Worker, error) {
 }
 
 func (m *Manager) startAgentAndWorker(channelID string) (*Worker, error) {
+	return m.startAgentAndWorkerWithModelFallback(channelID, true)
+}
+
+func (m *Manager) startAgentAndWorkerWithModelFallback(channelID string, allowStartupModelFallback bool) (*Worker, error) {
 	cwd := m.defaultCWD
 	model := m.defaultModel
+	modelSource := "default"
 	agentName := "ch-" + channelID
 	var mentionRefs []discordmention.Ref
+	var channelSess *Session
 
 	if sess, ok := m.getChannelSession(channelID); ok {
+		channelSess = sess
 		if sess.CWD != "" {
 			cwd = sess.CWD
 		}
 		if sess.Model != "" {
 			model = sess.Model
+			modelSource = "channel"
 		}
 		mentionRefs = cloneMentionRefs(sess.MentionRefs)
 	}
@@ -2437,16 +2515,41 @@ func (m *Manager) startAgentAndWorker(channelID string) (*Worker, error) {
 	// Try to load previous session if available
 	opts := m.agentOptsForChannel(channelID)
 	channelEngine := ""
-	if sess, ok := m.getChannelSession(channelID); ok {
-		if sess.SessionID != "" {
-			opts.LoadSessionID = sess.SessionID
+	if channelSess != nil {
+		if channelSess.SessionID != "" {
+			opts.LoadSessionID = channelSess.SessionID
 		}
-		channelEngine = sess.Engine
+		channelEngine = channelSess.Engine
 	}
 	dialect, binary := m.engineForChannel(channelID)
+	if model != "" {
+		if err := m.validateStartupModel(dialect, model); err != nil {
+			if !allowStartupModelFallback {
+				return nil, fmt.Errorf("startup model %q unavailable for %s: %w", model, dialect.String(), err)
+			}
+			m.logStartupModelIgnored(dialect, model, modelSource, channelID, err)
+			if modelSource == "channel" {
+				m.clearChannelStartupModel(channelID)
+				opts.LoadSessionID = ""
+			}
+			model = ""
+		}
+	}
 	opts = m.applyEngine(opts, dialect)
 
 	agent, err := acp.StartAgent(agentName, binary, cwd, model, opts)
+	if err != nil && model != "" && agentStartModelError(err) {
+		if !allowStartupModelFallback {
+			return nil, fmt.Errorf("start agent: %w", err)
+		}
+		if modelSource == "channel" {
+			m.clearChannelStartupModel(channelID)
+		}
+		opts.LoadSessionID = ""
+		log.Printf("[manager] retrying %s without startup model %q after model start error: %v", agentName, model, err)
+		model = ""
+		agent, err = acp.StartAgent(agentName, binary, cwd, model, opts)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("start agent: %w", err)
 	}
@@ -3367,13 +3470,13 @@ func (m *Manager) threadAgentLimitErrorLocked() error {
 func (m *Manager) spawnThreadAgent(threadID, parentChannelID string, modelOverride ...string) (*threadAgentEntry, error) {
 	cwd := m.defaultCWD
 	model := m.defaultModel
+	modelSource := "default"
 	var mentionRefs []discordmention.Ref
+	var parentSess *Session
 	if sess, ok := m.getChannelSession(parentChannelID); ok {
+		parentSess = sess
 		if sess.CWD != "" {
 			cwd = sess.CWD
-		}
-		if sess.Model != "" {
-			model = sess.Model
 		}
 	}
 	threadSess, hasThreadSession := m.getThreadSession(threadID)
@@ -3381,13 +3484,23 @@ func (m *Manager) spawnThreadAgent(threadID, parentChannelID string, modelOverri
 		if threadSess.CWD != "" {
 			cwd = threadSess.CWD
 		}
-		if threadSess.Model != "" {
-			model = threadSess.Model
-		}
 		mentionRefs = cloneMentionRefs(threadSess.MentionRefs)
+	}
+	dialect, binary := m.engineForThread(threadID, parentChannelID)
+	if parentSess != nil && parentSess.Model != "" {
+		parentDialect, _ := m.engineForChannel(parentChannelID)
+		if parentDialect == dialect {
+			model = parentSess.Model
+			modelSource = "parent"
+		}
+	}
+	if hasThreadSession && threadSess.Model != "" {
+		model = threadSess.Model
+		modelSource = "thread"
 	}
 	if len(modelOverride) > 0 && modelOverride[0] != "" {
 		model = modelOverride[0]
+		modelSource = "override"
 	}
 	var err error
 	cwd, err = m.ValidateCWD(cwd)
@@ -3400,10 +3513,35 @@ func (m *Manager) spawnThreadAgent(threadID, parentChannelID string, modelOverri
 	if hasThreadSession && threadSess.SessionID != "" {
 		opts.LoadSessionID = threadSess.SessionID
 	}
-	dialect, binary := m.engineForThread(threadID, parentChannelID)
+
+	if modelSource != "override" && model != "" {
+		if err := m.validateStartupModel(dialect, model); err != nil {
+			switch modelSource {
+			case "parent":
+				log.Printf("[manager] ignoring inherited parent startup model %q for thread %s on %s: %v", model, threadID, dialect.String(), err)
+			case "thread":
+				m.logStartupModelIgnored(dialect, model, modelSource, threadID, err)
+				m.clearThreadStartupModel(threadID, parentChannelID)
+			}
+			opts.LoadSessionID = ""
+			model = ""
+		}
+	}
 	opts = m.applyEngine(opts, dialect)
 
 	agent, err := acp.StartAgent(agentName, binary, cwd, model, opts)
+	if err != nil && modelSource != "override" && model != "" && agentStartModelError(err) {
+		switch modelSource {
+		case "parent":
+			log.Printf("[manager] retrying %s without inherited parent startup model %q after model start error: %v", agentName, model, err)
+		case "thread":
+			m.clearThreadStartupModel(threadID, parentChannelID)
+		}
+		opts.LoadSessionID = ""
+		log.Printf("[manager] retrying %s without startup model %q after model start error: %v", agentName, model, err)
+		model = ""
+		agent, err = acp.StartAgent(agentName, binary, cwd, model, opts)
+	}
 	if err != nil {
 		return nil, err
 	}

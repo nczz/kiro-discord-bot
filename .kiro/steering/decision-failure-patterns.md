@@ -285,6 +285,29 @@ Regression expectation:
 
 - Test delivered safe egress followed by agent error separately from true undelivered failure. Do not hide real failures just because any tool ran.
 
+### Engine-Scoped Model Leakage
+
+Symptoms:
+
+- A channel or thread works on one engine, then fails after switching to another engine with an unavailable model error.
+- Kiro receives an OMP-only model such as `openai-codex/gpt-5.6-luna` after `/engine kiro` or `/reset`.
+- Creating or reopening a thread repeatedly fails until the parent channel runs `/model <kiro-model>` again.
+
+First checks:
+
+- `channel/engine.go`: `/engine` must clear persisted `Session.Model` when changing engine.
+- `channel/manager.go`: channel/thread startup must validate or clear persisted startup models before `acp.StartAgent`.
+- `channel/manager.go`: thread spawn model precedence is default → parent channel → thread override → explicit command override.
+- `acp/dialect.go`: Kiro passes model at launch; OMP selects model via `session/set_config_option`.
+
+Regression expectation:
+
+- Test channel and thread engine switches clear persisted model and session reuse state.
+- Test startup clears an unavailable persisted Kiro model and starts without `--model`.
+- Test OMP startup retries without a configured model when `session/set_config_option` reports the model unavailable.
+- Test thread engine overrides do not inherit or clear the parent channel's model from another engine.
+- Test explicit `/model` startup failures remain user-visible instead of falling back silently.
+
 ### MCP Tool Used For Normal Replies
 
 Symptoms:

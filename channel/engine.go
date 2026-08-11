@@ -207,7 +207,10 @@ func (m *Manager) SwitchEngine(channelID, engineName string) error {
 	newSess := &Session{Engine: d.String()}
 	if oldSess != nil {
 		newSess.CWD = oldSess.CWD
-		newSess.Model = oldSess.Model
+		// Model IDs are engine-scoped. Do not carry a Kiro/OMP model across
+		// an engine switch; the target engine should choose its own default
+		// until the user explicitly selects a model in that engine.
+		newSess.Model = ""
 	}
 	if err := m.setChannelSession(channelID, newSess); err != nil {
 		return err
@@ -246,6 +249,7 @@ func (m *Manager) SwitchThreadEngine(threadID, parentChannelID, engineName strin
 	}
 	sess := *oldSess
 	sess.Engine = d.String()
+	sess.Model = ""
 	sess.SessionID = "" // fresh session on the new engine
 	sess.AgentName = ""
 	if err := m.setThreadSession(threadID, parentChannelID, &sess); err != nil {
