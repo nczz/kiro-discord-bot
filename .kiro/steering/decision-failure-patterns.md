@@ -372,6 +372,26 @@ Regression expectation:
 
 - Deployment handoff must report each target separately and include artifact identity plus runtime version evidence.
 
+### MCP Server Binary Installed As Main Bot
+
+Symptoms:
+
+- `mcp-discord` or another MCP server process starts a full `kiro-discord-bot` runtime instead of a stdio MCP server.
+- Process tree shows recursion such as `kiro-discord-bot -> kiro-cli -> kiro-cli-chat -> mcp-discord-server -> kiro-cli`.
+- The same Discord `message_create` raw event appears multiple times with identical payload hashes, and one user message is enqueued/answered multiple times.
+- Memory climbs quickly and OOM kills `kiro-cli-chat` or the service after an agent uses the MCP server.
+
+First checks:
+
+- Compare release artifact binary hashes on the host: the main bot, `mcp-discord`, and `mcp-media` must be distinct; compatibility paths such as `mcp-discord-server` and `mcp-media-server` must match their corresponding MCP binary, never the main bot.
+- Read the active MCP config (`KIRO_MCP_CONFIG`) and verify each command path points to the matching MCP binary.
+- Inspect process ancestry after startup and after a lightweight MCP initialize smoke; MCP servers must not spawn a new full bot or gateway listener.
+- Check `discord_events` and `bot_audit_events` for duplicate counts grouped by `message_id` after restart.
+
+Regression expectation:
+
+- Deployment handoff must include per-binary checksums for the main bot and MCP binaries, plus process-tree evidence that MCP server commands do not recurse into another bot runtime.
+
 ### User-Visible Timestamp Shows Wrong Timezone
 
 Symptoms:
