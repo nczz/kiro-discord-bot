@@ -927,6 +927,7 @@ type targetState struct {
 	DelegationDepth       int      `json:"delegation_depth"`
 	RequesterID           string   `json:"requester_id"`
 	RequesterName         string   `json:"requester_name"`
+	Source                string   `json:"source"`
 	CanManageChannel      bool     `json:"can_manage_channel"`
 	CanManageGuild        bool     `json:"can_manage_guild"`
 	AllowedMentionUserIDs []string `json:"allowed_mention_user_ids"`

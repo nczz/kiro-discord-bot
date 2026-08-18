@@ -351,6 +351,25 @@ Regression expectation:
 
 - Cover direct human mention, bot-only mention, mixed mentions, channel mode, thread mode, and role-only peers. Do not make bot-to-bot coordination a hidden side effect.
 
+### A2A Receiver Consent Versus Sender Delegation
+
+Symptoms:
+
+- `bot_a2a_trust_peer` on the receiver says a peer may delegate into the channel, but `bot_a2a_delegate` on the sender returns `unauthorized_target`.
+- `bot_a2a_peers` shows the receiver runtime online and inbound-allowed, but `peerPolicy.outboundDelegateTargets` is empty.
+- Direct human requests to delegate feel blocked by an extra sender-side setup step, while cron or remote A2A delegation still needs durable policy.
+
+First checks:
+
+- Receiver channel policy `accept_from_runtimes`: admission consent only.
+- Sender channel policy `delegate_targets`: durable outbound authorization for scheduled, cron, remote A2A, bot-handoff, or recurring delegation.
+- Bot-tools target state `source` and `remote_a2a`: direct `message`, `thread`, and slash `/a2a ask` may use an ephemeral one-shot runtime target; `cron`, `bot_handoff`, and `remote_a2a` must fail closed without persistent `delegate_targets`.
+- Audit metadata `authorization_mode` and `persistent_delegate_target` on `a2a_task_send_requested`.
+
+Regression expectation:
+
+- Cover direct human one-shot delegation without mutating `delegate_targets`, plus cron/remote/bot-handoff rejection without persistent outbound policy.
+
 ### Release Artifact Or Runtime Version Mismatch
 
 Symptoms:

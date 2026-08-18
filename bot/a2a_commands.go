@@ -136,7 +136,7 @@ func a2aSlashOptions() []*discordgo.ApplicationCommandOption {
 }
 
 func a2aArgsFromSlashOptions(options []*discordgo.ApplicationCommandInteractionDataOption, guildID, channelID, userID, username string, manage bool) string {
-	payload := a2aSlashPayload{Request: botmcp.A2AToolRequest{GuildID: guildID, ChannelID: channelID, RequestedBy: username, RequestedByID: userID, ManageChannels: manage}}
+	payload := a2aSlashPayload{Request: botmcp.A2AToolRequest{GuildID: guildID, ChannelID: channelID, RequestedBy: username, RequestedByID: userID, RequestSource: "slash", ManageChannels: manage}}
 	if len(options) == 0 {
 		payload.Subcommand = "peers"
 		raw, _ := json.Marshal(payload)

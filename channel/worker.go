@@ -66,6 +66,13 @@ type Job struct {
 	OnThreadReady          func(string)
 }
 
+func (job Job) botToolsRequestSource() string {
+	if job.Handoff {
+		return "bot_handoff"
+	}
+	return strings.TrimSpace(job.Source)
+}
+
 type DeliveryMode string
 
 const (
@@ -684,7 +691,7 @@ func (w *Worker) execute(job *Job) {
 		job.OnThreadReady(threadID)
 	}
 	canManageChannel, canManageGuild := botToolsRequesterPermissions(job.Session, job.UserID, threadID, w.channelID)
-	if err := writeBotToolsTargetStateWithRequester(w.botToolsTargetStatePath, threadID, job.DisableBotEgress, job.MentionRefs, job.RemoteA2A, job.AllowRemoteMemoryWrite, job.UserID, job.Username, job.A2ADelegationDepth, canManageChannel, canManageGuild); err != nil {
+	if err := writeBotToolsTargetStateWithRequesterSource(w.botToolsTargetStatePath, threadID, job.DisableBotEgress, job.MentionRefs, job.RemoteA2A, job.AllowRemoteMemoryWrite, job.UserID, job.Username, job.A2ADelegationDepth, canManageChannel, canManageGuild, job.botToolsRequestSource()); err != nil {
 		log.Printf("[worker %s] write bot-tools target state: %v", w.channelID, err)
 	}
 
@@ -1255,7 +1262,7 @@ func (w *Worker) executeInline(job *Job) {
 	}
 	targetID := job.inlineBotToolsTargetID()
 	canManageChannel, canManageGuild := botToolsRequesterPermissions(job.Session, job.UserID, targetID, job.ChannelID)
-	if err := writeBotToolsTargetStateWithRequester(w.botToolsTargetStatePath, targetID, job.DisableBotEgress, job.MentionRefs, job.RemoteA2A, job.AllowRemoteMemoryWrite, job.UserID, job.Username, job.A2ADelegationDepth, canManageChannel, canManageGuild); err != nil {
+	if err := writeBotToolsTargetStateWithRequesterSource(w.botToolsTargetStatePath, targetID, job.DisableBotEgress, job.MentionRefs, job.RemoteA2A, job.AllowRemoteMemoryWrite, job.UserID, job.Username, job.A2ADelegationDepth, canManageChannel, canManageGuild, job.botToolsRequestSource()); err != nil {
 		log.Printf("[worker %s] write inline bot-tools target state: %v", w.channelID, err)
 	}
 

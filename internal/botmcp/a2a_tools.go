@@ -83,6 +83,7 @@ type A2AToolRequest struct {
 	ChannelID               string   `json:"channel_id,omitempty"`
 	RequestedBy             string   `json:"requested_by,omitempty"`
 	RequestedByID           string   `json:"requested_by_id,omitempty"`
+	RequestSource           string   `json:"request_source,omitempty"`
 	ManageChannels          bool     `json:"manage_channels,omitempty"`
 	TargetAgent             string   `json:"target_agent,omitempty"`
 	SkillID                 string   `json:"skill_id,omitempty"`
@@ -814,8 +815,14 @@ func (s *A2AService) Delegate(ctx context.Context, req A2AToolRequest) (A2AToolR
 	if err != nil {
 		return responseError(err), nil
 	}
+	authorizationMode := "persistent_policy"
+	persistentDelegateTarget := true
 	if !delegated && !exactRuntimePolicy {
-		return responseError(fmt.Errorf("%w: target must be allowed by current channel delegate_targets policy", errorCode(a2a.ErrorUnauthorizedTarget))), nil
+		if !s.directHumanEphemeralDelegateAllowed(req, peer, targetChannelRef) {
+			return responseError(fmt.Errorf("%w: target must be allowed by current channel delegate_targets policy", errorCode(a2a.ErrorUnauthorizedTarget))), nil
+		}
+		authorizationMode = "ephemeral_user_request"
+		persistentDelegateTarget = false
 	}
 	req.SkillID = effectiveSkill
 	message := strings.TrimSpace(req.Message)
@@ -855,7 +862,10 @@ func (s *A2AService) Delegate(ctx context.Context, req A2AToolRequest) (A2AToolR
 	needsConfirmation := req.RequiresConfirmation || s.cfg.Config.RequireConfirmationForRemote
 	if needsConfirmation && strings.TrimSpace(req.ConfirmationToken) == "" {
 		exp := s.cfg.Now().UTC().Add(10 * time.Minute)
-		return A2AToolResponse{OK: true, Message: "A2A delegation requires confirmation", RequiresConfirmation: true, ConfirmationSummary: fmt.Sprintf("Delegate %q to %s@%s/%s via %s/%s (%s)", truncateForSummary(message), target, targetChannelRef, req.SkillID, resultVisibility, transcriptMode, deliveryReason), RiskLabels: []string{"remote_task", "data_egress"}, ExpiresAt: exp.Format(time.RFC3339), ChangeID: changeID, ConfirmationToken: s.confirmationToken("delegate", changeID, req, message), Metadata: deliveryResponseMetadata(resultVisibility, transcriptMode, deliveryReason, deliveryChannelID(req.ChannelID))}, nil
+		meta := deliveryResponseMetadata(resultVisibility, transcriptMode, deliveryReason, deliveryChannelID(req.ChannelID))
+		meta["authorization_mode"] = authorizationMode
+		meta["persistent_delegate_target"] = persistentDelegateTarget
+		return A2AToolResponse{OK: true, Message: "A2A delegation requires confirmation", RequiresConfirmation: true, ConfirmationSummary: fmt.Sprintf("Delegate %q to %s@%s/%s via %s/%s (%s)", truncateForSummary(message), target, targetChannelRef, req.SkillID, resultVisibility, transcriptMode, deliveryReason), RiskLabels: []string{"remote_task", "data_egress"}, ExpiresAt: exp.Format(time.RFC3339), ChangeID: changeID, ConfirmationToken: s.confirmationToken("delegate", changeID, req, message), Metadata: meta}, nil
 	}
 	if needsConfirmation {
 		if err := s.verifyConfirmation("delegate", changeID, req, message); err != nil {
@@ -916,6 +926,8 @@ func (s *A2AService) Delegate(ctx context.Context, req A2AToolRequest) (A2AToolR
 			ErrorCode:              a2a.ErrorNATSPublishFailed,
 			PayloadSize:            len(payload),
 		})
+		meta["authorization_mode"] = authorizationMode
+		meta["persistent_delegate_target"] = persistentDelegateTarget
 		_ = s.recordAudit(ctx, a2a.AuditTaskPublishFailed, req, "error", err.Error(), meta)
 		return responseError(fmt.Errorf("%w: %v", errorCode(a2a.ErrorNATSPublishFailed), err)), nil
 	}
@@ -942,11 +954,15 @@ func (s *A2AService) Delegate(ctx context.Context, req A2AToolRequest) (A2AToolR
 		ActorDiscordUserID:     req.RequestedByID,
 		PayloadSize:            len(payload),
 	})
+	meta["authorization_mode"] = authorizationMode
+	meta["persistent_delegate_target"] = persistentDelegateTarget
 	_ = s.recordAudit(ctx, a2a.AuditTaskSendRequested, req, "queued", "", meta)
 	sum := summarizeTask(row)
 	metaOut := deliveryResponseMetadata(resultVisibility, transcriptMode, deliveryReason, delivery.DiscordReplyThreadID)
 	metaOut["origin_runtime_ref"] = taskReq.OriginRuntimeRef
 	metaOut["success_confirmed"] = false
+	metaOut["authorization_mode"] = authorizationMode
+	metaOut["persistent_delegate_target"] = persistentDelegateTarget
 	metaOut["must_check_status"] = true
 	return A2AToolResponse{OK: true, Message: delegateSuccessMessage(resultVisibility, transcriptMode, deliveryReason), Task: &sum, Metadata: metaOut}, nil
 }
@@ -1735,6 +1751,38 @@ func deliveryResponseMetadata(resultVisibility, transcriptMode, reason, discordT
 	return meta
 }
 
+func (s *A2AService) directHumanEphemeralDelegateAllowed(req A2AToolRequest, peer a2a.PeerRow, targetChannelRef string) bool {
+	if strings.TrimSpace(req.RequestedByID) == "" || strings.TrimSpace(targetChannelRef) == "" {
+		return false
+	}
+	if peer.Stale {
+		return false
+	}
+	runtimeKind := strings.TrimSpace(peer.ExtendedCard.Runtime)
+	if runtimeKind != "channel" && runtimeKind != "thread" {
+		return false
+	}
+	peerChannelRef := strings.TrimSpace(peer.ExtendedCard.ChannelRef)
+	if peerChannelRef != "" && peerChannelRef != strings.TrimSpace(targetChannelRef) {
+		return false
+	}
+	source := strings.TrimSpace(req.RequestSource)
+	if state, ok := currentTargetState(); ok {
+		if state.RemoteA2A {
+			return false
+		}
+		if source == "" {
+			source = strings.TrimSpace(state.Source)
+		}
+	}
+	switch source {
+	case "message", "thread", "slash":
+		return true
+	default:
+		return false
+	}
+}
+
 func policyDelegatesRuntime(policy a2a.ChannelA2APolicy, agent, skill, targetChannelRef string) bool {
 	for _, target := range policy.DelegateTargets {
 		targetAgent := strings.TrimSpace(target.RuntimeAgentID)
@@ -2511,6 +2559,9 @@ func a2aRequestFromMCP(req mcp.CallToolRequest) A2AToolRequest {
 		}
 		if requesterName := strings.TrimSpace(state.RequesterName); requesterName != "" && strings.TrimSpace(out.RequestedBy) == "" {
 			out.RequestedBy = requesterName
+		}
+		if source := strings.TrimSpace(state.Source); source != "" && strings.TrimSpace(out.RequestSource) == "" {
+			out.RequestSource = source
 		}
 	}
 	return out

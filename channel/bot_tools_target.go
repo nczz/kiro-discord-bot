@@ -19,6 +19,7 @@ type botToolsTargetState struct {
 	DelegationDepth       int                  `json:"delegation_depth,omitempty"`
 	RequesterID           string               `json:"requester_id,omitempty"`
 	RequesterName         string               `json:"requester_name,omitempty"`
+	Source                string               `json:"source,omitempty"`
 	CanManageChannel      bool                 `json:"can_manage_channel,omitempty"`
 	CanManageGuild        bool                 `json:"can_manage_guild,omitempty"`
 	AllowedMentionUserIDs []string             `json:"allowed_mention_user_ids,omitempty"`
@@ -61,6 +62,10 @@ func writeBotToolsTargetStateWithPolicy(path, targetChannelID string, disableEgr
 }
 
 func writeBotToolsTargetStateWithRequester(path, targetChannelID string, disableEgress bool, refs []discordmention.Ref, remoteA2A bool, allowMemoryWrite bool, requesterID, requesterName string, delegationDepth int, canManageChannel, canManageGuild bool) error {
+	return writeBotToolsTargetStateWithRequesterSource(path, targetChannelID, disableEgress, refs, remoteA2A, allowMemoryWrite, requesterID, requesterName, delegationDepth, canManageChannel, canManageGuild, "")
+}
+
+func writeBotToolsTargetStateWithRequesterSource(path, targetChannelID string, disableEgress bool, refs []discordmention.Ref, remoteA2A bool, allowMemoryWrite bool, requesterID, requesterName string, delegationDepth int, canManageChannel, canManageGuild bool, source string) error {
 	path = strings.TrimSpace(path)
 	targetChannelID = strings.TrimSpace(targetChannelID)
 	if path == "" || targetChannelID == "" {
@@ -77,6 +82,7 @@ func writeBotToolsTargetStateWithRequester(path, targetChannelID string, disable
 		DelegationDepth:       delegationDepth,
 		RequesterID:           strings.TrimSpace(requesterID),
 		RequesterName:         strings.TrimSpace(requesterName),
+		Source:                strings.TrimSpace(source),
 		CanManageChannel:      canManageChannel,
 		CanManageGuild:        canManageGuild,
 		AllowedMentionUserIDs: allowedMentionUserIDs(refs),

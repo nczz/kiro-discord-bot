@@ -939,10 +939,14 @@ func TestBotToolsEgressDisabledReadsDynamicTargetState(t *testing.T) {
 func TestA2ARequestContextUsesBoundRequesterState(t *testing.T) {
 	dir := t.TempDir()
 	statePath := filepath.Join(dir, "target.json")
-	if err := os.WriteFile(statePath, []byte(`{"target_channel_id":"thread-1","requester_id":"user-1","requester_name":"alice"}`), 0644); err != nil {
+	if err := os.WriteFile(statePath, []byte(`{"target_channel_id":"thread-1","requester_id":"user-1","requester_name":"alice","source":"message"}`), 0644); err != nil {
 		t.Fatalf("write target state: %v", err)
 	}
 	t.Setenv("BOT_TOOLS_TARGET_STATE_PATH", statePath)
+	state, ok := currentTargetState()
+	if !ok || state.Source != "message" {
+		t.Fatalf("currentTargetState source = %+v, ok=%v; want message", state, ok)
+	}
 
 	req := A2AToolRequest{GuildID: "guild-1", ChannelID: "channel-1"}
 	req.RequestedByID = "user-1"

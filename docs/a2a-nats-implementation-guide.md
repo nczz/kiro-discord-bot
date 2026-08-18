@@ -51,7 +51,7 @@ The guide must preserve these decisions without reinterpretation:
 - Product UX contract: normal Discord language is the happy path; `bot_a2a_*` MCP tools are the execution boundary; slash commands are explicit fallback/bootstrap/admin controls only.
 - User-facing copy must prefer localized product terms over raw protocol fields; raw runtime/policy IDs belong in manager diagnostics, not primary prompts.
 - Policy setup must flow through natural-language plan, human-readable risk/egress preview, signed Discord confirmation, server-side ManageChannels validation, idempotent apply, and audit.
-- Delegation must flow through peer/policy lookup, policy-gated `bot_a2a_delegate`, confirmation when sensitive sharing requires it, and executor-owned Discord conversation delivery with durable result/status returned to the delegator.
+- Delegation must flow through peer/policy lookup and `bot_a2a_delegate`; persistent/scheduled delegation is policy-gated by `delegate_targets`, direct human message/thread/slash requests may use a one-shot non-persistent runtime target grant, sensitive sharing still requires confirmation, and executor-owned Discord conversation delivery returns durable result/status to the delegator.
 - `TASK_STATE_INPUT_REQUIRED` and `TASK_STATE_AUTH_REQUIRED` require explicit continuation flows.
 - Safe egress, audit, AllowedMentions, secret redaction, channel permissions, and MCP policy proxy remain mandatory.
 
@@ -174,7 +174,7 @@ Every publisher MUST declare a stable `Nats-Msg-Id` before implementation:
 | `bot_a2a_peers` | normal user | bound guild/channel context | redacted peer/skill list |
 | `bot_a2a_task_status` | requester or manager | task belongs to channel/user scope | task state summary |
 | `bot_a2a_trust_peer` | ManageChannels | exact peer runtime is known; no expert fields | immediate inbound receiver consent |
-| `bot_a2a_delegate` | normal user, policy-gated | outbound policy, egress labels, media policy, confirmation when required | task accepted/rejected status |
+| `bot_a2a_delegate` | normal user, policy-gated or direct human one-shot | outbound policy or direct human request source, egress labels, media policy, confirmation when required | task accepted/rejected status |
 | `bot_a2a_cancel` | requester or manager | nonterminal task, known executor | cancel control published |
 | `bot_a2a_input_reply` | requester or manager | `TASK_STATE_INPUT_REQUIRED`, nonce fresh, safe egress labels | input control published |
 | `bot_a2a_auth_reply` | requester or manager | `TASK_STATE_AUTH_REQUIRED`, scoped confirmation, no raw long-lived credential | auth control published |
@@ -184,7 +184,7 @@ Default setup semantics:
 
 - Stored policy defaults stay safe proxy/delegator.
 - `bot_a2a_trust_peer` is simple receiver consent only: `target_agent` adds one exact runtime to `accept_from_runtimes`, does not widen `accept_skills`, and rejects expert relationship/skill/channel/transcript/result fields.
-- `bot_a2a_delegate` with no `setup_mode` uses stored policy; explicit `auto`, `safe`, or `co_present` is required to override delivery per request.
+- `bot_a2a_delegate` with no `setup_mode` uses stored policy delivery settings; direct human message/thread/slash requests may queue a one-shot task to a discovered non-stale runtime without mutating `delegate_targets`, while cron, remote A2A, and bot-handoff jobs still require persistent outbound policy. Explicit `auto`, `safe`, or `co_present` is required to override delivery per request.
 - Policy/status UX must describe local co-present gates only; remote executor admission and Discord permissions remain separately validated.
 - Retired policy plan/apply/readiness bot-tools must not be registered in the normal MCP surface.
 

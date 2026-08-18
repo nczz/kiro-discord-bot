@@ -8,9 +8,36 @@ import (
 	"testing"
 	"time"
 
+	natsserver "github.com/nats-io/nats-server/v2/server"
+
 	"github.com/nczz/kiro-discord-bot/a2a"
 	"github.com/nczz/kiro-discord-bot/internal/channelmeta"
 )
+
+func runBotMCPEmbeddedNATS(t *testing.T) *natsserver.Server {
+	t.Helper()
+	opts := &natsserver.Options{
+		Host:      "127.0.0.1",
+		Port:      -1,
+		JetStream: true,
+		StoreDir:  t.TempDir(),
+		NoSigs:    true,
+	}
+	srv, err := natsserver.NewServer(opts)
+	if err != nil {
+		t.Fatalf("new nats server: %v", err)
+	}
+	srv.Start()
+	if !srv.ReadyForConnections(10 * time.Second) {
+		srv.Shutdown()
+		t.Fatal("nats server did not become ready")
+	}
+	t.Cleanup(func() {
+		srv.Shutdown()
+		srv.WaitForShutdown()
+	})
+	return srv
+}
 
 func TestA2AServiceDefaultConfirmationSecretIsProcessRandom(t *testing.T) {
 	t.Setenv("A2A_CONFIRMATION_SECRET", "")
@@ -791,6 +818,76 @@ func TestA2AToolsDelegateOmittedSkillReasonInfersCrossChannelMirror(t *testing.T
 	}
 	if !strings.Contains(planned.ConfirmationSummary, "peer-n100-erp@erp-support/erp-support/general_task") {
 		t.Fatalf("Delegate confirmation summary = %q, want inferred channel_ref and canonical skill", planned.ConfirmationSummary)
+	}
+}
+
+func TestA2AToolsDelegateAllowsDirectHumanEphemeralRuntimeTarget(t *testing.T) {
+	ctx := context.Background()
+	srv := runBotMCPEmbeddedNATS(t)
+	node, err := a2a.Connect(ctx, a2a.NodeConfig{Config: a2a.Config{NATSURL: srv.ClientURL(), AgentID: "adam-n200"}})
+	if err != nil {
+		t.Fatalf("connect nats: %v", err)
+	}
+	defer node.Close()
+	if err := a2a.EnsureStreams(ctx, node); err != nil {
+		t.Fatalf("EnsureStreams: %v", err)
+	}
+	svc, err := NewA2AService(A2AServiceConfig{
+		DataDir:            t.TempDir(),
+		Config:             a2a.Config{AgentID: "adam-n200", RuntimeIDMode: a2a.RuntimeIDModeRuntime, NATSURL: srv.ClientURL(), TaskTimeoutSec: 60, MaxDelegationDepth: 1},
+		Node:               node,
+		BoundGuildID:       "guild-1",
+		BoundChannelID:     "channel-1",
+		ConfirmationSecret: "test-secret",
+		ConnectNATS:        false,
+	})
+	if err != nil {
+		t.Fatalf("NewA2AService: %v", err)
+	}
+	defer svc.Close()
+	if err := svc.policies.Save(ctx, a2a.ChannelA2APolicy{GuildID: "guild-1", ChannelID: "channel-1", Enabled: true, RuntimeAgentID: "adam-n200-lobby", BotAgentID: "adam-n200", ChannelRef: "lobby"}, "manager"); err != nil {
+		t.Fatalf("Save policy: %v", err)
+	}
+	card := a2a.AgentCard{Name: "d80-kanboard", Version: "1.0.0", SupportedInterfaces: []a2a.A2AInterface{{URL: srv.ClientURL(), ProtocolBinding: a2a.ProtocolBindingNATS, ProtocolVersion: a2a.ProtocolVersion}}, Skills: []a2a.AgentSkill{{ID: "kanboard/general_task", Name: "General"}}}
+	peerExt := a2a.ExtendedAgentCard{Runtime: "channel", BotAgentID: "d80-chunbot", ChannelRef: "kanboard", DiscordGuildID: "guild-1", DiscordChannelID: "channel-2"}
+	if _, err := svc.peers.UpsertExtendedCard(ctx, "d80-kanboard", card, peerExt, true, "peer-instance", "online", time.Now().Add(time.Hour)); err != nil {
+		t.Fatalf("Upsert peer: %v", err)
+	}
+	got, err := svc.Delegate(ctx, A2AToolRequest{GuildID: "guild-1", ChannelID: "channel-1", RequestedBy: "alice", RequestedByID: "user-1", RequestSource: "message", TargetAgent: "d80-kanboard", Message: "create a kanboard task"})
+	if err != nil {
+		t.Fatalf("Delegate: %v", err)
+	}
+	if !got.OK || got.RequiresConfirmation || got.Task == nil {
+		t.Fatalf("Delegate = %+v, want queued without confirmation", got)
+	}
+	if got.Metadata["authorization_mode"] != "ephemeral_user_request" || got.Metadata["persistent_delegate_target"] != false {
+		t.Fatalf("Delegate metadata = %+v, want ephemeral one-shot authorization", got.Metadata)
+	}
+	policy, err := svc.policies.Get(ctx, "guild-1", "channel-1")
+	if err != nil {
+		t.Fatalf("Get policy: %v", err)
+	}
+	if len(policy.DelegateTargets) != 0 {
+		t.Fatalf("DelegateTargets = %+v, want one-shot request not persistent policy mutation", policy.DelegateTargets)
+	}
+	rejected, err := svc.Delegate(ctx, A2AToolRequest{GuildID: "guild-1", ChannelID: "channel-1", RequestedBy: "cron", RequestedByID: "system", RequestSource: "cron", TargetAgent: "d80-kanboard", Message: "create a kanboard task"})
+	if err != nil {
+		t.Fatalf("Delegate cron: %v", err)
+	}
+	if rejected.OK || rejected.ErrorCode != a2a.ErrorUnauthorizedTarget {
+		t.Fatalf("Delegate cron = %+v, want unauthorized target without persistent delegate_targets", rejected)
+	}
+	remoteState := filepath.Join(t.TempDir(), "target.json")
+	if err := os.WriteFile(remoteState, []byte(`{"target_channel_id":"channel-1","remote_a2a":true,"source":"message"}`), 0644); err != nil {
+		t.Fatalf("write remote target state: %v", err)
+	}
+	t.Setenv("BOT_TOOLS_TARGET_STATE_PATH", remoteState)
+	remoteRejected, err := svc.Delegate(ctx, A2AToolRequest{GuildID: "guild-1", ChannelID: "channel-1", RequestedBy: "alice", RequestedByID: "user-1", RequestSource: "message", TargetAgent: "d80-kanboard", Message: "create a kanboard task"})
+	if err != nil {
+		t.Fatalf("Delegate remote: %v", err)
+	}
+	if remoteRejected.OK || remoteRejected.ErrorCode != a2a.ErrorUnauthorizedTarget {
+		t.Fatalf("Delegate remote = %+v, want unauthorized target without persistent delegate_targets", remoteRejected)
 	}
 }
 

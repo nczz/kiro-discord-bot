@@ -1078,6 +1078,7 @@ func TestWorkerInlineDeliveryWithFinalReplyAvoidsPublicChannelPost(t *testing.T)
 		ChannelID:        "ch1",
 		BotToolsTargetID: "thread-1",
 		DisableBotEgress: true,
+		Source:           "message",
 		Prompt:           "slash audit prompt",
 		Session:          ds,
 		DeliveryMode:     DeliveryInline,
@@ -1098,6 +1099,9 @@ func TestWorkerInlineDeliveryWithFinalReplyAvoidsPublicChannelPost(t *testing.T)
 			}
 			if !strings.Contains(string(raw), `"allowed_mention_user_ids":["user-1"]`) {
 				t.Fatalf("target state = %s, want verified user mention allowlist", raw)
+			}
+			if !strings.Contains(string(raw), `"source":"message"`) {
+				t.Fatalf("target state = %s, want request source", raw)
 			}
 			finalReplies = append(finalReplies, content)
 		},

@@ -920,6 +920,23 @@ Append one subsection per completed phase.
 - Runtime settings touched: none.
 - Rollback boundary: revert this follow-up commit; `NATS_URL=""` remains the A2A no-op rollback path.
 
+### Direct human A2A one-shot delegation follow-up
+
+- Status: validation passed; pending commit.
+- Trigger: production diagnosis showed receiver-side `bot_a2a_trust_peer` consent allowed `kiroagent-n200` to send into d80 `kanboard`, but the lobby sender channel had no outbound `delegate_targets`, so a direct human request through `bot_a2a_delegate` failed before publishing.
+- Decision: keep durable outbound `delegate_targets` as the required authorization for cron, remote A2A, bot-handoff, scheduled, and recurring delegation, but allow direct human message/thread/slash requests to publish a one-shot task to a discovered non-stale runtime without mutating sender policy. Audit metadata must distinguish `authorization_mode=ephemeral_user_request` from `persistent_policy`.
+- Changed files: `channel/bot_tools_target.go`, `channel/worker.go`, `internal/botmcp/server.go`, `internal/botmcp/a2a_tools.go`, tests, docs-site A2A bot-tools docs, A2A source docs, steering failure patterns, and this progress ledger.
+- Validation:
+  - Focused regression: `go test ./internal/botmcp ./channel ./bot -run 'TestA2AToolsDelegateAllowsDirectHumanEphemeralRuntimeTarget|TestA2ARequestContextUsesBoundRequesterState|TestWorkerExecuteInlineSetsPrivateReplyTarget|TestA2A'` passed.
+  - A2A contract tests: `go test ./a2a ./channel ./internal/botmcp ./bot ./audit ./locale -run 'Test.*A2A|TestDoctor.*A2A'` passed.
+  - Go compile/static checks: `go build ./...`; `go vet ./...` passed.
+  - Docs site regenerated and verified: `cd docs-site && npm run verify` passed (`60` generated HTML files checked).
+  - Release preflight: `scripts/release-preflight.sh` passed, including `go test ./...`, `go vet ./...`, `go build ./...`, `docker compose config --quiet`, Docker image build, dockerized `kiro-cli --version`, and `git diff --check`.
+  - A2A rollout checklist check: required rollout smoke labels remain present in `docs-site/docs/guide/a2a-nats-rollout.md`.
+  - `git diff --check` passed.
+- Runtime settings touched: none.
+- Rollback boundary: revert this follow-up commit; persistent sender-side `delegate_targets` remains the conservative fallback workflow.
+
 ## Master goal prompt
 
 Use this prompt when starting or resuming the full implementation program:
