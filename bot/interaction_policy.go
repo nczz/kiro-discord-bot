@@ -13,7 +13,7 @@ var guildInteractionContexts = []discordgo.InteractionContextType{discordgo.Inte
 
 func commandDefaultMemberPermissions(name string) *int64 {
 	switch name {
-	case "audit", "mcp", "steering", "cwd", "start", "agent", "cron", "cron-list", "cron-run", "cron-prompt", "memory", "flashmemory", "clear":
+	case "audit", "mcp", "steering", "cwd", "start", "agent", "webhook", "cron", "cron-list", "cron-run", "cron-prompt", "memory", "flashmemory", "clear":
 		perms := int64(discordgo.PermissionManageChannels)
 		return &perms
 	default:
@@ -33,7 +33,7 @@ func applySlashCommandPolicy(cmd *discordgo.ApplicationCommand) *discordgo.Appli
 func commandResponseVisibility(name string, args string) commandVisibility {
 	switch name {
 	case "help", "status", "usage", "usage-history", "doctor", "audit", "mcp", "steering", "cwd", "models", "agent",
-		"session", "memory", "flashmemory", "cron-list", "cron-run", "cron-prompt", "remind":
+		"webhook", "session", "memory", "flashmemory", "cron-list", "cron-run", "cron-prompt", "remind":
 		return commandVisibilityPrivate
 	default:
 		return commandVisibilityPublic

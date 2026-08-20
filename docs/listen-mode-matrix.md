@@ -10,6 +10,7 @@ The canonical listen-mode documentation now lives on the static documentation si
 - `/back` restores full-listen mode and new parent-channel task threads.
 - Multi-bot channels can automatically switch to mention-only to avoid bot-to-bot loops.
 - Thread agents keep the listen behavior captured when the thread was created.
+- Discord channel webhooks are ignored unless `/webhook mode:on` is set for the parent channel; even then, the webhook content must start with the bot's real mention shown by `/webhook mode:status`.
 - Run `/doctor` in the target channel or thread to inspect the effective behavior.
 
 [listen-modes]: https://nczz.github.io/kiro-discord-bot/guide/listen-modes.html

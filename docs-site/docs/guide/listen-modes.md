@@ -24,6 +24,10 @@ Use real Discord mentions from the Discord UI. Plain text such as `@BuildBot` ma
 
 The bot also provides structured mention references to the agent so final answers can mention known users or peer bots without guessing raw Discord IDs.
 
+## Discord Channel Webhooks
+
+Discord webhook messages are bot-authored and ignored by default. A channel manager can run `/webhook mode:on` to allow tagged webhook prompts for that parent channel. Even when enabled, the webhook content must start with a real mention of this bot, such as `<@BOT_ID>`; run `/webhook mode:status` in the channel to see the exact tag. Webhook messages never execute bang/slash administration commands; accepted webhook content is treated only as agent prompt text.
+
 ## Multi-bot Handoff
 
 Peer bots are auto-discovered from guild bot members when the bot starts. `BOT_PEERS` is only needed to override names/roles, add a bot discovery cannot see, or exclude a bot.

@@ -1034,6 +1034,96 @@ func TestMultiBotMentionOnlyCanBeOpenedByBack(t *testing.T) {
 	}
 }
 
+func TestWebhookMessageRequiresChannelToggleAndBotMention(t *testing.T) {
+	ds := testPeerPermissionSession(t, nil)
+	mgr := channel.NewManager(channel.ManagerConfig{})
+	b := &Bot{manager: mgr, discord: ds}
+
+	msg := &discordgo.MessageCreate{Message: &discordgo.Message{
+		ID:        "message-1",
+		ChannelID: "channel-1",
+		GuildID:   "guild-1",
+		Content:   "<@bot-1> summarize this alert",
+		Author:    &discordgo.User{ID: "webhook-author", Username: "alerts", Bot: true},
+		WebhookID: "webhook-1",
+	}}
+	if b.shouldAcceptWebhookMessage(msg, msg.Content, "bot-1", "") {
+		t.Fatal("webhook should not be accepted before channel webhook listen is enabled")
+	}
+
+	mgr.SetWebhookListen("channel-1", true)
+	if !b.shouldAcceptWebhookMessage(msg, msg.Content, "bot-1", "") {
+		t.Fatal("tagged webhook should be accepted after channel webhook listen is enabled")
+	}
+	msg.Content = "summarize this alert"
+	if b.shouldAcceptWebhookMessage(msg, msg.Content, "bot-1", "") {
+		t.Fatal("webhook should still require an explicit bot mention")
+	}
+
+	msg.Content = "summarize this alert <@bot-1>"
+	if b.shouldAcceptWebhookMessage(msg, msg.Content, "bot-1", "") {
+		t.Fatal("webhook mention must be the leading trigger")
+	}
+}
+
+func TestWebhookHandleMessageReachesSetupPromptWhenEnabled(t *testing.T) {
+	L.Load("en")
+	ds := testPeerPermissionSession(t, nil)
+	transport := &countingDiscordTransport{}
+	ds.Client = &http.Client{Transport: transport}
+	mgr := channel.NewManager(channel.ManagerConfig{})
+	mgr.SetWebhookListen("channel-1", true)
+	b := &Bot{
+		manager:             mgr,
+		discord:             ds,
+		seen:                newSeenMessages(),
+		setupPromptCooldown: newSetupPromptCooldown(nil),
+	}
+	defer b.seen.Stop()
+
+	msg := &discordgo.MessageCreate{Message: &discordgo.Message{
+		ID:        "message-1",
+		ChannelID: "channel-1",
+		GuildID:   "guild-1",
+		Content:   "<@bot-1> summarize this alert",
+		Author:    &discordgo.User{ID: "webhook-author", Username: "alerts", Bot: true},
+		WebhookID: "webhook-1",
+	}}
+	b.handleMessage(ds, msg)
+	if got := transport.Count(); got != 1 {
+		t.Fatalf("setup prompt sends = %d, want accepted webhook to reach prompt routing", got)
+	}
+}
+
+func TestCmdWebhookStatusIncludesExactMentionTag(t *testing.T) {
+	L.Load("en")
+	ds := testPeerPermissionSession(t, []*discordgo.PermissionOverwrite{
+		userMemberManageOverwrite("viewer", discordgo.PermissionManageChannels),
+	})
+	b := &Bot{manager: channel.NewManager(channel.ManagerConfig{}), discord: ds}
+	var replies []string
+	ctx := cmdCtx{
+		channelID: "channel-1",
+		targetID:  "channel-1",
+		userID:    "viewer",
+		reply:     func(msg string) { replies = append(replies, msg) },
+	}
+
+	b.cmdWebhook(ctx)
+	if len(replies) != 1 || !strings.Contains(replies[0], "<@bot-1>") {
+		t.Fatalf("status reply = %q, want exact bot mention tag", replies)
+	}
+
+	ctx.args = "on"
+	b.cmdWebhook(ctx)
+	if !b.manager.WebhookListenEnabled("channel-1") {
+		t.Fatal("expected manager to enable webhook listen")
+	}
+	if len(replies) != 2 || strings.Contains(replies[1], "MISSING") || !strings.Contains(replies[1], "<@bot-1> summarize this alert") {
+		t.Fatalf("enable reply = %q, want complete example with exact mention tag", replies)
+	}
+}
+
 func TestRequiresHumanMentionReasons(t *testing.T) {
 	ds := testPeerPermissionSession(t, nil)
 
@@ -1957,8 +2047,8 @@ func TestSlashCommandOptionsKeepRequiredBeforeOptional(t *testing.T) {
 func TestSlashCommandsApplyVisibilityAndPermissionPolicy(t *testing.T) {
 	managed := map[string]bool{
 		"audit": true, "mcp": true, "cwd": true, "start": true, "agent": true,
-		"steering": true,
-		"cron":     true, "cron-list": true, "cron-run": true, "cron-prompt": true,
+		"webhook": true, "steering": true,
+		"cron": true, "cron-list": true, "cron-run": true, "cron-prompt": true,
 		"memory": true, "flashmemory": true, "clear": true,
 	}
 	for _, cmd := range buildSlashCommands() {

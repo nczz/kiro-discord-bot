@@ -59,6 +59,35 @@ These are deliberate boundaries unless a new architecture task changes them:
 - Do not patch multi-bot coordination by weakening `requiresHumanMention`, peer filtering, MCP policy, or safe egress.
 - If reliable multi-bot orchestration becomes a product goal, design it as an explicit server-side architecture with owned routing, state, audit, and bot identity boundaries.
 
+### Tagged Discord Webhook Prompts Are Explicit Per-Channel Input, Not Bot Handoff
+
+Decision:
+
+- Discord channel webhook messages stay ignored by default. A parent channel must explicitly enable `/webhook mode:on`, and accepted webhook content must start with the bot's real Discord mention shown by `/webhook mode:status`.
+
+Context:
+
+- Discord webhooks are bot-authored messages with spoofable display names and URLs that can leak. Treating all bot-authored or all webhook messages as agent work would weaken the bot-to-bot loop guard in `bot.handleMessage`.
+
+Rejected alternatives:
+
+- Accepting every webhook message in a listening channel was rejected because CI/Zapier/n8n-style webhooks can be noisy and unauthenticated beyond possession of the URL.
+- Reusing bot-to-bot handoff for normal channel webhooks was rejected because handoff is intentionally restricted to controlled thread result flow.
+- Letting webhook text execute `!` or slash-style administration commands was rejected because a webhook is not an authenticated Discord actor.
+
+Current scope:
+
+- `/webhook mode:on|off|status` controls a parent-channel allow switch.
+- Matching webhook input is prompt text only; it never becomes a privileged lifecycle/admin command.
+
+Future trigger:
+
+- If webhook IDs, external signatures, or per-integration policy become product requirements, design a dedicated policy store and audit model instead of weakening the current leading-mention gate.
+
+Verification:
+
+- Regression tests should cover default ignore, enabled + leading mention acceptance, missing/non-leading mention rejection, persistence, command status hint, and runtime routing past the bot-authored message gate.
+
 ## Current Safe Egress Decisions
 
 ### Document Files Are Extracted To Text, Not Rewritten In Original Format

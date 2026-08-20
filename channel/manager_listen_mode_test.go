@@ -63,6 +63,27 @@ func TestThreadModePersistsAcrossManagerRestart(t *testing.T) {
 	}
 }
 
+func TestWebhookListenModePersistsAcrossManagerRestart(t *testing.T) {
+	dataDir := t.TempDir()
+
+	m := NewManager(ManagerConfig{DataDir: dataDir})
+	if m.WebhookListenEnabled("channel-1") {
+		t.Fatal("expected webhook listen to default off")
+	}
+	m.SetWebhookListen("channel-1", true)
+
+	restarted := NewManager(ManagerConfig{DataDir: dataDir})
+	if !restarted.WebhookListenEnabled("channel-1") {
+		t.Fatal("expected webhook listen on to persist")
+	}
+	restarted.SetWebhookListen("channel-1", false)
+
+	again := NewManager(ManagerConfig{DataDir: dataDir})
+	if again.WebhookListenEnabled("channel-1") {
+		t.Fatal("expected webhook listen off to persist")
+	}
+}
+
 func TestPausedListenModeMigratesThreadModeOff(t *testing.T) {
 	dataDir := t.TempDir()
 

@@ -24,6 +24,10 @@ Thread agent 和 parent channel agent 彼此獨立。一個 thread 的工作不�
 
 bot 也會提供結構化 mention references 給 agent，讓 final answer 可以 mention 已驗證的使用者或 peer bot，不需要猜 raw Discord ID。
 
+## Discord Channel Webhooks
+
+Discord webhook 訊息屬於 bot-authored，預設會被忽略。頻道管理者可在 parent channel 執行 `/webhook mode:on`，允許該頻道的 tagged webhook prompt。即使開啟，webhook 內容仍必須以這個 bot 的真正 mention 開頭，例如 `<@BOT_ID>`；在頻道內執行 `/webhook mode:status` 可看到實際 tag。Webhook 訊息不會執行 bang/slash 管理指令；被接受的 webhook 內容只會當作 agent prompt text。
+
 ## Multi-bot Handoff
 
 Peer bots 會在 bot 啟動時從 guild bot members 自動發現。`BOT_PEERS` 只用於覆蓋名稱/role、加入 discovery 看不到的 bot，或排除某個 bot。

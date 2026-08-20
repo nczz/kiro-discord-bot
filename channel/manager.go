@@ -36,6 +36,7 @@ type Manager struct {
 	threadMode      map[string]bool   // parent channel ID -> agent opens new threads (default true)
 	threadListen    map[string]string // thread ID -> "full" or "mention" snapshot
 	silent          map[string]bool   // channelID → silent mode (default true when absent)
+	webhookListen   map[string]bool   // parent channel ID -> allow tagged Discord webhook messages (default false)
 	store           *SessionStore
 	kiroCLI         string
 	ompPath         string
@@ -222,6 +223,7 @@ func NewManager(cfg ManagerConfig) *Manager {
 		threadMode:          make(map[string]bool),
 		threadListen:        make(map[string]string),
 		silent:              make(map[string]bool),
+		webhookListen:       make(map[string]bool),
 		threadAgents:        make(map[string]*threadAgentEntry),
 		discord:             cfg.DiscordSession,
 		store:               cfg.Store,
@@ -347,6 +349,9 @@ func NewManager(cfg ManagerConfig) *Manager {
 	}
 	if err := m.loadThreadModes(); err != nil {
 		log.Printf("[manager] load thread modes: %v", err)
+	}
+	if err := m.loadWebhookListen(); err != nil {
+		log.Printf("[manager] load webhook listen modes: %v", err)
 	}
 	m.migratePausedThreadModes()
 	return m
@@ -3287,6 +3292,58 @@ func (m *Manager) saveThreadModesLocked() error {
 	return os.Rename(tmp, path)
 }
 
+func (m *Manager) webhookListenPath() string {
+	if m.dataDir == "" {
+		return ""
+	}
+	return filepath.Join(m.dataDir, "webhook_listen.json")
+}
+
+func (m *Manager) loadWebhookListen() error {
+	path := m.webhookListenPath()
+	if path == "" {
+		return nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	var modes map[string]bool
+	if err := json.Unmarshal(data, &modes); err != nil {
+		return err
+	}
+	for channelID, enabled := range modes {
+		m.webhookListen[channelID] = enabled
+	}
+	return nil
+}
+
+func (m *Manager) saveWebhookListenLocked() error {
+	path := m.webhookListenPath()
+	if path == "" {
+		return nil
+	}
+	modes := make(map[string]bool, len(m.webhookListen))
+	for channelID, enabled := range m.webhookListen {
+		modes[channelID] = enabled
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(modes, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
 // HasFullListenOverride returns true when the channel/thread was explicitly
 // resumed with /back. An absent entry means "use the default mode", which may
 // still be mention-only in multi-bot channels.
@@ -3364,6 +3421,28 @@ func (m *Manager) ThreadMentionOnly(threadID, parentChannelID string) bool {
 		return true
 	}
 	return false
+}
+
+// SetWebhookListen controls whether tagged Discord webhook messages can become
+// agent work for a parent channel.
+func (m *Manager) SetWebhookListen(parentChannelID string, enabled bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.webhookListen == nil {
+		m.webhookListen = make(map[string]bool)
+	}
+	m.webhookListen[parentChannelID] = enabled
+	if err := m.saveWebhookListenLocked(); err != nil {
+		log.Printf("[manager] save webhook listen mode for %s: %v", parentChannelID, err)
+	}
+}
+
+// WebhookListenEnabled reports whether tagged Discord webhook messages are
+// accepted for a parent channel. The default is disabled.
+func (m *Manager) WebhookListenEnabled(parentChannelID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.webhookListen[parentChannelID]
 }
 
 // SetSilent sets the silent (compact output) mode for a channel.

@@ -123,7 +123,7 @@ func isKnownBangCommand(name, content string) bool {
 		return false
 	}
 	switch name {
-	case "resume", "session", "pause", "back", "silent", "thread", "reset", "status", "usage", "doctor", "audit", "mcp", "skill", "steering", "cancel", "interrupt",
+	case "resume", "session", "pause", "back", "silent", "thread", "webhook", "reset", "status", "usage", "doctor", "audit", "mcp", "skill", "steering", "cancel", "interrupt",
 		"close-thread", "compact", "clear", "cwd", "start", "agent", "engine", "model", "models", "memory", "flashmemory", "cron", "help":
 		return true
 	case "remind":
@@ -605,6 +605,19 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 	isCommand := strings.HasPrefix(content, "!")
 
 	parentChannelID := resolveThreadParent(ds, m.ChannelID)
+	if m.WebhookID != "" {
+		if !b.shouldAcceptWebhookMessage(m, content, selfID, parentChannelID) {
+			return
+		}
+		content = b.stripOwnMentions(content, selfID)
+		if parentChannelID != "" {
+			b.enqueueThreadPrompt(ds, m, content, parentChannelID, false, "webhook")
+			return
+		}
+		b.enqueueChannelPrompt(ds, m, content, selfID, "webhook")
+		return
+	}
+
 	handoff := false
 	if m.Author.Bot {
 		handoff = b.shouldAcceptBotResultMention(ds, m, content, selfID, parentChannelID)
@@ -715,6 +728,9 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 	case content == "!thread", content == "!thread on", content == "!thread off":
 		ctx.args = strings.TrimSpace(strings.TrimPrefix(content, "!thread"))
 		b.cmdThreadMode(ctx)
+	case content == "!webhook" || strings.HasPrefix(content, "!webhook "):
+		ctx.args = strings.TrimSpace(strings.TrimPrefix(content, "!webhook"))
+		b.cmdWebhook(ctx)
 	case content == "!reset":
 		b.cmdReset(ctx)
 	case content == "!help":
@@ -784,51 +800,135 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 	case strings.HasPrefix(content, "!remind "):
 		b.handleRemindText(ds, m.ChannelID, m.GuildID, m.Author.ID, m.Author.Username, strings.TrimPrefix(content, "!remind "))
 	default:
-		if !b.manager.ChannelInitialized(m.ChannelID) {
-			b.sendChannelSetupPrompt(ds, m)
-			return
-		}
+		b.enqueueChannelPrompt(ds, m, content, selfID, "message")
+	}
+}
 
-		// Immediate feedback
-		_ = ds.MessageReactionAdd(m.ChannelID, m.ID, "⏳")
+func (b *Bot) shouldAcceptWebhookMessage(m *discordgo.MessageCreate, content, selfID, parentChannelID string) bool {
+	if m == nil || m.WebhookID == "" || b.manager == nil {
+		return false
+	}
+	targetChannelID := m.ChannelID
+	if parentChannelID != "" {
+		targetChannelID = parentChannelID
+	}
+	if !b.manager.WebhookListenEnabled(targetChannelID) {
+		log.Printf("[webhook-gate] ignored webhook msg reason=listen_disabled webhook=%s channel=%s msg=%s", m.WebhookID, m.ChannelID, m.ID)
+		return false
+	}
+	if !webhookStartsWithSelfMention(content, selfID) {
+		log.Printf("[webhook-gate] ignored webhook msg reason=no_leading_mention webhook=%s channel=%s msg=%s", m.WebhookID, m.ChannelID, m.ID)
+		return false
+	}
+	if strings.TrimSpace(b.stripOwnMentions(content, selfID)) == "" && len(m.Attachments) == 0 {
+		log.Printf("[webhook-gate] ignored webhook msg reason=empty_after_mention webhook=%s channel=%s msg=%s", m.WebhookID, m.ChannelID, m.ID)
+		return false
+	}
+	return true
+}
 
-		projectCWD := b.manager.CWDPath(m.ChannelID)
-		localPaths := b.downloadAttachments(projectCWD, m.ID, m.Attachments)
-		b.warnIfAttachmentsLarge(ds, m.ChannelID, localPaths)
+func webhookStartsWithSelfMention(content, selfID string) bool {
+	content = strings.TrimSpace(content)
+	if content == "" || selfID == "" {
+		return false
+	}
+	return strings.HasPrefix(content, "<@"+selfID+">") || strings.HasPrefix(content, "<@!"+selfID+">")
+}
 
-		// Transcribe audio files (voice messages + audio attachments)
-		var transcript string
-		if t, rest := b.transcribeAudioFiles(localPaths, m.Attachments); t != "" {
-			transcript = t
-			content = L.Get("stt.prefix") + t + "\n" + content
-			localPaths = rest
-		}
+func (b *Bot) enqueueChannelPrompt(ds *discordgo.Session, m *discordgo.MessageCreate, content, selfID, source string) {
+	if !b.manager.ChannelInitialized(m.ChannelID) {
+		b.sendChannelSetupPrompt(ds, m)
+		return
+	}
 
-		mentionRefs := appendMentionRefs(mentionRefsForMessage(m, selfID), b.peerMentionRefs(selfID)...)
-		prompt := buildPromptThreadWithMentions(content, localPaths, m.ChannelID, "", m.GuildID, m.Author.Username, m.Author.ID, b.peerPromptContext(selfID), mentionRefs)
-		deliveryMode := channel.DeliveryThread
-		if !b.manager.ThreadModeEnabled(m.ChannelID) {
-			deliveryMode = channel.DeliveryInline
-		}
+	// Immediate feedback
+	_ = ds.MessageReactionAdd(m.ChannelID, m.ID, "⏳")
 
-		job := &channel.Job{
-			ChannelID:    m.ChannelID,
-			GuildID:      m.GuildID,
-			MessageID:    m.ID,
-			Prompt:       prompt,
-			UserID:       m.Author.ID,
-			Username:     m.Author.Username,
-			Attachments:  localPaths,
-			Transcript:   transcript,
-			Source:       "message",
-			DeliveryMode: deliveryMode,
-			MentionRefs:  mentionRefs,
-		}
-		job.ThreadMentionOnly, _ = b.requiresHumanMention(ds, m.ChannelID, "", selfID)
-		if err := b.manager.Enqueue(ds, job); err != nil {
-			ds.MessageReactionRemove(m.ChannelID, m.ID, "⏳", "@me")
-			_, _ = sendDiscordText(ds, m.ChannelID, L.Getf("error.generic", err.Error()), nil)
-		}
+	projectCWD := b.manager.CWDPath(m.ChannelID)
+	localPaths := b.downloadAttachments(projectCWD, m.ID, m.Attachments)
+	b.warnIfAttachmentsLarge(ds, m.ChannelID, localPaths)
+
+	// Transcribe audio files (voice messages + audio attachments)
+	var transcript string
+	if t, rest := b.transcribeAudioFiles(localPaths, m.Attachments); t != "" {
+		transcript = t
+		content = L.Get("stt.prefix") + t + "\n" + content
+		localPaths = rest
+	}
+
+	mentionRefs := appendMentionRefs(mentionRefsForMessage(m, selfID), b.peerMentionRefs(selfID)...)
+	prompt := buildPromptThreadWithMentions(content, localPaths, m.ChannelID, "", m.GuildID, m.Author.Username, m.Author.ID, b.peerPromptContext(selfID), mentionRefs)
+	deliveryMode := channel.DeliveryThread
+	if !b.manager.ThreadModeEnabled(m.ChannelID) {
+		deliveryMode = channel.DeliveryInline
+	}
+
+	job := &channel.Job{
+		ChannelID:    m.ChannelID,
+		GuildID:      m.GuildID,
+		MessageID:    m.ID,
+		Prompt:       prompt,
+		UserID:       m.Author.ID,
+		Username:     m.Author.Username,
+		Attachments:  localPaths,
+		Transcript:   transcript,
+		Source:       source,
+		DeliveryMode: deliveryMode,
+		MentionRefs:  mentionRefs,
+	}
+	job.ThreadMentionOnly, _ = b.requiresHumanMention(ds, m.ChannelID, "", selfID)
+	if err := b.manager.Enqueue(ds, job); err != nil {
+		ds.MessageReactionRemove(m.ChannelID, m.ID, "⏳", "@me")
+		_, _ = sendDiscordText(ds, m.ChannelID, L.Getf("error.generic", err.Error()), nil)
+	}
+}
+
+func (b *Bot) enqueueThreadPrompt(ds *discordgo.Session, m *discordgo.MessageCreate, content, parentChannelID string, handoff bool, source string) {
+	threadID := m.ChannelID
+	if !b.manager.ChannelInitialized(parentChannelID) {
+		b.sendThreadSetupPrompt(ds, m, parentChannelID)
+		return
+	}
+
+	// Immediate feedback
+	_ = ds.MessageReactionAdd(threadID, m.ID, "⏳")
+
+	localPaths := b.downloadAttachments(b.manager.TargetCWDPath(threadID, parentChannelID), m.ID, m.Attachments)
+	b.warnIfAttachmentsLarge(ds, threadID, localPaths)
+
+	// Transcribe audio files
+	var transcript string
+	if t, rest := b.transcribeAudioFiles(localPaths, m.Attachments); t != "" {
+		transcript = t
+		content = L.Get("stt.prefix") + t + "\n" + content
+		localPaths = rest
+	}
+
+	threadSelfID := ""
+	if ds.State != nil && ds.State.User != nil {
+		threadSelfID = ds.State.User.ID
+	}
+	mentionRefs := appendMentionRefs(mentionRefsForMessage(m, threadSelfID), b.peerMentionRefs(threadSelfID)...)
+	prompt := buildPromptThreadWithMentions(content, localPaths, parentChannelID, threadID, m.GuildID, m.Author.Username, m.Author.ID, b.peerPromptContext(threadSelfID), mentionRefs)
+
+	job := &channel.Job{
+		ChannelID:       threadID,
+		ParentChannelID: parentChannelID,
+		GuildID:         m.GuildID,
+		MessageID:       m.ID,
+		Prompt:          prompt,
+		UserID:          m.Author.ID,
+		Username:        m.Author.Username,
+		Attachments:     localPaths,
+		ThreadID:        threadID,
+		Transcript:      transcript,
+		Handoff:         handoff,
+		Source:          source,
+		MentionRefs:     mentionRefs,
+	}
+	if err := b.manager.EnqueueThread(ds, job, parentChannelID); err != nil {
+		ds.MessageReactionRemove(threadID, m.ID, "⏳", "@me")
+		_, _ = sendDiscordText(ds, threadID, commandError(err), nil)
 	}
 }
 
@@ -948,6 +1048,10 @@ func (b *Bot) handleThreadMessage(ds *discordgo.Session, m *discordgo.MessageCre
 		ctx.args = strings.TrimSpace(strings.TrimPrefix(content, "!thread"))
 		b.cmdThreadMode(ctx)
 		return
+	case content == "!webhook" || strings.HasPrefix(content, "!webhook "):
+		ctx.args = strings.TrimSpace(strings.TrimPrefix(content, "!webhook"))
+		b.cmdWebhook(ctx)
+		return
 	case content == "!compact":
 		b.cmdCompact(ctx)
 		return
@@ -1010,51 +1114,7 @@ func (b *Bot) handleThreadMessage(ds *discordgo.Session, m *discordgo.MessageCre
 		return
 	}
 
-	if !b.manager.ChannelInitialized(parentChannelID) {
-		b.sendThreadSetupPrompt(ds, m, parentChannelID)
-		return
-	}
-
-	// Immediate feedback
-	_ = ds.MessageReactionAdd(threadID, m.ID, "⏳")
-
-	localPaths := b.downloadAttachments(b.manager.TargetCWDPath(threadID, parentChannelID), m.ID, m.Attachments)
-	b.warnIfAttachmentsLarge(ds, threadID, localPaths)
-
-	// Transcribe audio files
-	var transcript string
-	if t, rest := b.transcribeAudioFiles(localPaths, m.Attachments); t != "" {
-		transcript = t
-		content = L.Get("stt.prefix") + t + "\n" + content
-		localPaths = rest
-	}
-
-	selfID := ""
-	if ds.State != nil && ds.State.User != nil {
-		selfID = ds.State.User.ID
-	}
-	mentionRefs := appendMentionRefs(mentionRefsForMessage(m, selfID), b.peerMentionRefs(selfID)...)
-	prompt := buildPromptThreadWithMentions(content, localPaths, parentChannelID, threadID, m.GuildID, m.Author.Username, m.Author.ID, b.peerPromptContext(selfID), mentionRefs)
-
-	job := &channel.Job{
-		ChannelID:       threadID,
-		ParentChannelID: parentChannelID,
-		GuildID:         m.GuildID,
-		MessageID:       m.ID,
-		Prompt:          prompt,
-		UserID:          m.Author.ID,
-		Username:        m.Author.Username,
-		Attachments:     localPaths,
-		ThreadID:        threadID,
-		Transcript:      transcript,
-		Handoff:         handoff,
-		Source:          "thread",
-		MentionRefs:     mentionRefs,
-	}
-	if err := b.manager.EnqueueThread(ds, job, parentChannelID); err != nil {
-		ds.MessageReactionRemove(threadID, m.ID, "⏳", "@me")
-		_, _ = sendDiscordText(ds, threadID, commandError(err), nil)
-	}
+	b.enqueueThreadPrompt(ds, m, content, parentChannelID, handoff, "thread")
 }
 
 func buildSlashCommands() []*discordgo.ApplicationCommand {
@@ -1076,7 +1136,7 @@ func buildSlashCommandsWithA2A(a2aEnabled bool) []*discordgo.ApplicationCommand 
 			{Type: discordgo.ApplicationCommandOptionUser, Name: "user", Description: L.Get("cmd.usage_history.opt.user"), Required: false},
 			{Type: discordgo.ApplicationCommandOptionString, Name: "period", Description: L.Get("cmd.usage_history.opt.period"), Required: false, Choices: []*discordgo.ApplicationCommandOptionChoice{{Name: "7d", Value: "7d"}, {Name: "30d", Value: "30d"}, {Name: "this-month", Value: "this-month"}, {Name: "last-month", Value: "last-month"}}},
 			{Type: discordgo.ApplicationCommandOptionString, Name: "status", Description: L.Get("cmd.usage_history.opt.status"), Required: false, Choices: []*discordgo.ApplicationCommandOptionChoice{{Name: "all", Value: "all"}, {Name: "success", Value: "success"}, {Name: "failed", Value: "error"}}},
-			{Type: discordgo.ApplicationCommandOptionString, Name: "source", Description: L.Get("cmd.usage_history.opt.source"), Required: false, Choices: []*discordgo.ApplicationCommandOptionChoice{{Name: "all", Value: "all"}, {Name: "message", Value: "message"}, {Name: "command", Value: "command"}, {Name: "cron", Value: "cron"}}},
+			{Type: discordgo.ApplicationCommandOptionString, Name: "source", Description: L.Get("cmd.usage_history.opt.source"), Required: false, Choices: []*discordgo.ApplicationCommandOptionChoice{{Name: "all", Value: "all"}, {Name: "message", Value: "message"}, {Name: "webhook", Value: "webhook"}, {Name: "command", Value: "command"}, {Name: "cron", Value: "cron"}}},
 		}},
 		{Name: "doctor", Description: L.Get("cmd.doctor.desc")},
 		{Name: "audit", Description: L.Get("cmd.audit.desc"), Options: []*discordgo.ApplicationCommandOption{
@@ -1103,6 +1163,14 @@ func buildSlashCommandsWithA2A(a2aEnabled bool) []*discordgo.ApplicationCommand 
 		{Name: "thread", Description: L.Get("cmd.thread.desc"), Options: []*discordgo.ApplicationCommandOption{
 			{Type: discordgo.ApplicationCommandOptionString, Name: "mode", Description: L.Get("cmd.thread.opt.mode"), Required: false,
 				Choices: []*discordgo.ApplicationCommandOptionChoice{
+					{Name: "on", Value: "on"},
+					{Name: "off", Value: "off"},
+				}},
+		}},
+		{Name: "webhook", Description: L.Get("cmd.webhook.desc"), Options: []*discordgo.ApplicationCommandOption{
+			{Type: discordgo.ApplicationCommandOptionString, Name: "mode", Description: L.Get("cmd.webhook.opt.mode"), Required: false,
+				Choices: []*discordgo.ApplicationCommandOptionChoice{
+					{Name: "status", Value: "status"},
 					{Name: "on", Value: "on"},
 					{Name: "off", Value: "off"},
 				}},
@@ -1571,6 +1639,11 @@ func (b *Bot) handleSlashCommand(ds *discordgo.Session, i *discordgo.Interaction
 				ctx.args = data.Options[0].StringValue()
 			}
 			b.cmdThreadMode(ctx)
+		case "webhook":
+			if len(data.Options) > 0 {
+				ctx.args = data.Options[0].StringValue()
+			}
+			b.cmdWebhook(ctx)
 		case "model":
 			if len(data.Options) > 0 {
 				ctx.args = data.Options[0].StringValue()

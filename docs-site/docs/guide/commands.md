@@ -26,6 +26,7 @@ In a parent channel, `/clear` clears the active agent session and the bot-local 
 | `/back` | Restore full-listen mode and new task threads for the parent channel or current thread. |
 | `/thread [on|off]` | Show or set whether future parent-channel tasks create Discord threads. |
 | `/silent [on|off]` | Control compact vs detailed tool output visibility. |
+| `/webhook mode:<status|on|off>` | Show or set tagged Discord channel webhook listening. When enabled, a webhook message must start with a real bot mention such as `<@BOT_ID>`; use `/webhook mode:status` in the channel to see the exact tag for this bot. |
 
 ## Model and Agent Mode
 
@@ -60,7 +61,7 @@ See [Daily Workflows](daily-workflows.md) for the operational difference between
 | `/mcp manage` | Open the private MCP policy panel, scan tools, and manage tool allowlists. |
 | `/audit [limit]` | Privately inspect recent audit events for the current channel or thread. |
 | `/usage [user]` | Privately show guild-wide agent usage for today, week, and month-to-date, including credits or USD cost when the engine reports metering metadata. Members see their own usage by default; members with Manage Guild or Administrator permission may omit `user` for all users or choose another member. |
-| `/usage-history [user] [period] [status] [source]` | Privately inspect guild-wide detailed usage records. Period choices: `7d`, `30d`, `this-month`, `last-month`; status choices: `all`, `success`, `failed`; source choices: `all`, `message`, `command`, `cron`. Members can inspect their own history; inspecting another member requires Manage Guild or Administrator permission. |
+| `/usage-history [user] [period] [status] [source]` | Privately inspect guild-wide detailed usage records. Period choices: `7d`, `30d`, `this-month`, `last-month`; status choices: `all`, `success`, `failed`; source choices: `all`, `message`, `webhook`, `command`, `cron`. Members can inspect their own history; inspecting another member requires Manage Guild or Administrator permission. |
 
 Use slash `/audit` for audit data and slash `/usage` or `/usage-history` for usage data. Text `!audit` does not return audit rows, and text `!usage` only returns a slash-only notice, because Discord cannot make those replies private.
 

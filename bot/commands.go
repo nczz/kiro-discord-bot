@@ -79,7 +79,7 @@ func channelOnly(ctx cmdCtx) bool {
 
 func isChannelOnlySlashCommand(name string) bool {
 	switch name {
-	case "start", "cwd", "steering", "agent", "cron", "cron-list", "cron-run", "cron-prompt", "remind":
+	case "start", "cwd", "steering", "agent", "webhook", "cron", "cron-list", "cron-run", "cron-prompt", "remind":
 		return true
 	default:
 		return false
@@ -417,6 +417,41 @@ func (b *Bot) cmdThreadMode(ctx cmdCtx) {
 			ctx.reply(L.Get("thread_mode.status.off"))
 		}
 	}
+}
+
+func (b *Bot) cmdWebhook(ctx cmdCtx) {
+	mention := b.botMentionSyntax()
+	switch strings.ToLower(strings.TrimSpace(ctx.args)) {
+	case "on":
+		if !b.userCanManageAuditTarget(b.discord, ctx.userID, ctx.targetID) {
+			ctx.reply(L.Get("webhook.forbidden"))
+			return
+		}
+		b.manager.SetWebhookListen(ctx.channelID, true)
+		ctx.reply(L.Getf("webhook.on", mention, mention))
+	case "off":
+		if !b.userCanManageAuditTarget(b.discord, ctx.userID, ctx.targetID) {
+			ctx.reply(L.Get("webhook.forbidden"))
+			return
+		}
+		b.manager.SetWebhookListen(ctx.channelID, false)
+		ctx.reply(L.Getf("webhook.off", mention))
+	case "", "status":
+		if b.manager.WebhookListenEnabled(ctx.channelID) {
+			ctx.reply(L.Getf("webhook.status.on", mention, mention))
+		} else {
+			ctx.reply(L.Getf("webhook.status.off", mention))
+		}
+	default:
+		ctx.reply(L.Get("webhook.usage"))
+	}
+}
+
+func (b *Bot) botMentionSyntax() string {
+	if b != nil && b.discord != nil && b.discord.State != nil && b.discord.State.User != nil && b.discord.State.User.ID != "" {
+		return "<@" + b.discord.State.User.ID + ">"
+	}
+	return "<@BOT_ID>"
 }
 
 func (b *Bot) cmdModels(ctx cmdCtx) {
