@@ -32,7 +32,12 @@ var (
 	a2aLocalIDOutputRe = regexp.MustCompile(`"localId"\s*:\s*"([^"]+)"`)
 )
 
-const autoCompactContextThreshold = 90.0
+const (
+	autoCompactContextThreshold = 90.0
+	autoCompactTimeout          = 5 * time.Minute
+)
+
+var errAutoCompactIneffective = errors.New("auto compact ineffective")
 
 // Job represents a single user message to be processed.
 type Job struct {
@@ -152,6 +157,7 @@ type Worker struct {
 
 type workerAgent interface {
 	Ask(context.Context, string, func(string)) (string, error)
+	Compact(context.Context, func(string)) (string, error)
 	AskAsync(string, acp.AsyncCallbacks)
 	AskAsyncMulti([]acp.PromptContent, acp.AsyncCallbacks)
 	CancelPrompt()
@@ -971,9 +977,14 @@ func (w *Worker) execute(job *Job) {
 		finishJob()
 	})
 
-	w.autoCompactIfNeeded(ctx, job, threadID, func(msg string) {
+	if _, err := w.autoCompactIfNeeded(ctx, job, threadID, func(msg string) {
 		SendProcessMessage(ds, threadID, msg)
-	})
+	}); err != nil {
+		cancel()
+		w.failThreadJobBeforePrompt(ds, job, threadID, err, startTime)
+		finishJob()
+		return
+	}
 	if ctx.Err() != nil {
 		finishJob()
 		return
@@ -1005,6 +1016,57 @@ func (w *Worker) execute(job *Job) {
 	promptContent := buildPromptContent(prompt, job.Attachments, w.agent.SupportsImagePrompt())
 	w.agent.AskAsyncMulti(promptContent, callbacks)
 	// Returns immediately — callbacks handle the rest
+}
+
+func (w *Worker) autoCompactAbortContent() string {
+	return "❌ " + L.Get("context.auto_compact_aborted")
+}
+
+func (w *Worker) failThreadJobBeforePrompt(ds *discordgo.Session, job *Job, threadID string, err error, startTime time.Time) {
+	errorContent := w.autoCompactAbortContent()
+	if _, sendErr := SendLongThreadWithMentions(ds, threadID, AppendMetricsFooter(prefixA2ADelegatedFrom(errorContent, job.A2AOriginLabel), MetricsWithElapsed(w.agent.TurnMetrics(), startTime)), job.MentionRefs); sendErr != nil {
+		log.Printf("[worker %s] auto compact abort reply failed | user=%s msg=%s thread=%s err=%v",
+			w.channelID, job.Username, job.MessageID, threadID, sendErr)
+	}
+	swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "⚠️")
+	swapReaction(ds, job.ChannelID, job.MessageID, "⚙️", "⚠️")
+	w.auditJobEvent("agent_job_failed", job, threadID, "error", map[string]any{
+		"error":              L.Get("context.auto_compact_aborted"),
+		"auto_compact_error": fmt.Sprint(err),
+		"elapsed_ms":         time.Since(startTime).Milliseconds(),
+	})
+	w.auditResponseEvent(job, threadID, "error", errorContent)
+	w.recordUsage(job, threadID, "error", startTime)
+	job.emitA2AResult(a2a.TaskExecutionResult{
+		State:   a2a.TaskStateFailed,
+		Content: errorContent,
+		Error:   a2a.TaskError{Code: a2a.ErrorInternal, Message: L.Get("context.auto_compact_aborted")},
+		Metrics: a2aMetrics(w.agent.TurnMetrics(), startTime),
+	})
+}
+
+func (w *Worker) failInlineJobBeforePrompt(ds *discordgo.Session, job *Job, err error, startTime time.Time) {
+	errorContent := w.autoCompactAbortContent()
+	job.emitA2AResult(a2a.TaskExecutionResult{
+		State:   a2a.TaskStateFailed,
+		Content: errorContent,
+		Error:   a2a.TaskError{Code: a2a.ErrorInternal, Message: L.Get("context.auto_compact_aborted")},
+		Metrics: a2aMetrics(w.agent.TurnMetrics(), startTime),
+	})
+	if sendErr := job.sendInlineFinalReply(ds, AppendMetricsFooter(errorContent, MetricsWithElapsed(w.agent.TurnMetrics(), startTime))); sendErr != nil {
+		log.Printf("[worker %s] inline auto compact abort reply failed | user=%s msg=%s err=%v",
+			w.channelID, job.Username, job.MessageID, sendErr)
+	}
+	w.auditJobEvent("agent_job_failed", job, "", "error", map[string]any{
+		"delivery_mode":      DeliveryInline.String(),
+		"error":              L.Get("context.auto_compact_aborted"),
+		"auto_compact_error": fmt.Sprint(err),
+		"elapsed_ms":         time.Since(startTime).Milliseconds(),
+	})
+	if !job.suppressInlineDiscordFinal() {
+		w.auditResponseEvent(job, "", "error", errorContent)
+	}
+	w.recordUsage(job, "", "error", startTime)
 }
 
 type inlineReactionPulse struct {
@@ -1494,11 +1556,19 @@ func (w *Worker) executeInline(job *Job) {
 		finishJob("⚠️")
 	})
 
-	w.autoCompactIfNeeded(ctx, job, "", func(msg string) {
+	if _, err := w.autoCompactIfNeeded(ctx, job, "", func(msg string) {
 		if !job.DisableBotEgress {
 			SendProcessMessage(ds, targetID, msg)
 		}
-	})
+	}); err != nil {
+		if !beginFinish() {
+			return
+		}
+		cancel()
+		w.failInlineJobBeforePrompt(ds, job, err, startTime)
+		finishJob("⚠️")
+		return
+	}
 	if ctx.Err() != nil {
 		finishJob("⚠️")
 		return
@@ -1550,7 +1620,7 @@ func (w *Worker) autoCompactIfNeeded(parentCtx context.Context, job *Job, thread
 		msgID = job.MessageID
 	}
 	log.Printf("[worker %s] auto compact start | msg=%s ctx=%.0f%% unknown_loaded=%t", w.channelID, msgID, usage, unknownLoadedSession)
-	timeout := 30 * time.Second
+	timeout := autoCompactTimeout
 	if w.askTimeoutSec > 0 {
 		if configured := time.Duration(w.askTimeoutSec) * time.Second; configured < timeout {
 			timeout = configured
@@ -1563,7 +1633,7 @@ func (w *Worker) autoCompactIfNeeded(parentCtx context.Context, job *Job, thread
 		defer stop()
 	}
 	startedAt := time.Now()
-	_, err := w.agent.Ask(compactCtx, "/compact", nil)
+	_, err := w.agent.Compact(compactCtx, nil)
 	metrics := MetricsWithElapsed(w.agent.TurnMetrics(), startedAt)
 	after := metrics.ContextUsage
 	if after == 0 {
@@ -1601,7 +1671,7 @@ func (w *Worker) autoCompactIfNeeded(parentCtx context.Context, job *Job, thread
 		metadata["context_usage_after"] = after
 		metadata["unknown_loaded_session"] = unknownLoadedSession
 		w.auditJobEvent("agent_auto_compact_ineffective", job, threadID, "warning", metadata)
-		return true, nil
+		return true, errAutoCompactIneffective
 	}
 	w.autoCompactIneffectiveStreak = 0
 	log.Printf("[worker %s] auto compact done | msg=%s ctx_before=%.0f%% ctx_after=%.0f%%", w.channelID, msgID, usage, after)

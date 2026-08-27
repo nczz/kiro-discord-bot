@@ -3,6 +3,7 @@ package acp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -42,8 +43,15 @@ type Agent struct {
 	turnMetrics    TurnMetrics // per-turn metrics from latest metadata
 	lastStopReason string      // stopReason from the most recent prompt result
 
-	cumulativeCost   float64 // omp: latest cumulative session cost (USD) from usage_update
-	turnBaselineCost float64 // omp: cumulative cost snapshot at the start of the current turn
+	notificationSeq                 uint64 // increments on metadata/compaction status notifications
+	lastContextMetadataNotification uint64
+	compactionStartedSeq            uint64 // increments on _kiro.dev/compaction/status started
+	compactionCompletedSeq          uint64 // increments on _kiro.dev/compaction/status completed
+	lastCompactionCompletedNotif    uint64
+	compactionFailedSeq             uint64 // increments on terminal non-completed compaction status
+	lastCompactionFailState         string
+	cumulativeCost                  float64 // omp: latest cumulative session cost (USD) from usage_update
+	turnBaselineCost                float64 // omp: cumulative cost snapshot at the start of the current turn
 
 	initResult    *InitializeResult
 	sessResult    *SessionNewResult
@@ -516,6 +524,8 @@ func (a *Agent) handleNotification(method string, params json.RawMessage) {
 		if json.Unmarshal(params, &meta) == nil {
 			a.mu.Lock()
 			if meta.ContextUsagePercentage > 0 {
+				a.notificationSeq++
+				a.lastContextMetadataNotification = a.notificationSeq
 				a.contextUsage = meta.ContextUsagePercentage
 			}
 			if len(meta.MeteringUsage) > 0 {
@@ -527,6 +537,27 @@ func (a *Agent) handleNotification(method string, params json.RawMessage) {
 			a.turnMetrics.ContextUsage = a.contextUsage
 			a.mu.Unlock()
 		}
+		return
+	}
+
+	if method == NotifCompactionStatus {
+		statusType := parseCompactionStatusType(params)
+		if statusType == "" {
+			return
+		}
+		a.mu.Lock()
+		a.notificationSeq++
+		switch statusType {
+		case "started":
+			a.compactionStartedSeq++
+		case "completed":
+			a.compactionCompletedSeq++
+			a.lastCompactionCompletedNotif = a.notificationSeq
+		default:
+			a.compactionFailedSeq++
+			a.lastCompactionFailState = statusType
+		}
+		a.mu.Unlock()
 		return
 	}
 
@@ -961,6 +992,87 @@ func (a *Agent) setCurrentModeID(modeID string) {
 	}
 }
 
+var (
+	ErrCompactionIncomplete     = errors.New("compaction did not complete")
+	ErrCompactionMissingMetrics = errors.New("compaction completed without context metrics")
+)
+
+type compactionSnapshot struct {
+	compactionStartedSeq   uint64
+	compactionCompletedSeq uint64
+	compactionFailedSeq    uint64
+}
+
+func parseCompactionStatusType(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var payload struct {
+		Status struct {
+			Type string `json:"type"`
+		} `json:"status"`
+	}
+	if json.Unmarshal(raw, &payload) != nil {
+		return ""
+	}
+	return strings.ToLower(strings.TrimSpace(payload.Status.Type))
+}
+
+func compactResponseIndicatesAsync(response string) bool {
+	return strings.Contains(strings.ToLower(response), "compacting conversation")
+}
+
+func (a *Agent) compactionSnapshot() compactionSnapshot {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return compactionSnapshot{
+		compactionStartedSeq:   a.compactionStartedSeq,
+		compactionCompletedSeq: a.compactionCompletedSeq,
+		compactionFailedSeq:    a.compactionFailedSeq,
+	}
+}
+
+func (a *Agent) compactionStartedSince(snap compactionSnapshot) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.compactionStartedSeq > snap.compactionStartedSeq
+}
+
+func (a *Agent) waitForAsyncCompaction(ctx context.Context, snap compactionSnapshot) error {
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		a.mu.Lock()
+		completed := a.compactionCompletedSeq > snap.compactionCompletedSeq
+		metadataAfterCompleted := completed && a.lastContextMetadataNotification > a.lastCompactionCompletedNotif
+		failed := a.compactionFailedSeq > snap.compactionFailedSeq
+		failState := a.lastCompactionFailState
+		a.mu.Unlock()
+		if failed {
+			if failState == "" {
+				failState = "failed"
+			}
+			return fmt.Errorf("%w: status %s", ErrCompactionIncomplete, failState)
+		}
+		if completed && metadataAfterCompleted {
+			return nil
+		}
+		if completed && !metadataAfterCompleted {
+			select {
+			case <-ctx.Done():
+				return fmt.Errorf("%w: %v", ErrCompactionMissingMetrics, ctx.Err())
+			case <-ticker.C:
+				continue
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("%w: %v", ErrCompactionIncomplete, ctx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
 // Ask sends a prompt and waits for the complete response. onChunk is called for each streaming chunk.
 func (a *Agent) Ask(ctx context.Context, prompt string, onChunk func(string)) (string, error) {
 	a.mu.Lock()
@@ -1011,6 +1123,34 @@ func (a *Agent) Ask(ctx context.Context, prompt string, onChunk func(string)) (s
 		a.mu.Unlock()
 		return text, nil
 	}
+}
+
+// Compact sends Kiro's slash command and waits for the asynchronous
+// compaction/status + metadata sequence before the caller may send another
+// prompt. kiro-cli returns the /compact prompt result before background
+// compaction is complete; sending the next prompt in that window can wedge the
+// runtime at high context.
+func (a *Agent) Compact(ctx context.Context, onChunk func(string)) (string, error) {
+	snap := a.compactionSnapshot()
+	response, err := a.Ask(ctx, "/compact", onChunk)
+	if err != nil {
+		return response, err
+	}
+	if !a.compactionStartedSince(snap) && !compactResponseIndicatesAsync(response) {
+		return response, nil
+	}
+	a.mu.Lock()
+	a.state = "working"
+	a.mu.Unlock()
+	defer func() {
+		a.mu.Lock()
+		a.state = "idle"
+		a.mu.Unlock()
+	}()
+	if err := a.waitForAsyncCompaction(ctx, snap); err != nil {
+		return response, err
+	}
+	return response, nil
 }
 
 // AsyncCallbacks holds callbacks for AskAsync.

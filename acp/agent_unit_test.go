@@ -1,9 +1,12 @@
 package acp
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestAgentModelAndModeHelpers(t *testing.T) {
@@ -144,6 +147,72 @@ func TestParsePromptStopReason(t *testing.T) {
 				t.Fatalf("parsePromptStopReason() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestParseCompactionStatusType(t *testing.T) {
+	tests := []struct {
+		name string
+		raw  json.RawMessage
+		want string
+	}{
+		{name: "started", raw: json.RawMessage(`{"status":{"type":"started"}}`), want: "started"},
+		{name: "completed", raw: json.RawMessage(`{"status":{"type":" completed "}}`), want: "completed"},
+		{name: "missing", raw: json.RawMessage(`{"status":{}}`), want: ""},
+		{name: "malformed", raw: json.RawMessage(`not json`), want: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := parseCompactionStatusType(tt.raw); got != tt.want {
+				t.Fatalf("parseCompactionStatusType() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestWaitForAsyncCompactionRequiresCompletionAndMetadata(t *testing.T) {
+	a := &Agent{}
+	snap := a.compactionSnapshot()
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		a.handleNotification(NotifCompactionStatus, json.RawMessage(`{"status":{"type":"started"}}`))
+		time.Sleep(10 * time.Millisecond)
+		a.handleNotification(NotifCompactionStatus, json.RawMessage(`{"status":{"type":"completed"}}`))
+		time.Sleep(10 * time.Millisecond)
+		a.handleNotification(NotifMetadata, json.RawMessage(`{"contextUsagePercentage":8.5}`))
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := a.waitForAsyncCompaction(ctx, snap); err != nil {
+		t.Fatalf("waitForAsyncCompaction() error: %v", err)
+	}
+	if got := a.ContextUsage(); got != 8.5 {
+		t.Fatalf("context usage = %v, want 8.5", got)
+	}
+}
+
+func TestWaitForAsyncCompactionIgnoresMetadataBeforeCompletion(t *testing.T) {
+	a := &Agent{}
+	snap := a.compactionSnapshot()
+	a.handleNotification(NotifMetadata, json.RawMessage(`{"contextUsagePercentage":12.0}`))
+	a.handleNotification(NotifCompactionStatus, json.RawMessage(`{"status":{"type":"completed"}}`))
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	err := a.waitForAsyncCompaction(ctx, snap)
+	if !errors.Is(err, ErrCompactionMissingMetrics) {
+		t.Fatalf("waitForAsyncCompaction() error = %v, want missing metrics", err)
+	}
+}
+
+func TestWaitForAsyncCompactionErrorsWithoutMetadata(t *testing.T) {
+	a := &Agent{}
+	snap := a.compactionSnapshot()
+	a.handleNotification(NotifCompactionStatus, json.RawMessage(`{"status":{"type":"completed"}}`))
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	err := a.waitForAsyncCompaction(ctx, snap)
+	if !errors.Is(err, ErrCompactionMissingMetrics) {
+		t.Fatalf("waitForAsyncCompaction() error = %v, want missing metrics", err)
 	}
 }
 

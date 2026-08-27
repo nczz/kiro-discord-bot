@@ -19,6 +19,7 @@ const (
 	NotifUpdate           = "session/update"
 	NotifUpdateKiro       = "_kiro.dev/session/update"
 	NotifMetadata         = "_kiro.dev/metadata"
+	NotifCompactionStatus = "_kiro.dev/compaction/status"
 	NotifMcpReady         = "_kiro.dev/mcp/server_initialized"
 	NotifSubagent         = "_kiro.dev/subagent/list_update"
 

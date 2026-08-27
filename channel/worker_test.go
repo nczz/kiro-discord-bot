@@ -286,6 +286,10 @@ func (f *fakeWorkerAgent) Ask(_ context.Context, prompt string, _ func(string)) 
 	return f.askResponse, f.askErr
 }
 
+func (f *fakeWorkerAgent) Compact(ctx context.Context, onChunk func(string)) (string, error) {
+	return f.Ask(ctx, "/compact", onChunk)
+}
+
 func (f *fakeWorkerAgent) AskAsync(string, acp.AsyncCallbacks) {}
 
 func (f *fakeWorkerAgent) AskAsyncMulti(content []acp.PromptContent, cb acp.AsyncCallbacks) {
@@ -1752,19 +1756,89 @@ func TestAutoCompactWarnsWhenContextStillHigh(t *testing.T) {
 	}, "", func(msg string) {
 		notices = append(notices, msg)
 	})
-	if err != nil {
-		t.Fatalf("auto compact error: %v", err)
+	if !errors.Is(err, errAutoCompactIneffective) {
+		t.Fatalf("auto compact error = %v, want ineffective sentinel", err)
 	}
 	if !compacted {
 		t.Fatal("expected auto compact to run")
 	}
 	joined := strings.Join(notices, "\n")
-	if !strings.Contains(joined, "still high") || !strings.Contains(joined, "90% → 90%") {
+	if !strings.Contains(joined, "still high") || !strings.Contains(joined, "90% → 90%") || !strings.Contains(joined, "stopped before sending") {
 		t.Fatalf("auto compact notices = %#v, want ineffective warning", notices)
 	}
 	events := auditSink.Snapshot()
 	if len(events) != 1 || events[0].Type != "agent_auto_compact_ineffective" || events[0].Status != "warning" {
 		t.Fatalf("audit events = %+v, want ineffective warning", events)
+	}
+}
+
+func TestWorkerThreadStopsBeforePromptWhenAutoCompactIneffective(t *testing.T) {
+	L.Load("en")
+	rt := &recordingRoundTripper{}
+	ds := testDiscordSession(rt)
+	agent := &fakeWorkerAgent{
+		contextUsage: 91,
+		metrics:      acp.TurnMetrics{ContextUsage: 91},
+	}
+	w := newWorker("ch1", agent, 1, 30, 1, 1440, nil, "")
+
+	w.execute(&Job{
+		ChannelID: "ch1",
+		ThreadID:  "thread-1",
+		MessageID: "m1",
+		Prompt:    "high context task",
+		Session:   ds,
+	})
+
+	agent.mu.Lock()
+	asyncSent := len(agent.asyncContent)
+	prompts := append([]string(nil), agent.askPrompts...)
+	agent.mu.Unlock()
+	if asyncSent != 0 {
+		t.Fatalf("AskAsyncMulti sent %d content block(s), want none after ineffective compact", asyncSent)
+	}
+	if len(prompts) != 1 || prompts[0] != "/compact" {
+		t.Fatalf("compact prompts = %#v, want only /compact", prompts)
+	}
+	_, bodies := rt.Snapshot()
+	joined := strings.Join(bodies, "\n")
+	if !strings.Contains(joined, "Task stopped before sending the prompt") {
+		t.Fatalf("Discord replies = %v, want auto compact abort", bodies)
+	}
+}
+
+func TestWorkerInlineStopsBeforePromptWhenAutoCompactIneffective(t *testing.T) {
+	L.Load("en")
+	rt := &recordingRoundTripper{}
+	ds := testDiscordSession(rt)
+	agent := &fakeWorkerAgent{
+		contextUsage: 91,
+		metrics:      acp.TurnMetrics{ContextUsage: 91},
+	}
+	w := newWorker("ch1", agent, 1, 30, 1, 1440, nil, "")
+
+	w.executeInline(&Job{
+		ChannelID:    "ch1",
+		MessageID:    "m1",
+		Prompt:       "high context task",
+		Session:      ds,
+		DeliveryMode: DeliveryInline,
+	})
+
+	agent.mu.Lock()
+	asyncSent := len(agent.asyncContent)
+	prompts := append([]string(nil), agent.askPrompts...)
+	agent.mu.Unlock()
+	if asyncSent != 0 {
+		t.Fatalf("AskAsyncMulti sent %d content block(s), want none after ineffective compact", asyncSent)
+	}
+	if len(prompts) != 1 || prompts[0] != "/compact" {
+		t.Fatalf("compact prompts = %#v, want only /compact", prompts)
+	}
+	_, bodies := rt.Snapshot()
+	joined := strings.Join(bodies, "\n")
+	if !strings.Contains(joined, "Task stopped before sending the prompt") {
+		t.Fatalf("inline replies = %v, want auto compact abort", bodies)
 	}
 }
 
@@ -1780,8 +1854,8 @@ func TestAutoCompactRepeatedIneffectiveSuggestsClear(t *testing.T) {
 		compacted, err := w.autoCompactIfNeeded(context.Background(), &Job{MessageID: fmt.Sprintf("msg-%d", i+1)}, "", func(msg string) {
 			notices = append(notices, msg)
 		})
-		if err != nil {
-			t.Fatalf("auto compact %d error: %v", i+1, err)
+		if !errors.Is(err, errAutoCompactIneffective) {
+			t.Fatalf("auto compact %d error = %v, want ineffective sentinel", i+1, err)
 		}
 		if !compacted {
 			t.Fatalf("expected auto compact %d to run", i+1)
@@ -1812,8 +1886,11 @@ func TestAutoCompactLowContextResetsIneffectiveStreak(t *testing.T) {
 		compacted, err := w.autoCompactIfNeeded(context.Background(), &Job{MessageID: "msg-1"}, "", func(msg string) {
 			notices = append(notices, msg)
 		})
-		if err != nil {
-			t.Fatalf("auto compact error: %v", err)
+		if usage >= autoCompactContextThreshold && !errors.Is(err, errAutoCompactIneffective) {
+			t.Fatalf("auto compact error = %v, want ineffective sentinel", err)
+		}
+		if usage < autoCompactContextThreshold && err != nil {
+			t.Fatalf("auto compact error below threshold: %v", err)
 		}
 		if usage >= autoCompactContextThreshold && !compacted {
 			t.Fatalf("expected auto compact to run for usage %.0f", usage)
@@ -1897,8 +1974,8 @@ func TestAutoCompactWarnsWhenRestoredUnknownContextStillHigh(t *testing.T) {
 	}, "", func(msg string) {
 		notices = append(notices, msg)
 	})
-	if err != nil {
-		t.Fatalf("auto compact error: %v", err)
+	if !errors.Is(err, errAutoCompactIneffective) {
+		t.Fatalf("auto compact error = %v, want ineffective sentinel", err)
 	}
 	if !compacted {
 		t.Fatal("expected auto compact to run")

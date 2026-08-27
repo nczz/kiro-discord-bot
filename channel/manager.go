@@ -3055,6 +3055,19 @@ func (m *Manager) StartAuditPromptAgent(name, channelID, targetChannelID string)
 	}
 	return agent, model, nil
 }
+func agentCommandTimeout(command string) time.Duration {
+	if strings.TrimSpace(command) == "/compact" {
+		return autoCompactTimeout
+	}
+	return 30 * time.Second
+}
+
+func agentCommandAsk(ctx context.Context, agent *acp.Agent, command string) (string, error) {
+	if strings.TrimSpace(command) == "/compact" {
+		return agent.Compact(ctx, nil)
+	}
+	return agent.Ask(ctx, command, nil)
+}
 
 // SendCommand sends a slash command (e.g. /compact, /clear) to the channel's agent.
 func (m *Manager) SendCommand(channelID, command string) (string, error) {
@@ -3070,10 +3083,10 @@ func (m *Manager) SendCommandResult(channelID, command string) (AgentCommandResu
 	if !ok {
 		return AgentCommandResult{}, fmt.Errorf("no agent")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), agentCommandTimeout(command))
 	defer cancel()
 	startedAt := time.Now()
-	resp, err := agent.Ask(ctx, command, nil)
+	resp, err := agentCommandAsk(ctx, agent, command)
 	result := AgentCommandResult{
 		Response: resp,
 		Metrics:  MetricsWithElapsed(agent.TurnMetrics(), startedAt),
@@ -3881,10 +3894,10 @@ func (m *Manager) SendCommandThreadResult(threadID, command string) (AgentComman
 	if !ok {
 		return AgentCommandResult{}, ErrNoThreadAgent
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), agentCommandTimeout(command))
 	defer cancel()
 	startedAt := time.Now()
-	resp, err := entry.agent.Ask(ctx, command, nil)
+	resp, err := agentCommandAsk(ctx, entry.agent, command)
 	result := AgentCommandResult{
 		Response: resp,
 		Metrics:  MetricsWithElapsed(entry.agent.TurnMetrics(), startedAt),

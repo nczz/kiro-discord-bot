@@ -2,12 +2,15 @@ package acp_test
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/nczz/kiro-discord-bot/acp"
+	"github.com/nczz/kiro-discord-bot/internal/kirosettings"
 )
 
 func kiroCLI(t *testing.T) string {
@@ -225,6 +228,69 @@ func TestLoadSessionRestoresContext(t *testing.T) {
 	}
 	if !strings.Contains(resp, "SESSION_LOAD_FIXTURE_TOKEN") {
 		t.Fatalf("expected restored context token, got: %s", resp)
+	}
+}
+
+func TestKiroCompactWaitsForAsyncCompletion(t *testing.T) {
+	if os.Getenv("RUN_KIRO_COMPACT_SMOKE") == "" {
+		t.Skip("set RUN_KIRO_COMPACT_SMOKE=1 and KIRO_CLI to run Kiro compact smoke")
+	}
+	cli := kiroCLI(t)
+	sessionDir := t.TempDir()
+	runtimeHome := filepath.Join(t.TempDir(), "kiro-home")
+	runtimeMCP, err := kirosettings.EnsureRuntimeSettings(runtimeHome)
+	if err != nil {
+		t.Fatalf("prepare runtime settings: %v", err)
+	}
+	agent, err := acp.StartAgent("test-compact-wait", cli, t.TempDir(), "", acp.AgentOptions{
+		TrustAllTools: true,
+		Env: []string{
+			"KIRO_HOME=" + runtimeHome,
+			"KIRO_MCP_CONFIG=" + runtimeMCP,
+			"KIRO_SESSION_DIR=" + sessionDir,
+		},
+	})
+	if err != nil {
+		t.Fatalf("StartAgent: %v", err)
+	}
+	defer agent.Stop()
+
+	for i := 1; i <= 3; i++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+		payload := strings.Repeat(fmt.Sprintf("compact-smoke-%02d-", i), 320)
+		resp, err := agent.Ask(ctx, fmt.Sprintf("Do not use tools. Read this payload silently and reply exactly ACK_%d.\n%s", i, payload), nil)
+		cancel()
+		if err != nil {
+			t.Fatalf("seed turn %d: %v", i, err)
+		}
+		if !strings.Contains(resp, fmt.Sprintf("ACK_%d", i)) {
+			t.Fatalf("seed turn %d response = %q, want ACK_%d", i, resp, i)
+		}
+	}
+	before := agent.ContextUsage()
+	if before <= 0 {
+		t.Fatalf("context usage before compact = %.2f, want positive", before)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 240*time.Second)
+	resp, err := agent.Compact(ctx, nil)
+	cancel()
+	if err != nil {
+		t.Fatalf("Compact response %q error: %v", resp, err)
+	}
+	after := agent.ContextUsage()
+	if after <= 0 || after >= before {
+		t.Fatalf("context usage after compact = %.2f, want lower than %.2f", after, before)
+	}
+
+	ctx, cancel = context.WithTimeout(context.Background(), 180*time.Second)
+	resp, err = agent.Ask(ctx, "Reply exactly OK_AFTER_COMPACT.", nil)
+	cancel()
+	if err != nil {
+		t.Fatalf("post-compact Ask: %v", err)
+	}
+	if !strings.Contains(resp, "OK_AFTER_COMPACT") {
+		t.Fatalf("post-compact response = %q, want OK_AFTER_COMPACT", resp)
 	}
 }
 
