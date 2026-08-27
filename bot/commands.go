@@ -79,7 +79,7 @@ func channelOnly(ctx cmdCtx) bool {
 
 func isChannelOnlySlashCommand(name string) bool {
 	switch name {
-	case "start", "cwd", "steering", "agent", "webhook", "cron", "cron-list", "cron-run", "cron-prompt", "remind":
+	case "start", "cwd", "steering", "agent", "webhook", "cron", "cron-list", "cron-run", "cron-prompt", "remind", "restart":
 		return true
 	default:
 		return false
@@ -846,6 +846,14 @@ func doctorEnvLine(label, key, unset string) string {
 
 func (b *Bot) cmdHelp(ctx cmdCtx) {
 	ctx.reply(usageMessage())
+}
+
+func (b *Bot) cmdRestart(ctx cmdCtx) {
+	if channelOnly(ctx) {
+		return
+	}
+	stopped := b.manager.RestartChannelRuntimes(ctx.channelID)
+	ctx.reply(L.Getf("restart.success", stopped))
 }
 
 func (b *Bot) cmdReset(ctx cmdCtx) {

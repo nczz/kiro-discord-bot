@@ -1600,6 +1600,7 @@ func TestSlashCommandsIncludeAgentAndUsage(t *testing.T) {
 	foundMCP := false
 	foundSteering := false
 	foundA2A := false
+	foundRestart := false
 	for _, cmd := range buildSlashCommands() {
 		if cmd.Name == "mcp" {
 			foundMCP = true
@@ -1668,6 +1669,10 @@ func TestSlashCommandsIncludeAgentAndUsage(t *testing.T) {
 			}
 			continue
 		}
+		if cmd.Name == "restart" {
+			foundRestart = true
+			continue
+		}
 		if cmd.Name != "agent" {
 			continue
 		}
@@ -1676,8 +1681,8 @@ func TestSlashCommandsIncludeAgentAndUsage(t *testing.T) {
 			t.Fatalf("/agent options = %+v, want optional mode", cmd.Options)
 		}
 	}
-	if !foundAgent || !foundUsage || !foundInterrupt || !foundThread || !foundMCP || !foundSteering || !foundA2A {
-		t.Fatal("expected /agent, /usage, /interrupt, /thread, /mcp, /steering, and /a2a slash commands to be registered")
+	if !foundAgent || !foundUsage || !foundInterrupt || !foundThread || !foundMCP || !foundSteering || !foundA2A || !foundRestart {
+		t.Fatal("expected /agent, /usage, /interrupt, /thread, /mcp, /steering, /a2a, and /restart slash commands to be registered")
 	}
 }
 
@@ -2075,6 +2080,7 @@ func TestCommandRequiresInitializedChannelPolicy(t *testing.T) {
 	}{
 		{name: "start", want: true},
 		{name: "reset", want: true},
+		{name: "restart", want: true},
 		{name: "compact", want: true},
 		{name: "clear", want: true},
 		{name: "cron", want: true},
@@ -2098,6 +2104,29 @@ func TestCommandRequiresInitializedChannelPolicy(t *testing.T) {
 		if got := commandRequiresInitializedChannel(tt.name, tt.args); got != tt.want {
 			t.Fatalf("commandRequiresInitializedChannel(%q, %q) = %v, want %v", tt.name, tt.args, got, tt.want)
 		}
+	}
+}
+
+func TestCmdRestartReportsStoppedRuntimeCount(t *testing.T) {
+	L.Load("en")
+	b := &Bot{manager: channel.NewManager(channel.ManagerConfig{})}
+	var reply string
+	b.cmdRestart(cmdCtx{
+		channelID: "channel-1",
+		targetID:  "channel-1",
+		reply:     func(msg string) { reply = msg },
+	})
+	if !strings.Contains(reply, "Stopped 0 active runtime") {
+		t.Fatalf("restart reply = %q", reply)
+	}
+}
+
+func TestRestartCommandIsKnownAndChannelOnly(t *testing.T) {
+	if !isKnownBangCommand("restart", "!restart") {
+		t.Fatal("!restart should be recognized as a command")
+	}
+	if !isChannelOnlySlashCommand("restart") {
+		t.Fatal("/restart should be parent-channel only")
 	}
 }
 

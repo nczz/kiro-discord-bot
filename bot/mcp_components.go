@@ -153,7 +153,7 @@ func (b *Bot) handleMCPComponent(ds *discordgo.Session, i *discordgo.Interaction
 		edit(content, components)
 		return
 	case "restart":
-		stopped := b.manager.RestartMCPScope(channelID)
+		stopped := b.manager.RestartChannelRuntimes(channelID)
 		content, components := b.buildMCPManagePanel(channelID, "")
 		content = L.Getf("mcp.restarted", stopped) + "\n\n" + content
 		edit(content, components)

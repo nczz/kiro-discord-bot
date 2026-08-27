@@ -123,7 +123,7 @@ func isKnownBangCommand(name, content string) bool {
 		return false
 	}
 	switch name {
-	case "resume", "session", "pause", "back", "silent", "thread", "webhook", "reset", "status", "usage", "doctor", "audit", "mcp", "skill", "steering", "cancel", "interrupt",
+	case "resume", "session", "pause", "back", "silent", "thread", "webhook", "reset", "restart", "status", "usage", "doctor", "audit", "mcp", "skill", "steering", "cancel", "interrupt",
 		"close-thread", "compact", "clear", "cwd", "start", "agent", "engine", "model", "models", "memory", "flashmemory", "cron", "help":
 		return true
 	case "remind":
@@ -733,6 +733,8 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 		b.cmdWebhook(ctx)
 	case content == "!reset":
 		b.cmdReset(ctx)
+	case content == "!restart":
+		b.cmdRestart(ctx)
 	case content == "!help":
 		b.cmdHelp(ctx)
 	case content == "!status":
@@ -1127,6 +1129,7 @@ func buildSlashCommandsWithA2A(a2aEnabled bool) []*discordgo.ApplicationCommand 
 			{Type: discordgo.ApplicationCommandOptionString, Name: "cwd", Description: L.Get("cmd.start.opt.cwd"), Required: true},
 		}},
 		{Name: "reset", Description: L.Get("cmd.reset.desc")},
+		{Name: "restart", Description: L.Get("cmd.restart.desc")},
 		{Name: "help", Description: L.Get("cmd.help.desc")},
 		{Name: "status", Description: L.Get("cmd.status.desc")},
 		{Name: "usage", Description: L.Get("cmd.usage.desc"), Options: []*discordgo.ApplicationCommandOption{
@@ -1561,6 +1564,8 @@ func (b *Bot) handleSlashCommand(ds *discordgo.Session, i *discordgo.Interaction
 			b.cmdStart(ctx)
 		case "reset":
 			b.cmdReset(ctx)
+		case "restart":
+			b.cmdRestart(ctx)
 		case "help":
 			b.cmdHelp(ctx)
 		case "status":

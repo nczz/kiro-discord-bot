@@ -9,7 +9,7 @@ import (
 
 func commandRequiresInitializedChannel(name, args string) bool {
 	switch name {
-	case "start", "steering", "reset", "compact", "clear", "cron", "cron-prompt", "cron-run":
+	case "start", "steering", "reset", "restart", "compact", "clear", "cron", "cron-prompt", "cron-run":
 		return true
 	case "model", "agent":
 		return strings.TrimSpace(args) != ""

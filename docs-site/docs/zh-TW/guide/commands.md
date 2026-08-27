@@ -10,7 +10,8 @@
 | `/start <cwd>` | 進階直接綁定 CWD；一般建議用 `/cwd`。 |
 | `/status` | 顯示 agent 狀態、queue、context、session ID 與 uptime。 |
 | `/doctor` | 執行部署、權限與 ACP 診斷。 |
-| `/reset` | 重啟目前 channel 或 thread agent。 |
+| `/reset` | 重置目前 channel 或 thread agent session。 |
+| `/restart` | 停止目前 parent channel 內所有活躍 runtime；下一則訊息會用相同頻道設定啟動新的 runtime process。 |
 | `/clear` | 清除目前目標的對話歷史。 |
 | `/compact` | 在支援時要求 active engine 壓縮對話 context；若使用率仍偏高，請用 `/clear` 讓目前目標重新開始乾淨 session。 |
 

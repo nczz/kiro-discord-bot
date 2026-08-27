@@ -10,7 +10,8 @@ Commands are available as slash commands. Most also have `!` text-command equiva
 | `/start <cwd>` | Advanced direct CWD binding. Prefer `/cwd` for normal setup. |
 | `/status` | Show agent state, queue length, context use, session ID, and uptime. |
 | `/doctor` | Run deployment, permission, and ACP diagnostics for the current target. |
-| `/reset` | Restart the current channel or thread agent. |
+| `/reset` | Reset the current channel or thread agent session. |
+| `/restart` | Stop all active runtimes in the current parent channel; the next message starts fresh runtime processes with the same channel settings. |
 | `/clear` | Clear conversation history for the current target. |
 | `/compact` | Ask the active engine to compact conversation context where supported; if usage stays high, use `/clear` to start a clean target session. |
 

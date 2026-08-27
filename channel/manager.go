@@ -1559,7 +1559,7 @@ func (m *Manager) SetMCPPolicy(channelID, userID, serverName string, enabled boo
 	if err := m.mcpPolicies.SetPolicy(ctx, p); err != nil {
 		return err
 	}
-	stopped := m.RestartMCPScope(channelID)
+	stopped := m.RestartChannelRuntimes(channelID)
 	m.recordMCPPolicyEvent(channelID, userID, "policy", "updated", p, map[string]any{"action": "set_policy", "stopped_agents": stopped})
 	return nil
 }
@@ -1687,7 +1687,7 @@ func (m *Manager) updateMCPPolicy(channelID, userID, serverName string, metadata
 	if err := m.mcpPolicies.SetPolicy(ctx, p); err != nil {
 		return err
 	}
-	stopped := m.RestartMCPScope(channelID)
+	stopped := m.RestartChannelRuntimes(channelID)
 	if metadata == nil {
 		metadata = map[string]any{"action": "update_policy"}
 	}
@@ -1703,8 +1703,10 @@ func validateMCPPolicyExposesTools(p MCPChannelPolicy) error {
 	return errors.New(L.Getf("mcp.policy_no_tools", p.ServerName))
 }
 
-// RestartMCPScope stops the channel agent and child thread agents so the next start applies current MCP policy.
-func (m *Manager) RestartMCPScope(channelID string) int {
+// RestartChannelRuntimes stops the channel agent and all child thread agents.
+// Stored session metadata is preserved; the next message or resume starts fresh
+// runtime processes with the same channel/thread settings.
+func (m *Manager) RestartChannelRuntimes(channelID string) int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	stopped := 0
