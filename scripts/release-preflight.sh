@@ -8,7 +8,11 @@ RUN_DOCKER_BUILD="${RUN_DOCKER_BUILD:-1}"
 RUN_ACP_SMOKE="${RUN_ACP_SMOKE:-0}"
 RUN_OMP_SMOKE="${RUN_OMP_SMOKE:-0}"
 DOCKER_IMAGE="${DOCKER_IMAGE:-kiro-discord-bot:preflight}"
-TMP_BASE="${TMPDIR:-/tmp}"
+DEFAULT_TMP_BASE="${TMPDIR:-/tmp}"
+case "$DEFAULT_TMP_BASE" in
+  /var/folders/*) DEFAULT_TMP_BASE="/tmp" ;;
+esac
+TMP_BASE="${TMP_BASE:-$DEFAULT_TMP_BASE}"
 GOCACHE="${GOCACHE:-$TMP_BASE/kiro-discord-bot-gocache}"
 GOMODCACHE="${GOMODCACHE:-$TMP_BASE/kiro-discord-bot-gomodcache}"
 ACP_RUNTIME_HOME="${ACP_RUNTIME_HOME:-$ROOT_DIR/.tmp/release-preflight-kiro-home}"

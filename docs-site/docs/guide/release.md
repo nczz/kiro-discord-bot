@@ -10,6 +10,12 @@ Run the standard preflight:
 scripts/release-preflight.sh
 ```
 
+On macOS, avoid the default per-app `/var/folders/...` `TMPDIR` for the Go caches used by preflight. The script normalizes that default to `/tmp`; if module resolution reports `no required module provides package` for dependencies already present in `go.mod`, rerun with an explicit stable cache base:
+
+```bash
+TMP_BASE=/tmp RUN_ACP_SMOKE=1 KIRO_CLI=$(which kiro-cli) scripts/release-preflight.sh
+```
+
 When changing ACP behavior, engine integration, MCP policy, `bot-tools`, or cron pending ingestion, also run the relevant smoke checks:
 
 ```bash

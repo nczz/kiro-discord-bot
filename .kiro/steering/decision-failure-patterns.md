@@ -420,6 +420,25 @@ Regression expectation:
 
 - Deployment handoff must report each target separately and include artifact identity plus runtime version evidence.
 
+
+### macOS TMPDIR Go Module Cache Preflight Failure
+
+Symptoms:
+
+- `scripts/release-preflight.sh` fails during `go test ./...`.
+- Errors say `no required module provides package ...` for dependencies already listed in `go.mod`.
+- The same `go test ./...` passes outside the script or passes when using `/tmp` for `GOMODCACHE`.
+
+Cause:
+
+- macOS per-app `TMPDIR` under `/var/folders/...` can produce a bad release-preflight module cache state.
+- The failure is cache/environment related, not a missing dependency or `go.mod` problem.
+
+Fix:
+
+- Prefer a stable cache base for release preflight: `TMP_BASE=/tmp scripts/release-preflight.sh`.
+- The preflight script should normalize `/var/folders/...` `TMPDIR` to `/tmp` unless `TMP_BASE`, `GOCACHE`, or `GOMODCACHE` are explicitly set.
+
 ### MCP Server Binary Installed As Main Bot
 
 Symptoms:

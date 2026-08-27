@@ -14,6 +14,12 @@ The canonical release and deployment runbooks now live on the static documentati
    scripts/release-preflight.sh
    ```
 
+   On macOS, if preflight reports `no required module provides package` for dependencies already listed in `go.mod`, rerun with a stable cache base:
+
+   ```bash
+   TMP_BASE=/tmp scripts/release-preflight.sh
+   ```
+
 2. Add ACP smoke checks when touching engine/ACP behavior:
 
    ```bash
