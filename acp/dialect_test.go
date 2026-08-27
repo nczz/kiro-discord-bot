@@ -3,7 +3,9 @@ package acp
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -65,6 +67,155 @@ func TestProfileForSelectsDialect(t *testing.T) {
 	o := profileFor(DialectOmp).launchArgs("m", AgentOptions{TrustAllTools: true})
 	if len(o) >= len(k) {
 		t.Fatalf("omp args (%v) should be shorter than kiro args (%v)", o, k)
+	}
+}
+
+func TestKiroProfileSetModeUsesSessionSetMode(t *testing.T) {
+	req := captureSetModeRequest(t, kiroProfile(), "plan")
+
+	if req.Method != MethodSetMode {
+		t.Fatalf("kiro SetMode method = %q, want %q", req.Method, MethodSetMode)
+	}
+	if req.Params["sessionId"] != "sid-1" || req.Params["modeId"] != "plan" {
+		t.Fatalf("kiro SetMode params = %#v", req.Params)
+	}
+	if _, ok := req.Params["configId"]; ok {
+		t.Fatalf("kiro SetMode must not use configId params: %#v", req.Params)
+	}
+}
+
+func TestOmpProfileSetModeUsesConfigOption(t *testing.T) {
+	req := captureSetModeRequest(t, ompProfile(), "plan")
+
+	if req.Method != MethodSetConfigOption {
+		t.Fatalf("omp SetMode method = %q, want %q", req.Method, MethodSetConfigOption)
+	}
+	if req.Params["sessionId"] != "sid-1" || req.Params["configId"] != "mode" || req.Params["value"] != "plan" {
+		t.Fatalf("omp SetMode params = %#v", req.Params)
+	}
+	if _, ok := req.Params["modeId"]; ok {
+		t.Fatalf("omp SetMode must not send Kiro modeId param: %#v", req.Params)
+	}
+}
+
+func TestSetModeDoesNotUpdateCurrentModeOnRPCError(t *testing.T) {
+	pr, pw := io.Pipe()
+	defer pr.Close()
+	defer pw.Close()
+	out := newRequestBuffer()
+	tr := NewTransport(pr, out, 0)
+	go func() { _ = tr.ReadLoop() }()
+
+	a := &Agent{
+		SessionID: "sid-1",
+		transport: tr,
+		profile:   kiroProfile(),
+		sessResult: &SessionNewResult{Modes: &ModeState{
+			CurrentModeID:  "default",
+			AvailableModes: []ModeEntry{{ID: "default"}, {ID: "plan"}},
+		}},
+	}
+	done := make(chan error, 1)
+	go func() { done <- a.SetMode("plan") }()
+	waitForWrittenRequest(t, out)
+	if _, err := pw.Write([]byte(`{"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"Method not found"}}` + "\n")); err != nil {
+		t.Fatalf("write rpc error: %v", err)
+	}
+
+	err := waitSetModeResult(t, done)
+	if err == nil {
+		t.Fatal("SetMode should return RPC error")
+	}
+	if got := a.CurrentModeID(); got != "default" {
+		t.Fatalf("current mode updated on failure: got %q", got)
+	}
+}
+
+type capturedRPCRequest struct {
+	Method string                 `json:"method"`
+	Params map[string]interface{} `json:"params"`
+}
+
+func captureSetModeRequest(t *testing.T, profile dialectProfile, modeID string) capturedRPCRequest {
+	t.Helper()
+	pr, pw := io.Pipe()
+	defer pr.Close()
+	defer pw.Close()
+	out := newRequestBuffer()
+	tr := NewTransport(pr, out, 0)
+	go func() { _ = tr.ReadLoop() }()
+
+	a := &Agent{
+		SessionID: "sid-1",
+		transport: tr,
+		profile:   profile,
+		sessResult: &SessionNewResult{Modes: &ModeState{
+			CurrentModeID:  "default",
+			AvailableModes: []ModeEntry{{ID: "default"}, {ID: modeID}},
+		}},
+	}
+	done := make(chan error, 1)
+	go func() { done <- a.SetMode(modeID) }()
+	waitForWrittenRequest(t, out)
+	if _, err := pw.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":{}}` + "\n")); err != nil {
+		t.Fatalf("write rpc response: %v", err)
+	}
+	if err := waitSetModeResult(t, done); err != nil {
+		t.Fatalf("SetMode: %v", err)
+	}
+	if got := a.CurrentModeID(); got != modeID {
+		t.Fatalf("current mode = %q, want %q", got, modeID)
+	}
+
+	var req capturedRPCRequest
+	if err := json.Unmarshal(bytes.TrimSpace(out.Bytes()), &req); err != nil {
+		t.Fatalf("request json %q: %v", string(out.Bytes()), err)
+	}
+	return req
+}
+
+func waitSetModeResult(t *testing.T, done <-chan error) error {
+	t.Helper()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for SetMode")
+		return nil
+	}
+}
+
+type requestBuffer struct {
+	mu      sync.Mutex
+	buf     bytes.Buffer
+	written chan struct{}
+	once    sync.Once
+}
+
+func newRequestBuffer() *requestBuffer {
+	return &requestBuffer{written: make(chan struct{})}
+}
+
+func (b *requestBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	n, err := b.buf.Write(p)
+	b.mu.Unlock()
+	b.once.Do(func() { close(b.written) })
+	return n, err
+}
+
+func (b *requestBuffer) Bytes() []byte {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([]byte(nil), b.buf.Bytes()...)
+}
+
+func waitForWrittenRequest(t *testing.T, out *requestBuffer) {
+	t.Helper()
+	select {
+	case <-out.written:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for RPC request")
 	}
 }
 

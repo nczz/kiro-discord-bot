@@ -1153,13 +1153,11 @@ func (a *Agent) SetModel(modelID string) error {
 	return err
 }
 
-// SetMode switches the agent mode for the current session via session/set_mode.
-// Returns nil on success, or an error (including "Method not found" if unsupported).
+// SetMode switches the agent mode for the current session using the active
+// dialect's mode setter.
+// Returns nil on success, or an error if unsupported by the active backend.
 func (a *Agent) SetMode(modeID string) error {
-	_, err := a.transport.Send(MethodSetMode, map[string]interface{}{
-		"sessionId": a.SessionID,
-		"modeId":    modeID,
-	})
+	err := a.activeProfile().setMode(a, modeID)
 	if err == nil {
 		a.setCurrentModeID(modeID)
 	}

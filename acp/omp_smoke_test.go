@@ -43,6 +43,24 @@ func TestOmpSmoke(t *testing.T) {
 	}
 	t.Logf("omp version=%s currentModel=%s modes=%d models=%d",
 		agent.AgentVersion(), agent.CurrentModelID(), len(agent.AvailableModes()), len(agent.AvailableModels()))
+	if targetMode := alternateMode(agent.AvailableModes(), agent.CurrentModeID()); targetMode != "" {
+		originalMode := agent.CurrentModeID()
+		if err := agent.SetMode(targetMode); err != nil {
+			t.Fatalf("omp SetMode(%s): %v", targetMode, err)
+		}
+		if got := agent.CurrentModeID(); got != targetMode {
+			t.Fatalf("omp current mode after SetMode = %q, want %q", got, targetMode)
+		}
+		t.Logf("omp mode switch currentMode=%s", agent.CurrentModeID())
+		if originalMode != "" && originalMode != targetMode {
+			if err := agent.SetMode(originalMode); err != nil {
+				t.Fatalf("omp SetMode restore %s: %v", originalMode, err)
+			}
+		}
+	} else {
+		t.Log("omp mode switch skipped; fewer than two available modes")
+	}
+
 	if wanted := strings.TrimSpace(os.Getenv("OMP_SMOKE_MODEL")); wanted != "" {
 		if wanted == agent.CurrentModelID() {
 			t.Logf("omp model override skipped; currentModel already %s", wanted)
@@ -88,6 +106,15 @@ func TestOmpSmoke(t *testing.T) {
 	if !hasUSD {
 		t.Logf("omp: no USD metering captured this turn (may be 0 if cached); ctx=%.2f", m.ContextUsage)
 	}
+}
+
+func alternateMode(modes []ModeEntry, current string) string {
+	for _, mode := range modes {
+		if mode.ID != "" && mode.ID != current {
+			return mode.ID
+		}
+	}
+	return ""
 }
 
 func isTruthyEnv(value string) bool {

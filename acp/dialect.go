@@ -32,15 +32,17 @@ type dialectProfile struct {
 	launchArgs func(model string, opts AgentOptions) []string
 	// setModel switches the active model for an existing session.
 	setModel func(a *Agent, modelID string) error
+	// setMode switches the active agent mode for an existing session.
+	setMode func(a *Agent, modeID string) error
 	// cancel requests cancellation of the in-flight prompt for the session.
 	cancel func(a *Agent)
 	// parseSession parses a session/new (or session/load) result into SessionNewResult.
 	parseSession func(raw json.RawMessage) *SessionNewResult
 }
 
-// profileFor returns the dialect profile for the given dialect.
-// The DialectOmp branch is added in Stage 2 (S2.1); until then all dialects
-// resolve to the kiro profile (and no caller sets DialectOmp).
+// profileFor returns the dialect profile for the given dialect. Unknown dialect
+// values fall back to Kiro for backward compatibility with older callers that
+// did not set AgentOptions.Dialect.
 func profileFor(d Dialect) dialectProfile {
 	switch d {
 	case DialectOmp:
@@ -72,6 +74,13 @@ func kiroProfile() dialectProfile {
 			_, err := a.transport.Send(MethodSetModel, map[string]interface{}{
 				"sessionId": a.SessionID,
 				"modelId":   modelID,
+			})
+			return err
+		},
+		setMode: func(a *Agent, modeID string) error {
+			_, err := a.transport.Send(MethodSetMode, map[string]interface{}{
+				"sessionId": a.SessionID,
+				"modeId":    modeID,
 			})
 			return err
 		},
@@ -135,9 +144,9 @@ func (o ompConfigOption) Values() []ompConfigValue {
 }
 
 // ompProfile drives the `omp acp` ACP dialect (omp 16.x). Differences from kiro:
-// launch only uses generic omp flags such as --session-dir; model switch uses
-// session/set_config_option; cancel must be a JSON-RPC notification; session/new
-// returns configOptions (not modes/models).
+// launch only uses generic omp flags such as --session-dir; model and mode
+// switches use session/set_config_option; cancel must be a JSON-RPC notification;
+// session/new returns configOptions (not modes/models).
 func ompProfile() dialectProfile {
 	return dialectProfile{
 		launchArgs: func(model string, opts AgentOptions) []string {
@@ -155,6 +164,14 @@ func ompProfile() dialectProfile {
 				"sessionId": a.SessionID,
 				"configId":  "model",
 				"value":     modelID,
+			})
+			return err
+		},
+		setMode: func(a *Agent, modeID string) error {
+			_, err := a.transport.Send(MethodSetConfigOption, map[string]interface{}{
+				"sessionId": a.SessionID,
+				"configId":  "mode",
+				"value":     modeID,
 			})
 			return err
 		},

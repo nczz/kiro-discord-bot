@@ -1912,7 +1912,7 @@ func validateAgentModel(agent *acp.Agent, model string) error {
 	return nil
 }
 
-// SwitchMode attempts a dynamic mode switch via session/set_mode.
+// SwitchMode attempts a dynamic mode switch through the active ACP dialect.
 // Returns error if agent is not running or mode switch fails.
 func (m *Manager) SwitchMode(channelID, modeID string) error {
 	m.mu.Lock()
