@@ -5,6 +5,9 @@ import { chooseLocale, setLocale, t } from "./i18n.js";
 import { mentionSelection } from "./mentions.js";
 import { hasCapability, PROTOCOL_VERSION } from "./protocol.js";
 import { WebShareTransport } from "./transport.js";
+const roomHistoryVersion = 1;
+const roomHistoryLimit = 300;
+const roomHistoryPrefix = "kdb-webshare:room:";
 const commandSuggestions = [
     "agent",
     "audit",
@@ -77,6 +80,7 @@ void bootstrap();
 async function bootstrap() {
     try {
         state.join = parseJoinFragment();
+        restoreRoomHistory();
         state.keys = await deriveSessionKeys(state.join.roomID, state.join.roomKey);
         state.transport = new WebShareTransport({
             roomID: state.join.roomID,
@@ -152,18 +156,22 @@ async function handleFrame(frame) {
 }
 function applyServerEvent(event) {
     switch (event.type) {
-        case "welcome":
+        case "welcome": {
+            const previousSelectedThreadID = state.draft.targetThreadID;
             state.capabilities = event.capabilities;
             state.target = event.target;
             state.opener = event.opener;
             state.threads = event.threads ? [...event.threads] : [];
             if (event.target.threadID)
                 upsertThread({ id: event.target.threadID, name: event.target.threadName ?? event.target.threadID, parentChannelID: event.target.channelID, selected: true });
-            state.draft.targetThreadID = event.selectedThreadID;
+            state.draft.targetThreadID = welcomeSelectedThread(event, previousSelectedThreadID);
             state.mentionPicker.users = event.mentionableUsers ?? [];
             state.mentionPicker.bot = event.mentionableBot;
-            pushMessage("system", t(state.locale, "systemAuthor"), `${event.opener.displayName} → ${targetLabel(event.target)}`);
+            const welcomeText = `${event.opener.displayName} → ${targetLabel(event.target)}`;
+            if (!state.messages.some((message) => message.kind === "system" && message.content === welcomeText))
+                pushMessage("system", t(state.locale, "systemAuthor"), welcomeText);
             break;
+        }
         case "channel_event":
             mergeMentionables(event.event.mentionableUsers, event.event.mentionableBot);
             applyDiscordMessage("discord", event.event, event.event.content ?? "", event.event.author?.displayName ?? "Discord");
@@ -203,6 +211,7 @@ function applyServerEvent(event) {
             state.transport?.stop();
             break;
     }
+    persistRoomHistory();
 }
 function handleUploadState(event) {
     if (event.status === "accepted") {
@@ -789,7 +798,7 @@ function applyDiscordMessage(kind, event, content, fallbackAuthor) {
             const existing = state.messages[existingIndex];
             if (!existing)
                 return;
-            const next = { ...existing, content: deletedContent, deleted: true, thread: event.thread ?? existing.thread, threadMessage: existing.threadMessage || Boolean(event.thread && event.messageID), replyTo: event.replyTo ?? existing.replyTo };
+            const next = { ...existing, content: deletedContent, timestamp: event.timestamp ? formatMessageTimestamp(event.timestamp) : existing.timestamp, deleted: true, thread: event.thread ?? existing.thread, threadMessage: existing.threadMessage || Boolean(event.thread && event.messageID), replyTo: event.replyTo ?? existing.replyTo };
             delete next.attachments;
             state.messages[existingIndex] = next;
             return;
@@ -806,6 +815,7 @@ function applyDiscordMessage(kind, event, content, fallbackAuthor) {
             author: event.author?.displayName ?? existing.author,
             content,
             edited: existing.edited || action === "updated",
+            timestamp: event.timestamp ? formatMessageTimestamp(event.timestamp) : existing.timestamp,
             thread: event.thread ?? existing.thread,
             threadMessage: existing.threadMessage || Boolean(event.thread && event.messageID),
             replyTo: event.replyTo ?? existing.replyTo,
@@ -823,19 +833,23 @@ function applyDiscordMessage(kind, event, content, fallbackAuthor) {
     }
     if (!shouldDisplayDiscordMessage(event.messageID))
         return;
-    pushMessage(kind, event.author?.displayName ?? fallbackAuthor, content, { attachments: event.attachments, mentions: event.mentions, discordMessageID: event.messageID, edited: action === "updated", thread: event.thread, threadMessage: Boolean(event.thread && event.messageID), replyTo: event.replyTo });
+    pushMessage(kind, event.author?.displayName ?? fallbackAuthor, content, { attachments: event.attachments, mentions: event.mentions, discordMessageID: event.messageID, edited: action === "updated", thread: event.thread, threadMessage: Boolean(event.thread && event.messageID), replyTo: event.replyTo, timestamp: event.timestamp });
 }
 function applyThreadEvent(event) {
-    if (event.action === "deleted" && !event.messageID)
+    const hasMessage = Boolean(event.messageID);
+    if (event.action === "deleted" && !hasMessage)
         removeThread(event.thread.id);
     else
         upsertThread(event.thread);
-    if (event.action === "selected")
-        state.draft.targetThreadID = event.thread.id;
+    if (!hasMessage) {
+        if (event.action !== "selected")
+            pushMessage("system", t(state.locale, "systemAuthor"), threadEventBody(event), { timestamp: event.timestamp });
+        return;
+    }
     applyDiscordMessage("discord", event, threadEventBody(event), event.author?.displayName ?? event.thread.name);
 }
 function pushMessage(kind, author, content, options = {}) {
-    const message = { id: crypto.randomUUID(), kind, author, timestamp: new Date().toLocaleTimeString(), content };
+    const message = { id: crypto.randomUUID(), kind, author, timestamp: formatMessageTimestamp(options.timestamp), content };
     if (options.attachments?.length)
         message.attachments = options.attachments;
     if (options.mentions?.length)
@@ -855,6 +869,7 @@ function pushMessage(kind, author, content, options = {}) {
     state.messages.push(message);
     if (state.messages.length > 300)
         state.messages = state.messages.slice(-300);
+    persistRoomHistory();
 }
 function targetLabel(target) {
     const channel = target.channelName ? `#${target.channelName}` : target.channelID;
@@ -914,6 +929,108 @@ function removeThread(threadID) {
     state.threads = state.threads.filter((thread) => thread.id !== threadID);
     if (state.draft.targetThreadID === threadID)
         state.draft.targetThreadID = undefined;
+}
+function welcomeSelectedThread(event, previousSelectedThreadID) {
+    if (event.target.threadID)
+        return event.target.threadID;
+    if (event.selectedThreadID)
+        return event.selectedThreadID;
+    if (previousSelectedThreadID && event.threads?.some((thread) => thread.id === previousSelectedThreadID))
+        return previousSelectedThreadID;
+    return undefined;
+}
+function formatMessageTimestamp(raw) {
+    if (!raw)
+        return new Date().toLocaleString();
+    const date = new Date(raw);
+    if (Number.isNaN(date.getTime()))
+        return new Date().toLocaleString();
+    return date.toLocaleString();
+}
+function roomHistoryKey(roomID = state.join?.roomID) {
+    if (!roomID)
+        return undefined;
+    return `${roomHistoryPrefix}${roomID}:v${roomHistoryVersion}`;
+}
+function restoreRoomHistory() {
+    const key = roomHistoryKey();
+    if (!key)
+        return;
+    try {
+        const raw = sessionStorage.getItem(key);
+        if (!raw)
+            return;
+        const parsed = JSON.parse(raw);
+        if (parsed.v !== roomHistoryVersion)
+            return;
+        state.messages = sanitizeStoredMessages(parsed.messages).slice(-roomHistoryLimit);
+        state.threads = sanitizeStoredThreads(parsed.threads);
+        state.draft.targetThreadID = typeof parsed.selectedThreadID === "string" ? parsed.selectedThreadID : undefined;
+        state.seenMessageIDs = new Set(state.messages.map((message) => message.discordMessageID).filter((id) => Boolean(id)));
+    }
+    catch {
+        // Ignore corrupt per-room browser history; live relay state remains authoritative.
+    }
+}
+function persistRoomHistory() {
+    const key = roomHistoryKey();
+    if (!key)
+        return;
+    try {
+        const payload = {
+            v: roomHistoryVersion,
+            messages: state.messages.slice(-roomHistoryLimit),
+            threads: state.threads,
+            ...(state.draft.targetThreadID ? { selectedThreadID: state.draft.targetThreadID } : {}),
+            savedAt: new Date().toISOString(),
+        };
+        sessionStorage.setItem(key, JSON.stringify(payload));
+    }
+    catch {
+        // Storage can be disabled or full; never break the live control surface.
+    }
+}
+function sanitizeStoredMessages(value) {
+    if (!Array.isArray(value))
+        return [];
+    const messages = [];
+    for (const item of value) {
+        if (!item || typeof item !== "object")
+            continue;
+        const raw = item;
+        if (!isMessageKind(raw.kind) || typeof raw.author !== "string" || typeof raw.timestamp !== "string" || typeof raw.content !== "string")
+            continue;
+        messages.push({
+            id: typeof raw.id === "string" ? raw.id : crypto.randomUUID(),
+            kind: raw.kind,
+            author: raw.author,
+            timestamp: raw.timestamp,
+            content: raw.content,
+            ...(Array.isArray(raw.attachments) ? { attachments: raw.attachments } : {}),
+            ...(Array.isArray(raw.mentions) ? { mentions: raw.mentions } : {}),
+            ...(typeof raw.discordMessageID === "string" ? { discordMessageID: raw.discordMessageID } : {}),
+            ...(raw.edited ? { edited: true } : {}),
+            ...(raw.deleted ? { deleted: true } : {}),
+            ...(isThreadView(raw.thread) ? { thread: raw.thread } : {}),
+            ...(raw.threadMessage ? { threadMessage: true } : {}),
+            ...(raw.replyTo ? { replyTo: raw.replyTo } : {}),
+        });
+    }
+    return messages;
+}
+function sanitizeStoredThreads(value) {
+    if (!Array.isArray(value))
+        return [];
+    return value.filter(isThreadView);
+}
+function isThreadView(value) {
+    if (!value || typeof value !== "object")
+        return false;
+    const thread = value;
+    return typeof thread.id === "string" && typeof thread.name === "string";
+}
+function isMessageKind(value) {
+    return value === "discord" || value === "agent" || value === "command" || value === "system" || value === "upload" || value === "attachment" || value === "error";
 }
 function markdownMessageContent(message) {
     const root = el("div", { className: "message-content markdown-content" });

@@ -554,6 +554,50 @@ func TestWebShareBroadcastsLiveDiscordMessage(t *testing.T) {
 	}
 }
 
+func TestWebShareThreadTargetBroadcastUsesShareParentWhenResolverMisses(t *testing.T) {
+	store, err := webshare.OpenStore(context.Background(), t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	mat, err := webshare.GenerateSecretMaterial()
+	if err != nil {
+		t.Fatal(err)
+	}
+	share, err := store.CreateShare(context.Background(), webshare.CreateShareRequest{ShareID: mat.ShareID, GuildID: "guild-1", TargetType: webshare.TargetThread, TargetID: "thread-1", ParentChannelID: "channel-1", OpenerUserID: "viewer", OpenerUsername: "Viewer", RelayURL: "wss://relay/r", PublicBaseURL: "https://relay", RoomID: mat.RoomID, RoomKey: mat.RoomKey, WriteToken: mat.WriteToken, Capabilities: webshare.WriteCapabilities(), Status: webshare.StatusActive, Now: time.Now()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ch := make(chan webshare.ServerEvent, 3)
+	b := &Bot{webshareStore: store, webshareHosts: map[string]*webshareHostLoop{share.ShareID: {send: ch}}}
+
+	createdAt := time.Date(2026, 9, 1, 3, 0, 0, 0, time.UTC)
+	updatedAt := createdAt.Add(time.Minute)
+	deletedAt := createdAt.Add(2 * time.Minute)
+	b.broadcastWebShareDiscordMessage(context.Background(), &discordgo.MessageCreate{Message: &discordgo.Message{
+		ID: "msg-create", ChannelID: "thread-1", GuildID: "guild-1", Content: "created", Timestamp: createdAt, Author: &discordgo.User{ID: "user-2", Username: "Bob"},
+	}}, "")
+	b.broadcastWebShareDiscordMessageUpdate(context.Background(), &discordgo.MessageUpdate{Message: &discordgo.Message{
+		ID: "msg-update", ChannelID: "thread-1", GuildID: "guild-1", Content: "updated", Timestamp: updatedAt,
+	}}, "")
+	b.broadcastWebShareDiscordMessageDelete(context.Background(), &discordgo.MessageDelete{Message: &discordgo.Message{
+		ID: "msg-delete", ChannelID: "thread-1", GuildID: "guild-1", Timestamp: deletedAt,
+	}}, "")
+
+	for i, tc := range []struct{ action, timestamp string }{{"message", createdAt.Format(time.RFC3339Nano)}, {"updated", updatedAt.Format(time.RFC3339Nano)}, {"deleted", deletedAt.Format(time.RFC3339Nano)}} {
+		select {
+		case event := <-ch:
+			payload := event.Event.(map[string]any)
+			thread := payload["thread"].(map[string]any)
+			if event.Type != "thread_event" || payload["action"] != tc.action || payload["timestamp"] != tc.timestamp || thread["id"] != "thread-1" || thread["parentChannelID"] != "channel-1" {
+				t.Fatalf("event %d = %+v payload=%#v", i, event, payload)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("missing thread event %d", i)
+		}
+	}
+}
+
 func TestWebShareBroadcastIncludesReplyReference(t *testing.T) {
 	store, share := newTestWebShareStoreAndShare(t)
 	ch := make(chan webshare.ServerEvent, 1)

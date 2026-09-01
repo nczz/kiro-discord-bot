@@ -43,6 +43,15 @@ interface ChatMessage {
   replyTo?: MessageReferenceView | undefined;
 }
 
+interface StoredRoomHistory {
+  v: 1;
+  messages: ChatMessage[];
+  threads: ThreadView[];
+  selectedThreadID?: string;
+  savedAt: string;
+}
+
+
 
 interface DraftState {
   mode: ComposeMode;
@@ -51,6 +60,11 @@ interface DraftState {
   newThreadName: string;
   sourceMessageID: string;
 }
+
+
+const roomHistoryVersion = 1;
+const roomHistoryLimit = 300;
+const roomHistoryPrefix = "kdb-webshare:room:";
 
 const commandSuggestions = [
   "agent",
@@ -151,6 +165,7 @@ void bootstrap();
 async function bootstrap(): Promise<void> {
   try {
     state.join = parseJoinFragment();
+    restoreRoomHistory();
     state.keys = await deriveSessionKeys(state.join.roomID, state.join.roomKey);
     state.transport = new WebShareTransport({
       roomID: state.join.roomID,
@@ -220,17 +235,20 @@ async function handleFrame(frame: RelayFrame): Promise<void> {
 
 function applyServerEvent(event: ServerEvent): void {
   switch (event.type) {
-    case "welcome":
+    case "welcome": {
+      const previousSelectedThreadID = state.draft.targetThreadID;
       state.capabilities = event.capabilities;
       state.target = event.target;
       state.opener = event.opener;
       state.threads = event.threads ? [...event.threads] : [];
       if (event.target.threadID) upsertThread({ id: event.target.threadID, name: event.target.threadName ?? event.target.threadID, parentChannelID: event.target.channelID, selected: true });
-      state.draft.targetThreadID = event.selectedThreadID;
+      state.draft.targetThreadID = welcomeSelectedThread(event, previousSelectedThreadID);
       state.mentionPicker.users = event.mentionableUsers ?? [];
       state.mentionPicker.bot = event.mentionableBot;
-      pushMessage("system", t(state.locale, "systemAuthor"), `${event.opener.displayName} → ${targetLabel(event.target)}`);
+      const welcomeText = `${event.opener.displayName} → ${targetLabel(event.target)}`;
+      if (!state.messages.some((message) => message.kind === "system" && message.content === welcomeText)) pushMessage("system", t(state.locale, "systemAuthor"), welcomeText);
       break;
+    }
     case "channel_event":
       mergeMentionables(event.event.mentionableUsers, event.event.mentionableBot);
       applyDiscordMessage("discord", event.event, event.event.content ?? "", event.event.author?.displayName ?? "Discord");
@@ -269,6 +287,7 @@ function applyServerEvent(event: ServerEvent): void {
       state.transport?.stop();
       break;
   }
+  persistRoomHistory();
 }
 
 function handleUploadState(event: Extract<ServerEvent, { type: "upload_state" }>): void {
@@ -853,6 +872,7 @@ interface PushMessageOptions {
   thread?: ThreadView | undefined;
   threadMessage?: boolean | undefined;
   replyTo?: MessageReferenceView | undefined;
+  timestamp?: string | undefined;
 }
 
 interface DiscordMessageLike {
@@ -864,6 +884,7 @@ interface DiscordMessageLike {
   action?: string;
   thread?: ThreadView;
   replyTo?: MessageReferenceView;
+  timestamp?: string;
 }
 
 function applyDiscordMessage(kind: MessageKind, event: DiscordMessageLike, content: string, fallbackAuthor: string): void {
@@ -874,7 +895,7 @@ function applyDiscordMessage(kind: MessageKind, event: DiscordMessageLike, conte
     if (existingIndex >= 0) {
       const existing = state.messages[existingIndex];
       if (!existing) return;
-      const next: ChatMessage = { ...existing, content: deletedContent, deleted: true, thread: event.thread ?? existing.thread, threadMessage: existing.threadMessage || Boolean(event.thread && event.messageID), replyTo: event.replyTo ?? existing.replyTo };
+      const next: ChatMessage = { ...existing, content: deletedContent, timestamp: event.timestamp ? formatMessageTimestamp(event.timestamp) : existing.timestamp, deleted: true, thread: event.thread ?? existing.thread, threadMessage: existing.threadMessage || Boolean(event.thread && event.messageID), replyTo: event.replyTo ?? existing.replyTo };
       delete next.attachments;
       state.messages[existingIndex] = next;
       return;
@@ -890,6 +911,7 @@ function applyDiscordMessage(kind: MessageKind, event: DiscordMessageLike, conte
       author: event.author?.displayName ?? existing.author,
       content,
       edited: existing.edited || action === "updated",
+      timestamp: event.timestamp ? formatMessageTimestamp(event.timestamp) : existing.timestamp,
       thread: event.thread ?? existing.thread,
       threadMessage: existing.threadMessage || Boolean(event.thread && event.messageID),
       replyTo: event.replyTo ?? existing.replyTo,
@@ -903,18 +925,22 @@ function applyDiscordMessage(kind: MessageKind, event: DiscordMessageLike, conte
     return;
   }
   if (!shouldDisplayDiscordMessage(event.messageID)) return;
-  pushMessage(kind, event.author?.displayName ?? fallbackAuthor, content, { attachments: event.attachments, mentions: event.mentions, discordMessageID: event.messageID, edited: action === "updated", thread: event.thread, threadMessage: Boolean(event.thread && event.messageID), replyTo: event.replyTo });
+  pushMessage(kind, event.author?.displayName ?? fallbackAuthor, content, { attachments: event.attachments, mentions: event.mentions, discordMessageID: event.messageID, edited: action === "updated", thread: event.thread, threadMessage: Boolean(event.thread && event.messageID), replyTo: event.replyTo, timestamp: event.timestamp });
 }
 
 function applyThreadEvent(event: Extract<ServerEvent, { type: "thread_event" }>["event"]): void {
-  if (event.action === "deleted" && !event.messageID) removeThread(event.thread.id);
+  const hasMessage = Boolean(event.messageID);
+  if (event.action === "deleted" && !hasMessage) removeThread(event.thread.id);
   else upsertThread(event.thread);
-  if (event.action === "selected") state.draft.targetThreadID = event.thread.id;
+  if (!hasMessage) {
+    if (event.action !== "selected") pushMessage("system", t(state.locale, "systemAuthor"), threadEventBody(event), { timestamp: event.timestamp });
+    return;
+  }
   applyDiscordMessage("discord", event, threadEventBody(event), event.author?.displayName ?? event.thread.name);
 }
 
 function pushMessage(kind: MessageKind, author: string, content: string, options: PushMessageOptions = {}): void {
-  const message: ChatMessage = { id: crypto.randomUUID(), kind, author, timestamp: new Date().toLocaleTimeString(), content };
+  const message: ChatMessage = { id: crypto.randomUUID(), kind, author, timestamp: formatMessageTimestamp(options.timestamp), content };
   if (options.attachments?.length) message.attachments = options.attachments;
   if (options.mentions?.length) message.mentions = options.mentions;
   if (options.discordMessageID) message.discordMessageID = options.discordMessageID;
@@ -925,6 +951,7 @@ function pushMessage(kind: MessageKind, author: string, content: string, options
   if (options.replyTo) message.replyTo = options.replyTo;
   state.messages.push(message);
   if (state.messages.length > 300) state.messages = state.messages.slice(-300);
+  persistRoomHistory();
 }
 
 function targetLabel(target: TargetView): string {
@@ -980,6 +1007,100 @@ function upsertThread(thread: ThreadView): void {
 function removeThread(threadID: string): void {
   state.threads = state.threads.filter((thread) => thread.id !== threadID);
   if (state.draft.targetThreadID === threadID) state.draft.targetThreadID = undefined;
+}
+
+function welcomeSelectedThread(event: Extract<ServerEvent, { type: "welcome" }>, previousSelectedThreadID: string | undefined): string | undefined {
+  if (event.target.threadID) return event.target.threadID;
+  if (event.selectedThreadID) return event.selectedThreadID;
+  if (previousSelectedThreadID && event.threads?.some((thread) => thread.id === previousSelectedThreadID)) return previousSelectedThreadID;
+  return undefined;
+}
+
+function formatMessageTimestamp(raw?: string): string {
+  if (!raw) return new Date().toLocaleString();
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return new Date().toLocaleString();
+  return date.toLocaleString();
+}
+
+function roomHistoryKey(roomID = state.join?.roomID): string | undefined {
+  if (!roomID) return undefined;
+  return `${roomHistoryPrefix}${roomID}:v${roomHistoryVersion}`;
+}
+
+function restoreRoomHistory(): void {
+  const key = roomHistoryKey();
+  if (!key) return;
+  try {
+    const raw = sessionStorage.getItem(key);
+    if (!raw) return;
+    const parsed = JSON.parse(raw) as Partial<StoredRoomHistory>;
+    if (parsed.v !== roomHistoryVersion) return;
+    state.messages = sanitizeStoredMessages(parsed.messages).slice(-roomHistoryLimit);
+    state.threads = sanitizeStoredThreads(parsed.threads);
+    state.draft.targetThreadID = typeof parsed.selectedThreadID === "string" ? parsed.selectedThreadID : undefined;
+    state.seenMessageIDs = new Set(state.messages.map((message) => message.discordMessageID).filter((id): id is string => Boolean(id)));
+  } catch {
+    // Ignore corrupt per-room browser history; live relay state remains authoritative.
+  }
+}
+
+function persistRoomHistory(): void {
+  const key = roomHistoryKey();
+  if (!key) return;
+  try {
+    const payload: StoredRoomHistory = {
+      v: roomHistoryVersion,
+      messages: state.messages.slice(-roomHistoryLimit),
+      threads: state.threads,
+      ...(state.draft.targetThreadID ? { selectedThreadID: state.draft.targetThreadID } : {}),
+      savedAt: new Date().toISOString(),
+    };
+    sessionStorage.setItem(key, JSON.stringify(payload));
+  } catch {
+    // Storage can be disabled or full; never break the live control surface.
+  }
+}
+
+function sanitizeStoredMessages(value: unknown): ChatMessage[] {
+  if (!Array.isArray(value)) return [];
+  const messages: ChatMessage[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object") continue;
+    const raw = item as Partial<ChatMessage>;
+    if (!isMessageKind(raw.kind) || typeof raw.author !== "string" || typeof raw.timestamp !== "string" || typeof raw.content !== "string") continue;
+    messages.push({
+      id: typeof raw.id === "string" ? raw.id : crypto.randomUUID(),
+      kind: raw.kind,
+      author: raw.author,
+      timestamp: raw.timestamp,
+      content: raw.content,
+      ...(Array.isArray(raw.attachments) ? { attachments: raw.attachments } : {}),
+      ...(Array.isArray(raw.mentions) ? { mentions: raw.mentions } : {}),
+      ...(typeof raw.discordMessageID === "string" ? { discordMessageID: raw.discordMessageID } : {}),
+      ...(raw.edited ? { edited: true } : {}),
+      ...(raw.deleted ? { deleted: true } : {}),
+      ...(isThreadView(raw.thread) ? { thread: raw.thread } : {}),
+      ...(raw.threadMessage ? { threadMessage: true } : {}),
+      ...(raw.replyTo ? { replyTo: raw.replyTo } : {}),
+    });
+  }
+  return messages;
+}
+
+function sanitizeStoredThreads(value: unknown): ThreadView[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter(isThreadView);
+}
+
+function isThreadView(value: unknown): value is ThreadView {
+  if (!value || typeof value !== "object") return false;
+  const thread = value as Partial<ThreadView>;
+  return typeof thread.id === "string" && typeof thread.name === "string";
+}
+
+function isMessageKind(value: unknown): value is MessageKind {
+  return value === "discord" || value === "agent" || value === "command" || value === "system" || value === "upload" || value === "attachment" || value === "error";
 }
 
 function markdownMessageContent(message: ChatMessage): HTMLElement {

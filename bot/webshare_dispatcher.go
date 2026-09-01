@@ -277,7 +277,7 @@ func (b *Bot) websharePrompt(ctx context.Context, share webshare.Share, action w
 		if ref, ok := b.webshareBotMentionRef(share); ok {
 			recordRefs = append(recordRefs, ref)
 		}
-		record := map[string]any{"eventID": webshareEventID("webshare-prompt", sent.ID), "messageID": sent.ID, "author": map[string]any{"id": share.OpenerUserID, "displayName": webshareDisplayName(share), "username": share.OpenerUsername}, "content": body, "mentions": webshareMentionsFromRefs(recordRefs)}
+		record := map[string]any{"eventID": webshareEventID("webshare-prompt", sent.ID), "timestamp": webshareDiscordTimestamp(sent), "messageID": sent.ID, "author": map[string]any{"id": share.OpenerUserID, "displayName": webshareDisplayName(share), "username": share.OpenerUsername}, "content": body, "mentions": webshareMentionsFromRefs(recordRefs)}
 		if len(attachmentViews) > 0 {
 			record["attachments"] = attachmentViews
 		}
@@ -302,7 +302,7 @@ func (b *Bot) websharePrompt(ctx context.Context, share webshare.Share, action w
 			return webshare.ServerEvent{Type: "error", Status: "error", ReasonCode: "enqueue_failed", Content: err.Error()}
 		}
 	}
-	return webshare.ServerEvent{Type: "agent_event", Status: "queued", Event: map[string]any{"eventID": webshareEventID("agent-queued", targetID), "status": "queued"}}
+	return webshare.ServerEvent{Type: "agent_event", Status: "queued", Event: map[string]any{"eventID": webshareEventID("agent-queued", targetID), "timestamp": time.Now().UTC().Format(time.RFC3339Nano), "status": "queued"}}
 }
 
 func websharePromptParent(share webshare.Share, targetID, parentID string) string {
@@ -473,7 +473,7 @@ func (b *Bot) websharePostChannelMessage(ctx context.Context, share webshare.Sha
 		return webshareWebhookFailureEvent("discord_webhook_send_failed", err)
 	}
 	b.recordWebShareAudit(share, "webshare_channel_message", share.OpenerUserID, action.DisplayName, targetID, true, "", map[string]any{"message_id": sent.ID, "mentioned_users": len(allowed.Users), "attachment_count": len(files), "transport": "webhook"})
-	event := map[string]any{"eventID": webshareEventID("channel-message", sent.ID), "messageID": sent.ID, "author": map[string]any{"id": share.OpenerUserID, "displayName": webshareDisplayName(share), "username": share.OpenerUsername}, "content": body, "mentions": webshareMentionsFromRefs(refs)}
+	event := map[string]any{"eventID": webshareEventID("channel-message", sent.ID), "timestamp": webshareDiscordTimestamp(sent), "messageID": sent.ID, "author": map[string]any{"id": share.OpenerUserID, "displayName": webshareDisplayName(share), "username": share.OpenerUsername}, "content": body, "mentions": webshareMentionsFromRefs(refs)}
 	if len(attachmentViews) > 0 {
 		event["attachments"] = attachmentViews
 	}

@@ -61,14 +61,15 @@ func (b *Bot) sendWebShareHostEvent(shareID string, event webshare.ServerEvent) 
 func (b *Bot) webshareDiscordMessageEvent(ctx context.Context, share webshare.Share, m *discordgo.MessageCreate, parentChannelID string) webshare.ServerEvent {
 	attachments := b.webshareDiscordAttachmentRefs(ctx, share, m)
 	author := map[string]any{"id": m.Author.ID, "displayName": displayOrDefault(m.Author.Username), "username": m.Author.Username}
-	base := map[string]any{"eventID": webshareEventID("discord-message", m.ID), "messageID": m.ID, "action": "created", "author": author, "content": secrets.RedactEnv(m.Content), "attachments": attachments, "mentionableUsers": mentionableUsersFromMessage(m), "mentionableBot": b.webshareMentionableBot(), "mentions": discordMentionsFromMessage(m)}
+	base := map[string]any{"eventID": webshareEventID("discord-message", m.ID), "timestamp": webshareDiscordTimestamp(m.Message), "messageID": m.ID, "action": "created", "author": author, "content": secrets.RedactEnv(m.Content), "attachments": attachments, "mentionableUsers": mentionableUsersFromMessage(m), "mentionableBot": b.webshareMentionableBot(), "mentions": discordMentionsFromMessage(m)}
 	if replyTo := discordReplyReferenceFromMessage(m.Message); replyTo != nil {
 		base["replyTo"] = replyTo
 	}
-	if strings.TrimSpace(parentChannelID) == "" {
+	parentID := webshareEventParent(share, m.ChannelID, parentChannelID)
+	if parentID == "" {
 		return webshare.ServerEvent{Type: "channel_event", Status: "ok", Event: base}
 	}
-	base["thread"] = map[string]any{"id": m.ChannelID, "name": m.ChannelID, "parentChannelID": parentChannelID}
+	base["thread"] = map[string]any{"id": m.ChannelID, "name": m.ChannelID, "parentChannelID": parentID}
 	base["action"] = "message"
 	return webshare.ServerEvent{Type: "thread_event", Status: "ok", Event: base}
 }
@@ -96,7 +97,7 @@ func (b *Bot) broadcastWebShareDiscordMessageUpdate(ctx context.Context, m *disc
 		return
 	}
 	b.broadcastWebShareDiscordEvent(ctx, m.GuildID, m.ChannelID, parentChannelID, m.ID, func(share webshare.Share) webshare.ServerEvent {
-		base := map[string]any{"eventID": webshareEventID("discord-message-updated", m.ID), "messageID": m.ID, "action": "updated", "content": secrets.RedactEnv(m.Content)}
+		base := map[string]any{"eventID": webshareEventID("discord-message-updated", m.ID), "timestamp": webshareDiscordTimestamp(m.Message), "messageID": m.ID, "action": "updated", "content": secrets.RedactEnv(m.Content)}
 		if m.Author != nil {
 			base["author"] = map[string]any{"id": m.Author.ID, "displayName": displayOrDefault(m.Author.Username), "username": m.Author.Username}
 		}
@@ -112,10 +113,11 @@ func (b *Bot) broadcastWebShareDiscordMessageUpdate(ctx context.Context, m *disc
 		if replyTo := discordReplyReferenceFromMessage(m.Message); replyTo != nil {
 			base["replyTo"] = replyTo
 		}
-		if strings.TrimSpace(parentChannelID) == "" {
+		parentID := webshareEventParent(share, m.ChannelID, parentChannelID)
+		if parentID == "" {
 			return webshare.ServerEvent{Type: "channel_event", Status: "ok", Event: base}
 		}
-		base["thread"] = map[string]any{"id": m.ChannelID, "name": m.ChannelID, "parentChannelID": parentChannelID}
+		base["thread"] = map[string]any{"id": m.ChannelID, "name": m.ChannelID, "parentChannelID": parentID}
 		base["action"] = "updated"
 		return webshare.ServerEvent{Type: "thread_event", Status: "ok", Event: base}
 	})
@@ -133,11 +135,12 @@ func (b *Bot) broadcastWebShareDiscordMessageDelete(ctx context.Context, m *disc
 		return
 	}
 	b.broadcastWebShareDiscordEvent(ctx, m.GuildID, m.ChannelID, parentChannelID, m.ID, func(share webshare.Share) webshare.ServerEvent {
-		base := map[string]any{"eventID": webshareEventID("discord-message-deleted", m.ID), "messageID": m.ID, "action": "deleted"}
-		if strings.TrimSpace(parentChannelID) == "" {
+		base := map[string]any{"eventID": webshareEventID("discord-message-deleted", m.ID), "timestamp": webshareDiscordTimestamp(m.Message), "messageID": m.ID, "action": "deleted"}
+		parentID := webshareEventParent(share, m.ChannelID, parentChannelID)
+		if parentID == "" {
 			return webshare.ServerEvent{Type: "channel_event", Status: "ok", Event: base}
 		}
-		base["thread"] = map[string]any{"id": m.ChannelID, "name": m.ChannelID, "parentChannelID": parentChannelID}
+		base["thread"] = map[string]any{"id": m.ChannelID, "name": m.ChannelID, "parentChannelID": parentID}
 		base["action"] = "deleted"
 		return webshare.ServerEvent{Type: "thread_event", Status: "ok", Event: base}
 	})
@@ -195,7 +198,7 @@ func (b *Bot) broadcastWebShareThreadLifecycle(ctx context.Context, ch *discordg
 		if loop == nil {
 			continue
 		}
-		event := webshare.ServerEvent{Type: "thread_event", Status: "ok", Event: map[string]any{"eventID": webshareEventID("thread-"+action, ch.ID), "thread": thread, "action": action}}
+		event := webshare.ServerEvent{Type: "thread_event", Status: "ok", Event: map[string]any{"eventID": webshareEventID("thread-"+action, ch.ID), "timestamp": time.Now().UTC().Format(time.RFC3339Nano), "thread": thread, "action": action}}
 		select {
 		case loop.send <- event:
 		default:
@@ -212,6 +215,27 @@ func webshareShareCoversThreadLifecycle(share webshare.Share, ch *discordgo.Chan
 		return share.TargetID == ch.ID
 	}
 	return share.TargetType == webshare.TargetChannel && share.TargetID == ch.ParentID
+}
+
+func webshareEventParent(share webshare.Share, channelID, parentChannelID string) string {
+	parentID := strings.TrimSpace(parentChannelID)
+	if parentID != "" {
+		return parentID
+	}
+	if share.TargetType == webshare.TargetThread && strings.TrimSpace(channelID) == share.TargetID {
+		return share.ParentChannelID
+	}
+	return ""
+}
+
+func webshareDiscordTimestamp(m *discordgo.Message) string {
+	if m == nil {
+		return ""
+	}
+	if m.Timestamp.IsZero() {
+		return ""
+	}
+	return m.Timestamp.UTC().Format(time.RFC3339Nano)
 }
 
 func webshareThreadView(ch *discordgo.Channel) map[string]any {
