@@ -10,6 +10,7 @@
 - Send Messages
 - Add Reactions
 - Read Message History
+- 啟用 WebShare 時需要 Manage Webhooks
 - Message Content Intent
 
 MCP server 可能需要額外 Discord REST 存取。bot 的 channel policy 不會取代 Discord 權限；兩邊都要允許，操作才會成功。
@@ -18,13 +19,17 @@ MCP server 可能需要額外 Discord REST 存取。bot 的 channel policy 不�
 
 ## 私密回應
 
-管理面板與敏感查詢會在 Discord 支援時使用 ephemeral private response。包含 `/cwd`、`/status`、`/usage`、`/usage-history`、`/doctor`、`/audit`、`/models`、`/memory`、`/flashmemory`、`/mcp manage`、`/steering`、`/cron-list`。
+管理面板與敏感查詢會在 Discord 支援時使用 ephemeral private response。包含 `/cwd`、`/status`、`/usage`、`/usage-history`、`/doctor`、`/audit`、`/models`、`/memory`、`/flashmemory`、`/mcp manage`、`/steering`、`/cron-list` 與 `/webshare`。
 
 文字指令不一定能提供 Discord private response。Audit 資料請使用 slash `/audit`；usage data 請使用 slash `/usage` 或 `/usage-history`。文字 `!audit` 不會回傳 audit rows 或 prompt 調查報告，文字 `!usage` 只會提示改用 slash。
 
 ## CWD 邊界
 
 用 `DEFAULT_CWD` 與 `ALLOWED_CWD_ROOTS` 把頻道 setup 限制在預期專案根目錄內。新頻道必須先初始化才能開始 agent 工作，setup 只會在 `DEFAULT_CWD` 下選擇或建立專案。
+
+## WebShare 控制
+
+WebShare 預設關閉，只有在 self-host relay 與 matching host token 都準備好後才應啟用。Control link 會在停止或撤銷前委派 opener 的 channel/thread authority，因此 managers 應把 active shares 視為短期 privileged sessions。Handoff 期間用 `/webshare status` 檢查，正常完成後用 `/webshare stop`，如果連結可能外洩則用 `/webshare revoke`。
 
 ## MCP 安全
 

@@ -12,3 +12,5 @@ logs/
 dist/
 .tmp/
 */kiro-agent-runtime/
+/bin/
+node_modules/

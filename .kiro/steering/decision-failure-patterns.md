@@ -88,6 +88,41 @@ Verification:
 
 - Regression tests should cover default ignore, enabled + leading mention acceptance, missing/non-leading mention rejection, persistence, command status hint, and runtime routing past the bot-authored message gate.
 
+
+### WebShare Relay Is Delegated Discord Target Control, Not User Identity Emulation
+
+Decision:
+
+- WebShare relay links are capability-bearing delegated sessions scoped to one Discord guild channel/thread target and opener user. The bot may let the link holder act through the opener's permission context inside that target, but it must never use Discord user tokens, selfbot behavior, or unmarked webhook spoofing to impersonate the opener.
+- The relay is a pure Go/self-host service. It routes opaque end-to-end encrypted WebSocket frames between browser clients and the bot's outbound host connection. It does not parse Discord or agent payloads.
+
+Context:
+
+- Product direction requires an OMP-like relay link, bot-initiated relay connection, no default time limit, full channel parity from the web UI, web-side prompt/command/message/thread/attachment capability, and Discord-side lockout for the opener until the share is stopped.
+- Discord does not allow a bot to truly send messages as a normal user account. Webhook display names/avatars are overrideable, but webhook messages remain distinguishable webhook-authored Discord messages.
+- Existing `/webhook mode` is intentionally explicit and prompt-only; WebShare is a separate authenticated/delegated control surface and must not weaken the webhook leading-mention gate or bot-authored loop guard.
+
+Rejected alternatives:
+
+- User token or selfbot integration is rejected because it violates Discord platform boundaries and would collapse audit/accountability.
+- Treating WebShare browser input as fake `discordgo.MessageCreate` or fake slash `InteractionCreate` is rejected because it would forge Discord event identity, IDs, response semantics, and permission evidence.
+- Cloudflare Workers/Durable Objects relay is rejected for this product shape because the selected deployment target is pure Go/self-host behind optional reverse proxies such as nginx.
+- Parse-all mentions from web-originated messages are rejected. WebShare may mention users/bots only through explicit selected `AllowedMentions`; `@everyone`/`@here` stay disabled unless a future decision adds a separate capability.
+
+Current scope:
+
+- Plan source of truth: `docs/webshare-relay-implementation-plan.md`.
+- First implementation is expected to include full channel parity: live view, agent prompt, bot command bridge, normal channel message posting, selected user/bot mentions, thread creation/selection, web upload, scoped Discord attachment fetch, interrupt/control, opener Discord lockout, audit, and reverse-proxy-compatible Go relay deployment.
+- Discord-visible messages must be marked as delegated, for example `Alice via WebShare`; webhook display may be added only if it remains marked and cannot loop back into webhook prompt input.
+
+Future trigger:
+
+- Reopen this decision if Discord exposes an official delegated user/app interaction model, if multi-instance relay scaling becomes required, if `@everyone`/role mention delegation is explicitly required, or if attachment access needs a different per-file approval model.
+
+Verification:
+
+- Regression coverage must prove opener lockout on Discord prompt/command paths, permission recheck on every web action, no fake Discord event injection, explicit `AllowedMentions`, target-scoped attachment fetch, encrypted relay frame routing, host auth outside query strings, no secret/link/path leakage in logs/audit, and unchanged `/webhook mode` behavior.
+
 ## Current Safe Egress Decisions
 
 ### Document Files Are Extracted To Text, Not Rewritten In Original Format

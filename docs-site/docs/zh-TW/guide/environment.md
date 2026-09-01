@@ -6,9 +6,10 @@ Bot 不會自行載入 `.env`。請透過 shell、launchd、systemd、Docker 或
 
 ## 如何使用本頁
 
-環境變數大致分成三類：
+環境變數大致分成四類：
 
-- 主 bot runtime：Discord 連線、ACP agent engines、channel/thread 行為、audit、usage 與背景維護。
+- 主 bot runtime：Discord 連線、ACP agent engines、channel/thread 行為、WebShare、audit、usage 與背景維護。
+- WebShare relay：browser shares 使用的獨立 self-host relay process。
 - MCP helper servers：獨立執行的 `mcp-discord-server`、`mcp-media-server` 等 process。
 - Provider credentials：Kiro、STT、media generation 或其他外部服務 API keys。
 
@@ -77,6 +78,19 @@ BOT_PEERS=...
 
 不要在不同 bot identity 之間共用 `DATA_DIR`。Audit DB、usage SQLite DB 與遷移封存 JSONL、channel settings、MCP policy 與 agent runtime files 都是該 bot 擁有的狀態。
 
+### WebShare Bot 與 Relay
+
+只有在 self-host relay 可透過 HTTPS/WSS 連線，且 bot 可作為 relay host 完成驗證後，才啟用 WebShare。
+
+```env
+WEBSHARE_ENABLED=true
+WEBSHARE_RELAY_URL=wss://relay.example
+WEBSHARE_PUBLIC_BASE_URL=https://relay.example
+WEBSHARE_HOST_TOKEN_FILE=/etc/kdb-webshare/host-token
+```
+
+請使用相同的 relay-side `RELAY_HOST_TOKEN_FILE` 或 `RELAY_HOST_TOKEN`。Public base URL 是使用者在 browser 開啟的網址；relay URL 是 bot 附加 `/r/<room>` 前使用的 relay origin 或 route prefix。
+
 ## 變數關係
 
 - `DATA_DIR` 擁有 bot 的持久狀態：channel metadata、audit DB、usage SQLite DB 與遷移封存檔、MCP policy、下載 attachments 與 bot-managed engine runtime directories。
@@ -87,9 +101,14 @@ BOT_PEERS=...
 - `TRUST_ALL_TOOLS` 與 `TRUST_TOOLS` 是 ACP server permission request 的核准設定，不會取代 Discord command ACL 或 MCP channel policy。
 - `PREFLIGHT_MODE=skip` 是停用 ACP preflight 的明確方式。`SKIP_PREFLIGHT` 是相容性設定，只要非空就會跳過 preflight。
 
+- WebShare 使用兩個 processes：bot 會把 durable share state 放在 `DATA_DIR/webshare`，relay 只提供 static assets 並轉送 encrypted WebSocket frames。
+- `WEBSHARE_PUBLIC_BASE_URL` 必須符合 browser-facing HTTPS origin。`WEBSHARE_RELAY_URL` 應指向 relay origin，通常是同一 origin 的 `wss://`；bot 會為每個 host WebSocket 附加 `/r/<room>`。
+- Bot 的 `WEBSHARE_HOST_TOKEN_FILE`/`WEBSHARE_HOST_TOKEN` 必須符合 relay 的 `RELAY_HOST_TOKEN_FILE`/`RELAY_HOST_TOKEN`；production 優先使用 file-based secrets。
+
 ## 升級注意事項
 
 - Kiro-only 部署升級後不需要新增環境變數也能維持既有行為。
+- 升級後 WebShare 仍保持停用，除非設定 `WEBSHARE_ENABLED=true` 以及 relay URLs/tokens。
 - 不要在 production 設定 `OMP_PROFILE`，除非該 profile 已經用執行 bot 的同一個 OS service user 完成認證。
 - 修改 engine、MCP、audit 或儲存相關變數後，請重啟服務並執行 `/doctor`。
 - launchd、systemd 或 Docker 部署應該把變數放在 service definition，不要假設互動 shell profile 會被繼承。
@@ -155,6 +174,41 @@ BOT_PEERS=...
 | `ATTACHMENT_MAX_MB` | `25` | Bot 接受的最大 attachment 大小。 |
 | `PREFLIGHT_MODE` | `warn` | ACP 相容性 preflight 模式。`strict` 失敗即退出，`skip` 停用檢查，不明值會退回 warn。 |
 | `SKIP_PREFLIGHT` | 空 | 任意非空值都會跳過 ACP preflight。建議用 `PREFLIGHT_MODE=skip` 表達明確意圖。 |
+
+## WebShare Bot
+
+當 `WEBSHARE_ENABLED=false` 或空值時，WebShare 停用。啟用後，`/webshare start` 會建立 target-scoped delegated browser link。部署 runbook 與安全模型見 [WebShare](webshare.md)。
+
+| 變數 | 預設 | 用途 |
+| --- | --- | --- |
+| `WEBSHARE_ENABLED` | `false` | 啟用 `/webshare start`、`/webshare stop`、`/webshare status` 與 `/webshare revoke`。 |
+| `WEBSHARE_RELAY_URL` | 空 | Bot 作為 host 連線使用的 relay origin 或 route prefix，例如 `wss://relay.example`。WebShare 啟用時必填。 |
+| `WEBSHARE_PUBLIC_BASE_URL` | 空 | 用於建立 control/view links 的 browser-facing HTTPS base URL，例如 `https://relay.example`。WebShare 啟用時必填。 |
+| `WEBSHARE_HOST_TOKEN_FILE` | 空 | Relay host bearer token 檔案路徑。Production 建議使用。 |
+| `WEBSHARE_HOST_TOKEN` | 空 | Relay host bearer token 內容。只建議本機開發或 secret manager injection 使用。 |
+| `WEBSHARE_MAX_FRAME_BYTES` | `4194304` | Bot 接受的最大 encrypted relay frame size。應與 `RELAY_MAX_FRAME_BYTES` 對齊。 |
+| `WEBSHARE_RECONNECT_INITIAL_MS` | `1000` | Bot-to-relay reconnect 初始 backoff milliseconds。 |
+| `WEBSHARE_RECONNECT_MAX_MS` | `30000` | Bot-to-relay reconnect 最大 backoff milliseconds。 |
+
+## WebShare Relay
+
+這些變數設定獨立 `webshare-relay` process，不是主 bot process；除非兩者由同一份 environment 啟動。
+
+| 變數 | 預設 | 用途 |
+| --- | --- | --- |
+| `RELAY_ADDR` | `:8080` | Static assets、WebSocket rooms、health 與 optional local reverse proxy 的 HTTP listen address。 |
+| `RELAY_PUBLIC_BASE_URL` | 空 | Browser-facing HTTPS base URL，用於 relay healthcheck defaults 與 operator diagnostics。 |
+| `RELAY_HOST_TOKEN_FILE` | 空 | Bot host WebSocket connections 需要的 bearer token 檔案。Production 建議使用。 |
+| `RELAY_HOST_TOKEN` | 空 | Host WebSocket authentication 的 bearer token 內容。Relay 沒有任何 token source 時會拒絕 serve。 |
+| `RELAY_TRUST_PROXY` | `false` | 信任 reverse proxy 傳入的 `X-Forwarded-*` headers。只有在 request 都經 trusted proxy 進入時才啟用。 |
+| `RELAY_MAX_ROOMS` | `1000` | Relay rooms 同時存在的最大數量。 |
+| `RELAY_MAX_PEERS_PER_ROOM` | `32` | 每個 room 可連線的最大 guest peers。 |
+| `RELAY_MAX_FRAME_BYTES` | `4194304` | Relay 轉送的最大 opaque encrypted frame size。 |
+| `RELAY_HOST_IDLE_TIMEOUT` | `0` | Host idle timeout duration。`0` 表示停用 application-level idle expiry。 |
+| `RELAY_GUEST_IDLE_TIMEOUT` | `0` | Guest idle timeout duration。`0` 表示停用 application-level idle expiry。 |
+| `RELAY_WRITE_TIMEOUT` | `30s` | Relay WebSocket write timeout。必須大於 zero。 |
+| `RELAY_LOG_LEVEL` | `info` | Relay log level：`debug`、`info`、`warn` 或 `error`。 |
+| `RELAY_METRICS_ADDR` | 空 | Optional Prometheus metrics listen address，常見值是 `127.0.0.1:9090`。 |
 
 ## Audit
 

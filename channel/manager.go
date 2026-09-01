@@ -3535,7 +3535,9 @@ func (m *Manager) EnqueueThread(ds *discordgo.Session, job *Job, parentChannelID
 	}
 	m.recordJobEnqueued(job, entry.worker.QueueLen(), true)
 
-	_ = ds.MessageReactionAdd(job.ChannelID, job.MessageID, "⏳")
+	if ds != nil && job.MessageID != "" {
+		_ = ds.MessageReactionAdd(job.ChannelID, job.MessageID, "⏳")
+	}
 	return nil
 }
 

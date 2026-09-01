@@ -12,6 +12,7 @@
 | MCP tools | `/mcp manage`、channel policy DB、外部 MCP server environment guards、per-tool allowlists。 |
 | Audit data | `AUDIT_LOG_*` settings、SQLite file permissions、retention policy。 |
 | Generated egress | Discord send permissions、`bot-tools` safe egress queues、MCP server write restrictions。 |
+| WebShare relay | Self-host relay host token、URL-fragment link secrets、E2E encrypted frames、opener permission rechecks、明確 `via WebShare` display。 |
 
 ## 最小權限預設
 
@@ -19,9 +20,17 @@
 
 外部 MCP servers 也應有自己的 environment-level policy。Discord MCP server 支援 guild allowlist、channel allowlist、read-only mode、write-tool allowlist 與 destructive-operation blocking。
 
+## WebShare 委派
+
+WebShare control links 是單一 channel 或 thread target 的 delegated capabilities。Relay 是 content-blind 且必須 self-host；它只轉送 encrypted frames，不應接收 Discord user tokens、raw local paths、command secrets 或 plaintext prompts。Bot access 維持 outbound-only，透過 relay host WebSocket 連線。
+
+每個 WebShare write action 都以 opener 身分授權，並在執行前重新檢查 Discord access。Share active 期間，opener 在該 target 的 direct Discord prompt 與 bot-command paths 會被 lockout；必須使用 browser link 或 `/webshare stop`。Browser-originated Discord messages 必須明確標示 `via WebShare`，v1 mentions 只限明確選取 users 與 bot。Role mentions、parse-all mentions、`@everyone` 與 `@here` 均停用。
+
 ## Secrets
 
 Tokens 與 provider keys 應放在 service environment，不要放進 repository files。`/doctor` 會遮蔽已知敏感值，但 logs、shell history、process manager 與 crash report 仍應視為敏感面。
+
+WebShare relay host tokens 與完整 control/view links 都是 secrets。Production 優先使用 `WEBSHARE_HOST_TOKEN_FILE` 與 `RELAY_HOST_TOKEN_FILE`。完整 WebShare URLs 包含 fragment secrets；fragment 不會送到 relay，但 URL 仍可能留在 browser history、screenshots、chat 與 support logs 中。
 
 ## 公開與私密 Discord 回覆
 

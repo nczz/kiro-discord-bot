@@ -9,7 +9,7 @@ Audit 與 usage 回答的是不同問題：
 
 Audit 預設啟用，SQLite 預設路徑是 `DATA_DIR/audit/discord.sqlite`，除非用 `AUDIT_LOG_DB` 覆寫。
 
-Recorder 會記錄 Discord gateway 活動與 bot-side events，包含 message create、update、delete、reaction、channel/thread events、interaction、command reply、agent lifecycle、final response，以及 delivery success/failure metadata。
+Recorder 會記錄 Discord gateway 活動與 bot-side events，包含 message create、update、delete、reaction、channel/thread events、interaction、command reply、WebShare share lifecycle 與 delegated actions、agent lifecycle、final response，以及 delivery success/failure metadata。
 
 Typing event 只有在 `AUDIT_LOG_RECORD_TYPING=true` 時才會記錄。
 
@@ -25,6 +25,12 @@ Discord gateway 的 `message_delete` event 能確認某則訊息消失，但不�
 
 用 `AUDIT_LOG_RETENTION_DAYS` 控制舊資料清理。預設 `0` 表示全部保留。
 
+## WebShare Audit 與隱私
+
+WebShare audit events 會識別 share ID、opener Discord user、可用時的 remote browser display name、target channel/thread、action type、allow/deny result 與 revoke reason。不得保存完整 control/view links、fragment secrets、write tokens、relay host tokens、CDN signed URLs 或 raw local filesystem paths。
+
+Browser-originated Discord messages 會刻意顯示為 delegated output，例如 `Alice via WebShare`。Relay 本身保持 content-blind，但 operators 仍應把 relay access logs 視為敏感 metadata，因為 room IDs、IP addresses、user agents、frame sizes 與 timing 可能透露使用模式。
+
 ## Audit 指令行為
 
 `/audit` 僅支援 slash command：
@@ -37,7 +43,7 @@ Audit 管理需要與敏感 channel controls 相同的 channel/admin 授權。
 
 ## Usage 歸屬
 
-Usage record 是 agent work 完成後追加寫入的 ledger。若工作來自使用者 command、prompt、mention、audit prompt、compact、clear 或 scheduled command context，會歸屬到觸發的 Discord 使用者。
+Usage record 是 agent work 完成後追加寫入的 ledger。若工作來自使用者 command、prompt、mention、WebShare delegated action、audit prompt、compact、clear 或 scheduled command context，會歸屬到觸發的 Discord 使用者。
 
 Runtime usage 資料保存在獨立的 `DATA_DIR/usage/usage.sqlite`。升級後首次啟動會以 transaction 匯入舊的 `DATA_DIR/usage/*.jsonl`，成功後移至 `DATA_DIR/usage/archive/` 作為遷移備份；runtime 不再查詢或寫入這些 JSONL。若舊檔格式損壞，啟動會中止，該檔案不會只匯入一部分。
 
@@ -50,6 +56,8 @@ Cron job 會使用 job owner 或設定的 user context。Kiro usage 會加總 `c
 `/usage` 預設以私密回覆列出 requester 自己在全伺服器本月的用量。具備管理伺服器或系統管理員權限的成員可列出本月所有有紀錄的使用者，或指定其他成員；超過 Discord 訊息限制時會自動送出額外的 ephemeral 分段。報表會盡可能依 resolved Discord user ID 分組。若舊紀錄只有 username，只有在能明確對應時才會合併到 user row；有歧義的名稱會保留分開，避免誤歸屬。
 
 `/usage-history` 可依使用者、期間、狀態與來源私密查詢全伺服器詳細紀錄。一般成員可查詢自己；查詢其他成員的詳細歷史需要管理伺服器或系統管理員權限。
+
+使用 `/usage-history` filter 時，WebShare-originated agent work 會出現在 `webshare` source，usage 仍歸屬於被委派 Discord authority 的 opener。
 
 報表時間窗：
 

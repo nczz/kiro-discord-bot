@@ -41,6 +41,7 @@ Kiro CLI 與 OMP 都是外部 agent CLI。這個專案會從 Discord 啟動與�
 | --- | --- |
 | 初次設定 | [快速開始][getting-started-zh] · [安裝][install-doc-zh] |
 | 日常使用 | [指令參考][commands-zh] · [監聽模式][listen-modes-zh] |
+| 瀏覽器交接 | [WebShare][webshare-zh] · [部署][deployment-zh] · [安全模型][security-zh] |
 | Agent engines | [Agent Engines][agent-engines-zh] · [環境變數][environment-zh] |
 | Agent 脈絡 | [`AGENTS.md`](AGENTS.md) · [Steering 檔案][steering-zh] · [核心概念][core-concepts-zh] |
 | 工具權限 | [MCP 權限][mcp-zh] · [Bot Tools][bot-tools-zh] · [Discord MCP Server][mcp-discord-zh] · [Media MCP Server][media-mcp-zh] |
@@ -77,6 +78,7 @@ MIT
 [agent-engines-zh]: https://nczz.github.io/kiro-discord-bot/zh-TW/guide/agent-engines.html
 [commands-zh]: https://nczz.github.io/kiro-discord-bot/zh-TW/guide/commands.html
 [listen-modes-zh]: https://nczz.github.io/kiro-discord-bot/zh-TW/guide/listen-modes.html
+[webshare-zh]: https://nczz.github.io/kiro-discord-bot/zh-TW/guide/webshare.html
 [core-concepts-zh]: https://nczz.github.io/kiro-discord-bot/zh-TW/guide/core-concepts.html
 [steering-zh]: https://nczz.github.io/kiro-discord-bot/zh-TW/guide/steering.html
 [mcp-zh]: https://nczz.github.io/kiro-discord-bot/zh-TW/guide/mcp.html

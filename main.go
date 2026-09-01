@@ -123,6 +123,7 @@ func main() {
 		STTModel:          cfg.STTModel,
 		STTLanguage:       cfg.STTLanguage,
 		STTMaxDurationSec: cfg.STTMaxDurationSec,
+		WebShare:          cfg.WebShare,
 	})
 	if err != nil {
 		a2aNode.Close()

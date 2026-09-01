@@ -4,7 +4,7 @@ A trainable ACP agent control plane that lives in Discord.
 
 Bind Discord channels to real projects, choose an ACP engine, teach persistent rules, and safely extend the agent with MCP tools.
 
-[Get Started](guide/getting-started.html) · [Agent Engines](guide/agent-engines.html) · [Command Reference](guide/commands.html) · [Scoped Skills](guide/scoped-skills.html) · [Enable A2A with NATS](guide/a2a-nats-setup.html) · [繁體中文](zh-TW/)
+[Get Started](guide/getting-started.html) · [Agent Engines](guide/agent-engines.html) · [Command Reference](guide/commands.html) · [WebShare](guide/webshare.html) · [Scoped Skills](guide/scoped-skills.html) · [Enable A2A with NATS](guide/a2a-nats-setup.html) · [繁體中文](zh-TW/)
 
 ## Highlights
 
@@ -16,7 +16,7 @@ Bind Discord channels to real projects, choose an ACP engine, teach persistent r
 
 ## What this site covers
 
-This documentation is the practical operating manual for `kiro-discord-bot`: installation, channel setup, everyday use, steering files, scoped skills, MCP policy, audit and usage, admin safety, deployment, release work, security review, and troubleshooting.
+This documentation is the practical operating manual for `kiro-discord-bot`: installation, channel setup, everyday use, WebShare browser handoff, steering files, scoped skills, MCP policy, audit and usage, admin safety, deployment, release work, security review, and troubleshooting.
 
 The README remains the compact project entry point. Detailed explanations and operational runbooks live here.
 
@@ -27,8 +27,8 @@ The README remains the compact project entry point. Detailed explanations and op
 | First-time evaluator | [Getting Started](guide/getting-started.html), [Core Concepts](guide/core-concepts.html), [Agent Engines](guide/agent-engines.html) |
 | Installer | [Installation](guide/installation.html), [Agent Engines](guide/agent-engines.html), [Environment Reference](guide/environment.html), [Deployment](guide/deployment.html) |
 | Discord user | [Command Reference](guide/commands.html), [Scoped Skills](guide/scoped-skills.html), [Listen Modes](guide/listen-modes.html), [Cron and Reminders](guide/cron-reminders.html) |
-| Channel admin | [Admin and Security](guide/admin-security.html), [Scoped Skills](guide/scoped-skills.html), [MCP Policy](guide/mcp.html), [Audit, Usage, and Privacy](guide/audit-usage-privacy.html) |
+| Channel admin | [Admin and Security](guide/admin-security.html), [WebShare](guide/webshare.html), [Scoped Skills](guide/scoped-skills.html), [MCP Policy](guide/mcp.html), [Audit, Usage, and Privacy](guide/audit-usage-privacy.html) |
 | MCP admin | [MCP Policy](guide/mcp.html), [Bot Tools MCP](guide/bot-tools.html), [Scoped Skills](guide/scoped-skills.html), [Discord MCP](guide/mcp-discord.html), [Media MCP](guide/media-mcp.html) |
-| Operator | [Agent Engines](guide/agent-engines.html), [Deployment](guide/deployment.html), [Enable A2A with NATS](guide/a2a-nats-setup.html), [A2A Protocol Model](guide/a2a-protocol.html), [macOS MCP Networking](guide/macos-mcp-networking.html), [Troubleshooting](guide/troubleshooting.html) |
+| Operator | [Agent Engines](guide/agent-engines.html), [Deployment](guide/deployment.html), [WebShare](guide/webshare.html), [Enable A2A with NATS](guide/a2a-nats-setup.html), [A2A Protocol Model](guide/a2a-protocol.html), [macOS MCP Networking](guide/macos-mcp-networking.html), [Troubleshooting](guide/troubleshooting.html) |
 | Maintainer | [Release Runbook](guide/release.html), [Contributor Guide](guide/contributing.html), [Docs Maintenance](guide/docs-maintenance.html) |
-| Security reviewer | [Security Model](guide/security-model.html), [Audit, Usage, and Privacy](guide/audit-usage-privacy.html), [Environment Reference](guide/environment.html) |
+| Security reviewer | [Security Model](guide/security-model.html), [WebShare](guide/webshare.html), [Audit, Usage, and Privacy](guide/audit-usage-privacy.html), [Environment Reference](guide/environment.html) |

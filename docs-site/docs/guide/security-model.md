@@ -12,6 +12,7 @@
 | MCP tools | `/mcp manage`, channel policy DB, external MCP server environment guards, and per-tool allowlists. |
 | Audit data | `AUDIT_LOG_*` settings, SQLite file permissions, and retention policy. |
 | Generated egress | Discord send permissions, `bot-tools` safe egress queues, and MCP server write restrictions. |
+| WebShare relay | Self-hosted relay host token, URL-fragment link secrets, E2E encrypted frames, opener permission rechecks, and explicit `via WebShare` display. |
 
 ## Least Privilege Defaults
 
@@ -19,9 +20,17 @@ Initialize each channel separately and enable only the MCP tools that channel ne
 
 External MCP servers should also enforce their own environment-level policy. The Discord MCP server supports guild allowlists, channel allowlists, read-only mode, write-tool allowlists, and destructive-operation blocking.
 
+## WebShare Delegation
+
+WebShare control links are delegated capabilities for one channel or thread target. The relay is content-blind and must be self-hosted; it routes encrypted frames and must not receive Discord user tokens, raw local paths, command secrets, or plaintext prompts. Bot access remains outbound-only through the relay host WebSocket.
+
+Every WebShare write action is authorized as the opener and rechecks Discord access before execution. While a share is active, the opener is locked out of direct Discord prompt and bot-command paths for that target; they must use the browser link or `/webshare stop`. Browser-originated Discord messages must be visibly marked `via WebShare`, and v1 mentions are limited to explicitly selected users plus the bot. Role mentions, parse-all mentions, `@everyone`, and `@here` are disabled.
+
 ## Secrets
 
 Keep tokens and provider keys in the service environment, not in repository files. `/doctor` redacts known sensitive values, but logs, shell history, process managers, and crash reports should still be treated as sensitive surfaces.
+
+WebShare relay host tokens and full control/view links are secrets. Keep host tokens in `WEBSHARE_HOST_TOKEN_FILE` and `RELAY_HOST_TOKEN_FILE` where possible. Full WebShare URLs contain fragment secrets; fragments are not sent to the relay, but the URL is still sensitive in browser history, screenshots, chat, and support logs.
 
 ## Public vs Private Discord Responses
 

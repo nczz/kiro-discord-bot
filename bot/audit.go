@@ -46,6 +46,11 @@ func (b *Bot) recordCommandResponseDelivery(ctx cmdCtx, command, source, status,
 	for k, v := range metadata {
 		copied[k] = v
 	}
+	auditContent := content
+	if metadataBool(copied, "redact_audit_content") {
+		auditContent = ""
+		copied["content_redacted"] = true
+	}
 	copied["content_len"] = len(content)
 	if msg != nil && msg.ID != "" {
 		copied["response_message_id"] = msg.ID
@@ -74,10 +79,25 @@ func (b *Bot) recordCommandResponseDelivery(ctx cmdCtx, command, source, status,
 		Command:       command,
 		Source:        source,
 		Status:        status,
-		Content:       content,
+		Content:       auditContent,
 		Error:         errText,
 		Metadata:      copied,
 	})
+}
+
+func metadataBool(metadata map[string]any, key string) bool {
+	value, ok := metadata[key]
+	if !ok {
+		return false
+	}
+	switch v := value.(type) {
+	case bool:
+		return v
+	case string:
+		return strings.EqualFold(strings.TrimSpace(v), "true")
+	default:
+		return false
+	}
 }
 
 func (b *Bot) recordInteractionResponseDelivery(ctx cmdCtx, command, status, content string, responseType discordgo.InteractionResponseType, metadata map[string]any, sendErr error) {

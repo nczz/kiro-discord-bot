@@ -6,9 +6,10 @@ Use `/doctor` after startup to inspect effective values. Secrets are redacted in
 
 ## How to Use This Page
 
-Environment variables fall into three groups:
+Environment variables fall into four groups:
 
-- Main bot runtime: Discord connection, ACP agent engines, channel/thread behavior, audit, usage, and background maintenance.
+- Main bot runtime: Discord connection, ACP agent engines, channel/thread behavior, WebShare, audit, usage, and background maintenance.
+- WebShare relay: the separate self-hosted relay process used by browser shares.
 - MCP helper servers: standalone processes such as `mcp-discord-server` and `mcp-media-server`.
 - Provider credentials: API keys for Kiro, STT, media generation, or other external services.
 
@@ -77,6 +78,19 @@ BOT_PEERS=...
 
 Do not share `DATA_DIR` between bot identities. Audit DBs, the usage SQLite DB and migrated JSONL archives, channel settings, MCP policy, and agent runtime files are bot-owned state.
 
+### WebShare Bot and Relay
+
+Enable WebShare only after a self-host relay is reachable over HTTPS/WSS and the bot can authenticate as the relay host.
+
+```env
+WEBSHARE_ENABLED=true
+WEBSHARE_RELAY_URL=wss://relay.example
+WEBSHARE_PUBLIC_BASE_URL=https://relay.example
+WEBSHARE_HOST_TOKEN_FILE=/etc/kdb-webshare/host-token
+```
+
+Use the matching relay-side `RELAY_HOST_TOKEN_FILE` or `RELAY_HOST_TOKEN`. The public base URL is what users open in the browser; the relay URL is the relay origin or route prefix the bot uses before appending `/r/<room>`.
+
 ## Variable Relationships
 
 - `DATA_DIR` owns persistent bot state: channel metadata, audit DB, usage SQLite DB and migration archives, MCP policy, downloaded attachments, and bot-managed engine runtime directories.
@@ -86,10 +100,14 @@ Do not share `DATA_DIR` between bot identities. Audit DBs, the usage SQLite DB a
 - `KIRO_MCP_CONFIG` is treated as an MCP catalog source. Runtime agents receive bot-managed, per-policy MCP settings under `DATA_DIR`, rather than inheriting the user's Kiro settings directly.
 - `TRUST_ALL_TOOLS` and `TRUST_TOOLS` approve ACP server permission requests. They do not replace Discord command ACLs or MCP channel policy.
 - `PREFLIGHT_MODE=skip` is the explicit way to disable ACP preflight. `SKIP_PREFLIGHT` exists for compatibility and skips preflight when non-empty.
+- WebShare uses two processes: the bot keeps durable share state under `DATA_DIR/webshare`, while the relay only serves static assets and routes encrypted WebSocket frames.
+- `WEBSHARE_PUBLIC_BASE_URL` must match the browser-facing HTTPS origin. `WEBSHARE_RELAY_URL` should point at the relay origin, usually the same origin with `wss://`; the bot appends `/r/<room>` for each host WebSocket.
+- Bot `WEBSHARE_HOST_TOKEN_FILE`/`WEBSHARE_HOST_TOKEN` must match relay `RELAY_HOST_TOKEN_FILE`/`RELAY_HOST_TOKEN`; prefer file-based secrets in production.
 
 ## Upgrade Notes
 
 - Upgrading a Kiro-only deployment keeps working with no new environment variables.
+- WebShare remains disabled on upgrade unless `WEBSHARE_ENABLED=true` and relay URLs/tokens are configured.
 - Do not copy `OMP_PROFILE` into production until that profile has been authenticated as the same OS service user that runs the bot.
 - After changing engine, MCP, audit, or storage variables, restart the service and run `/doctor`.
 - For launchd, systemd, or Docker deployments, put variables in the service definition rather than assuming an interactive shell profile will be inherited.
@@ -155,6 +173,41 @@ Do not share `DATA_DIR` between bot identities. Audit DBs, the usage SQLite DB a
 | `ATTACHMENT_MAX_MB` | `25` | Maximum attachment size accepted by the bot. |
 | `PREFLIGHT_MODE` | `warn` | ACP compatibility preflight mode. `strict` exits on failure, `skip` disables the check, and unknown values fall back to warn. |
 | `SKIP_PREFLIGHT` | empty | Any non-empty value skips ACP preflight. Prefer `PREFLIGHT_MODE=skip` for explicit configuration. |
+
+## WebShare Bot
+
+WebShare is disabled while `WEBSHARE_ENABLED=false` or empty. When enabled, `/webshare start` creates a target-scoped delegated browser link. See [WebShare](webshare.md) for the deployment runbook and security model.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `WEBSHARE_ENABLED` | `false` | Enables `/webshare start`, `/webshare stop`, `/webshare status`, and `/webshare revoke`. |
+| `WEBSHARE_RELAY_URL` | empty | Relay origin or route prefix the bot connects through as host, for example `wss://relay.example`. Required when WebShare is enabled. |
+| `WEBSHARE_PUBLIC_BASE_URL` | empty | Browser-facing HTTPS base URL used to build control and view links, for example `https://relay.example`. Required when WebShare is enabled. |
+| `WEBSHARE_HOST_TOKEN_FILE` | empty | Path to the relay host bearer token. Preferred production setting. |
+| `WEBSHARE_HOST_TOKEN` | empty | Relay host bearer token value. Use only for local development or secret-manager injection. |
+| `WEBSHARE_MAX_FRAME_BYTES` | `4194304` | Maximum encrypted relay frame size accepted by the bot. Keep aligned with `RELAY_MAX_FRAME_BYTES`. |
+| `WEBSHARE_RECONNECT_INITIAL_MS` | `1000` | Initial bot-to-relay reconnect backoff in milliseconds. |
+| `WEBSHARE_RECONNECT_MAX_MS` | `30000` | Maximum bot-to-relay reconnect backoff in milliseconds. |
+
+## WebShare Relay
+
+These variables configure the standalone `webshare-relay` process, not the main bot process unless both are launched from the same environment.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `RELAY_ADDR` | `:8080` | HTTP listen address for static assets, WebSocket rooms, health, and optional local reverse proxying. |
+| `RELAY_PUBLIC_BASE_URL` | empty | Browser-facing HTTPS base URL used by relay healthcheck defaults and operator diagnostics. |
+| `RELAY_HOST_TOKEN_FILE` | empty | File containing the bearer token required for bot host WebSocket connections. Preferred production setting. |
+| `RELAY_HOST_TOKEN` | empty | Bearer token value for host WebSocket authentication. The relay refuses to serve without either token source. |
+| `RELAY_TRUST_PROXY` | `false` | Trust `X-Forwarded-*` headers from the reverse proxy. Enable only when requests arrive through a trusted proxy. |
+| `RELAY_MAX_ROOMS` | `1000` | Maximum concurrent relay rooms. |
+| `RELAY_MAX_PEERS_PER_ROOM` | `32` | Maximum connected guest peers per room. |
+| `RELAY_MAX_FRAME_BYTES` | `4194304` | Maximum opaque encrypted frame size the relay routes. |
+| `RELAY_HOST_IDLE_TIMEOUT` | `0` | Host idle timeout duration. `0` disables application-level idle expiry. |
+| `RELAY_GUEST_IDLE_TIMEOUT` | `0` | Guest idle timeout duration. `0` disables application-level idle expiry. |
+| `RELAY_WRITE_TIMEOUT` | `30s` | Per-write timeout for relay WebSocket writes. Must be greater than zero. |
+| `RELAY_LOG_LEVEL` | `info` | Relay log level: `debug`, `info`, `warn`, or `error`. |
+| `RELAY_METRICS_ADDR` | empty | Optional Prometheus metrics listen address, commonly `127.0.0.1:9090`. |
 
 ## Audit
 

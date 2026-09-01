@@ -63,7 +63,7 @@ Create an application in the Discord Developer Portal, then configure:
 | --- | --- |
 | OAuth2 scopes | `bot`, `applications.commands` |
 | Base permissions | View Channels, Send Messages, Send Messages in Threads, Create Public Threads, Read Message History, Add Reactions, Use Slash Commands |
-| Optional permissions | Manage Threads, Embed Links, Attach Files, depending on enabled features |
+| Optional permissions | Manage Webhooks for WebShare delegated identity, Manage Threads, Embed Links, Attach Files, depending on enabled features |
 | Privileged intents | Message Content Intent |
 
 The Interactions Endpoint URL in General Information must be empty. If it is set, Discord sends slash commands to that endpoint instead of the gateway connection, and commands time out.

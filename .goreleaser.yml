@@ -49,12 +49,29 @@ builds:
       - amd64
       - arm64
 
+  - id: webshare-relay
+    main: ./cmd/webshare-relay
+    binary: webshare-relay
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+
 archives:
   - id: default
     ids:
       - bot
       - mcp-discord
       - mcp-media
+      - webshare-relay
     name_template: "kiro-discord-bot_{{ .Os }}_{{ .Arch }}"
     files:
       - LICENSE

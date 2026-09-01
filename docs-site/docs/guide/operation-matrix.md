@@ -24,6 +24,8 @@ Use this matrix before releasing changes that affect agent engines, Discord comm
 | `/usage` | Private guild-wide report: self by default; Manage Guild/Administrator can aggregate all users or select another member. | Same guild-wide scope and permission rules. | Credits come from Kiro metering metadata. | USD cost comes from OMP `usage_update`. |
 | `/usage-history` | Private guild-wide detailed usage history with user/period/status/source filters; self-only unless requester has Manage Guild/Administrator. | Same guild-wide scope and permission rules. | Reads SQLite usage history. | Reads SQLite usage history. |
 | `/audit prompt` | Uses a short-lived scoped agent and records usage under the Discord caller. | Same, with thread target metadata. | Uses channel engine. | Uses channel engine. |
+| `/webshare start` | Opens a delegated browser share for the parent channel when WebShare is enabled and requester can manage the target. | Opens a delegated browser share scoped to the thread target. | Uses the channel/thread engine through normal manager entrypoints. | Uses the channel/thread engine through normal manager entrypoints. |
+| `/webshare stop` / `/webshare revoke` | Stops opener share or manager-revokes the active target share; clears opener lockout. | Same for thread target. | Does not bypass Kiro cancellation/session rules. | Does not bypass OMP cancellation/session rules. |
 
 ## Release Checklist
 
@@ -31,5 +33,6 @@ Use this matrix before releasing changes that affect agent engines, Discord comm
 - Run Kiro ACP smoke when Kiro behavior changed.
 - Run OMP ACP smoke when OMP behavior changed.
 - In Discord, test `/engine`, `/models`, `/model`, `/agent`, `/status`, `/usage`, `/usage-history`, and `/audit prompt` in both a parent channel and a thread.
+- For WebShare changes, verify `/webshare start`, browser connect, visible `via WebShare` post, selected-user mention, agent prompt, thread action, upload/fetch attachment, `/webshare stop`, and manager `/webshare revoke`.
 - Verify `/doctor` reports every enabled engine, usage SQLite schema/record health, and does not require disabled engines.
 - Verify failed `/engine` switches do not leave partial channel or thread sessions.

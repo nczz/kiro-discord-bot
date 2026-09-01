@@ -858,9 +858,13 @@ func (w *Worker) execute(job *Job) {
 					finishJob()
 					return
 				}
-				if _, sendErr := SendLongThreadWithMentions(ds, threadID, AppendMetricsFooter(prefixA2ADelegatedFrom(errorContent, job.A2AOriginLabel), MetricsWithElapsed(w.agent.TurnMetrics(), startTime)), job.MentionRefs); sendErr != nil {
+				errorWithMetrics := AppendMetricsFooter(prefixA2ADelegatedFrom(errorContent, job.A2AOriginLabel), MetricsWithElapsed(w.agent.TurnMetrics(), startTime))
+				if _, sendErr := SendLongThreadWithMentions(ds, threadID, errorWithMetrics, job.MentionRefs); sendErr != nil {
 					log.Printf("[worker %s] thread error reply failed | user=%s msg=%s thread=%s err=%v",
 						w.channelID, job.Username, job.MessageID, threadID, sendErr)
+				}
+				if job.FinalReply != nil {
+					job.FinalReply(errorWithMetrics)
 				}
 				job.emitA2AResult(a2a.TaskExecutionResult{
 					State:   a2aStateForInlineError(ctxErr),
@@ -893,7 +897,8 @@ func (w *Worker) execute(job *Job) {
 			w.drainBeforeFinal(threadID)
 			stopReason := w.agent.StopReason()
 			response = AppendStopReasonNotice(response, stopReason)
-			if sentCount, sendErr := SendLongThreadWithMentions(ds, threadID, AppendMetricsFooter(prefixA2ADelegatedFrom(response, job.A2AOriginLabel), MetricsWithElapsed(w.agent.TurnMetrics(), startTime)), job.MentionRefs); sendErr != nil || sentCount == 0 {
+			responseWithMetrics := AppendMetricsFooter(prefixA2ADelegatedFrom(response, job.A2AOriginLabel), MetricsWithElapsed(w.agent.TurnMetrics(), startTime))
+			if sentCount, sendErr := SendLongThreadWithMentions(ds, threadID, responseWithMetrics, job.MentionRefs); sendErr != nil || sentCount == 0 {
 				if sendErr == nil {
 					sendErr = fmt.Errorf("no Discord messages delivered")
 				}
@@ -918,6 +923,9 @@ func (w *Worker) execute(job *Job) {
 				return
 			}
 			swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "✅")
+			if job.FinalReply != nil {
+				job.FinalReply(responseWithMetrics)
+			}
 			swapReaction(ds, job.ChannelID, job.MessageID, "⚙️", "✅")
 			w.auditResponseEvent(job, threadID, "success", response)
 

@@ -9,7 +9,7 @@ The audit and usage systems answer different questions:
 
 Audit is enabled by default and stores SQLite data at `DATA_DIR/audit/discord.sqlite` unless `AUDIT_LOG_DB` overrides it.
 
-The recorder stores Discord gateway activity and bot-side events, including message creates, updates, deletes, reactions, channel and thread events, interactions, command replies, agent lifecycle events, final responses, and delivery success or failure metadata.
+The recorder stores Discord gateway activity and bot-side events, including message creates, updates, deletes, reactions, channel and thread events, interactions, command replies, WebShare share lifecycle and delegated actions, agent lifecycle events, final responses, and delivery success or failure metadata.
 
 Typing events are recorded only when `AUDIT_LOG_RECORD_TYPING=true`.
 
@@ -25,6 +25,12 @@ Moderator or bot deletions may appear in Discord Guild Audit Log as `MESSAGE_DEL
 
 Use `AUDIT_LOG_RETENTION_DAYS` to prune old rows. The default `0` keeps all audit data.
 
+## WebShare Audit and Privacy
+
+WebShare audit events identify the share ID, opener Discord user, remote browser display name when available, target channel/thread, action type, allow/deny result, and revoke reason. They must not store full control/view links, fragment secrets, write tokens, relay host tokens, CDN signed URLs, or raw local filesystem paths.
+
+Browser-originated Discord messages are intentionally visible as delegated output, for example `Alice via WebShare`. The relay remains content-blind, but operators should still treat relay access logs as sensitive metadata because room IDs, IP addresses, user agents, frame sizes, and timing can reveal usage patterns.
+
 ## Audit Command Behavior
 
 `/audit` is slash-only:
@@ -37,7 +43,7 @@ Audit management requires the same channel/admin authorization used by sensitive
 
 ## Usage Attribution
 
-Usage records are append-only ledgers written after completed agent work. They are attributed to the invoking Discord user when the job came from a user command, prompt, mention, audit prompt, compact, clear, or scheduled command context.
+Usage records are append-only ledgers written after completed agent work. They are attributed to the invoking Discord user when the job came from a user command, prompt, mention, WebShare delegated action, audit prompt, compact, clear, or scheduled command context.
 
 Runtime usage data is stored in the dedicated SQLite database `DATA_DIR/usage/usage.sqlite`. On the first startup after upgrading, legacy monthly `DATA_DIR/usage/*.jsonl` ledgers are imported transactionally and moved to `DATA_DIR/usage/archive/`. The archived files are retained as migration backups and are no longer queried or written at runtime. A malformed legacy file aborts startup without partially importing that file.
 
@@ -50,6 +56,8 @@ If an engine does not return metering metadata for a turn, `/usage` still counts
 `/usage` privately lists the requester's guild-wide current-month usage by default. Members with Manage Guild or Administrator permission may list every user with a current-month record or select another member; long reports automatically send additional ephemeral response parts when they exceed Discord's message limit. The report groups records by resolved Discord user ID when possible. If older records only have a username, the report merges that username into a user row only when it can do so unambiguously. Ambiguous names remain separate so the bot does not misattribute usage.
 
 `/usage-history` privately returns guild-wide detailed records for the selected period and supports user, status, and source filters. Members may inspect their own history. Inspecting another member's detailed history requires Manage Guild or Administrator permission.
+
+When filtering `/usage-history`, WebShare-originated agent work appears under the `webshare` source while still attributing usage to the opener whose Discord authority was delegated.
 
 The report windows are:
 

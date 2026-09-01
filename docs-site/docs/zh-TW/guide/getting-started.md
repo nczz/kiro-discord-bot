@@ -5,7 +5,7 @@
 ## 需求
 
 - Discord bot application，scope 包含 `bot` 與 `applications.commands`。
-- Discord 權限：View Channels、Send Messages、Add Reactions、Read Message History。
+- Discord 權限：View Channels、Send Messages、Add Reactions、Read Message History；啟用 WebShare 時還需要 Manage Webhooks。
 - Discord Developer Portal 中啟用 Message Content Intent。
 - 至少一個已安裝並完成認證的 ACP engine：`kiro-cli` 或 `omp`。
 - 一個允許 bot 作為頻道工作目錄的專案路徑。

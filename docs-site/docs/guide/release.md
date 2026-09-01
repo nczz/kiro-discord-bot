@@ -67,6 +67,7 @@ The release workflow builds archives for Linux and macOS on amd64 and arm64. Eac
 - `kiro-discord-bot`
 - `mcp-discord` or `mcp-discord-server`
 - `mcp-media` or `mcp-media-server`
+- `webshare-relay`
 
 ## 4. Verify GitHub Actions
 

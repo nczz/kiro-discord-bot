@@ -92,17 +92,24 @@ func (r *recordingDiscordTransport) RoundTrip(req *http.Request) (*http.Response
 	r.paths = append(r.paths, req.Method+" "+req.URL.Path)
 	r.bodies = append(r.bodies, body)
 	r.mu.Unlock()
+	responseBody := fmt.Sprintf(`{
+		"id":%q,
+		"channel_id":"channel-1",
+		"content":"ok",
+		"author":{"id":"bot-1","username":"bot","discriminator":"0000","bot":true}
+	}`, id)
+	switch {
+	case req.Method == http.MethodGet && strings.HasSuffix(req.URL.Path, "/webhooks"):
+		responseBody = `[]`
+	case req.Method == http.MethodPost && strings.HasSuffix(req.URL.Path, "/webhooks"):
+		responseBody = `{"id":"webshare-hook-1","type":1,"channel_id":"channel-1","name":"KDB WebShare","token":"webshare-token-1","user":{"id":"bot-1","username":"bot","bot":true}}`
+	}
 	return &http.Response{
 		StatusCode: http.StatusOK,
 		Status:     "200 OK",
 		Header:     make(http.Header),
-		Body: io.NopCloser(strings.NewReader(fmt.Sprintf(`{
-			"id":%q,
-			"channel_id":"channel-1",
-			"content":"ok",
-			"author":{"id":"bot-1","username":"bot","discriminator":"0000","bot":true}
-		}`, id))),
-		Request: req,
+		Body:       io.NopCloser(strings.NewReader(responseBody)),
+		Request:    req,
 	}, nil
 }
 
@@ -2052,7 +2059,7 @@ func TestSlashCommandOptionsKeepRequiredBeforeOptional(t *testing.T) {
 func TestSlashCommandsApplyVisibilityAndPermissionPolicy(t *testing.T) {
 	managed := map[string]bool{
 		"audit": true, "mcp": true, "cwd": true, "start": true, "agent": true,
-		"webhook": true, "steering": true,
+		"webhook": true, "webshare": true, "steering": true,
 		"cron": true, "cron-list": true, "cron-run": true, "cron-prompt": true,
 		"memory": true, "flashmemory": true, "clear": true,
 	}

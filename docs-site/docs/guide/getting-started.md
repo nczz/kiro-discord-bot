@@ -5,7 +5,7 @@
 ## Requirements
 
 - A Discord bot application with `bot` and `applications.commands` scopes.
-- Discord permissions: View Channels, Send Messages, Add Reactions, Read Message History.
+- Discord permissions: View Channels, Send Messages, Add Reactions, Read Message History, plus Manage Webhooks when WebShare is enabled.
 - Message Content Intent enabled in the Discord Developer Portal.
 - At least one ACP engine installed and authenticated: `kiro-cli` or `omp`.
 - A project directory the bot is allowed to use as the channel working directory.

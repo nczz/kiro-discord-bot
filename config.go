@@ -6,10 +6,12 @@ import (
 	"strconv"
 
 	"github.com/nczz/kiro-discord-bot/a2a"
+	"github.com/nczz/kiro-discord-bot/bot"
 	"github.com/nczz/kiro-discord-bot/internal/paths"
 )
 
 type A2AConfig = a2a.Config
+type botWebShareConfig = bot.WebShareConfig
 
 type Config struct {
 	DiscordToken         string
@@ -59,6 +61,7 @@ type Config struct {
 	STTLanguage          string
 	STTMaxDurationSec    int
 	A2A                  A2AConfig
+	WebShare             botWebShareConfig
 }
 
 func loadConfig() *Config {
@@ -109,6 +112,16 @@ func loadConfig() *Config {
 		STTModel:             envOr("STT_MODEL", ""),
 		STTLanguage:          envOr("STT_LANGUAGE", ""),
 		STTMaxDurationSec:    envInt("STT_MAX_DURATION_SEC", 300),
+		WebShare: botWebShareConfig{
+			Enabled:            envBool("WEBSHARE_ENABLED", false),
+			RelayURL:           envOr("WEBSHARE_RELAY_URL", ""),
+			PublicBaseURL:      envOr("WEBSHARE_PUBLIC_BASE_URL", ""),
+			HostTokenFile:      envOr("WEBSHARE_HOST_TOKEN_FILE", ""),
+			HostToken:          envOr("WEBSHARE_HOST_TOKEN", ""),
+			MaxFrameBytes:      int64(envInt("WEBSHARE_MAX_FRAME_BYTES", 4*1024*1024)),
+			ReconnectInitialMS: envInt("WEBSHARE_RECONNECT_INITIAL_MS", 1000),
+			ReconnectMaxMS:     envInt("WEBSHARE_RECONNECT_MAX_MS", 30000),
+		},
 		A2A: A2AConfig{
 			NATSURL:                      envOr("NATS_URL", ""),
 			NATSCredsFile:                envOr("NATS_CREDS_FILE", ""),

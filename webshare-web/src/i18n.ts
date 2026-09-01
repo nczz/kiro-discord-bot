@@ -1,0 +1,261 @@
+export type Locale = "en" | "zh-TW";
+
+type MessageKey =
+  | "appTitle"
+  | "delegationWarningTitle"
+  | "delegationWarningBody"
+  | "connectionStatus"
+  | "connected"
+  | "connecting"
+  | "reconnecting"
+  | "disconnected"
+  | "error"
+  | "invalidLink"
+  | "target"
+  | "opener"
+  | "capabilities"
+  | "eventLog"
+  | "composer"
+  | "agentPrompt"
+  | "channelMessage"
+  | "botCommand"
+  | "messageText"
+  | "command"
+  | "commandArgs"
+  | "send"
+  | "interruptAgent"
+  | "mentions"
+  | "mentionHelp"
+  | "noMentionEveryone"
+  | "threads"
+  | "currentThread"
+  | "selectThread"
+  | "createThread"
+  | "threadName"
+  | "sourceMessage"
+  | "viewOnly"
+  | "writeLink"
+  | "eventNone"
+  | "locale"
+  | "targetChannel"
+  | "uploadComplete"
+  | "uploadStreaming"
+  | "download"
+  | "yes"
+  | "no"
+  | "attachmentLabel"
+  | "browserDisplayName"
+  | "notConnected"
+  | "channels"
+  | "members"
+  | "memberHelp"
+  | "writeAs"
+  | "modeAgent"
+  | "modeMessage"
+  | "modeCommand"
+  | "placeholderAgent"
+  | "placeholderMessage"
+  | "placeholderCommand"
+  | "attachFiles"
+  | "sourceMessageCompact"
+  | "threadCreateHint"
+  | "systemAuthor"
+  | "botAuthor"
+  | "agentAuthor"
+  | "uploadAccepted"
+  | "threadCreated"
+  | "threadSelected"
+  | "threadUpdated"
+  | "threadDeleted"
+  | "messageEdited"
+  | "messageDeleted"
+  | "openThread"
+  | "replyInThread"
+  | "backToChannel"
+  | "threadConversation"
+  | "replyingInThread"
+  | "beforeContext"
+  | "afterContext"
+  | "contextNotCaptured"
+  | "noThreadMessages"
+  | "replyingTo"
+  | "repliedMessage";
+
+const messages: Record<Locale, Record<MessageKey, string>> = {
+  en: {
+    appTitle: "KDB WebShare",
+    delegationWarningTitle: "Delegated Discord capability",
+    delegationWarningBody: "This control link lets the holder act through the opener in this Discord target until the share is stopped. Do not paste this URL into chat, screenshots, logs, or support tickets.",
+    connectionStatus: "Connection status",
+    connected: "Connected",
+    connecting: "Connecting",
+    reconnecting: "Reconnecting",
+    disconnected: "Disconnected",
+    error: "Error",
+    invalidLink: "Open a WebShare URL in the form #/join/<room>.<secret>. The secret stays in the fragment and is never sent to the relay URL.",
+    target: "Target",
+    opener: "Opener",
+    capabilities: "Capabilities",
+    eventLog: "Event log",
+    composer: "Composer",
+    agentPrompt: "Agent prompt",
+    channelMessage: "Channel message",
+    botCommand: "Bot command",
+    messageText: "Message text",
+    command: "Command",
+    commandArgs: "Arguments as JSON object",
+    send: "Send",
+    interruptAgent: "Interrupt agent",
+    mentions: "Selected mentions",
+    mentionHelp: "Only selected users and the bot can be mentioned in v1.",
+    noMentionEveryone: "Role mentions, @everyone, and @here are intentionally unavailable.",
+    threads: "Threads",
+    currentThread: "Current thread",
+    selectThread: "Select thread",
+    createThread: "Create thread",
+    threadName: "Thread name",
+    sourceMessage: "Source message ID (optional)",
+    viewOnly: "View-only link",
+    writeLink: "Control link",
+    eventNone: "No events yet.",
+    locale: "Language",
+    targetChannel: "Target channel",
+    uploadComplete: "complete",
+    uploadStreaming: "streaming",
+    download: "download",
+    yes: "yes",
+    no: "no",
+    attachmentLabel: "attachment",
+    browserDisplayName: "WebShare browser",
+    notConnected: "Not connected",
+    channels: "Channels",
+    members: "Members",
+    memberHelp: "Tick a person before sending if that message may ping them. Unselected raw mentions stay inert.",
+    writeAs: "via",
+    modeAgent: "Agent route: mention the bot to ask it from the shared Discord target.",
+    modeMessage: "Channel route: send a normal Discord-visible message.",
+    modeCommand: "Command route: leading slash runs a bot command.",
+    placeholderAgent: "Type a Discord message. Mention the bot to ask the agent; start with / to run a bot command.",
+    placeholderMessage: "Type a Discord message. Mention the bot to ask the agent; start with / to run a bot command.",
+    placeholderCommand: "Type a Discord message. Mention the bot to ask the agent; start with / to run a bot command.",
+    attachFiles: "Attach files",
+    sourceMessageCompact: "source message ID",
+    threadCreateHint: "Threads",
+    systemAuthor: "WebShare",
+    botAuthor: "KDB Bot",
+    agentAuthor: "KDB Agent",
+    uploadAccepted: "upload accepted",
+    threadCreated: "Thread created",
+    threadSelected: "Thread selected",
+    threadUpdated: "Thread updated",
+    threadDeleted: "Thread deleted",
+    messageEdited: "edited",
+    messageDeleted: "Message deleted",
+    openThread: "Open thread",
+    replyInThread: "reply",
+    backToChannel: "Back to channel",
+    threadConversation: "Thread conversation",
+    replyingInThread: "Replies now go to",
+    beforeContext: "Channel context before this thread",
+    afterContext: "Channel context after this thread",
+    contextNotCaptured: "No surrounding channel context captured in this browser session.",
+    noThreadMessages: "No thread messages captured yet.",
+    replyingTo: "Replying to",
+    repliedMessage: "message",
+  },
+  "zh-TW": {
+    appTitle: "KDB WebShare",
+    delegationWarningTitle: "已委派的 Discord 權限",
+    delegationWarningBody: "此控制連結持有人可在分享停止前，透過開啟者身分於此 Discord 目標操作。請勿將此 URL 貼到聊天、截圖、紀錄或支援工單中。",
+    connectionStatus: "連線狀態",
+    connected: "已連線",
+    connecting: "連線中",
+    reconnecting: "重新連線中",
+    disconnected: "已中斷",
+    error: "錯誤",
+    invalidLink: "請以 #/join/<room>.<secret> 格式開啟 WebShare URL。secret 只留在 fragment，不會送到 relay URL。",
+    target: "目標",
+    opener: "開啟者",
+    capabilities: "能力",
+    eventLog: "事件紀錄",
+    composer: "撰寫",
+    agentPrompt: "Agent prompt",
+    channelMessage: "頻道訊息",
+    botCommand: "Bot 指令",
+    messageText: "訊息內容",
+    command: "指令",
+    commandArgs: "JSON 物件參數",
+    send: "送出",
+    interruptAgent: "中斷 agent",
+    mentions: "已選 mention",
+    mentionHelp: "v1 僅允許選定使用者與 bot mention。",
+    noMentionEveryone: "角色 mention、@everyone 與 @here 刻意不提供。",
+    threads: "討論串",
+    currentThread: "目前討論串",
+    selectThread: "選擇討論串",
+    createThread: "建立討論串",
+    threadName: "討論串名稱",
+    sourceMessage: "來源訊息 ID（可選）",
+    viewOnly: "僅檢視連結",
+    writeLink: "控制連結",
+    eventNone: "尚無事件。",
+    locale: "語言",
+    targetChannel: "目標頻道",
+    uploadComplete: "已完成",
+    uploadStreaming: "串流中",
+    download: "下載",
+    yes: "是",
+    no: "否",
+    attachmentLabel: "附件",
+    browserDisplayName: "WebShare 瀏覽器",
+    notConnected: "尚未連線",
+    channels: "頻道",
+    members: "成員",
+    memberHelp: "如果訊息可能 ping 某人，送出前先勾選。未勾選的原始 mention 會保持無效。",
+    writeAs: "透過",
+    modeAgent: "Agent 路由：mention bot 就會從共享的 Discord 目標詢問 agent。",
+    modeMessage: "頻道路由：送出一般、會出現在 Discord 的訊息。",
+    modeCommand: "指令路由：開頭輸入 / 會執行 bot 指令。",
+    placeholderAgent: "輸入 Discord 訊息。mention bot 會詢問 agent；開頭輸入 / 會執行 bot 指令。",
+    placeholderMessage: "輸入 Discord 訊息。mention bot 會詢問 agent；開頭輸入 / 會執行 bot 指令。",
+    placeholderCommand: "輸入 Discord 訊息。mention bot 會詢問 agent；開頭輸入 / 會執行 bot 指令。",
+    attachFiles: "附加檔案",
+    sourceMessageCompact: "來源訊息 ID",
+    threadCreateHint: "討論串",
+    systemAuthor: "WebShare",
+    botAuthor: "KDB Bot",
+    agentAuthor: "KDB Agent",
+    uploadAccepted: "已接受上傳",
+    threadCreated: "已建立討論串",
+    threadSelected: "已選擇討論串",
+    threadUpdated: "已更新討論串",
+    threadDeleted: "已刪除討論串",
+    messageEdited: "已編輯",
+    messageDeleted: "訊息已刪除",
+    openThread: "開啟討論串",
+    replyInThread: "回覆",
+    backToChannel: "回到頻道",
+    threadConversation: "討論串對話",
+    replyingInThread: "現在會回覆到",
+    beforeContext: "此討論串前的頻道前文",
+    afterContext: "此討論串後的頻道後文",
+    contextNotCaptured: "此瀏覽器工作階段尚未擷取周邊頻道前後文。",
+    noThreadMessages: "尚未擷取此討論串訊息。",
+    replyingTo: "回覆",
+    repliedMessage: "訊息",
+  },
+};
+
+export function chooseLocale(): Locale {
+  const stored = window.localStorage.getItem("webshare-locale");
+  if (stored === "en" || stored === "zh-TW") return stored;
+  return "zh-TW";
+}
+
+export function setLocale(locale: Locale): void {
+  window.localStorage.setItem("webshare-locale", locale);
+}
+
+export function t(locale: Locale, key: MessageKey): string {
+  return messages[locale][key];
+}

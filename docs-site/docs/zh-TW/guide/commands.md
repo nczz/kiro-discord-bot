@@ -28,6 +28,9 @@
 | `/thread [on|off]` | 查詢或設定未來 parent-channel task 是否建立 Discord thread。 |
 | `/silent [on|off]` | 控制 compact 或詳細 tool output。 |
 | `/webhook mode:<status|on|off>` | 查詢或設定帶 bot tag 的 Discord channel webhook 監聽。開啟後，webhook 訊息仍必須以真正的 bot mention（例如 `<@BOT_ID>`）開頭；在頻道內用 `/webhook mode:status` 可看到這個 bot 的實際 tag。 |
+| `/webshare start/stop/status/revoke` | 管理目前 channel 或 thread 的 WebShare browser control link。此連結會在停止或撤銷前，於此 target 委派 opener 的 Discord authority；詳見 [WebShare](webshare.md)。 |
+
+`/webshare start` 會在 WebShare 已啟用且 requester 可管理 target 時，以 private response 回傳 control/view links。`/webshare stop` 會結束 opener 的 active share，並解除其 Discord-side lockout。`/webshare status` 顯示 active share state。`/webshare revoke` 是 manager 用於連結外洩或 opener 不在場時的 emergency path。WebShare 訊息會明確標示 `via WebShare`；v1 只允許明確選取的 user mentions 與 bot，不允許 roles、`@everyone` 或 `@here`。
 
 ## Model 與 Agent Mode
 
@@ -62,7 +65,7 @@ Memory、flash memory、steering 與 session cleanup 的操作差異見 [日常�
 | `/mcp manage` | 開啟私密 MCP policy panel，掃描 tools 並管理 allowlist。 |
 | `/audit [limit]` | 私密檢視目前 channel/thread 的 audit events。 |
 | `/usage [user]` | 私密顯示全伺服器今日、本周、本月至今的 agent 用量；engine 有回傳 metering metadata 時會包含 credits 或 USD cost。一般成員預設只看自己；具備管理伺服器或系統管理員權限者可留空查看所有使用者或指定其他成員。 |
-| `/usage-history [user] [period] [status] [source]` | 私密查詢全伺服器詳細用量紀錄。`period` 可選 `7d`、`30d`、`this-month`、`last-month`；`status` 可選 `all`、`success`、`failed`；`source` 可選 `all`、`message`、`webhook`、`command`、`cron`。一般成員可查詢自己；查詢其他成員需要管理伺服器或系統管理員權限。 |
+| `/usage-history [user] [period] [status] [source]` | 私密查詢全伺服器詳細用量紀錄。`period` 可選 `7d`、`30d`、`this-month`、`last-month`；`status` 可選 `all`、`success`、`failed`；`source` 可選 `all`、`message`、`webhook`、`webshare`、`command`、`cron`。一般成員可查詢自己；查詢其他成員需要管理伺服器或系統管理員權限。 |
 
 Audit data 請使用 slash `/audit`；usage data 請使用 slash `/usage` 或 `/usage-history`。文字 `!audit` 不回傳 audit rows，文字 `!usage` 只會提示改用 slash，因為 Discord 無法讓這類文字回覆變成 private。
 

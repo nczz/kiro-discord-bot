@@ -41,6 +41,7 @@ Continue with the [full installation guide][install-doc].
 | --- | --- |
 | First-time setup | [Getting Started][getting-started] · [Installation][install-doc] |
 | Daily use | [Command Reference][commands] · [Listen Modes][listen-modes] |
+| Browser handoff | [WebShare][webshare] · [Deployment][deployment] · [Security Model][security] |
 | Agent engines | [Agent Engines][agent-engines] · [Environment][environment] |
 | Agent context | [`AGENTS.md`](AGENTS.md) · [Steering Files][steering] · [Core Concepts][core-concepts] |
 | Tool access | [MCP Policy][mcp] · [Bot Tools][bot-tools] · [Discord MCP Server][mcp-discord] · [Media MCP Server][media-mcp] |
@@ -77,6 +78,7 @@ MIT
 [agent-engines]: https://nczz.github.io/kiro-discord-bot/guide/agent-engines.html
 [commands]: https://nczz.github.io/kiro-discord-bot/guide/commands.html
 [listen-modes]: https://nczz.github.io/kiro-discord-bot/guide/listen-modes.html
+[webshare]: https://nczz.github.io/kiro-discord-bot/guide/webshare.html
 [core-concepts]: https://nczz.github.io/kiro-discord-bot/guide/core-concepts.html
 [steering]: https://nczz.github.io/kiro-discord-bot/guide/steering.html
 [mcp]: https://nczz.github.io/kiro-discord-bot/guide/mcp.html

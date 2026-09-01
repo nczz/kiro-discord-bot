@@ -24,6 +24,8 @@
 | `/usage` | 全伺服器私密報表：預設查自己；具備管理伺服器／系統管理員權限者可彙總所有使用者或指定其他成員。 | 採相同的全伺服器 scope 與權限規則。 | Credits 來自 Kiro metering metadata。 | USD cost 來自 OMP `usage_update`。 |
 | `/usage-history` | 私密查詢全伺服器詳細 usage history，支援 user/period/status/source filters；只能查自己，除非 requester 具備管理伺服器／系統管理員權限。 | 採相同的全伺服器 scope 與權限規則。 | 讀取 SQLite usage history。 | 讀取 SQLite usage history。 |
 | `/audit prompt` | 使用短生命週期 scoped agent，並把 usage 歸到 Discord caller。 | 相同，並帶 thread target metadata。 | 使用 channel engine。 | 使用 channel engine。 |
+| `/webshare start` | WebShare 啟用且 requester 可管理 target 時，為 parent channel 開啟 delegated browser share。 | 為 thread target 開啟 delegated browser share。 | 透過正常 manager entrypoints 使用 channel/thread engine。 | 透過正常 manager entrypoints 使用 channel/thread engine。 |
+| `/webshare stop` / `/webshare revoke` | 停止 opener share，或由 manager revoke active target share；會解除 opener lockout。 | Thread target 也相同。 | 不繞過 Kiro cancellation/session rules。 | 不繞過 OMP cancellation/session rules。 |
 
 ## Release Checklist
 
@@ -31,5 +33,6 @@
 - Kiro 行為有變更時跑 Kiro ACP smoke。
 - OMP 行為有變更時跑 OMP ACP smoke。
 - 在 Discord 的 parent channel 與 thread 內測 `/engine`、`/models`、`/model`、`/agent`、`/status`、`/usage`、`/usage-history` 與 `/audit prompt`。
+- WebShare 變更需驗證 `/webshare start`、browser connect、可見 `via WebShare` post、selected-user mention、agent prompt、thread action、upload/fetch attachment、`/webshare stop` 與 manager `/webshare revoke`。
 - 確認 `/doctor` 會回報每個 enabled engine、Usage SQLite schema/record health，且不要求 disabled engines。
 - 確認失敗的 `/engine` switch 不會留下 partial channel 或 thread session。

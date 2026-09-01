@@ -18,42 +18,52 @@ import (
 	"github.com/nczz/kiro-discord-bot/internal/paths"
 	"github.com/nczz/kiro-discord-bot/internal/skills"
 	"github.com/nczz/kiro-discord-bot/stt"
+	"github.com/nczz/kiro-discord-bot/webshare"
 )
 
 type Bot struct {
-	discord             *discordgo.Session
-	manager             *channel.Manager
-	guildID             string
-	dataDir             string
-	hb                  *heartbeat.Heartbeat
-	hbCancel            context.CancelFunc
-	safeEgress          *safeEgressTask
-	cronStore           *heartbeat.CronStore
-	cronTask            *heartbeat.CronTask
-	auditRecorder       *audit.Recorder
-	skillsStore         *skills.Store
-	a2aNode             *a2a.Node
-	a2aConfig           a2a.Config
-	a2aPeerStore        *a2a.SQLitePeerStore
-	a2aPeerFallbackSub  *nats.Subscription
-	a2aInstanceID       string
-	cronTimezone        string
-	version             string
-	startedAt           time.Time
-	downloadClient      *http.Client
-	attachmentMaxBytes  int64
-	seen                *seenMessages
-	sttClient           *stt.Client
-	sttMaxDuration      int
-	peerMu              sync.RWMutex
-	peers               []BotPeer
-	manualPeers         []BotPeer
-	peerPermMu          sync.Mutex
-	peerPermCache       map[string]peerPermissionCacheEntry
-	cronPromptCache     cronPromptStore // parsed cron jobs awaiting button confirmation
-	a2aConfirmations    *a2aPolicyConfirmationStore
-	setupPromptMu       sync.Mutex
-	setupPromptCooldown *setupPromptCooldown
+	discord                  *discordgo.Session
+	manager                  *channel.Manager
+	guildID                  string
+	dataDir                  string
+	hb                       *heartbeat.Heartbeat
+	hbCancel                 context.CancelFunc
+	safeEgress               *safeEgressTask
+	cronStore                *heartbeat.CronStore
+	cronTask                 *heartbeat.CronTask
+	auditRecorder            *audit.Recorder
+	skillsStore              *skills.Store
+	a2aNode                  *a2a.Node
+	a2aConfig                a2a.Config
+	a2aPeerStore             *a2a.SQLitePeerStore
+	a2aPeerFallbackSub       *nats.Subscription
+	a2aInstanceID            string
+	cronTimezone             string
+	version                  string
+	startedAt                time.Time
+	downloadClient           *http.Client
+	attachmentMaxBytes       int64
+	seen                     *seenMessages
+	sttClient                *stt.Client
+	sttMaxDuration           int
+	peerMu                   sync.RWMutex
+	peers                    []BotPeer
+	manualPeers              []BotPeer
+	peerPermMu               sync.Mutex
+	peerPermCache            map[string]peerPermissionCacheEntry
+	cronPromptCache          cronPromptStore // parsed cron jobs awaiting button confirmation
+	a2aConfirmations         *a2aPolicyConfirmationStore
+	setupPromptMu            sync.Mutex
+	setupPromptCooldown      *setupPromptCooldown
+	webshareConfig           WebShareConfig
+	webshareStore            *webshare.Store
+	webshareMu               sync.Mutex
+	webshareHosts            map[string]*webshareHostLoop
+	webshareUploadMu         sync.Mutex
+	webshareUploads          map[string]*webshareUploadSession
+	webshareWebhookMu        sync.Mutex
+	webshareWebhookByChannel map[string]webshareWebhookCredential
+	webshareWebhookIDs       map[string]bool
 }
 
 func New(cfg interface{ GetBotConfig() BotConfig }) (*Bot, error) {
@@ -85,6 +95,7 @@ type BotConfig struct {
 	BotPeers           string
 	Audit              audit.Config
 	A2ANode            *a2a.Node
+	WebShare           WebShareConfig
 }
 
 func NewFromConfig(cfg BotConfig) (*Bot, error) {
@@ -121,6 +132,17 @@ func NewFromConfig(cfg BotConfig) (*Bot, error) {
 		log.Printf("[audit] sqlite recorder enabled")
 	}
 
+	var webshareStore *webshare.Store
+	if cfg.WebShare.Enabled {
+		webshareStore, err = webshare.OpenStore(context.Background(), cfg.DataDir)
+		if err != nil {
+			if auditRecorder != nil {
+				auditRecorder.Close()
+			}
+			return nil, fmt.Errorf("open webshare store: %w", err)
+		}
+	}
+
 	cfg.ManagerConfig.DiscordSession = ds
 	cfg.ManagerConfig.Store = store
 	manager := channel.NewManager(cfg.ManagerConfig)
@@ -128,6 +150,9 @@ func NewFromConfig(cfg BotConfig) (*Bot, error) {
 		manager.StopAll()
 		if auditRecorder != nil {
 			auditRecorder.Close()
+		}
+		if webshareStore != nil {
+			_ = webshareStore.Close()
 		}
 		return nil, fmt.Errorf("open usage database: %w", err)
 	}
@@ -144,26 +169,34 @@ func NewFromConfig(cfg BotConfig) (*Bot, error) {
 		if auditRecorder != nil {
 			auditRecorder.Close()
 		}
+		if webshareStore != nil {
+			_ = webshareStore.Close()
+		}
 		return nil, fmt.Errorf("open skills store: %w", err)
 	}
 
 	manualPeers := parseBotPeers(cfg.BotPeers)
 	b := &Bot{discord: ds, manager: manager, guildID: cfg.GuildID, dataDir: cfg.DataDir, cronTimezone: cfg.CronTimezone, version: cfg.BotVersion,
-		startedAt:           time.Now(),
-		downloadClient:      &http.Client{Timeout: time.Duration(cfg.DownloadTimeoutSec) * time.Second},
-		attachmentMaxBytes:  cfg.AttachmentMaxBytes,
-		seen:                newSeenMessages(),
-		sttMaxDuration:      cfg.STTMaxDurationSec,
-		peers:               activeBotPeers(manualPeers),
-		manualPeers:         manualPeers,
-		peerPermCache:       make(map[string]peerPermissionCacheEntry),
-		auditRecorder:       auditRecorder,
-		skillsStore:         skillsStore,
-		a2aNode:             cfg.A2ANode,
-		a2aConfig:           cfg.A2A,
-		a2aInstanceID:       fmt.Sprintf("%s-%d", cfg.A2A.AgentID, time.Now().UnixNano()),
-		setupPromptCooldown: newSetupPromptCooldown(nil),
-		a2aConfirmations:    newA2APolicyConfirmationStore(nil),
+		startedAt:                time.Now(),
+		downloadClient:           &http.Client{Timeout: time.Duration(cfg.DownloadTimeoutSec) * time.Second},
+		attachmentMaxBytes:       cfg.AttachmentMaxBytes,
+		seen:                     newSeenMessages(),
+		sttMaxDuration:           cfg.STTMaxDurationSec,
+		peers:                    activeBotPeers(manualPeers),
+		manualPeers:              manualPeers,
+		peerPermCache:            make(map[string]peerPermissionCacheEntry),
+		auditRecorder:            auditRecorder,
+		skillsStore:              skillsStore,
+		a2aNode:                  cfg.A2ANode,
+		a2aConfig:                cfg.A2A,
+		a2aInstanceID:            fmt.Sprintf("%s-%d", cfg.A2A.AgentID, time.Now().UnixNano()),
+		setupPromptCooldown:      newSetupPromptCooldown(nil),
+		a2aConfirmations:         newA2APolicyConfirmationStore(nil),
+		webshareConfig:           cfg.WebShare,
+		webshareStore:            webshareStore,
+		webshareUploads:          make(map[string]*webshareUploadSession),
+		webshareWebhookByChannel: make(map[string]webshareWebhookCredential),
+		webshareWebhookIDs:       make(map[string]bool),
 	}
 	if cfg.STTEnabled && cfg.STTAPIKey != "" {
 		b.sttClient = stt.New(cfg.STTProvider, cfg.STTAPIKey, cfg.STTModel, cfg.STTLanguage)
@@ -204,7 +237,11 @@ func NewFromConfig(cfg BotConfig) (*Bot, error) {
 	b.hb = hb
 	ds.AddHandler(b.handleMessage)
 	ds.AddHandler(b.handleInteraction)
+	ds.AddHandler(b.handleThreadCreate)
 	ds.AddHandler(b.handleThreadUpdate)
+	ds.AddHandler(b.handleThreadDelete)
+	ds.AddHandler(b.handleMessageUpdate)
+	ds.AddHandler(b.handleMessageDelete)
 	return b, nil
 }
 
@@ -225,6 +262,7 @@ func (b *Bot) Start() error {
 	ctx, cancel := context.WithCancel(context.Background())
 	b.hbCancel = cancel
 	b.startA2APeerDiscovery(ctx)
+	b.startWebShareReconnectLoop(ctx)
 	go b.hb.Start(ctx)
 	return nil
 }
@@ -233,6 +271,7 @@ func (b *Bot) Stop() {
 	if b.hbCancel != nil {
 		b.hbCancel()
 	}
+	b.stopAllWebShareHosts()
 	b.seen.Stop()
 	if b.a2aPeerFallbackSub != nil {
 		_ = b.a2aPeerFallbackSub.Unsubscribe()
@@ -254,5 +293,8 @@ func (b *Bot) Stop() {
 	}
 	if b.skillsStore != nil {
 		_ = b.skillsStore.Close()
+	}
+	if b.webshareStore != nil {
+		_ = b.webshareStore.Close()
 	}
 }

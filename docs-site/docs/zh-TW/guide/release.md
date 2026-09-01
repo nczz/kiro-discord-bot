@@ -61,6 +61,7 @@ Release workflow 會為 Linux/macOS、amd64/arm64 建置 archives。每個 archi
 - `kiro-discord-bot`
 - `mcp-discord` 或 `mcp-discord-server`
 - `mcp-media` 或 `mcp-media-server`
+- `webshare-relay`
 
 ## 4. 驗證 GitHub Actions
 

@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"image"
@@ -123,7 +124,7 @@ func isKnownBangCommand(name, content string) bool {
 		return false
 	}
 	switch name {
-	case "resume", "session", "pause", "back", "silent", "thread", "webhook", "reset", "restart", "status", "usage", "doctor", "audit", "mcp", "skill", "steering", "cancel", "interrupt",
+	case "resume", "session", "pause", "back", "silent", "thread", "webhook", "webshare", "reset", "restart", "status", "usage", "doctor", "audit", "mcp", "skill", "steering", "cancel", "interrupt",
 		"close-thread", "compact", "clear", "cwd", "start", "agent", "engine", "model", "models", "memory", "flashmemory", "cron", "help":
 		return true
 	case "remind":
@@ -587,6 +588,12 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 	b.recordChannelMetadata(ds, m.ChannelID, m.GuildID)
 	selfID := ds.State.User.ID
 	if shouldIgnoreMessage(m, selfID) {
+		if m != nil && m.Message != nil && m.Author != nil && m.Author.ID == selfID && !b.seen.Mark(m.ID) {
+			content := strings.TrimSpace(m.Content)
+			if content != "" || len(m.Attachments) > 0 {
+				b.broadcastWebShareDiscordMessage(context.Background(), m, resolveThreadParent(ds, m.ChannelID))
+			}
+		}
 		return
 	}
 
@@ -605,6 +612,13 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 	isCommand := strings.HasPrefix(content, "!")
 
 	parentChannelID := resolveThreadParent(ds, m.ChannelID)
+	if m.WebhookID != "" && b.isWebShareWebhookMessage(m) {
+		if b.seen != nil {
+			_ = b.seen.Mark(m.ID)
+		}
+		return
+	}
+	b.broadcastWebShareDiscordMessage(context.Background(), m, parentChannelID)
 	if m.WebhookID != "" {
 		if !b.shouldAcceptWebhookMessage(m, content, selfID, parentChannelID) {
 			return
@@ -615,6 +629,10 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 			return
 		}
 		b.enqueueChannelPrompt(ds, m, content, selfID, "webhook")
+		return
+	}
+	if !m.Author.Bot && b.rejectWebShareLockedDiscordUse(m.Author.ID, m.ChannelID, parentChannelID, commandNameFromBang(content)) {
+		_, _ = sendDiscordText(ds, m.ChannelID, b.webshareLockoutMessage(), nil)
 		return
 	}
 
@@ -731,6 +749,8 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 	case content == "!webhook" || strings.HasPrefix(content, "!webhook "):
 		ctx.args = strings.TrimSpace(strings.TrimPrefix(content, "!webhook"))
 		b.cmdWebhook(ctx)
+	case content == "!webshare" || strings.HasPrefix(content, "!webshare "):
+		ctx.reply(L.Get("usage.slash_only"))
 	case content == "!reset":
 		b.cmdReset(ctx)
 	case content == "!restart":
@@ -934,9 +954,24 @@ func (b *Bot) enqueueThreadPrompt(ds *discordgo.Session, m *discordgo.MessageCre
 	}
 }
 
+func (b *Bot) handleThreadCreate(ds *discordgo.Session, t *discordgo.ThreadCreate) {
+	if t == nil || t.Channel == nil || !b.isMyGuild(t.GuildID) {
+		return
+	}
+	registerThreadParent(t.ID, t.ParentID)
+	b.recordChannelMetadata(ds, t.ID, t.GuildID)
+	b.broadcastWebShareThreadLifecycle(context.Background(), t.Channel, "created")
+}
+
 // handleThreadUpdate handles Discord thread archive/unarchive events.
 func (b *Bot) handleThreadUpdate(ds *discordgo.Session, t *discordgo.ThreadUpdate) {
-	if t.ThreadMetadata != nil && t.ThreadMetadata.Archived {
+	if t == nil || t.Channel == nil || !b.isMyGuild(t.GuildID) {
+		return
+	}
+	registerThreadParent(t.ID, t.ParentID)
+	b.recordChannelMetadata(ds, t.ID, t.GuildID)
+	b.broadcastWebShareThreadLifecycle(context.Background(), t.Channel, "updated")
+	if t.ThreadMetadata != nil && t.ThreadMetadata.Archived && b.manager != nil {
 		if b.manager.HasThreadAgent(t.ID) {
 			stopped, deferred := b.manager.MarkThreadArchived(t.ID)
 			if deferred {
@@ -949,6 +984,27 @@ func (b *Bot) handleThreadUpdate(ds *discordgo.Session, t *discordgo.ThreadUpdat
 			}
 		}
 	}
+}
+
+func (b *Bot) handleThreadDelete(ds *discordgo.Session, t *discordgo.ThreadDelete) {
+	if t == nil || t.Channel == nil || !b.isMyGuild(t.GuildID) {
+		return
+	}
+	b.broadcastWebShareThreadLifecycle(context.Background(), t.Channel, "deleted")
+}
+
+func (b *Bot) handleMessageUpdate(ds *discordgo.Session, m *discordgo.MessageUpdate) {
+	if m == nil || m.Message == nil || strings.TrimSpace(m.ID) == "" || !b.isMyGuild(m.GuildID) || !webshareMessageUpdateHasRenderableChange(m) {
+		return
+	}
+	b.broadcastWebShareDiscordMessageUpdate(context.Background(), m, resolveThreadParent(ds, m.ChannelID))
+}
+
+func (b *Bot) handleMessageDelete(ds *discordgo.Session, m *discordgo.MessageDelete) {
+	if m == nil || m.Message == nil || strings.TrimSpace(m.ID) == "" || !b.isMyGuild(m.GuildID) {
+		return
+	}
+	b.broadcastWebShareDiscordMessageDelete(context.Background(), m, resolveThreadParent(ds, m.ChannelID))
 }
 
 // handleThreadMessage handles messages sent inside a thread, routing to a dedicated thread agent.
@@ -1053,6 +1109,9 @@ func (b *Bot) handleThreadMessage(ds *discordgo.Session, m *discordgo.MessageCre
 	case content == "!webhook" || strings.HasPrefix(content, "!webhook "):
 		ctx.args = strings.TrimSpace(strings.TrimPrefix(content, "!webhook"))
 		b.cmdWebhook(ctx)
+		return
+	case content == "!webshare" || strings.HasPrefix(content, "!webshare "):
+		ctx.reply(L.Get("usage.slash_only"))
 		return
 	case content == "!compact":
 		b.cmdCompact(ctx)
@@ -1178,6 +1237,7 @@ func buildSlashCommandsWithA2A(a2aEnabled bool) []*discordgo.ApplicationCommand 
 					{Name: "off", Value: "off"},
 				}},
 		}},
+		{Name: "webshare", Description: L.Get("cmd.webshare.desc"), Options: webshareSlashOptions()},
 		{Name: "model", Description: L.Get("cmd.model.desc"), Options: []*discordgo.ApplicationCommandOption{
 			{Type: discordgo.ApplicationCommandOptionString, Name: "model", Description: L.Get("cmd.model.opt.model"), Required: false},
 		}},
@@ -1428,6 +1488,20 @@ func (b *Bot) handleSlashCommand(ds *discordgo.Session, i *discordgo.Interaction
 	auditCtx.channelID = channelID
 	auditCtx.targetID = rawChannelID
 	auditCtx.inThread = inThread
+	if b.rejectWebShareLockedDiscordUse(userID, rawChannelID, threadParent, data.Name) {
+		msg := b.webshareLockoutMessage()
+		err := ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{
+				Content:         msg,
+				AllowedMentions: &discordgo.MessageAllowedMentions{},
+				Flags:           discordgo.MessageFlagsEphemeral,
+			},
+		})
+		b.recordInteractionResponseDelivery(auditCtx, data.Name, "rejected", msg, discordgo.InteractionResponseChannelMessageWithSource, map[string]any{"ephemeral": true, "webshare_lockout": true}, err)
+		b.recordCommandCompleted(auditCtx, data.Name, "slash", "rejected", "webshare_lockout")
+		return
+	}
 
 	if inThread && isChannelOnlySlashCommand(data.Name) {
 		msg := L.Get("error.channel_only")
@@ -1649,6 +1723,9 @@ func (b *Bot) handleSlashCommand(ds *discordgo.Session, i *discordgo.Interaction
 				ctx.args = data.Options[0].StringValue()
 			}
 			b.cmdWebhook(ctx)
+		case "webshare":
+			ctx.args = webshareArgsFromSlashOptions(data.Options)
+			b.cmdWebShare(ctx)
 		case "model":
 			if len(data.Options) > 0 {
 				ctx.args = data.Options[0].StringValue()
