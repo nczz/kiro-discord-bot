@@ -257,7 +257,7 @@ function applyServerEvent(event: ServerEvent): void {
       applyThreadEvent(event.event);
       break;
     case "agent_event":
-      pushMessage("agent", t(state.locale, "agentAuthor"), event.event.content ?? event.event.status);
+      pushMessage("agent", t(state.locale, "agentAuthor"), event.event.content ?? event.event.status, { timestamp: event.event.timestamp });
       break;
     case "command_result":
       pushMessage("command", t(state.locale, "botAuthor"), event.content || event.status);
@@ -859,6 +859,7 @@ function contextSection(label: string, messages: ChatMessage[]): HTMLElement {
 
 function selectThread(threadID: string | undefined): void {
   state.draft.targetThreadID = threadID;
+  persistRoomHistory();
   if (threadID && canWrite("selectThread")) void dispatch({ type: "select_thread", threadID });
   render();
 }
@@ -900,7 +901,7 @@ function applyDiscordMessage(kind: MessageKind, event: DiscordMessageLike, conte
       state.messages[existingIndex] = next;
       return;
     }
-    pushMessage(kind, fallbackAuthor, deletedContent, { discordMessageID: event.messageID, deleted: true, mentions: event.mentions, thread: event.thread, threadMessage: Boolean(event.thread && event.messageID), replyTo: event.replyTo });
+    pushMessage(kind, fallbackAuthor, deletedContent, { discordMessageID: event.messageID, deleted: true, mentions: event.mentions, thread: event.thread, threadMessage: Boolean(event.thread && event.messageID), replyTo: event.replyTo, timestamp: event.timestamp });
     return;
   }
   if (existingIndex >= 0) {

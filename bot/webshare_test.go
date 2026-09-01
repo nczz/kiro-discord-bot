@@ -504,6 +504,32 @@ func TestWebShareThreadCreateValidationAuditRedactionAndAttachmentFetch(t *testi
 	}
 }
 
+func TestWebShareCreateThreadIncludesServerTimestamp(t *testing.T) {
+	store, share := newTestWebShareStoreAndShare(t)
+	manager := channel.NewManager(channel.ManagerConfig{DataDir: t.TempDir(), DefaultCWD: t.TempDir()})
+	rt := &recordingDiscordTransport{}
+	ds := &discordgo.Session{State: discordgo.NewState(), Client: &http.Client{Transport: rt}, Ratelimiter: discordgo.NewRatelimiter()}
+	b := &Bot{discord: ds, manager: manager, webshareStore: store}
+
+	before := time.Now().UTC()
+	got := b.webshareCreateThread(context.Background(), share, webshare.ClientAction{Name: "review"})
+	if got.Type != "thread_event" || got.Status != "ok" {
+		t.Fatalf("create thread event = %+v", got)
+	}
+	payload := got.Event.(map[string]any)
+	raw, ok := payload["timestamp"].(string)
+	if !ok || raw == "" {
+		t.Fatalf("timestamp missing: %#v", payload)
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, raw)
+	if err != nil {
+		t.Fatalf("timestamp parse: %v", err)
+	}
+	if parsed.Before(before.Add(-time.Second)) || parsed.After(time.Now().UTC().Add(time.Second)) {
+		t.Fatalf("timestamp = %s outside server receive window", parsed)
+	}
+}
+
 func TestWebShareChunkedUploadIssuesScopedAttachmentRef(t *testing.T) {
 	store, share := newTestWebShareStoreAndShare(t)
 	project := t.TempDir()
@@ -595,6 +621,31 @@ func TestWebShareThreadTargetBroadcastUsesShareParentWhenResolverMisses(t *testi
 		case <-time.After(time.Second):
 			t.Fatalf("missing thread event %d", i)
 		}
+	}
+}
+
+func TestWebShareDeleteBroadcastUsesServerTimestampFallback(t *testing.T) {
+	store, share := newTestWebShareStoreAndShare(t)
+	ch := make(chan webshare.ServerEvent, 1)
+	b := &Bot{webshareStore: store, webshareHosts: map[string]*webshareHostLoop{share.ShareID: {send: ch}}}
+	before := time.Now().UTC()
+	b.broadcastWebShareDiscordMessageDelete(context.Background(), &discordgo.MessageDelete{Message: &discordgo.Message{ID: "msg-delete-zero", ChannelID: share.TargetID, GuildID: share.GuildID}}, "")
+	select {
+	case event := <-ch:
+		payload := event.Event.(map[string]any)
+		raw, ok := payload["timestamp"].(string)
+		if !ok || raw == "" {
+			t.Fatalf("timestamp missing: %#v", payload)
+		}
+		got, err := time.Parse(time.RFC3339Nano, raw)
+		if err != nil {
+			t.Fatalf("timestamp parse: %v", err)
+		}
+		if got.Before(before.Add(-time.Second)) || got.After(time.Now().UTC().Add(time.Second)) {
+			t.Fatalf("timestamp = %s outside server receive window", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("missing delete event")
 	}
 }
 

@@ -229,13 +229,10 @@ func webshareEventParent(share webshare.Share, channelID, parentChannelID string
 }
 
 func webshareDiscordTimestamp(m *discordgo.Message) string {
-	if m == nil {
-		return ""
+	if m != nil && !m.Timestamp.IsZero() {
+		return m.Timestamp.UTC().Format(time.RFC3339Nano)
 	}
-	if m.Timestamp.IsZero() {
-		return ""
-	}
-	return m.Timestamp.UTC().Format(time.RFC3339Nano)
+	return time.Now().UTC().Format(time.RFC3339Nano)
 }
 
 func webshareThreadView(ch *discordgo.Channel) map[string]any {

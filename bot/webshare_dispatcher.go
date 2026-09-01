@@ -867,7 +867,7 @@ func (b *Bot) webshareCreateThread(ctx context.Context, share webshare.Share, ac
 	}
 	registerThreadParent(thread.ID, share.TargetID)
 	_ = b.webshareStore.RegisterManagedChildThread(ctx, webshare.ManagedChildThread{ShareID: share.ShareID, ParentChannelID: share.TargetID, ThreadID: thread.ID, Name: thread.Name, CreatedByUserID: share.OpenerUserID, Metadata: map[string]any{"source": "webshare"}})
-	return webshare.ServerEvent{Type: "thread_event", Status: "ok", Event: map[string]any{"eventID": webshareEventID("thread-created", thread.ID), "thread": map[string]any{"id": thread.ID, "name": thread.Name, "parentChannelID": share.TargetID, "selected": true}, "action": "created"}, Metadata: map[string]any{"thread_id": thread.ID, "name": thread.Name}}
+	return webshare.ServerEvent{Type: "thread_event", Status: "ok", Event: map[string]any{"eventID": webshareEventID("thread-created", thread.ID), "thread": map[string]any{"id": thread.ID, "name": thread.Name, "parentChannelID": share.TargetID, "selected": true}, "action": "created", "timestamp": time.Now().UTC().Format(time.RFC3339Nano)}, Metadata: map[string]any{"thread_id": thread.ID, "name": thread.Name}}
 }
 
 func (b *Bot) webshareInterrupt(share webshare.Share, targetID, parentID string) webshare.ServerEvent {
@@ -880,7 +880,7 @@ func (b *Bot) webshareInterrupt(share webshare.Share, targetID, parentID string)
 	if err != nil {
 		return webshare.ServerEvent{Type: "error", Status: "error", ReasonCode: "interrupt_failed", Content: err.Error()}
 	}
-	return webshare.ServerEvent{Type: "agent_event", Status: "ok", Event: map[string]any{"eventID": webshareEventID("agent-interrupted", targetID), "status": "interrupted"}}
+	return webshare.ServerEvent{Type: "agent_event", Status: "ok", Event: map[string]any{"eventID": webshareEventID("agent-interrupted", targetID), "status": "interrupted", "timestamp": time.Now().UTC().Format(time.RFC3339Nano)}}
 }
 
 func (b *Bot) webshareUploadInit(ctx context.Context, share webshare.Share, action webshare.ClientAction, targetID, parentID string) webshare.ServerEvent {
