@@ -15,16 +15,19 @@
   --danger: #f23f42;
   --ok: #23a559;
   --warn: #f0b232;
+  --app-height: 100dvh;
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
 * { box-sizing: border-box; }
-html, body, #app { height: 100%; }
+html, body, #app {
+  height: 100%;
+  min-height: 100%;
+}
 body {
   margin: 0;
   overflow: hidden;
   background: var(--surface);
-  color: var(--text);
 }
 button, input, textarea, select { font: inherit; }
 button {
@@ -47,10 +50,12 @@ input:focus, textarea:focus, select:focus, button:focus-visible {
 }
 
 .discord-app {
-  height: 100vh;
+  width: 100%;
+  height: var(--app-height);
   min-height: 0;
   display: grid;
   grid-template-columns: 72px 260px minmax(0, 1fr) 240px;
+  overflow: hidden;
   background: var(--surface);
 }
 .server-rail {
@@ -137,10 +142,13 @@ input:focus, textarea:focus, select:focus, button:focus-visible {
 .hint { color: var(--subtle); font-size: 0.78rem; line-height: 1.35; }
 
 .chat-pane {
+  position: relative;
   min-width: 0;
   min-height: 0;
+  height: 100%;
   display: grid;
   grid-template-rows: 48px minmax(0, 1fr) auto;
+  overflow: hidden;
   background: var(--surface);
 }
 .chat-header {
@@ -204,6 +212,9 @@ input:focus, textarea:focus, select:focus, button:focus-visible {
 .message-list {
   min-height: 0;
   overflow: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  scroll-padding-bottom: 1rem;
   padding: 1rem max(1rem, 3vw) 0.75rem;
 }
 .delegation-notice, .system-block {
@@ -366,10 +377,14 @@ input:focus, textarea:focus, select:focus, button:focus-visible {
 .attachment-chip:disabled { cursor: not-allowed; }
 
 .composer-bar {
+  position: sticky;
+  bottom: 0;
+  z-index: 10;
   min-width: 0;
   display: grid;
   gap: 0.55rem;
-  padding: 0.65rem max(1rem, 3vw) 1rem;
+  padding: 0.65rem max(1rem, 3vw) max(1rem, env(safe-area-inset-bottom));
+  border-top: 1px solid rgba(0, 0, 0, 0.18);
   background: linear-gradient(180deg, rgba(49, 51, 56, 0), var(--surface) 16%);
 }
 .composer-hint, .attachment-strip, .composer-utility {
@@ -408,9 +423,9 @@ input:focus, textarea:focus, select:focus, button:focus-visible {
 .upload-icon.disabled { opacity: 0.45; cursor: not-allowed; }
 .upload-icon input { display: none; }
 .composer-input-row textarea {
-  width: 100%;
   min-height: 32px;
   max-height: 180px;
+  overflow-y: auto;
   resize: vertical;
   padding: 0.35rem 0;
   background: transparent;
@@ -534,33 +549,49 @@ input:focus, textarea:focus, select:focus, button:focus-visible {
   }
 }
 @media (max-width: 760px) {
-  html, body, #app { height: 100%; }
-  body { overflow: hidden; }
+  html, body, #app {
+    height: var(--app-height);
+    min-height: 0;
+  }
   .discord-app {
-    height: 100dvh;
-    min-height: 100vh;
+    height: var(--app-height);
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr);
-    overflow: hidden;
   }
   .server-rail, .channel-sidebar { display: none; }
   .chat-pane {
     grid-column: 1;
-    min-height: 0;
-    height: 100dvh;
+    height: var(--app-height);
     grid-template-rows: auto minmax(0, 1fr) auto;
   }
   .chat-header {
     height: auto;
     min-height: 48px;
     align-items: flex-start;
-    padding: 0.7rem 0.8rem;
+    padding: max(0.7rem, env(safe-area-inset-top)) 0.8rem 0.7rem;
     flex-direction: column;
     gap: 0.45rem;
   }
   .header-actions { width: 100%; justify-content: space-between; }
   .message-list { padding: 0.75rem 0.8rem 0.5rem; }
-  .composer-bar { padding: 0.55rem 0.8rem 0.8rem; }
-  .composer-input-row { grid-template-columns: 34px minmax(0, 1fr); }
-  .send-button { grid-column: 2; justify-self: end; }
+  .composer-bar { padding: 0.55rem 0.8rem max(0.8rem, env(safe-area-inset-bottom)); }
+  .composer-suggestions { max-height: min(40dvh, 14rem); }
+  .composer-input-row {
+    grid-template-columns: 44px minmax(0, 1fr) auto;
+    align-items: center;
+  }
+  .upload-icon {
+    width: 44px;
+    height: 44px;
+  }
+  .composer-input-row textarea {
+    min-height: 44px;
+    max-height: min(35dvh, 10rem);
+    resize: none;
+  }
+  .send-button {
+    min-height: 44px;
+    justify-self: end;
+    padding-inline: 0.7rem;
+  }
 }

@@ -38,6 +38,15 @@ is_true() {
 
 need_cmd go
 
+need_cmd npm
+
+step "webshare web build"
+(cd webshare-web && npm run build)
+
+step "webshare embedded asset sync"
+diff -qr webshare-web/dist internal/websharerelay/webroot
+
+
 GO_TEST_ENV=(
   env
   -u KIRO_CLI

@@ -76,7 +76,21 @@ const appRoot = document.querySelector("#app");
 if (!appRoot)
     throw new Error("missing_app_root");
 const app = appRoot;
+installViewportHeightVar();
 void bootstrap();
+function installViewportHeightVar() {
+    const root = document.documentElement;
+    const update = () => {
+        const viewport = window.visualViewport;
+        const height = viewport?.height ?? window.innerHeight;
+        root.style.setProperty("--app-height", `${Math.max(1, Math.round(height))}px`);
+    };
+    update();
+    window.addEventListener("resize", update, { passive: true });
+    window.addEventListener("orientationchange", update, { passive: true });
+    window.visualViewport?.addEventListener("resize", update, { passive: true });
+    window.visualViewport?.addEventListener("scroll", update, { passive: true });
+}
 async function bootstrap() {
     try {
         state.join = parseJoinFragment();
@@ -230,12 +244,14 @@ function handleUploadState(event) {
     }
 }
 function render() {
+    const oldList = app.querySelector(".message-list");
+    const shouldStickToBottom = !oldList || oldList.scrollHeight - oldList.scrollTop - oldList.clientHeight < 80;
     clear(app);
-    app.append(discordShell());
+    app.append(discordShell(shouldStickToBottom));
 }
-function discordShell() {
+function discordShell(shouldStickToBottom) {
     const shell = el("main", { className: "discord-app" });
-    shell.append(serverRail(), channelSidebar(), chatPane(), memberSidebar());
+    shell.append(serverRail(), channelSidebar(), chatPane(shouldStickToBottom), memberSidebar());
     return shell;
 }
 function serverRail() {
@@ -281,7 +297,7 @@ function createThreadInline() {
     box.append(el("div", { className: "hint", text: t(state.locale, "threadCreateHint") }), name, source, create);
     return box;
 }
-function chatPane() {
+function chatPane(shouldStickToBottom) {
     const pane = el("section", { className: "chat-pane" });
     pane.append(chatHeader());
     const list = el("div", { className: "message-list", attrs: { role: "log", "aria-live": "polite" } });
@@ -299,7 +315,8 @@ function chatPane() {
     for (const message of visible)
         list.append(messageRow(message));
     pane.append(list, composerBar());
-    requestAnimationFrame(() => { list.scrollTop = list.scrollHeight; });
+    if (shouldStickToBottom)
+        requestAnimationFrame(() => { list.scrollTop = list.scrollHeight; });
     return pane;
 }
 function chatHeader() {
@@ -342,9 +359,6 @@ function composerBar() {
         sendDraft();
     });
     const hint = el("div", { className: "composer-hint", text: composerHint(inferredMode) });
-    wrap.append(hint);
-    if (inferredMode !== "command")
-        wrap.append(attachmentChips());
     const inputRow = el("div", { className: "composer-input-row" });
     const upload = uploadControl(disabled || inferredMode === "command" || !canWrite("upload"));
     const textarea = el("textarea", { attrs: { placeholder: composerPlaceholder(), rows: "1", autocomplete: "off", spellcheck: "true" } });
@@ -385,7 +399,10 @@ function composerBar() {
     const send = el("button", { className: "send-button", text: t(state.locale, "send") });
     send.disabled = disabled;
     inputRow.append(upload, textarea, send);
-    wrap.append(inputRow, suggestions, inlineUtilityRow());
+    wrap.append(hint);
+    if (inferredMode !== "command")
+        wrap.append(attachmentChips());
+    wrap.append(suggestions, inputRow, inlineUtilityRow());
     renderComposerSuggestions(textarea, suggestions, refreshComposer);
     return wrap;
 }
