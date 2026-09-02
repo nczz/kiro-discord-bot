@@ -2682,12 +2682,24 @@ func TestBuildPromptInjectsCurrentDatetimeGuidance(t *testing.T) {
 		"下個月第二週 => range_type=month_week offset=1 week_index=2",
 		"過去7天 => range_type=relative_days days=7 direction=past",
 		"Do not calculate weekdays, month boundaries, or relative ranges from model memory",
+		"Use the [Current datetime] timezone for date/time reasoning",
+		"Do not append a timezone to every date/time answer",
+		"Mention it only when the user asks",
+		"This affects reply wording only; still call bot_resolve_date_range",
+		"Do not expose CRON_TIMEZONE, timezone_source, or [Current datetime] in normal replies",
 		"Do not inspect or mutate raw bot state files or databases",
 		"Use available exposed bot MCP tools",
 		"bot_a2a_task_status",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("prompt missing %q:\n%s", want, got)
+		}
+	}
+	for _, unwanted := range []string{
+		"State the timezone used for user-visible date/time answers",
+	} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("prompt retained over-broad timezone guidance %q:\n%s", unwanted, got)
 		}
 	}
 }
