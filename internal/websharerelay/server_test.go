@@ -2,6 +2,7 @@ package websharerelay
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
@@ -58,6 +59,7 @@ func TestSecondHostRejectedWithClose4009(t *testing.T) {
 		t.Fatalf("first host: %v", err)
 	}
 	defer host.Close()
+	waitForRelayRooms(t, server.URL, 1)
 
 	second, resp, err := dialRelay(server.URL, "one-host", "host", testHostToken)
 	if err != nil {
@@ -201,6 +203,33 @@ func newTestRelay(t *testing.T) *httptest.Server {
 		t.Fatalf("NewServer: %v", err)
 	}
 	return httptest.NewServer(relay)
+}
+
+func waitForRelayRooms(t *testing.T, baseURL string, want int) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	var last Stats
+	var lastErr error
+	for time.Now().Before(deadline) {
+		resp, err := http.Get(baseURL + "/healthz")
+		if err != nil {
+			lastErr = err
+			time.Sleep(10 * time.Millisecond)
+			continue
+		}
+		func() {
+			defer resp.Body.Close()
+			lastErr = json.NewDecoder(resp.Body).Decode(&last)
+		}()
+		if lastErr == nil && last.Rooms == want {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if lastErr != nil {
+		t.Fatalf("relay rooms did not reach %d: last err=%v", want, lastErr)
+	}
+	t.Fatalf("relay rooms = %d guests=%d, want rooms=%d", last.Rooms, last.Guests, want)
 }
 
 func dialRelay(baseURL, roomID, role, token string) (*websocket.Conn, *http.Response, error) {
