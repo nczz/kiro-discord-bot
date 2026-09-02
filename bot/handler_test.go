@@ -320,6 +320,58 @@ func TestSafeEgressDrainChannelFlushesOnlyMatchingPendingActions(t *testing.T) {
 	}
 }
 
+func TestSafeEgressSendMessageRendersVerifiedMentionPlaceholders(t *testing.T) {
+	dir := t.TempDir()
+	rt := &recordingDiscordTransport{}
+	ds, err := discordgo.New("Bot test")
+	if err != nil {
+		t.Fatalf("new discord session: %v", err)
+	}
+	ds.Client = &http.Client{Transport: rt}
+	b := &Bot{discord: ds, dataDir: dir}
+	task := newSafeEgressTask(b)
+
+	if _, err := botegress.WritePending(dir, botegress.Action{
+		ID:        "mention-message",
+		Action:    botegress.ActionSendMessage,
+		ChannelID: "thread-1",
+		Content:   "notify [[discord:user:123456789012345678]] raw <@999999999999999999>",
+		MentionRefs: []discordmention.Ref{
+			discordmention.UserRef("123456789012345678", "mxp.tw"),
+		},
+		CreatedAt: "2026-01-01T00:00:00Z",
+	}); err != nil {
+		t.Fatalf("write pending: %v", err)
+	}
+
+	if delivered := task.DrainChannel("thread-1"); delivered != 1 {
+		t.Fatalf("DrainChannel delivered = %d, want 1", delivered)
+	}
+
+	_, bodies := rt.Snapshot()
+	if len(bodies) != 1 {
+		t.Fatalf("unexpected Discord calls: %v", bodies)
+	}
+	var payload struct {
+		Content         string `json:"content"`
+		AllowedMentions struct {
+			Users []string `json:"users"`
+		} `json:"allowed_mentions"`
+	}
+	if err := json.Unmarshal([]byte(bodies[0]), &payload); err != nil {
+		t.Fatalf("payload json: %v\n%s", err, bodies[0])
+	}
+	if !strings.Contains(payload.Content, "<@123456789012345678>") {
+		t.Fatalf("content missing rendered verified mention: %q", payload.Content)
+	}
+	if strings.Contains(payload.Content, "<@999999999999999999>") {
+		t.Fatalf("raw unverified mention stayed active: %q", payload.Content)
+	}
+	if len(payload.AllowedMentions.Users) != 1 || payload.AllowedMentions.Users[0] != "123456789012345678" {
+		t.Fatalf("allowed mentions = %+v, want verified requester only", payload.AllowedMentions.Users)
+	}
+}
+
 func TestSafeEgressSendMessageSplitsLongContent(t *testing.T) {
 	dir := t.TempDir()
 	rt := &recordingDiscordTransport{}
@@ -363,6 +415,51 @@ func TestSafeEgressSendMessageSplitsLongContent(t *testing.T) {
 		if strings.Contains(payload.Content, "Safe egress blocked") {
 			t.Fatalf("safe egress reported failure instead of splitting: %q", payload.Content)
 		}
+	}
+}
+
+func TestSafeEgressSendFileRendersVerifiedMentionCaption(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "report.txt")
+	if err := os.WriteFile(filePath, []byte("report body"), 0600); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	rt := &recordingDiscordTransport{}
+	ds, err := discordgo.New("Bot test")
+	if err != nil {
+		t.Fatalf("new discord session: %v", err)
+	}
+	ds.Client = &http.Client{Transport: rt}
+	b := &Bot{discord: ds, dataDir: dir}
+	task := newSafeEgressTask(b)
+
+	if _, err := botegress.WritePending(dir, botegress.Action{
+		ID:        "mention-file",
+		Action:    botegress.ActionSendFile,
+		ChannelID: "channel-1",
+		FilePath:  filePath,
+		Content:   "caption [[discord:user:123456789012345678]] raw <@999999999999999999>",
+		MentionRefs: []discordmention.Ref{
+			discordmention.UserRef("123456789012345678", "mxp.tw"),
+		},
+		CreatedAt: "2026-01-01T00:00:00Z",
+	}); err != nil {
+		t.Fatalf("write pending: %v", err)
+	}
+
+	if delivered := task.DrainChannel("channel-1"); delivered != 1 {
+		t.Fatalf("DrainChannel delivered = %d, want 1", delivered)
+	}
+	_, bodies := rt.Snapshot()
+	if len(bodies) != 1 {
+		t.Fatalf("expected one file upload, got %d bodies: %v", len(bodies), bodies)
+	}
+	body := bodies[0]
+	if !strings.Contains(body, `\u003c@123456789012345678\u003e`) || !strings.Contains(body, `"users":["123456789012345678"]`) {
+		t.Fatalf("file caption missing rendered verified mention or allowed mention: %s", body)
+	}
+	if strings.Contains(body, `<@999999999999999999>`) || strings.Contains(body, `\u003c@999999999999999999\u003e`) {
+		t.Fatalf("file caption kept raw unverified mention active: %s", body)
 	}
 }
 

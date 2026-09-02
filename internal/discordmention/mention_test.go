@@ -49,6 +49,12 @@ func TestPromptBlockListsPlaceholders(t *testing.T) {
 	if !strings.Contains(block, "[[discord:user:123]]") || strings.Contains(block, "<@123>") {
 		t.Fatalf("prompt block = %q", block)
 	}
+	if !strings.Contains(block, "use the placeholder instead of the display name alone") {
+		t.Fatalf("prompt block = %q, want explicit display-name warning", block)
+	}
+	if !strings.Contains(block, "bare Discord user IDs") {
+		t.Fatalf("prompt block = %q, want explicit raw ID warning", block)
+	}
 }
 
 func TestRenderIgnoresInvalidDiscordIDs(t *testing.T) {

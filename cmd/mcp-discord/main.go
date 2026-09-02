@@ -18,6 +18,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/nczz/kiro-discord-bot/internal/discordfmt"
+	"github.com/nczz/kiro-discord-bot/internal/discordmention"
 	"github.com/nczz/kiro-discord-bot/internal/secrets"
 )
 
@@ -270,7 +271,8 @@ func safeAttachmentFilename(raw string) string {
 }
 
 func sendDiscordMessageParts(channelID, content string) ([]*discordgo.Message, error) {
-	parts := discordfmt.Split(secrets.RedactEnv(content), discordMessageLimit)
+	rendered, mentionRefs := renderDiscordTextMentions(secrets.RedactEnv(content))
+	parts := discordfmt.Split(rendered, discordMessageLimit)
 	if len(parts) == 0 {
 		return nil, fmt.Errorf("content is empty")
 	}
@@ -280,7 +282,7 @@ func sendDiscordMessageParts(channelID, content string) ([]*discordgo.Message, e
 		if len(parts) > 1 {
 			part = discordfmt.WithPartPrefix(part, i, len(parts))
 		}
-		msg, err := dg.ChannelMessageSendComplex(channelID, discordTextMessage(part))
+		msg, err := dg.ChannelMessageSendComplex(channelID, discordTextMessage(part, mentionRefs))
 		if err != nil {
 			if firstErr == nil {
 				firstErr = err
@@ -293,7 +295,8 @@ func sendDiscordMessageParts(channelID, content string) ([]*discordgo.Message, e
 }
 
 func replyDiscordMessageParts(channelID, messageID, content string) ([]*discordgo.Message, error) {
-	parts := discordfmt.Split(secrets.RedactEnv(content), discordMessageLimit)
+	rendered, mentionRefs := renderDiscordTextMentions(secrets.RedactEnv(content))
+	parts := discordfmt.Split(rendered, discordMessageLimit)
 	if len(parts) == 0 {
 		return nil, fmt.Errorf("content is empty")
 	}
@@ -308,11 +311,11 @@ func replyDiscordMessageParts(channelID, messageID, content string) ([]*discordg
 			err error
 		)
 		if i == 0 {
-			send := discordTextMessage(part)
+			send := discordTextMessage(part, mentionRefs)
 			send.Reference = &discordgo.MessageReference{MessageID: messageID, ChannelID: channelID}
 			msg, err = dg.ChannelMessageSendComplex(channelID, send)
 		} else {
-			msg, err = dg.ChannelMessageSendComplex(channelID, discordTextMessage(part))
+			msg, err = dg.ChannelMessageSendComplex(channelID, discordTextMessage(part, mentionRefs))
 		}
 		if err != nil {
 			if firstErr == nil {
@@ -335,10 +338,10 @@ func messageIDs(messages []*discordgo.Message) string {
 	return strings.Join(ids, ", ")
 }
 
-func discordTextMessage(content string) *discordgo.MessageSend {
+func discordTextMessage(content string, mentionRefs []discordmention.Ref) *discordgo.MessageSend {
 	return &discordgo.MessageSend{
 		Content:         content,
-		AllowedMentions: &discordgo.MessageAllowedMentions{},
+		AllowedMentions: discordmention.AllowedMentionsForRendered(content, mentionRefs),
 		Flags:           discordgo.MessageFlagsSuppressEmbeds,
 	}
 }
@@ -699,7 +702,8 @@ func main() {
 			}
 			chID = resolveWriteTargetChannel(chID)
 			filePath, _ := req.RequireString("file_path")
-			content := secrets.RedactEnv(req.GetString("content", ""))
+			rawContent := req.GetString("content", "")
+			content, mentionRefs := renderDiscordTextMentions(secrets.RedactEnv(rawContent))
 
 			f, err := os.Open(filePath)
 			if err != nil {
@@ -716,14 +720,15 @@ func main() {
 			}
 
 			if len(discordfmt.Split(content, discordMessageLimit)) > 1 {
-				if _, err := sendDiscordMessageParts(chID, content); err != nil {
+				if _, err := sendDiscordMessageParts(chID, rawContent); err != nil {
 					return mcp.NewToolResultError(err.Error()), nil
 				}
 				content = ""
+				mentionRefs = nil
 			}
 			msg, err := dg.ChannelMessageSendComplex(chID, &discordgo.MessageSend{
 				Content:         content,
-				AllowedMentions: &discordgo.MessageAllowedMentions{},
+				AllowedMentions: discordmention.AllowedMentionsForRendered(content, mentionRefs),
 				Flags:           discordgo.MessageFlagsSuppressEmbeds,
 				Files: []*discordgo.File{{
 					Name:   filepath.Base(filePath),

@@ -13,6 +13,7 @@ import (
 	"github.com/bwmarrin/discordgo"
 	"github.com/nczz/kiro-discord-bot/audit"
 	"github.com/nczz/kiro-discord-bot/internal/botegress"
+	"github.com/nczz/kiro-discord-bot/internal/discordmention"
 	"github.com/nczz/kiro-discord-bot/internal/secrets"
 	L "github.com/nczz/kiro-discord-bot/locale"
 )
@@ -119,7 +120,7 @@ func (t *safeEgressTask) process(action botegress.Action) error {
 		if content == "" {
 			content = "[REDACTED]"
 		}
-		_, err := channelSendSanitized(t.bot.discord, action.ChannelID, content)
+		_, err := channelSendSanitized(t.bot.discord, action.ChannelID, content, action.MentionRefs)
 		return err
 	case botegress.ActionSendFile:
 		return t.sendFile(action)
@@ -217,13 +218,14 @@ func (t *safeEgressTask) sendFile(action botegress.Action) error {
 		return err
 	}
 	defer os.Remove(prepared.Path)
-	content := strings.TrimSpace(t.redactor.Redact(action.Content))
+	rawContent := strings.TrimSpace(t.redactor.Redact(action.Content))
 	if prepared.SensitivePath {
-		if content != "" {
-			content += "\n"
+		if rawContent != "" {
+			rawContent += "\n"
 		}
-		content += L.Get("egress.sensitive_path_notice")
+		rawContent += L.Get("egress.sensitive_path_notice")
 	}
+	content, _ := discordmention.Render(rawContent, action.MentionRefs)
 	file, err := openDiscordFile(prepared.Path, prepared.DisplayName)
 	if err != nil {
 		return err
@@ -232,7 +234,7 @@ func (t *safeEgressTask) sendFile(action botegress.Action) error {
 		defer closer.Close()
 	}
 	if utf8.RuneCountInString(content) > discordReplyLimit {
-		if _, err := channelSendSanitized(t.bot.discord, action.ChannelID, content); err != nil {
+		if _, err := channelSendSanitized(t.bot.discord, action.ChannelID, rawContent, action.MentionRefs); err != nil {
 			return err
 		}
 		content = ""
@@ -240,7 +242,7 @@ func (t *safeEgressTask) sendFile(action botegress.Action) error {
 	msg := &discordgo.MessageSend{
 		Content:         content,
 		Files:           []*discordgo.File{file},
-		AllowedMentions: &discordgo.MessageAllowedMentions{},
+		AllowedMentions: discordmention.AllowedMentionsForRendered(content, action.MentionRefs),
 		Flags:           discordgo.MessageFlagsSuppressEmbeds,
 	}
 	_, err = t.bot.discord.ChannelMessageSendComplex(action.ChannelID, msg)
@@ -262,7 +264,7 @@ func (t *safeEgressTask) sendSafeFailure(action botegress.Action, err error) {
 	}
 	reason := egressReasonMessage(err.Error())
 	msg := L.Getf("egress.blocked", botegress.RedactSensitivePaths(t.redactor.Redact(reason)))
-	_, _ = channelSendSanitized(t.bot.discord, channelID, msg)
+	_, _ = channelSendSanitized(t.bot.discord, channelID, msg, nil)
 }
 
 func egressReasonMessage(raw string) string {
@@ -289,11 +291,12 @@ var egressReasonKeys = []struct {
 	{"unsupported extractable format", "egress.reason.unsupported_format"},
 }
 
-func channelSendSanitized(ds *discordgo.Session, channelID, content string) (int, error) {
+func channelSendSanitized(ds *discordgo.Session, channelID, content string, mentionRefs []discordmention.Ref) (int, error) {
 	if ds == nil || channelID == "" || content == "" {
 		return 0, nil
 	}
-	parts := splitDiscordMessage(content, discordReplyLimit)
+	rendered, _ := discordmention.Render(content, mentionRefs)
+	parts := splitDiscordMessage(rendered, discordReplyLimit)
 	if len(parts) == 0 {
 		return 0, nil
 	}
@@ -305,7 +308,7 @@ func channelSendSanitized(ds *discordgo.Session, channelID, content string) (int
 		}
 		_, err := ds.ChannelMessageSendComplex(channelID, &discordgo.MessageSend{
 			Content:         part,
-			AllowedMentions: &discordgo.MessageAllowedMentions{},
+			AllowedMentions: discordmention.AllowedMentionsForRendered(part, mentionRefs),
 			Flags:           discordgo.MessageFlagsSuppressEmbeds,
 		})
 		if err != nil {

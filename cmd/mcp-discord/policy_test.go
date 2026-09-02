@@ -271,6 +271,58 @@ func TestSendDiscordMessagePartsSplitsLongContent(t *testing.T) {
 	}
 }
 
+func TestSendDiscordMessagePartsRendersVerifiedMentionPlaceholders(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "target.json")
+	rawState := `{"mention_refs":[{"kind":"user","id":"123456789012345678","display_name":"mxp.tw","placeholder":"[[discord:user:123456789012345678]]"},{"kind":"role","id":"222222222222222222","display_name":"Ops","placeholder":"[[discord:role:222222222222222222]]"}]}` + "\n"
+	if err := os.WriteFile(statePath, []byte(rawState), 0644); err != nil {
+		t.Fatalf("write target state: %v", err)
+	}
+	t.Setenv("BOT_TOOLS_TARGET_STATE_PATH", statePath)
+	rt := &recordingDiscordTransport{}
+	ds, err := discordgo.New("Bot test")
+	if err != nil {
+		t.Fatalf("new discord session: %v", err)
+	}
+	ds.Client = &http.Client{Transport: rt}
+	oldDG := dg
+	dg = ds
+	defer func() { dg = oldDG }()
+
+	if _, err := sendDiscordMessageParts("channel-1", "notify [[discord:user:123456789012345678]] and [[discord:role:222222222222222222]] raw <@999999999999999999>"); err != nil {
+		t.Fatalf("send parts: %v", err)
+	}
+
+	bodies := rt.Bodies()
+	if len(bodies) != 1 {
+		t.Fatalf("sent bodies = %d, want 1: %v", len(bodies), bodies)
+	}
+	var payload struct {
+		Content         string `json:"content"`
+		AllowedMentions struct {
+			Users []string `json:"users"`
+			Roles []string `json:"roles"`
+		} `json:"allowed_mentions"`
+	}
+	if err := json.Unmarshal([]byte(bodies[0]), &payload); err != nil {
+		t.Fatalf("payload json: %v\n%s", err, bodies[0])
+	}
+	if !strings.Contains(payload.Content, "<@123456789012345678>") {
+		t.Fatalf("content missing rendered verified mention: %q", payload.Content)
+	}
+	if !strings.Contains(payload.Content, "<@&222222222222222222>") {
+		t.Fatalf("content missing rendered verified role mention: %q", payload.Content)
+	}
+	if strings.Contains(payload.Content, "<@999999999999999999>") {
+		t.Fatalf("raw unverified mention stayed active: %q", payload.Content)
+	}
+	if len(payload.AllowedMentions.Users) != 1 || payload.AllowedMentions.Users[0] != "123456789012345678" {
+		t.Fatalf("allowed users = %+v, want verified user mention only", payload.AllowedMentions.Users)
+	}
+	if len(payload.AllowedMentions.Roles) != 1 || payload.AllowedMentions.Roles[0] != "222222222222222222" {
+		t.Fatalf("allowed roles = %+v, want verified role mention only", payload.AllowedMentions.Roles)
+	}
+}
+
 func TestReplyDiscordMessagePartsSplitsLongContent(t *testing.T) {
 	rt := &recordingDiscordTransport{}
 	ds, err := discordgo.New("Bot test")
@@ -431,7 +483,7 @@ func TestAmbiguousMentionCandidatesDoNotExposeReusableUserIDs(t *testing.T) {
 
 func TestGrantMentionRefsForCurrentJobUpdatesTargetState(t *testing.T) {
 	statePath := filepath.Join(t.TempDir(), "target.json")
-	if err := os.WriteFile(statePath, []byte(`{"target_channel_id":"thread-1","allowed_mention_user_ids":["old"],"mention_refs":[{"kind":"user","id":"old","display_name":"Old","placeholder":"[[discord:user:old]]"}]}`+"\n"), 0644); err != nil {
+	if err := os.WriteFile(statePath, []byte(`{"target_channel_id":"thread-1","allowed_mention_user_ids":["old"],"mention_refs":[{"kind":"user","id":"old","display_name":"Old","placeholder":"[[discord:user:old]]"},{"kind":"role","id":"999","display_name":"Ops","placeholder":"[[discord:role:999]]"}]}`+"\n"), 0644); err != nil {
 		t.Fatalf("write state: %v", err)
 	}
 	t.Setenv("BOT_TOOLS_TARGET_STATE_PATH", statePath)
@@ -450,7 +502,19 @@ func TestGrantMentionRefsForCurrentJobUpdatesTargetState(t *testing.T) {
 	if !containsString(state.AllowedMentionUserIDs, "old") || !containsString(state.AllowedMentionUserIDs, "123") {
 		t.Fatalf("allowed mention IDs = %+v", state.AllowedMentionUserIDs)
 	}
-	if len(state.MentionRefs) != 2 {
+	if len(state.MentionRefs) != 3 {
 		t.Fatalf("mention refs = %+v", state.MentionRefs)
 	}
+	if !containsMentionRef(state.MentionRefs, "role", "999") {
+		t.Fatalf("mention refs = %+v, want existing role preserved", state.MentionRefs)
+	}
+}
+
+func containsMentionRef(refs []discordmention.Ref, kind, id string) bool {
+	for _, ref := range refs {
+		if ref.Kind == kind && ref.ID == id {
+			return true
+		}
+	}
+	return false
 }

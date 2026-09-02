@@ -170,7 +170,7 @@ func PromptBlock(refs []Ref) string {
 	}
 	sort.Strings(lines)
 	return "[Discord mention references]\n" +
-		"Use only these exact placeholders when you need to mention a Discord user or role. Do not write raw Discord mention syntax or guess IDs; unlisted targets cannot be mentioned.\n" +
+		"Use only these exact placeholders when you need to mention a Discord user or role. When addressing or notifying a listed user in a user-visible reply, use the placeholder instead of the display name alone. Do not write raw Discord mention syntax, bare Discord user IDs, or peer id values; display names are only plain names, and unlisted targets cannot be mentioned.\n" +
 		strings.Join(lines, "\n") + "\n"
 }
 

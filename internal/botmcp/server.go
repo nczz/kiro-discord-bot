@@ -11,6 +11,7 @@ import (
 	"github.com/nczz/kiro-discord-bot/internal/botegress"
 	"github.com/nczz/kiro-discord-bot/internal/channelmeta"
 	"github.com/nczz/kiro-discord-bot/internal/cronpolicy"
+	"github.com/nczz/kiro-discord-bot/internal/discordmention"
 	"github.com/nczz/kiro-discord-bot/internal/secrets"
 	"github.com/nczz/kiro-discord-bot/internal/timectx"
 	"github.com/robfig/cron/v3"
@@ -285,10 +286,12 @@ func NewServerWithOptions(opts ServerOptions) *server.MCPServer {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			content, _ := req.RequireString("content")
+			mentionRefs := currentMentionRefs()
 			id, err := botegress.WritePending(dataDir(), botegress.Action{
-				Action:    botegress.ActionSendMessage,
-				ChannelID: deliveryChannelID(channelID),
-				Content:   content,
+				Action:      botegress.ActionSendMessage,
+				ChannelID:   deliveryChannelID(channelID),
+				Content:     content,
+				MentionRefs: mentionRefs,
 			})
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
@@ -313,10 +316,11 @@ func NewServerWithOptions(opts ServerOptions) *server.MCPServer {
 			}
 			content := secrets.RedactEnv(req.GetString("content", ""))
 			id, err := botegress.WritePending(dataDir(), botegress.Action{
-				Action:    botegress.ActionSendFile,
-				ChannelID: deliveryChannelID(channelID),
-				FilePath:  filePath,
-				Content:   content,
+				Action:      botegress.ActionSendFile,
+				ChannelID:   deliveryChannelID(channelID),
+				FilePath:    filePath,
+				Content:     content,
+				MentionRefs: currentMentionRefs(),
 			})
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
@@ -346,6 +350,7 @@ func NewServerWithOptions(opts ServerOptions) *server.MCPServer {
 				FilePath:            filePath,
 				Content:             req.GetString("content", ""),
 				RemoveFileAfterSend: true,
+				MentionRefs:         currentMentionRefs(),
 			})
 			if err != nil {
 				_ = os.Remove(filePath)
@@ -920,17 +925,18 @@ func compactHistorySnippet(s string, maxRunes int) string {
 }
 
 type targetState struct {
-	TargetChannelID       string   `json:"target_channel_id"`
-	DisableEgress         bool     `json:"disable_egress"`
-	RemoteA2A             bool     `json:"remote_a2a"`
-	AllowMemoryWrite      bool     `json:"allow_memory_write"`
-	DelegationDepth       int      `json:"delegation_depth"`
-	RequesterID           string   `json:"requester_id"`
-	RequesterName         string   `json:"requester_name"`
-	Source                string   `json:"source"`
-	CanManageChannel      bool     `json:"can_manage_channel"`
-	CanManageGuild        bool     `json:"can_manage_guild"`
-	AllowedMentionUserIDs []string `json:"allowed_mention_user_ids"`
+	TargetChannelID       string               `json:"target_channel_id"`
+	DisableEgress         bool                 `json:"disable_egress"`
+	RemoteA2A             bool                 `json:"remote_a2a"`
+	AllowMemoryWrite      bool                 `json:"allow_memory_write"`
+	DelegationDepth       int                  `json:"delegation_depth"`
+	RequesterID           string               `json:"requester_id"`
+	RequesterName         string               `json:"requester_name"`
+	Source                string               `json:"source"`
+	CanManageChannel      bool                 `json:"can_manage_channel"`
+	CanManageGuild        bool                 `json:"can_manage_guild"`
+	AllowedMentionUserIDs []string             `json:"allowed_mention_user_ids"`
+	MentionRefs           []discordmention.Ref `json:"mention_refs,omitempty"`
 }
 
 func dataDir() string {
@@ -1337,6 +1343,14 @@ func currentTargetState() (targetState, bool) {
 		return state, false
 	}
 	return state, true
+}
+
+func currentMentionRefs() []discordmention.Ref {
+	state, ok := currentTargetState()
+	if !ok || len(state.MentionRefs) == 0 {
+		return nil
+	}
+	return append([]discordmention.Ref(nil), state.MentionRefs...)
 }
 
 func dataSummary(root string) (summary, error) {

@@ -15,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/nczz/kiro-discord-bot/a2a"
@@ -29,6 +31,7 @@ import (
 
 var (
 	reMention          = regexp.MustCompile(`<@!?\d+>`)
+	discordUserIDRe    = regexp.MustCompile(`^\d{5,}$`)
 	a2aLocalIDOutputRe = regexp.MustCompile(`"localId"\s*:\s*"([^"]+)"`)
 )
 
@@ -841,7 +844,7 @@ func (w *Worker) execute(job *Job) {
 				}
 				log.Printf("[worker %s] job error | user=%s msg=%s elapsed=%s ctxErr=%v err=%v",
 					w.channelID, job.Username, job.MessageID, time.Since(startTime).Round(time.Millisecond), ctxErr, askErr)
-				errorContent := "❌ " + errMsg
+				errorContent := mentionRequesterInFinalResponse("❌ "+errMsg, job)
 				delivered := w.drainBeforeFinal(threadID)
 				if suppressGenericKiroErrorAfterEgress(askErr, ctxErr, delivered) {
 					log.Printf("[worker %s] suppressing generic Kiro error after safe egress delivery | user=%s msg=%s delivered=%d",
@@ -892,7 +895,7 @@ func (w *Worker) execute(job *Job) {
 				response = L.Get("worker.empty_response")
 			}
 			response = delegateGuard.finalResponse(response)
-
+			response = mentionRequesterInFinalResponse(response, job)
 			// Drain pending tool-egress messages before final text.
 			w.drainBeforeFinal(threadID)
 			stopReason := w.agent.StopReason()
@@ -1199,11 +1202,86 @@ func (job *Job) sendInlineFinalReply(ds *discordgo.Session, content string) erro
 	if job == nil || job.suppressInlineDiscordFinal() {
 		return nil
 	}
+	content = mentionRequesterInFinalResponse(content, job)
 	if job.FinalReply != nil {
 		job.FinalReply(content)
 		return nil
 	}
+	if job.DisableBotEgress {
+		return nil
+	}
 	return SendLongReplyWithMentions(ds, job.ChannelID, job.MessageID, content, job.MentionRefs)
+}
+
+func mentionRequesterInFinalResponse(content string, job *Job) string {
+	if job == nil || strings.TrimSpace(content) == "" {
+		return content
+	}
+	ref, ok := requesterMentionRef(job)
+	if !ok || strings.Contains(content, ref.Placeholder) {
+		return content
+	}
+	prefix := leadingWhitespace(content)
+	body := strings.TrimLeftFunc(content, unicode.IsSpace)
+	body = stripLeadingRequesterDisplayName(body, ref.DisplayName)
+	if body == "" {
+		return prefix + ref.Placeholder
+	}
+	return prefix + ref.Placeholder + " " + body
+}
+
+func requesterMentionRef(job *Job) (discordmention.Ref, bool) {
+	if job == nil {
+		return discordmention.Ref{}, false
+	}
+	userID := strings.TrimSpace(job.UserID)
+	if !discordUserIDRe.MatchString(userID) {
+		return discordmention.Ref{}, false
+	}
+	for _, ref := range job.MentionRefs {
+		if ref.Kind == "user" && strings.TrimSpace(ref.ID) == userID && strings.TrimSpace(ref.Placeholder) != "" {
+			return ref, true
+		}
+	}
+	return discordmention.Ref{}, false
+}
+
+func leadingWhitespace(s string) string {
+	i := 0
+	for i < len(s) {
+		r, size := rune(s[i]), 1
+		if r >= utf8.RuneSelf {
+			r, size = utf8.DecodeRuneInString(s[i:])
+		}
+		if !unicode.IsSpace(r) {
+			break
+		}
+		i += size
+	}
+	return s[:i]
+}
+
+func stripLeadingRequesterDisplayName(body, displayName string) string {
+	displayName = strings.TrimSpace(displayName)
+	if displayName == "" {
+		return body
+	}
+	for _, candidate := range []string{"@" + displayName, displayName} {
+		if !strings.HasPrefix(body, candidate) {
+			continue
+		}
+		rest := body[len(candidate):]
+		if rest == "" {
+			return ""
+		}
+		first, _ := utf8.DecodeRuneInString(rest)
+		if unicode.IsSpace(first) || strings.ContainsRune(":：,，、-—–", first) {
+			return strings.TrimLeftFunc(rest, func(r rune) bool {
+				return unicode.IsSpace(r) || strings.ContainsRune(":：,，、-—–", r)
+			})
+		}
+	}
+	return body
 }
 
 func prefixA2ADelegatedFrom(content, label string) string {
@@ -1415,7 +1493,7 @@ func (w *Worker) executeInline(job *Job) {
 				}
 				log.Printf("[worker %s] inline job error | user=%s msg=%s elapsed=%s ctxErr=%v err=%v",
 					w.channelID, job.Username, job.MessageID, time.Since(startTime).Round(time.Millisecond), ctxErr, askErr)
-				errorContent := "❌ " + errMsg
+				errorContent := mentionRequesterInFinalResponse("❌ "+errMsg, job)
 				errorWithMetrics := AppendMetricsFooter(errorContent, MetricsWithElapsed(w.agent.TurnMetrics(), startTime))
 				delivered := 0
 				if !job.DisableBotEgress {
@@ -1466,6 +1544,7 @@ func (w *Worker) executeInline(job *Job) {
 				response = L.Get("worker.empty_response")
 			}
 			response = delegateGuard.finalResponse(response)
+			response = mentionRequesterInFinalResponse(response, job)
 			stopReason := w.agent.StopReason()
 			response = AppendStopReasonNotice(response, stopReason)
 			responseWithMetrics := AppendMetricsFooter(response, MetricsWithElapsed(w.agent.TurnMetrics(), startTime))
@@ -2054,7 +2133,7 @@ func (w *Worker) executeFallback(job *Job) {
 		} else if stderr := w.agent.RecentStderr(); stderr != "" {
 			errMsg += "\n```\n" + stderr + "\n```"
 		}
-		logContent = "❌ " + errMsg
+		logContent = mentionRequesterInFinalResponse("❌ "+errMsg, job)
 		delivered := w.drainBeforeFinal(job.ChannelID)
 		if suppressGenericKiroErrorAfterEgress(askErr, ctx.Err(), delivered) {
 			log.Printf("[worker %s] suppressing fallback generic Kiro error after safe egress delivery | user=%s msg=%s delivered=%d",
@@ -2076,6 +2155,7 @@ func (w *Worker) executeFallback(job *Job) {
 		if response == "" {
 			response = L.Get("worker.empty_response")
 		}
+		response = mentionRequesterInFinalResponse(response, job)
 		response = AppendStopReasonNotice(response, w.agent.StopReason())
 		logContent = response
 		responseWithMetrics := AppendMetricsFooter(response, MetricsWithElapsed(w.agent.TurnMetrics(), startTime))

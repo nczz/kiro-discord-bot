@@ -570,6 +570,55 @@ func TestSendLongThreadWithMentionsRendersBeforeSplitting(t *testing.T) {
 	}
 }
 
+func TestMentionRequesterInFinalResponseReplacesDisplayNameSalutation(t *testing.T) {
+	job := &Job{
+		UserID: "123456789012345678",
+		MentionRefs: []discordmention.Ref{
+			discordmention.UserRef("123456789012345678", "mxp.tw"),
+		},
+	}
+
+	got := mentionRequesterInFinalResponse("mxp.tw，完成了", job)
+	if got != "[[discord:user:123456789012345678]] 完成了" {
+		t.Fatalf("final response = %q, want requester placeholder replacing display name", got)
+	}
+	rendered, allowed := renderDiscordMentions(got, job.MentionRefs)
+	if !strings.Contains(rendered, "<@123456789012345678>") {
+		t.Fatalf("rendered final response missing requester mention: %q", rendered)
+	}
+	if allowed == nil || len(allowed.Users) != 1 || allowed.Users[0] != "123456789012345678" {
+		t.Fatalf("allowed mentions = %+v, want requester only", allowed)
+	}
+}
+
+func TestMentionRequesterInFinalResponseDoesNotGuessInvalidRequester(t *testing.T) {
+	job := &Job{
+		UserID: "mxp.tw",
+		MentionRefs: []discordmention.Ref{
+			discordmention.UserRef("123456789012345678", "mxp.tw"),
+		},
+	}
+
+	got := mentionRequesterInFinalResponse("完成了", job)
+	if got != "完成了" {
+		t.Fatalf("final response = %q, want unchanged for non-Discord requester id", got)
+	}
+}
+
+func TestMentionRequesterInFinalResponseDoesNotDoublePrefix(t *testing.T) {
+	job := &Job{
+		UserID: "123456789012345678",
+		MentionRefs: []discordmention.Ref{
+			discordmention.UserRef("123456789012345678", "mxp.tw"),
+		},
+	}
+
+	got := mentionRequesterInFinalResponse("[[discord:user:123456789012345678]] 已完成", job)
+	if got != "[[discord:user:123456789012345678]] 已完成" {
+		t.Fatalf("final response = %q, want existing requester placeholder preserved", got)
+	}
+}
+
 func TestWorkerRemembersMentionRefsAcrossJobs(t *testing.T) {
 	w := newWorker("channel-1", &fakeWorkerAgent{}, 1, 1, 1, 60, nil, "")
 	first := w.rememberMentionRefs([]discordmention.Ref{discordmention.UserRef("123", "Chun")})
@@ -2067,6 +2116,48 @@ func TestWorkerFallbackAppendsMetricsFooter(t *testing.T) {
 		}
 	}
 	t.Fatalf("expected fallback edit request; requests=%v", reqs)
+}
+
+func TestWorkerFallbackMentionsVerifiedRequester(t *testing.T) {
+	L.Load("en")
+	rt := &recordingRoundTripper{}
+	ds := testDiscordSession(rt)
+	agent := &fakeWorkerAgent{askResponse: "mxp.tw，fallback response"}
+	w := newWorker("ch1", agent, 1, 30, 1, 1440, nil, "")
+
+	w.executeFallback(&Job{
+		ChannelID: "ch1",
+		MessageID: "m1",
+		Prompt:    "hello",
+		Session:   ds,
+		UserID:    "123456789012345678",
+		MentionRefs: []discordmention.Ref{
+			discordmention.UserRef("123456789012345678", "mxp.tw"),
+		},
+	})
+
+	reqs, bodies := rt.Snapshot()
+	for i, req := range reqs {
+		if strings.HasPrefix(req, "PATCH ") && strings.Contains(req, "/channels/ch1/messages/reply-1") {
+			var payload struct {
+				Content         string `json:"content"`
+				AllowedMentions struct {
+					Users []string `json:"users"`
+				} `json:"allowed_mentions"`
+			}
+			if err := json.Unmarshal([]byte(bodies[i]), &payload); err != nil {
+				t.Fatalf("fallback payload json: %v\n%s", err, bodies[i])
+			}
+			if !strings.Contains(payload.Content, "<@123456789012345678>") || strings.Contains(payload.Content, "mxp.tw，") {
+				t.Fatalf("fallback content = %q, want requester mention replacing display-name salutation", payload.Content)
+			}
+			if len(payload.AllowedMentions.Users) != 1 || payload.AllowedMentions.Users[0] != "123456789012345678" {
+				t.Fatalf("allowed mentions = %+v, want requester only", payload.AllowedMentions.Users)
+			}
+			return
+		}
+	}
+	t.Fatalf("expected fallback edit request; requests=%v bodies=%v", reqs, bodies)
 }
 
 func TestWorkerFallbackEmptyResponseStillAppendsMetricsFooter(t *testing.T) {

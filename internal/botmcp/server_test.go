@@ -23,6 +23,7 @@ import (
 	"github.com/nczz/kiro-discord-bot/internal/botegress"
 	"github.com/nczz/kiro-discord-bot/internal/channelmeta"
 	"github.com/nczz/kiro-discord-bot/internal/cronpolicy"
+	"github.com/nczz/kiro-discord-bot/internal/discordmention"
 )
 
 func containsString(items []string, want string) bool {
@@ -32,6 +33,20 @@ func containsString(items []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func TestCurrentMentionRefsReadsTargetState(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "target.json")
+	rawState := `{"mention_refs":[{"kind":"user","id":"123456789012345678","display_name":"mxp.tw","placeholder":"[[discord:user:123456789012345678]]"}]}` + "\n"
+	if err := os.WriteFile(statePath, []byte(rawState), 0644); err != nil {
+		t.Fatalf("write target state: %v", err)
+	}
+	t.Setenv("BOT_TOOLS_TARGET_STATE_PATH", statePath)
+
+	refs := currentMentionRefs()
+	if len(refs) != 1 || refs[0] != discordmention.UserRef("123456789012345678", "mxp.tw") {
+		t.Fatalf("current mention refs = %+v", refs)
+	}
 }
 
 func TestDataSummaryAndChannelListAreMetadataOnly(t *testing.T) {

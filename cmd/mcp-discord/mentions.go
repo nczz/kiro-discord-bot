@@ -380,6 +380,28 @@ func mentionMemberScanLimit() int {
 	return limit
 }
 
+func renderDiscordTextMentions(content string) (string, []discordmention.Ref) {
+	refs := currentDiscordTextMentionRefs()
+	rendered, _ := discordmention.Render(content, refs)
+	return rendered, refs
+}
+
+func currentDiscordTextMentionRefs() []discordmention.Ref {
+	path := strings.TrimSpace(os.Getenv("BOT_TOOLS_TARGET_STATE_PATH"))
+	if path == "" {
+		return nil
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var state mentionTargetState
+	if err := json.Unmarshal(raw, &state); err != nil {
+		return nil
+	}
+	return cleanRenderableMentionRefs(state.MentionRefs)
+}
+
 func grantMentionRefsForCurrentJob(refs []discordmention.Ref) error {
 	path := strings.TrimSpace(os.Getenv("BOT_TOOLS_TARGET_STATE_PATH"))
 	if path == "" {
@@ -393,7 +415,7 @@ func grantMentionRefsForCurrentJob(refs []discordmention.Ref) error {
 	if err := json.Unmarshal(raw, &state); err != nil {
 		return fmt.Errorf("parse target state: %w", err)
 	}
-	state.MentionRefs = cleanMentionRefs(append(state.MentionRefs, refs...))
+	state.MentionRefs = cleanRenderableMentionRefs(append(state.MentionRefs, refs...))
 	state.AllowedMentionUserIDs = allowedMentionUserIDs(state.MentionRefs)
 	updated, err := json.Marshal(state)
 	if err != nil {
@@ -407,6 +429,30 @@ func grantMentionRefsForCurrentJob(refs []discordmention.Ref) error {
 		return err
 	}
 	return os.Rename(tmp, path)
+}
+
+func cleanRenderableMentionRefs(refs []discordmention.Ref) []discordmention.Ref {
+	seen := make(map[string]bool)
+	out := make([]discordmention.Ref, 0, len(refs))
+	for _, ref := range refs {
+		id := strings.TrimSpace(ref.ID)
+		if id == "" {
+			continue
+		}
+		key := ref.Kind + ":" + id
+		if seen[key] {
+			continue
+		}
+		switch ref.Kind {
+		case "user":
+			seen[key] = true
+			out = append(out, discordmention.UserRef(id, ref.DisplayName))
+		case "role":
+			seen[key] = true
+			out = append(out, discordmention.RoleRef(id, ref.DisplayName))
+		}
+	}
+	return out
 }
 
 func cleanMentionRefs(refs []discordmention.Ref) []discordmention.Ref {

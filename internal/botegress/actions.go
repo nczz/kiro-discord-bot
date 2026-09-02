@@ -10,6 +10,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/nczz/kiro-discord-bot/internal/discordmention"
 )
 
 const (
@@ -22,17 +24,18 @@ const (
 
 // Action is a pending bot-side request written by bot-tools and ingested by the main bot.
 type Action struct {
-	ID                  string `json:"id"`
-	Action              string `json:"action"`
-	ChannelID           string `json:"channel_id"`
-	Content             string `json:"content,omitempty"`
-	FilePath            string `json:"file_path,omitempty"`
-	RemoveFileAfterSend bool   `json:"remove_file_after_send,omitempty"`
-	MemoryEntry         string `json:"memory_entry,omitempty"`
-	MemoryIndex         int    `json:"memory_index,omitempty"`
-	RequestedBy         string `json:"requested_by,omitempty"`
-	Reason              string `json:"reason,omitempty"`
-	CreatedAt           string `json:"created_at"`
+	ID                  string               `json:"id"`
+	Action              string               `json:"action"`
+	ChannelID           string               `json:"channel_id"`
+	Content             string               `json:"content,omitempty"`
+	MentionRefs         []discordmention.Ref `json:"mention_refs,omitempty"`
+	FilePath            string               `json:"file_path,omitempty"`
+	RemoveFileAfterSend bool                 `json:"remove_file_after_send,omitempty"`
+	MemoryEntry         string               `json:"memory_entry,omitempty"`
+	MemoryIndex         int                  `json:"memory_index,omitempty"`
+	RequestedBy         string               `json:"requested_by,omitempty"`
+	Reason              string               `json:"reason,omitempty"`
+	CreatedAt           string               `json:"created_at"`
 }
 
 func PendingDir(dataDir string) string {
