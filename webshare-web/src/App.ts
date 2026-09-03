@@ -324,14 +324,19 @@ function handleUploadState(event: Extract<ServerEvent, { type: "upload_state" }>
 
 function render(): void {
   const oldList = app.querySelector<HTMLElement>(".message-list");
-  const shouldStickToBottom = !oldList || oldList.scrollHeight - oldList.scrollTop - oldList.clientHeight < 80;
+  const shouldStickToBottom = !oldList || isScrolledNearBottom(oldList);
   clear(app);
-  app.append(discordShell(shouldStickToBottom));
+  const shell = discordShell();
+  app.append(shell);
+  if (shouldStickToBottom) {
+    const list = shell.querySelector<HTMLElement>(".message-list");
+    if (list) scrollMessageListToBottom(list);
+  }
 }
 
-function discordShell(shouldStickToBottom: boolean): HTMLElement {
+function discordShell(): HTMLElement {
   const shell = el("main", { className: "discord-app" });
-  shell.append(serverRail(), channelSidebar(), chatPane(shouldStickToBottom), memberSidebar());
+  shell.append(serverRail(), channelSidebar(), chatPane(), memberSidebar());
   return shell;
 }
 
@@ -380,7 +385,7 @@ function createThreadInline(): HTMLElement {
   return box;
 }
 
-function chatPane(shouldStickToBottom: boolean): HTMLElement {
+function chatPane(): HTMLElement {
   const pane = el("section", { className: "chat-pane" });
   pane.append(chatHeader());
   const list = el("div", { className: "message-list", attrs: { role: "log", "aria-live": "polite" } });
@@ -393,8 +398,18 @@ function chatPane(shouldStickToBottom: boolean): HTMLElement {
   if (visible.length === 0) list.append(systemBlock(thread ? t(state.locale, "noThreadMessages") : t(state.locale, "eventNone")));
   for (const message of visible) list.append(messageRow(message));
   pane.append(list, composerBar());
-  if (shouldStickToBottom) requestAnimationFrame(() => { list.scrollTop = list.scrollHeight; });
   return pane;
+}
+
+function isScrolledNearBottom(list: HTMLElement): boolean {
+  return list.scrollHeight - list.scrollTop - list.clientHeight < 80;
+}
+
+function scrollMessageListToBottom(list: HTMLElement): void {
+  list.scrollTop = list.scrollHeight;
+  requestAnimationFrame(() => {
+    list.scrollTop = list.scrollHeight;
+  });
 }
 
 function chatHeader(): HTMLElement {

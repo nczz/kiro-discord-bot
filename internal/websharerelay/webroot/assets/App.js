@@ -245,13 +245,19 @@ function handleUploadState(event) {
 }
 function render() {
     const oldList = app.querySelector(".message-list");
-    const shouldStickToBottom = !oldList || oldList.scrollHeight - oldList.scrollTop - oldList.clientHeight < 80;
+    const shouldStickToBottom = !oldList || isScrolledNearBottom(oldList);
     clear(app);
-    app.append(discordShell(shouldStickToBottom));
+    const shell = discordShell();
+    app.append(shell);
+    if (shouldStickToBottom) {
+        const list = shell.querySelector(".message-list");
+        if (list)
+            scrollMessageListToBottom(list);
+    }
 }
-function discordShell(shouldStickToBottom) {
+function discordShell() {
     const shell = el("main", { className: "discord-app" });
-    shell.append(serverRail(), channelSidebar(), chatPane(shouldStickToBottom), memberSidebar());
+    shell.append(serverRail(), channelSidebar(), chatPane(), memberSidebar());
     return shell;
 }
 function serverRail() {
@@ -297,7 +303,7 @@ function createThreadInline() {
     box.append(el("div", { className: "hint", text: t(state.locale, "threadCreateHint") }), name, source, create);
     return box;
 }
-function chatPane(shouldStickToBottom) {
+function chatPane() {
     const pane = el("section", { className: "chat-pane" });
     pane.append(chatHeader());
     const list = el("div", { className: "message-list", attrs: { role: "log", "aria-live": "polite" } });
@@ -315,9 +321,16 @@ function chatPane(shouldStickToBottom) {
     for (const message of visible)
         list.append(messageRow(message));
     pane.append(list, composerBar());
-    if (shouldStickToBottom)
-        requestAnimationFrame(() => { list.scrollTop = list.scrollHeight; });
     return pane;
+}
+function isScrolledNearBottom(list) {
+    return list.scrollHeight - list.scrollTop - list.clientHeight < 80;
+}
+function scrollMessageListToBottom(list) {
+    list.scrollTop = list.scrollHeight;
+    requestAnimationFrame(() => {
+        list.scrollTop = list.scrollHeight;
+    });
 }
 function chatHeader() {
     const header = el("header", { className: "chat-header" });

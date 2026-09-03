@@ -188,6 +188,14 @@ func (b *Bot) broadcastWebShareThreadLifecycle(ctx context.Context, ch *discordg
 			continue
 		}
 		if share.TargetType == webshare.TargetChannel {
+			known := action == "created"
+			if action != "created" {
+				_, err := b.webshareStore.ResolveManagedChildThread(ctx, share.ShareID, ch.ID)
+				known = err == nil
+			}
+			if !known {
+				continue
+			}
 			if action == "deleted" {
 				_ = b.webshareStore.UnregisterManagedChildThread(ctx, share.ShareID, ch.ID)
 			} else {

@@ -791,6 +791,57 @@ func TestWebShareBroadcastsThreadLifecycleAndRegistersChild(t *testing.T) {
 	}
 }
 
+func TestWebShareSkipsUnmanagedThreadLifecycle(t *testing.T) {
+	for _, action := range []string{"updated", "deleted"} {
+		t.Run(action, func(t *testing.T) {
+			store, share := newTestWebShareStoreAndShare(t)
+			ch := make(chan webshare.ServerEvent, 1)
+			b := &Bot{webshareStore: store, webshareHosts: map[string]*webshareHostLoop{share.ShareID: {send: ch}}}
+			thread := &discordgo.Channel{ID: "thread-42", GuildID: share.GuildID, ParentID: share.TargetID, Name: "Historic Thread", Type: discordgo.ChannelTypeGuildPublicThread}
+
+			b.broadcastWebShareThreadLifecycle(context.Background(), thread, action)
+			select {
+			case event := <-ch:
+				t.Fatalf("unmanaged historic thread %s was broadcast: %+v", action, event)
+			case <-time.After(100 * time.Millisecond):
+			}
+			children, err := store.ListManagedChildThreads(context.Background(), share.ShareID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(children) != 0 {
+				t.Fatalf("unmanaged historic thread was registered: %+v", children)
+			}
+		})
+	}
+}
+
+func TestWebShareBroadcastsManagedThreadUpdates(t *testing.T) {
+	store, share := newTestWebShareStoreAndShare(t)
+	if err := store.RegisterManagedChildThread(context.Background(), webshare.ManagedChildThread{ShareID: share.ShareID, ParentChannelID: share.TargetID, ThreadID: "thread-42", Name: "Old Name"}); err != nil {
+		t.Fatal(err)
+	}
+	ch := make(chan webshare.ServerEvent, 1)
+	b := &Bot{webshareStore: store, webshareHosts: map[string]*webshareHostLoop{share.ShareID: {send: ch}}}
+	thread := &discordgo.Channel{ID: "thread-42", GuildID: share.GuildID, ParentID: share.TargetID, Name: "New Name", Type: discordgo.ChannelTypeGuildPublicThread}
+
+	b.broadcastWebShareThreadLifecycle(context.Background(), thread, "updated")
+	select {
+	case event := <-ch:
+		payload := event.Event.(map[string]any)
+		threadView := payload["thread"].(map[string]any)
+		if event.Type != "thread_event" || payload["action"] != "updated" || threadView["name"] != "New Name" {
+			t.Fatalf("managed update event = %+v payload=%#v", event, payload)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("missing managed thread update")
+	}
+	child, err := store.ResolveManagedChildThread(context.Background(), share.ShareID, "thread-42")
+	if err != nil || child.Name != "New Name" {
+		t.Fatalf("updated child = %+v err=%v", child, err)
+	}
+}
+
 func TestWebShareWelcomeListsManagedChildThreads(t *testing.T) {
 	store, share := newTestWebShareStoreAndShare(t)
 	if err := store.RegisterManagedChildThread(context.Background(), webshare.ManagedChildThread{ShareID: share.ShareID, ParentChannelID: share.TargetID, ThreadID: "thread-42", Name: "Spec Review"}); err != nil {
