@@ -1,88 +1,62 @@
-import { el } from "./dom.js";
-import { hasCapability } from "./protocol.js";
-import { t } from "./i18n.js";
-export function createComposer(locale, state, capabilities, getMentions, getAttachments, dispatch) {
-    const root = el("div", { className: "card stack" });
-    root.append(el("h2", { text: t(locale, "composer") }));
-    const tabs = el("div", { className: "tabs" });
-    const modes = [
-        ["agent", t(locale, "agentPrompt"), hasCapability(capabilities, "sendAgentPrompt")],
-        ["message", t(locale, "channelMessage"), hasCapability(capabilities, "postChannelMessage")],
-        ["command", t(locale, "botCommand"), hasCapability(capabilities, "runBotCommand")],
-    ];
-    for (const [mode, label, enabled] of modes) {
-        const button = el("button", { text: label });
-        button.classList.toggle("active", state.mode === mode);
-        button.disabled = !enabled;
-        button.addEventListener("click", () => {
-            state.mode = mode;
-            root.dispatchEvent(new CustomEvent("composer-change", { bubbles: true }));
-        });
-        tabs.append(button);
-    }
-    root.append(tabs);
-    if (state.mode === "command") {
-        const command = el("input", { attrs: { placeholder: t(locale, "command") } });
-        command.value = state.command;
-        command.addEventListener("input", () => { state.command = command.value; });
-        const args = el("textarea", { attrs: { placeholder: t(locale, "commandArgs") } });
-        args.value = state.commandArgs;
-        args.addEventListener("input", () => { state.commandArgs = args.value; });
-        root.append(label(t(locale, "command"), command));
-        root.append(label(t(locale, "commandArgs"), args));
-    }
-    else {
-        const text = el("textarea", { attrs: { placeholder: t(locale, "messageText") } });
-        text.value = state.text;
-        text.addEventListener("input", () => { state.text = text.value; });
-        root.append(label(t(locale, "messageText"), text));
-    }
-    const actions = el("div", { className: "composer-actions" });
-    const send = el("button", { text: t(locale, "send") });
-    send.addEventListener("click", () => sendCurrent(state, getMentions(), getAttachments(), dispatch));
-    const interrupt = el("button", { text: t(locale, "interruptAgent") });
-    interrupt.disabled = !hasCapability(capabilities, "interruptAgent");
-    interrupt.addEventListener("click", () => dispatch({ type: "interrupt_agent" }));
-    actions.append(send, interrupt);
-    root.append(actions);
-    return root;
+export function resolveDraftMode(selectedMode, text) {
+    return text.trimStart().startsWith("/") && selectedMode !== "command" ? "command" : selectedMode;
 }
-function sendCurrent(state, mentions, attachments, dispatch) {
-    const targetThreadID = state.targetThreadID || undefined;
-    if (state.mode === "agent") {
-        const text = state.text.trim();
-        if (!text)
-            return;
-        dispatch({ type: "send_agent_prompt", text, attachments, ...(targetThreadID ? { targetThreadID } : {}) });
-        state.text = "";
-        return;
-    }
-    if (state.mode === "message") {
-        const text = state.text.trim();
-        if (!text)
-            return;
-        dispatch({ type: "post_channel_message", text, attachments, allowedMentions: mentions, ...(targetThreadID ? { targetThreadID } : {}) });
-        state.text = "";
-        return;
-    }
-    const command = state.command.trim();
-    if (!command)
-        return;
-    dispatch({ type: "run_bot_command", command, args: parseArgs(state.commandArgs), ...(targetThreadID ? { targetThreadID } : {}) });
-    state.command = "";
-    state.commandArgs = "{}";
+export function commandName(command) {
+    return command.trim().split(/\s+/u)[0]?.toLowerCase() ?? "";
 }
-function parseArgs(input) {
-    const trimmed = input.trim();
-    if (!trimmed)
-        return {};
-    const parsed = JSON.parse(trimmed);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
-        throw new Error("command_args_must_be_object");
-    return parsed;
+export function highRiskCommand(name) {
+    switch (name) {
+        case "reset":
+        case "restart":
+        case "cancel":
+        case "clear":
+        case "close":
+        case "close-thread":
+        case "interrupt":
+        case "webhook":
+            return true;
+        default:
+            return false;
+    }
 }
-function label(text, child) {
-    const node = el("label");
-    node.append(document.createTextNode(text), child);
-    return node;
+export function webshareCommandAllowed(name) {
+    switch (name) {
+        case "cron-list":
+        case "cron-run":
+        case "remind":
+        case "usage-history":
+            return true;
+        default:
+            return false;
+    }
+}
+export function draftMentionsBot(text, bot) {
+    if (!bot)
+        return false;
+    const normalized = text.toLowerCase();
+    return normalized.includes(`<@${bot.id}>`) || normalized.includes(`<@!${bot.id}>`);
+}
+export function draftMentionsUser(text, userID) {
+    return text.includes(`<@${userID}>`) || text.includes(`<@!${userID}>`) || text.includes(`[[discord:user:${userID}]]`);
+}
+export function allowedMentionSelectionForDraft(text, picker, canMentionUsers, canMentionBot) {
+    const users = canMentionUsers ? [...picker.selectedUsers].filter((userID) => draftMentionsUser(text, userID)) : [];
+    const bot = canMentionBot && picker.botSelected && draftMentionsBot(text, picker.bot);
+    return bot ? { users, bot: true } : { users };
+}
+export function mentionPreviewNames(text, picker, canMentionUsers, canMentionBot) {
+    const names = [];
+    const bot = picker.bot;
+    if (bot && canMentionBot && picker.botSelected && draftMentionsBot(text, bot))
+        names.push(`@${bot.displayName}`);
+    if (canMentionUsers) {
+        for (const user of picker.users) {
+            if (!picker.selectedUsers.has(user.id))
+                continue;
+            if (!draftMentionsUser(text, user.id))
+                continue;
+            names.push(`@${user.displayName}`);
+        }
+    }
+    return names;
 }

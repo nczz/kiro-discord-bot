@@ -1,13 +1,14 @@
 import { continueAcceptedUpload, downloadURL, queueUploads, selectedAttachmentRefs, type UploadState } from "./attachments.js";
 import { deriveSessionKeys, openJSON, parseJoinFragment, sealJSON, writeTokenProof, type ParsedJoinLink, type SessionKeys } from "./crypto.js";
 import { clear, el, formatBytes } from "./dom.js";
+import { allowedMentionSelectionForDraft, commandName, highRiskCommand, mentionPreviewNames, resolveDraftMode, webshareCommandAllowed, type ComposeMode } from "./composer.js";
+import { parseDiscordMessageReference, suggestedThreadName } from "./threads.js";
 import { chooseLocale, setLocale, t, type Locale } from "./i18n.js";
-import { mentionSelection, type MentionPickerState } from "./mentions.js";
-import type { ActorView, AllowedMentionSelection, AttachmentMetadata, AttachmentRef, Capabilities, Capability, ClientAction, MentionView, MessageReferenceView, SanitizedDiscordAttachment, ServerEvent, TargetView, ThreadView } from "./protocol.js";
+import type { MentionPickerState } from "./mentions.js";
+import type { ActorView, AllowedMentionSelection, AttachmentMetadata, AttachmentRef, Capabilities, Capability, ClientAction, MentionView, MessageReferenceView, SanitizedDiscordAttachment, ServerEvent, ShareView, TargetView, ThreadView } from "./protocol.js";
 import { hasCapability, PROTOCOL_VERSION } from "./protocol.js";
 import { WebShareTransport, type RelayFrame, type TransportStatus } from "./transport.js";
 
-type ComposeMode = "agent" | "message" | "command";
 type MessageKind = "discord" | "agent" | "command" | "system" | "upload" | "attachment" | "error";
 type ComposerSuggestionKind = "command" | "bot" | "user";
 
@@ -59,6 +60,7 @@ interface DraftState {
   targetThreadID: string | undefined;
   newThreadName: string;
   sourceMessageID: string;
+  threadError: string | undefined;
 }
 
 
@@ -67,37 +69,9 @@ const roomHistoryLimit = 300;
 const roomHistoryPrefix = "kdb-webshare:room:";
 
 const commandSuggestions = [
-  "agent",
-  "audit",
-  "back",
-  "clear",
-  "close-thread",
-  "compact",
-  "cwd",
-  "doctor",
   "cron-list",
   "cron-run",
-  "engine",
-  "help",
-  "flashmemory",
-  "interrupt",
-  "mcp",
-  "memory",
-  "close",
-  "model",
-  "models",
-  "pause",
   "remind",
-  "reset",
-  "restart",
-  "resume",
-  "session",
-  "skill",
-  "status",
-  "thread",
-  "usage",
-  "webhook",
-  "webshare",
   "usage-history",
 ];
 
@@ -112,6 +86,7 @@ interface AppState {
   lastReceiveSeqByPeer: Map<number, number>;
   hostPeerID: number | undefined;
   capabilities: Capabilities | undefined;
+  share: ShareView | undefined;
   target: TargetView | undefined;
   opener: ActorView | undefined;
   threads: ThreadView[];
@@ -123,6 +98,10 @@ interface AppState {
   error: string | undefined;
   seenMessageIDs: Set<string>;
   clientPeerID: number;
+  terminalReason: string | undefined;
+  liveAnnouncement: string | undefined;
+  mobileThreadsOpen: boolean;
+  unseenCount: number;
 }
 
 const state: AppState = {
@@ -136,17 +115,22 @@ const state: AppState = {
   lastReceiveSeqByPeer: new Map(),
   hostPeerID: undefined,
   capabilities: undefined,
+  share: undefined,
   target: undefined,
   opener: undefined,
   threads: [],
   mentionPicker: { users: [], bot: undefined, selectedUsers: new Set(), botSelected: false },
-  draft: { mode: "agent", text: "", targetThreadID: undefined, newThreadName: "", sourceMessageID: "" },
+  draft: { mode: "message", text: "", targetThreadID: undefined, newThreadName: "", sourceMessageID: "", threadError: undefined },
   uploads: { pending: [], queued: [], inProgress: new Map(), downloads: new Map() },
   pendingAttachmentDownloads: new Set(),
   messages: [],
   error: undefined,
   seenMessageIDs: new Set(),
   clientPeerID: randomClientPeerID(),
+  terminalReason: undefined,
+  liveAnnouncement: undefined,
+  mobileThreadsOpen: false,
+  unseenCount: 0,
 };
 function randomClientPeerID(): number {
   const bytes = new Uint32Array(1);
@@ -192,13 +176,13 @@ async function bootstrap(): Promise<void> {
       },
       onFrame: (frame) => void handleFrame(frame),
       onError: (error) => {
-        state.error = error instanceof Error ? error.message : String(error);
+        setError(error instanceof Error ? error.message : String(error));
         render();
       },
     });
     state.transport.connect();
   } catch (error) {
-    state.error = error instanceof Error ? error.message : String(error);
+    setError(error instanceof Error ? error.message : String(error));
   }
   render();
 }
@@ -214,7 +198,7 @@ async function sendHello(): Promise<void> {
 async function dispatch(action: ClientAction): Promise<void> {
   if (!state.keys || !state.transport || !state.join) return;
   if (!state.join.canWrite && action.type !== "hello") {
-    state.error = t(state.locale, "viewOnly");
+    setError(t(state.locale, "viewOnly"));
     render();
     return;
   }
@@ -223,9 +207,9 @@ async function dispatch(action: ClientAction): Promise<void> {
     const seq = state.sendSeq;
     state.sendSeq += 1;
     const payload = await sealJSON(signedAction, state.keys.guestToHost, state.join.roomID, state.clientPeerID, seq, 2, "guest_to_host");
-    if (!state.transport.send(payload, state.hostPeerID ?? 0)) state.error = t(state.locale, "notConnected");
+    if (!state.transport.send(payload, state.hostPeerID ?? 0)) setError(t(state.locale, "notConnected"));
   } catch (error) {
-    state.error = error instanceof Error ? error.message : String(error);
+    setError(error instanceof Error ? error.message : String(error));
   }
   render();
 }
@@ -243,7 +227,7 @@ async function handleFrame(frame: RelayFrame): Promise<void> {
     state.hostPeerID = frame.peerID;
     applyServerEvent(event);
   } catch (error) {
-    state.error = error instanceof Error ? error.message : String(error);
+    setError(error instanceof Error ? error.message : String(error));
   }
   render();
 }
@@ -252,6 +236,7 @@ function applyServerEvent(event: ServerEvent): void {
   switch (event.type) {
     case "welcome": {
       const previousSelectedThreadID = state.draft.targetThreadID;
+      state.share = event.share;
       state.capabilities = event.capabilities;
       state.target = event.target;
       state.opener = event.opener;
@@ -292,15 +277,21 @@ function applyServerEvent(event: ServerEvent): void {
     case "notice":
       pushMessage("system", t(state.locale, "systemAuthor"), event.messageKey);
       break;
-    case "error":
+    case "error": {
       state.pendingAttachmentDownloads.clear();
-      state.error = `${event.reasonCode ?? event.code ?? "error"}: ${event.content ?? event.messageKey ?? ""}`;
-      pushMessage("error", t(state.locale, "systemAuthor"), state.error);
+      const message = `${event.reasonCode ?? event.code ?? "error"}: ${event.content ?? event.messageKey ?? ""}`;
+      setError(message);
+      pushMessage("error", t(state.locale, "systemAuthor"), message);
       break;
-    case "bye":
-      pushMessage("system", t(state.locale, "systemAuthor"), event.reasonCode);
+    }
+    case "bye": {
+      state.terminalReason = event.reasonCode;
+      const message = terminalMessage(event.reasonCode);
+      setError(message);
+      pushMessage("system", t(state.locale, "systemAuthor"), message);
       state.transport?.stop();
       break;
+    }
   }
   persistRoomHistory();
 }
@@ -324,14 +315,32 @@ function handleUploadState(event: Extract<ServerEvent, { type: "upload_state" }>
 
 function render(): void {
   const oldList = app.querySelector<HTMLElement>(".message-list");
+  const announcement = state.liveAnnouncement;
   const shouldStickToBottom = !oldList || isScrolledNearBottom(oldList);
+  const previousScrollTop = oldList?.scrollTop ?? 0;
   clear(app);
   const shell = discordShell();
   app.append(shell);
+  const list = shell.querySelector<HTMLElement>(".message-list");
+  if (!list) return;
   if (shouldStickToBottom) {
-    const list = shell.querySelector<HTMLElement>(".message-list");
-    if (list) scrollMessageListToBottom(list);
+    state.unseenCount = 0;
+    scrollMessageListToBottom(list);
+  } else {
+    list.scrollTop = previousScrollTop;
   }
+  if (announcement) {
+    window.setTimeout(() => {
+      if (state.liveAnnouncement !== announcement) return;
+      state.liveAnnouncement = undefined;
+      render();
+    }, 4000);
+  }
+}
+
+function setError(message: string): void {
+  state.error = message;
+  state.liveAnnouncement = message;
 }
 
 function discordShell(): HTMLElement {
@@ -341,14 +350,14 @@ function discordShell(): HTMLElement {
 }
 
 function serverRail(): HTMLElement {
-  const rail = el("aside", { className: "server-rail", attrs: { "aria-label": "WebShare" } });
-  rail.append(el("div", { className: "server-icon active", text: "WS" }));
+  const rail = el("aside", { className: "server-rail", attrs: { "aria-label": serverLabel() } });
+  rail.append(el("div", { className: "server-icon active", text: serverInitials(), attrs: { title: serverLabel(), "aria-label": serverLabel() } }));
   return rail;
 }
 
 function channelSidebar(): HTMLElement {
   const nav = el("nav", { className: "channel-sidebar", attrs: { "aria-label": t(state.locale, "channels") } });
-  nav.append(el("div", { className: "guild-title", text: t(state.locale, "appTitle") }));
+  nav.append(el("div", { className: "guild-title", text: serverLabel() }));
   nav.append(channelButton(undefined, targetChannelLabel(), !state.draft.targetThreadID));
   nav.append(el("div", { className: "sidebar-section", text: t(state.locale, "threads") }));
   for (const thread of state.threads) nav.append(channelButton(thread.id, thread.name, state.draft.targetThreadID === thread.id));
@@ -358,45 +367,65 @@ function channelSidebar(): HTMLElement {
 
 function channelButton(threadID: string | undefined, label: string, active: boolean): HTMLButtonElement {
   const button = el("button", { className: active ? "channel-link active" : "channel-link", text: `# ${label}` }) as HTMLButtonElement;
+  button.type = "button";
+  button.disabled = Boolean(threadID) && !canWrite("selectThread");
   button.addEventListener("click", () => selectThread(threadID));
   return button;
 }
 
 function createThreadInline(): HTMLElement {
   const box = el("div", { className: "thread-create" });
-  const name = el("input", { attrs: { placeholder: t(state.locale, "threadName") } }) as HTMLInputElement;
-  const source = el("input", { attrs: { placeholder: t(state.locale, "sourceMessageCompact") } }) as HTMLInputElement;
-  const create = el("button", { text: t(state.locale, "createThread") }) as HTMLButtonElement;
+  const name = el("input", { attrs: { placeholder: t(state.locale, "threadName"), "aria-label": t(state.locale, "threadName") } }) as HTMLInputElement;
+  const source = el("input", { attrs: { placeholder: t(state.locale, "sourceMessageCompact"), "aria-label": t(state.locale, "sourceMessage") } }) as HTMLInputElement;
+  const create = el("button", { text: t(state.locale, "createThread"), attrs: { "aria-label": t(state.locale, "createThread") } }) as HTMLButtonElement;
   name.value = state.draft.newThreadName;
   source.value = state.draft.sourceMessageID;
-  name.addEventListener("input", () => { state.draft.newThreadName = name.value; });
-  source.addEventListener("input", () => { state.draft.sourceMessageID = source.value; });
+  name.addEventListener("input", () => {
+    state.draft.newThreadName = name.value;
+    state.draft.threadError = undefined;
+  });
+  source.addEventListener("input", () => {
+    state.draft.sourceMessageID = source.value;
+    state.draft.threadError = undefined;
+  });
   create.disabled = !canWrite("createThread");
   create.addEventListener("click", () => {
     const threadName = state.draft.newThreadName.trim();
     if (!threadName) return;
-    const sourceMessageID = state.draft.sourceMessageID.trim();
+    const sourceInput = state.draft.sourceMessageID.trim();
+    const sourceMessageID = parseDiscordMessageReference(sourceInput);
+    if (sourceInput && !sourceMessageID) {
+      state.draft.threadError = t(state.locale, "sourceMessageInvalid");
+      render();
+      return;
+    }
     void dispatch({ type: "create_thread", name: threadName, ...(sourceMessageID ? { sourceMessageID } : {}) });
     state.draft.newThreadName = "";
     state.draft.sourceMessageID = "";
+    state.draft.threadError = undefined;
     render();
   });
-  box.append(el("div", { className: "hint", text: t(state.locale, "threadCreateHint") }), name, source, create);
+  box.append(el("div", { className: "hint", text: t(state.locale, "threadCreateHint") }), name, source);
+  if (state.draft.threadError) box.append(el("div", { className: "thread-error", text: state.draft.threadError, attrs: { role: "alert" } }));
+  box.append(create);
   return box;
 }
 
 function chatPane(): HTMLElement {
   const pane = el("section", { className: "chat-pane" });
   pane.append(chatHeader());
-  const list = el("div", { className: "message-list", attrs: { role: "log", "aria-live": "polite" } });
+  const list = el("div", { className: "message-list", attrs: { role: "log", "aria-live": "off", "aria-relevant": "additions text", "aria-label": `${t(state.locale, "eventLog")} · ${activeTargetLabel()}` } });
   const thread = selectedThread();
   list.append(delegationNotice());
+  if (state.mobileThreadsOpen) list.append(mobileThreadPanel());
   if (!state.join) list.append(systemBlock(t(state.locale, "invalidLink")));
   if (state.error) list.append(systemBlock(state.error, true));
   if (thread) list.append(threadContextPanel(thread));
   const visible = visibleMessages();
   if (visible.length === 0) list.append(systemBlock(thread ? t(state.locale, "noThreadMessages") : t(state.locale, "eventNone")));
   for (const message of visible) list.append(messageRow(message));
+  if (state.liveAnnouncement) pane.append(liveAnnouncementRegion());
+  if (state.unseenCount > 0) pane.append(newMessagesButton());
   pane.append(list, composerBar());
   return pane;
 }
@@ -421,7 +450,7 @@ function chatHeader(): HTMLElement {
       ? [el("span", { className: "hash", text: "#" }), el("span", { className: "breadcrumb", text: targetChannelLabel() }), el("span", { className: "breadcrumb-sep", text: "/" }), el("strong", { text: thread.name })]
       : [el("span", { className: "hash", text: "#" }), el("strong", { text: activeTargetLabel() })],
   });
-  const locale = el("select", { className: "locale-select" }) as HTMLSelectElement;
+  const locale = el("select", { className: "locale-select", attrs: { "aria-label": t(state.locale, "locale") } }) as HTMLSelectElement;
   locale.append(new Option("English", "en"), new Option("繁體中文", "zh-TW"));
   locale.value = state.locale;
   locale.addEventListener("change", () => {
@@ -429,7 +458,7 @@ function chatHeader(): HTMLElement {
     setLocale(state.locale);
     render();
   });
-  const actions = [statusPill(), locale];
+  const actions = [threadMenuButton(), statusPill(), locale, ...safetyControls()];
   if (thread) {
     const back = el("button", { className: "back-button", text: t(state.locale, "backToChannel") }) as HTMLButtonElement;
     back.type = "button";
@@ -440,9 +469,153 @@ function chatHeader(): HTMLElement {
   return header;
 }
 
+function threadMenuButton(): HTMLButtonElement {
+  const button = el("button", { className: "thread-menu-button", text: t(state.locale, "mobileThreads"), attrs: { "aria-expanded": String(state.mobileThreadsOpen), "aria-label": t(state.locale, "mobileThreads") } }) as HTMLButtonElement;
+  button.type = "button";
+  button.addEventListener("click", () => {
+    const opening = !state.mobileThreadsOpen;
+    state.mobileThreadsOpen = opening;
+    render();
+    requestAnimationFrame(() => app.querySelector<HTMLButtonElement>(opening ? ".mobile-thread-close" : ".thread-menu-button")?.focus());
+  });
+  return button;
+}
+
+function safetyControls(): HTMLElement[] {
+  if (!state.join?.canWrite) return [];
+  const interrupt = el("button", { className: "safety-button", text: t(state.locale, "interruptAgent"), attrs: { "aria-label": t(state.locale, "interruptAgent") } }) as HTMLButtonElement;
+  interrupt.type = "button";
+  interrupt.disabled = state.terminalReason !== undefined || !canWrite("interruptAgent");
+  interrupt.addEventListener("click", () => {
+    void dispatch({ type: "interrupt_agent" });
+  });
+  const stop = el("button", { className: "safety-button", text: t(state.locale, "stopShare"), attrs: { "aria-label": t(state.locale, "stopShare") } }) as HTMLButtonElement;
+  stop.type = "button";
+  stop.disabled = state.terminalReason !== undefined;
+  stop.addEventListener("click", () => {
+    if (!window.confirm(`${t(state.locale, "stopConfirm")}\n${t(state.locale, "sendTarget")}: ${draftTargetLabel()}`)) return;
+    void dispatch({ type: "stop" });
+  });
+  const revoke = el("button", { className: "safety-button danger", text: t(state.locale, "revokeShare"), attrs: { "aria-label": t(state.locale, "revokeShare") } }) as HTMLButtonElement;
+  revoke.type = "button";
+  revoke.disabled = state.terminalReason !== undefined;
+  revoke.addEventListener("click", () => {
+    if (!window.confirm(t(state.locale, "revokeConfirm"))) return;
+    void dispatch({ type: "revoke" });
+  });
+  return [interrupt, stop, revoke];
+}
+
+function mobileThreadPanel(): HTMLElement {
+  const panel = el("section", { className: "mobile-thread-panel", attrs: { "aria-label": t(state.locale, "mobileThreads") } });
+  panel.append(
+    el("div", {
+      className: "mobile-thread-panel-header",
+      children: [
+        el("strong", { text: t(state.locale, "mobileThreads") }),
+        el("button", { className: "mobile-thread-close", text: "×", attrs: { type: "button", "aria-label": t(state.locale, "closeThreadDrawer") } }),
+      ],
+    }),
+  );
+  const close = panel.querySelector<HTMLButtonElement>(".mobile-thread-close");
+  close?.addEventListener("click", () => {
+    state.mobileThreadsOpen = false;
+    render();
+    requestAnimationFrame(() => app.querySelector<HTMLButtonElement>(".thread-menu-button")?.focus());
+  });
+  panel.append(channelButton(undefined, targetChannelLabel(), !state.draft.targetThreadID));
+  for (const thread of state.threads) panel.append(channelButton(thread.id, thread.name, state.draft.targetThreadID === thread.id));
+  panel.append(createThreadInline());
+  return panel;
+}
+
+function newMessagesButton(): HTMLButtonElement {
+  const label = `${t(state.locale, "newMessages")} · ${t(state.locale, "jumpToLatest")}`;
+  const button = el("button", { className: "new-messages-button", text: label, attrs: { "aria-label": label } }) as HTMLButtonElement;
+  button.type = "button";
+  button.addEventListener("click", () => {
+    state.unseenCount = 0;
+    const list = app.querySelector<HTMLElement>(".message-list");
+    if (list) scrollMessageListToBottom(list);
+    render();
+  });
+  return button;
+}
+
+function liveAnnouncementRegion(): HTMLElement {
+  return el("div", { className: "sr-only", text: state.liveAnnouncement ?? "", attrs: { role: "status", "aria-live": "polite", "aria-atomic": "true" } });
+}
+
+function routeSelector(disabled: boolean): HTMLElement {
+  const group = el("div", { className: "route-selector", attrs: { role: "radiogroup", "aria-label": t(state.locale, "routeLabel") } });
+  const routes: Array<[ComposeMode, string]> = [["message", t(state.locale, "channelMessage")], ["agent", t(state.locale, "agentPrompt")], ["command", t(state.locale, "botCommand")]];
+  for (const [mode, label] of routes) {
+    const active = state.draft.mode === mode;
+    const button = el("button", { className: active ? "route-chip active" : "route-chip", text: label, attrs: { role: "radio", "aria-checked": String(active), "data-mode": mode, tabindex: active ? "0" : "-1" } }) as HTMLButtonElement;
+    button.type = "button";
+    button.disabled = disabled || !modeWritable(mode);
+    button.tabIndex = active && !button.disabled ? 0 : -1;
+    button.addEventListener("click", () => {
+      state.draft.mode = mode;
+      render();
+      requestAnimationFrame(() => app.querySelector<HTMLButtonElement>(`.route-chip[data-mode="${mode}"]`)?.focus());
+    });
+    group.append(button);
+  }
+  group.addEventListener("keydown", (event) => {
+    let offset = 0;
+    switch (event.key) {
+      case "ArrowRight":
+      case "ArrowDown":
+        offset = 1;
+        break;
+      case "ArrowLeft":
+      case "ArrowUp":
+        offset = -1;
+        break;
+      default:
+        return;
+    }
+    event.preventDefault();
+    const enabled = routes.map(([mode]) => mode).filter((mode) => modeWritable(mode));
+    if (enabled.length === 0) return;
+    const current = Math.max(0, enabled.indexOf(state.draft.mode));
+    const nextMode = enabled[(current + offset + enabled.length) % enabled.length] ?? state.draft.mode;
+    state.draft.mode = nextMode;
+    render();
+    requestAnimationFrame(() => app.querySelector<HTMLButtonElement>(`.route-chip[data-mode="${nextMode}"]`)?.focus());
+  });
+  return group;
+}
+
+function syncRouteSelector(group: HTMLElement, disabled: boolean): void {
+  for (const button of group.querySelectorAll<HTMLButtonElement>(".route-chip")) {
+    const mode = button.dataset.mode as ComposeMode | undefined;
+    if (!mode) continue;
+    const active = state.draft.mode === mode;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-checked", String(active));
+    button.disabled = disabled || !modeWritable(mode);
+    button.tabIndex = active && !button.disabled ? 0 : -1;
+  }
+}
+
 function delegationNotice(): HTMLElement {
   const mode = state.join?.canWrite ? t(state.locale, "writeLink") : t(state.locale, "viewOnly");
-  return el("article", { className: "delegation-notice", children: [el("strong", { text: t(state.locale, "delegationWarningTitle") }), el("span", { text: `${mode} · ${t(state.locale, "delegationWarningBody")}` })] });
+  const status = state.terminalReason ? terminalMessage(state.terminalReason) : shareStatusLabel();
+  return el("article", {
+    className: "delegation-notice trust-bar",
+    children: [
+      el("strong", { text: `${t(state.locale, "delegationWarningTitle")} · ${mode}` }),
+      el("span", { text: `${t(state.locale, "server")}: ${serverLabel()}` }),
+      el("span", { text: `${t(state.locale, "target")}: ${targetLabel(state.target)} · ${t(state.locale, "targetType")}: ${targetTypeLabel()}` }),
+      el("span", { text: `${t(state.locale, "shareIdentity")}: ${state.opener?.displayName ?? "-"} ${t(state.locale, "writeAs")} WebShare` }),
+      el("span", { text: `${t(state.locale, "shareStatus")}: ${status}` }),
+      ...(!composerWritable() ? [el("span", { className: "muted", text: t(state.locale, "writeUnavailable") })] : []),
+      el("span", { text: t(state.locale, "delegationWarningBody") }),
+      el("span", { className: "muted", text: t(state.locale, "partialMirror") }),
+    ],
+  });
 }
 
 function composerBar(): HTMLElement {
@@ -453,19 +626,25 @@ function composerBar(): HTMLElement {
     event.preventDefault();
     sendDraft();
   });
-  const hint = el("div", { className: "composer-hint", text: composerHint(inferredMode) });
+  const route = routeSelector(disabled);
+  const hint = el("div", { className: "composer-hint", text: composerHint(inferredMode), attrs: { id: "composer-hint" } });
   const inputRow = el("div", { className: "composer-input-row" });
   const upload = uploadControl(disabled || inferredMode === "command" || !canWrite("upload"));
-  const textarea = el("textarea", { attrs: { placeholder: composerPlaceholder(), rows: "1", autocomplete: "off", spellcheck: "true" } }) as HTMLTextAreaElement;
-  const suggestions = el("div", { className: "composer-suggestions hidden", attrs: { role: "listbox" } });
+  const textarea = el("textarea", { attrs: { placeholder: composerPlaceholder(), rows: "1", autocomplete: "off", spellcheck: "true", "aria-label": t(state.locale, "messageText"), "aria-describedby": "composer-hint", role: "combobox", "aria-autocomplete": "list", "aria-controls": "composer-suggestions", "aria-expanded": "false" } }) as HTMLTextAreaElement;
+  const suggestions = el("div", { className: "composer-suggestions hidden", attrs: { role: "listbox", id: "composer-suggestions" } });
   textarea.value = state.draft.text;
   textarea.disabled = disabled;
+  const utility = inlineUtilityRow();
+  let activeSuggestionIndex = 0;
   const refreshComposer = () => {
     state.draft.text = textarea.value;
     const mode = currentDraftMode(textarea.value);
     hint.textContent = composerHint(mode);
     setUploadControlDisabled(upload, disabled || mode === "command" || !canWrite("upload"));
-    renderComposerSuggestions(textarea, suggestions, refreshComposer);
+    syncRouteSelector(route, disabled);
+    renderInlineUtilityRow(utility);
+    activeSuggestionIndex = 0;
+    renderComposerSuggestions(textarea, suggestions, refreshComposer, activeSuggestionIndex);
   };
   let composing = false;
   textarea.addEventListener("compositionstart", () => {
@@ -476,16 +655,55 @@ function composerBar(): HTMLElement {
     refreshComposer();
   });
   textarea.addEventListener("input", refreshComposer);
-  textarea.addEventListener("click", () => renderComposerSuggestions(textarea, suggestions, refreshComposer));
-  textarea.addEventListener("keyup", () => renderComposerSuggestions(textarea, suggestions, refreshComposer));
+  textarea.addEventListener("click", () => {
+    activeSuggestionIndex = 0;
+    renderComposerSuggestions(textarea, suggestions, refreshComposer, activeSuggestionIndex);
+  });
+  textarea.addEventListener("keyup", (event) => {
+    switch (event.key) {
+      case "ArrowDown":
+      case "ArrowUp":
+      case "Enter":
+      case "Escape":
+      case "Tab":
+        return;
+      default:
+        activeSuggestionIndex = 0;
+        renderComposerSuggestions(textarea, suggestions, refreshComposer, activeSuggestionIndex);
+    }
+  });
   textarea.addEventListener("keydown", (event) => {
-    if (event.key === "Tab" && acceptFirstComposerSuggestion(textarea)) {
+    const suggestionCount = composerSuggestions(textarea).length;
+    const suggestionsOpen = suggestionCount > 0 && !suggestions.classList.contains("hidden");
+    if (suggestionsOpen && event.key === "ArrowDown") {
+      event.preventDefault();
+      activeSuggestionIndex = (activeSuggestionIndex + 1) % suggestionCount;
+      renderComposerSuggestions(textarea, suggestions, refreshComposer, activeSuggestionIndex);
+      return;
+    }
+    if (suggestionsOpen && event.key === "ArrowUp") {
+      event.preventDefault();
+      activeSuggestionIndex = (activeSuggestionIndex + suggestionCount - 1) % suggestionCount;
+      renderComposerSuggestions(textarea, suggestions, refreshComposer, activeSuggestionIndex);
+      return;
+    }
+    if (event.key === "Escape" && suggestionsOpen) {
+      event.preventDefault();
+      hideComposerSuggestions(textarea, suggestions);
+      return;
+    }
+    if (event.key === "Tab" && suggestionsOpen && acceptFirstComposerSuggestion(textarea)) {
       event.preventDefault();
       refreshComposer();
       return;
     }
     if (event.key === "Enter" && !event.shiftKey) {
       if (composing || event.isComposing || event.keyCode === 229) return;
+      if (suggestionsOpen && acceptComposerSuggestionAt(textarea, activeSuggestionIndex)) {
+        event.preventDefault();
+        refreshComposer();
+        return;
+      }
       event.preventDefault();
       sendDraft();
     }
@@ -493,15 +711,17 @@ function composerBar(): HTMLElement {
   const send = el("button", { className: "send-button", text: t(state.locale, "send") }) as HTMLButtonElement;
   send.disabled = disabled;
   inputRow.append(upload, textarea, send);
-  wrap.append(hint);
+  wrap.append(route, hint);
   if (inferredMode !== "command") wrap.append(attachmentChips());
-  wrap.append(suggestions, inputRow, inlineUtilityRow());
-  renderComposerSuggestions(textarea, suggestions, refreshComposer);
+  wrap.append(suggestions, inputRow, utility);
+  renderComposerSuggestions(textarea, suggestions, refreshComposer, activeSuggestionIndex);
   return wrap;
 }
 
 function setUploadControlDisabled(control: HTMLElement, disabled: boolean): void {
   control.classList.toggle("disabled", disabled);
+  control.setAttribute("aria-disabled", String(disabled));
+  control.tabIndex = disabled ? -1 : 0;
   const input = control.querySelector<HTMLInputElement>("input");
   if (input) input.disabled = disabled;
 }
@@ -545,12 +765,20 @@ function composerSuggestions(textarea: HTMLTextAreaElement): ComposerSuggestion[
   return out.slice(0, 8);
 }
 
-function renderComposerSuggestions(textarea: HTMLTextAreaElement, root: HTMLElement, refresh: () => void): void {
+function renderComposerSuggestions(textarea: HTMLTextAreaElement, root: HTMLElement, refresh: () => void, activeIndex = 0): void {
   clear(root);
   const suggestions = composerSuggestions(textarea);
   root.classList.toggle("hidden", suggestions.length === 0);
-  for (const suggestion of suggestions) {
-    const button = el("button", { className: "composer-suggestion", attrs: { type: "button", role: "option" }, children: [el("strong", { text: suggestion.label }), el("span", { text: suggestion.detail })] }) as HTMLButtonElement;
+  textarea.setAttribute("aria-expanded", String(suggestions.length > 0));
+  if (suggestions.length === 0) {
+    textarea.removeAttribute("aria-activedescendant");
+    return;
+  }
+  const selectedIndex = Math.min(activeIndex, suggestions.length - 1);
+  textarea.setAttribute("aria-activedescendant", `composer-suggestion-${selectedIndex}`);
+  suggestions.forEach((suggestion, index) => {
+    const selected = index === selectedIndex;
+    const button = el("button", { className: selected ? "composer-suggestion active" : "composer-suggestion", attrs: { id: `composer-suggestion-${index}`, type: "button", role: "option", "aria-selected": String(selected) }, children: [el("strong", { text: suggestion.label }), el("span", { text: suggestion.detail })] }) as HTMLButtonElement;
     button.addEventListener("mousedown", (event) => event.preventDefault());
     button.addEventListener("click", () => {
       acceptComposerSuggestion(textarea, suggestion);
@@ -558,13 +786,23 @@ function renderComposerSuggestions(textarea: HTMLTextAreaElement, root: HTMLElem
       textarea.focus();
     });
     root.append(button);
-  }
+  });
+}
+
+function hideComposerSuggestions(textarea: HTMLTextAreaElement, root: HTMLElement): void {
+  clear(root);
+  root.classList.add("hidden");
+  textarea.setAttribute("aria-expanded", "false");
+  textarea.removeAttribute("aria-activedescendant");
 }
 
 function acceptFirstComposerSuggestion(textarea: HTMLTextAreaElement): boolean {
-  const [first] = composerSuggestions(textarea);
-  if (!first) return false;
-  return acceptComposerSuggestion(textarea, first);
+  return acceptComposerSuggestionAt(textarea, 0);
+}
+
+function acceptComposerSuggestionAt(textarea: HTMLTextAreaElement, index: number): boolean {
+  const suggestion = composerSuggestions(textarea)[index];
+  return suggestion ? acceptComposerSuggestion(textarea, suggestion) : false;
 }
 
 function acceptComposerSuggestion(textarea: HTMLTextAreaElement, suggestion: ComposerSuggestion): boolean {
@@ -579,9 +817,14 @@ function acceptComposerSuggestion(textarea: HTMLTextAreaElement, suggestion: Com
 
 
 function uploadControl(disabled: boolean): HTMLElement {
-  const label = el("label", { className: disabled ? "upload-icon disabled" : "upload-icon", text: "+" }) as HTMLLabelElement;
-  const input = el("input", { attrs: { type: "file", multiple: "true" } }) as HTMLInputElement;
+  const label = el("label", { className: disabled ? "upload-icon disabled" : "upload-icon", text: "+", attrs: { role: "button", tabindex: disabled ? "-1" : "0", "aria-disabled": String(disabled), "aria-label": t(state.locale, "attachFiles"), title: t(state.locale, "attachFiles") } }) as HTMLLabelElement;
+  const input = el("input", { attrs: { type: "file", multiple: "true", "aria-label": t(state.locale, "attachFiles") } }) as HTMLInputElement;
   input.disabled = disabled;
+  label.addEventListener("keydown", (event) => {
+    if (input.disabled || (event.key !== "Enter" && event.key !== " ")) return;
+    event.preventDefault();
+    input.click();
+  });
   input.addEventListener("change", () => void queueUploads(input.files, state.uploads, (action) => dispatch(action)));
   label.append(input);
   return label;
@@ -589,8 +832,19 @@ function uploadControl(disabled: boolean): HTMLElement {
 
 function inlineUtilityRow(): HTMLElement {
   const row = el("div", { className: "composer-utility" });
-  row.append(inlineMentionFallback(), el("span", { className: "target-chip", text: `${t(state.locale, "writeAs")} ${state.opener?.displayName ?? "-"}` }));
+  renderInlineUtilityRow(row);
   return row;
+}
+
+function renderInlineUtilityRow(row: HTMLElement): void {
+  clear(row);
+  row.append(
+    inlineMentionFallback(),
+    el("span", { className: "target-chip", text: `${t(state.locale, "sendTarget")}: ${draftTargetLabel()}` }),
+    el("span", { className: "target-chip", text: `${t(state.locale, "writeAs")} ${state.opener?.displayName ?? "-"}` }),
+  );
+  const pings = mentionPreview();
+  if (pings) row.append(pings);
 }
 
 function attachmentChips(): HTMLElement {
@@ -639,6 +893,8 @@ function messageRow(message: ChatMessage): HTMLElement {
   if (message.replyTo) body.append(replyPreview(message.replyTo));
   if (message.content) body.append(markdownMessageContent(message));
   if (message.thread && !message.threadMessage && !message.deleted && canOpenThread(message.thread)) body.append(threadJump(message.thread));
+  const createThread = createThreadFromMessageButton(message);
+  if (createThread) body.append(el("div", { className: "message-actions", children: [createThread] }));
   if (message.attachments?.length) body.append(attachmentList(message.attachments));
   row.append(avatar(message.author, message.kind), body);
   return row;
@@ -724,7 +980,8 @@ function triggerAttachmentDownload(attachmentRef: string): void {
 }
 
 function systemBlock(text: string, error = false): HTMLElement {
-  return el("article", { className: error ? "system-block error" : "system-block", text });
+  if (error) return el("article", { className: "system-block error", text, attrs: { role: "alert" } });
+  return el("article", { className: "system-block", text });
 }
 
 function avatar(seed: string, kind: string): HTMLElement {
@@ -739,7 +996,16 @@ function sendDraft(): void {
   const attachments = mode === "command" ? [] : selectedAttachmentRefs(state.uploads);
   if (mode === "command") {
     const command = text.startsWith("/") ? text.slice(1).trim() : text;
-    if (!command) return;
+    const name = commandName(command);
+    if (!command || !name) return;
+    if (!webshareCommandAllowed(name)) {
+      const message = t(state.locale, "commandNotAllowed");
+      setError(message);
+      pushMessage("error", t(state.locale, "systemAuthor"), message);
+      render();
+      return;
+    }
+    if (highRiskCommand(name) && !window.confirm(`${t(state.locale, "commandConfirm")}\n${t(state.locale, "sendTarget")}: ${draftTargetLabel()}\n/${command}`)) return;
     void dispatch({ type: "run_bot_command", command, args: {}, ...(targetThreadID ? { targetThreadID } : {}) });
   } else if (mode === "agent") {
     void dispatch({ type: "send_agent_prompt", text, attachments, allowedMentions: allowedMentionSelection(text), ...(targetThreadID ? { targetThreadID } : {}) });
@@ -747,6 +1013,8 @@ function sendDraft(): void {
     void dispatch({ type: "post_channel_message", text, attachments, allowedMentions: allowedMentionSelection(text), ...(targetThreadID ? { targetThreadID } : {}) });
   }
   if (mode !== "command") state.uploads.pending = [];
+  state.mentionPicker.selectedUsers.clear();
+  state.mentionPicker.botSelected = false;
   state.draft.text = "";
   render();
 }
@@ -757,7 +1025,7 @@ function writableCapabilities(): Capabilities | undefined {
 }
 
 function canWrite(capability: Parameters<typeof hasCapability>[1]): boolean {
-  return Boolean(state.join?.canWrite) && hasCapability(writableCapabilities(), capability);
+  return state.terminalReason === undefined && shareWritableState() && Boolean(state.join?.canWrite) && hasCapability(writableCapabilities(), capability);
 }
 
 function modeCapability(mode: ComposeMode): Capability {
@@ -779,38 +1047,21 @@ function canMention(isBot: boolean): boolean {
 }
 
 function allowedMentionSelection(text = state.draft.text): AllowedMentionSelection {
-  const selected = mentionSelection(state.mentionPicker);
-  const bot = canWrite("mentionBot") && (Boolean(selected.bot) || draftMentionsBot(text));
-  return {
-    users: canWrite("mentionUsers") ? selected.users : [],
-    ...(bot ? { bot: true } : {}),
-  };
+  return allowedMentionSelectionForDraft(text, state.mentionPicker, canWrite("mentionUsers"), canWrite("mentionBot"));
 }
 
 function currentDraftMode(text = state.draft.text): ComposeMode {
-  const trimmed = text.trimStart();
-  if (trimmed.startsWith("/")) return "command";
-  if (draftMentionsBot(trimmed)) return "agent";
-  return "message";
+  const mode = resolveDraftMode(state.draft.mode, text);
+  if (mode !== state.draft.mode) state.draft.mode = mode;
+  return state.draft.mode;
 }
 
-function draftMentionsBot(text: string): boolean {
-  const bot = state.mentionPicker.bot;
-  if (!bot) return false;
-  const normalized = text.toLowerCase();
-  if (normalized.includes(`<@${bot.id}>`) || normalized.includes(`<@!${bot.id}>`)) return true;
-  return botMentionAliases().some((alias) => alias !== "" && normalized.includes(`@${alias}`));
-}
-
-function botMentionAliases(): string[] {
-  const bot = state.mentionPicker.bot;
-  if (!bot) return [];
-  return [bot.displayName].map((item) => item.trim().toLowerCase()).filter(Boolean);
-}
 function actionWithWriteToken(action: ClientAction): ClientAction {
-  if (!state.join?.writeToken) return action;
+  const eventID = action.type === "hello" ? action.eventID : action.eventID ?? crypto.randomUUID();
+  const withID = eventID ? { ...action, eventID } : action;
+  if (!state.join?.writeToken) return withID;
   const writeToken = writeTokenProof(state.join.writeToken);
-  return writeToken ? { ...action, writeToken } : action;
+  return writeToken ? { ...withID, writeToken } : withID;
 }
 
 function discardUpload(uploadID: string): void {
@@ -827,8 +1078,8 @@ function rememberUploadedAttachment(metadata: { attachmentRef?: string; filename
 }
 
 function statusPill(): HTMLElement {
-  const label = `${t(state.locale, "connectionStatus")}: ${t(state.locale, state.status)}`;
-  return el("div", { className: "status-pill", attrs: { title: state.statusDetail ?? "" }, children: [el("span", { className: `status-dot ${state.status}` }), el("span", { text: label })] });
+  const label = state.terminalReason ? `${t(state.locale, "connectionStatus")}: ${terminalMessage(state.terminalReason)}` : `${t(state.locale, "connectionStatus")}: ${t(state.locale, state.status)}`;
+  return el("div", { className: "status-pill", attrs: { role: "status", "aria-live": "polite", title: state.statusDetail ?? "" }, children: [el("span", { className: `status-dot ${state.status}` }), el("span", { text: label })] });
 }
 
 function shouldDisplayDiscordMessage(messageID: string | undefined): boolean {
@@ -890,10 +1141,19 @@ function contextSection(label: string, messages: ChatMessage[]): HTMLElement {
 }
 
 function selectThread(threadID: string | undefined): void {
+  if (threadID && !canWrite("selectThread")) {
+    state.draft.threadError = t(state.locale, "writeUnavailable");
+    state.mobileThreadsOpen = true;
+    render();
+    return;
+  }
+  const shouldRestoreThreadButtonFocus = state.mobileThreadsOpen;
   state.draft.targetThreadID = threadID;
+  state.mobileThreadsOpen = false;
   persistRoomHistory();
-  if (threadID && canWrite("selectThread")) void dispatch({ type: "select_thread", threadID });
+  if (threadID) void dispatch({ type: "select_thread", threadID });
   render();
+  if (shouldRestoreThreadButtonFocus) requestAnimationFrame(() => app.querySelector<HTMLButtonElement>(".thread-menu-button")?.focus());
 }
 
 interface PushMessageOptions {
@@ -973,6 +1233,8 @@ function applyThreadEvent(event: Extract<ServerEvent, { type: "thread_event" }>[
 }
 
 function pushMessage(kind: MessageKind, author: string, content: string, options: PushMessageOptions = {}): void {
+  const oldList = app.querySelector<HTMLElement>(".message-list");
+  if (oldList && !isScrolledNearBottom(oldList)) state.unseenCount += 1;
   const message: ChatMessage = { id: crypto.randomUUID(), kind, author, timestamp: formatMessageTimestamp(options.timestamp), content };
   if (options.attachments?.length) message.attachments = options.attachments;
   if (options.mentions?.length) message.mentions = options.mentions;
@@ -980,6 +1242,7 @@ function pushMessage(kind: MessageKind, author: string, content: string, options
   if (options.edited) message.edited = true;
   if (options.deleted) message.deleted = true;
   if (options.thread) message.thread = options.thread;
+  state.liveAnnouncement = `${author}: ${content.slice(0, 160)}`;
   if (options.threadMessage) message.threadMessage = true;
   if (options.replyTo) message.replyTo = options.replyTo;
   state.messages.push(message);
@@ -987,14 +1250,60 @@ function pushMessage(kind: MessageKind, author: string, content: string, options
   persistRoomHistory();
 }
 
-function targetLabel(target: TargetView): string {
+function targetLabel(target: TargetView | undefined): string {
+  if (!target) return t(state.locale, "targetChannel");
   const channel = target.channelName ? `#${target.channelName}` : target.channelID;
   return target.threadName ? `${channel} / ${target.threadName}` : channel;
+}
+
+function draftTargetLabel(): string {
+  const thread = selectedThread();
+  if (!thread) return targetLabel(state.target);
+  const channel = state.target?.channelName ? `#${state.target.channelName}` : state.target?.channelID ?? t(state.locale, "targetChannel");
+  return `${channel} / ${thread.name}`;
 }
 
 function targetChannelLabel(): string {
   if (!state.target) return t(state.locale, "targetChannel");
   return state.target.channelName ?? state.target.channelID;
+}
+
+function serverLabel(): string {
+  if (!state.target) return t(state.locale, "appTitle");
+  return state.target.guildName || `${t(state.locale, "server")} ${state.target.guildID}`;
+}
+
+function serverInitials(): string {
+  const label = serverLabel().trim();
+  if (!label) return "WS";
+  const words = label.split(/\s+/u).filter(Boolean);
+  const initials = words.length > 1 ? words.slice(0, 2).map((word) => word[0]).join("") : label.slice(0, 2);
+  return initials.toUpperCase();
+}
+
+function targetTypeLabel(): string {
+  const type = state.draft.targetThreadID || state.target?.targetType === "thread" ? "thread" : state.target?.targetType;
+  if (type === "thread") return t(state.locale, "targetTypeThread");
+  if (type === "channel") return t(state.locale, "targetTypeChannel");
+  return type ?? "-";
+}
+
+function shareStatusLabel(): string {
+  const status = state.share?.status;
+  if (!status) return t(state.locale, state.status);
+  if (status === "active") return t(state.locale, "shareActive");
+  if (status === "created") return t(state.locale, "shareCreated");
+  if (status === "connecting") return t(state.locale, "shareConnecting");
+  if (status === "disconnected") return t(state.locale, "shareDisconnected");
+  if (status === "revoked") return t(state.locale, "shareRevoked");
+  if (status === "degraded") return t(state.locale, "permissionLost");
+  if (status === "expired") return t(state.locale, "shareExpired");
+  return status;
+}
+
+function shareWritableState(): boolean {
+  const status = state.share?.status;
+  return !status || status === "created" || status === "connecting" || status === "active" || status === "disconnected";
 }
 
 function activeTargetLabel(): string {
@@ -1003,6 +1312,8 @@ function activeTargetLabel(): string {
 }
 
 function composerPlaceholder(): string {
+  if (state.draft.mode === "command") return t(state.locale, "placeholderCommand");
+  if (state.draft.mode === "message") return t(state.locale, "placeholderMessage");
   return t(state.locale, "placeholderAgent");
 }
 
@@ -1010,6 +1321,20 @@ function composerHint(mode: ComposeMode): string {
   if (mode === "command") return t(state.locale, "modeCommand");
   if (mode === "agent") return t(state.locale, "modeAgent");
   return t(state.locale, "modeMessage");
+}
+
+
+function mentionPreview(): HTMLElement | undefined {
+  const names = mentionPreviewNames(state.draft.text, state.mentionPicker, canWrite("mentionUsers"), canWrite("mentionBot"));
+  if (names.length === 0) return undefined;
+  return el("span", { className: "target-chip mention-preview", text: `${t(state.locale, "willPing")}: ${names.join(", ")}` });
+}
+
+function terminalMessage(reasonCode: string): string {
+  if (reasonCode === "stopped") return t(state.locale, "shareStopped");
+  if (reasonCode === "revoked") return t(state.locale, "shareRevoked");
+  if (reasonCode === "permission_lost") return t(state.locale, "permissionLost");
+  return reasonCode;
 }
 
 function threadEventBody(event: Extract<ServerEvent, { type: "thread_event" }>["event"]): string {
@@ -1044,6 +1369,7 @@ function removeThread(threadID: string): void {
 
 function welcomeSelectedThread(event: Extract<ServerEvent, { type: "welcome" }>, previousSelectedThreadID: string | undefined): string | undefined {
   if (event.target.threadID) return event.target.threadID;
+  if (!hasCapability(event.capabilities, "selectThread")) return undefined;
   if (event.selectedThreadID) return event.selectedThreadID;
   if (previousSelectedThreadID && event.threads?.some((thread) => thread.id === previousSelectedThreadID)) return previousSelectedThreadID;
   return undefined;
@@ -1243,8 +1569,12 @@ function renderInlineMarkdown(text: string, depth = 0): Node[] {
       } else {
         nodes.push(document.createTextNode(token.content));
       }
+    } else if (token.kind === "spoiler") {
+      const node = el("span", { className: "spoiler", attrs: { tabindex: "0" } });
+      node.append(...renderInlineMarkdown(token.content, depth + 1));
+      nodes.push(node);
     } else {
-      const node = document.createElement(token.kind === "strong" ? "strong" : "em");
+      const node = document.createElement(token.kind === "strong" ? "strong" : token.kind === "delete" ? "del" : "em");
       node.append(...renderInlineMarkdown(token.content, depth + 1));
       nodes.push(node);
     }
@@ -1254,13 +1584,15 @@ function renderInlineMarkdown(text: string, depth = 0): Node[] {
 }
 
 type InlineMarkdownToken =
-  | { kind: "code" | "strong" | "em"; index: number; end: number; content: string }
+  | { kind: "code" | "strong" | "em" | "delete" | "spoiler"; index: number; end: number; content: string }
   | { kind: "link"; index: number; end: number; content: string; href: string };
 
 function nextMarkdownToken(text: string): InlineMarkdownToken | undefined {
   const candidates = [
     codeSpanToken(text),
     linkToken(text),
+    delimitedToken(text, "||", "spoiler"),
+    delimitedToken(text, "~~", "delete"),
     delimitedToken(text, "**", "strong"),
     delimitedToken(text, "__", "strong"),
     delimitedToken(text, "*", "em"),
@@ -1284,7 +1616,7 @@ function linkToken(text: string): InlineMarkdownToken | undefined {
   return { kind: "link", index: match.index, end: match.index + match[0].length, content: match[1] ?? "", href: match[2] ?? "" };
 }
 
-function delimitedToken(text: string, delimiter: string, kind: "strong" | "em"): InlineMarkdownToken | undefined {
+function delimitedToken(text: string, delimiter: string, kind: "strong" | "em" | "delete" | "spoiler"): InlineMarkdownToken | undefined {
   const start = text.indexOf(delimiter);
   if (start < 0) return undefined;
   const contentStart = start + delimiter.length;
@@ -1326,6 +1658,27 @@ function threadJump(thread: ThreadView): HTMLElement {
   const button = el("button", { className: "thread-jump", text: `${t(state.locale, "openThread")} · ${t(state.locale, "replyInThread")} # ${thread.name}` }) as HTMLButtonElement;
   button.type = "button";
   button.addEventListener("click", () => selectThread(thread.id));
+  return button;
+}
+
+function createThreadFromMessageButton(message: ChatMessage): HTMLElement | undefined {
+  if (message.kind !== "discord" || !message.discordMessageID || message.threadMessage || message.deleted || !canWrite("createThread")) return undefined;
+  const button = el("button", { className: "message-action", text: t(state.locale, "createThreadFromMessage"), attrs: { type: "button", "aria-label": t(state.locale, "createThreadFromMessage") } }) as HTMLButtonElement;
+  button.addEventListener("click", () => {
+    state.draft.sourceMessageID = message.discordMessageID ?? "";
+    state.draft.threadError = undefined;
+    if (!state.draft.newThreadName.trim()) state.draft.newThreadName = suggestedThreadName(message.author, displayMessageContent(message));
+    state.mobileThreadsOpen = true;
+    render();
+    requestAnimationFrame(() => {
+      const mobileInput = app.querySelector<HTMLInputElement>(".mobile-thread-panel .thread-create input");
+      if (mobileInput && mobileInput.offsetParent !== null) {
+        mobileInput.focus();
+        return;
+      }
+      app.querySelector<HTMLInputElement>(".channel-sidebar .thread-create input")?.focus();
+    });
+  });
   return button;
 }
 

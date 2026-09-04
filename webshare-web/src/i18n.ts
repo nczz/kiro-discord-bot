@@ -79,7 +79,38 @@ type MessageKey =
   | "contextNotCaptured"
   | "noThreadMessages"
   | "replyingTo"
-  | "repliedMessage";
+  | "repliedMessage"
+  | "server"
+  | "shareIdentity"
+  | "shareStopped"
+  | "shareRevoked"
+  | "permissionLost"
+  | "stopShare"
+  | "revokeShare"
+  | "revokeConfirm"
+  | "stopConfirm"
+  | "routeLabel"
+  | "mobileThreads"
+  | "closeThreadDrawer"
+  | "createThreadFromMessage"
+  | "sourceMessageInvalid"
+  | "newMessages"
+  | "jumpToLatest"
+  | "partialMirror"
+  | "targetType"
+  | "shareStatus"
+  | "writeUnavailable"
+  | "targetTypeChannel"
+  | "targetTypeThread"
+  | "shareActive"
+  | "shareCreated"
+  | "shareConnecting"
+  | "shareDisconnected"
+  | "shareExpired"
+  | "sendTarget"
+  | "willPing"
+  | "commandConfirm"
+  | "commandNotAllowed";
 
 const messages: Record<Locale, Record<MessageKey, string>> = {
   en: {
@@ -98,8 +129,8 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     capabilities: "Capabilities",
     eventLog: "Event log",
     composer: "Composer",
-    agentPrompt: "Agent prompt",
-    channelMessage: "Channel message",
+    agentPrompt: "Ask agent",
+    channelMessage: "Message",
     botCommand: "Bot command",
     messageText: "Message text",
     command: "Command",
@@ -114,7 +145,7 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     selectThread: "Select thread",
     createThread: "Create thread",
     threadName: "Thread name",
-    sourceMessage: "Source message ID (optional)",
+    sourceMessage: "Source message link or ID (optional)",
     viewOnly: "View-only link",
     writeLink: "Control link",
     eventNone: "No events yet.",
@@ -128,19 +159,19 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     attachmentLabel: "attachment",
     browserDisplayName: "WebShare browser",
     notConnected: "Not connected",
+    placeholderAgent: "Ask the agent from this Discord target.",
+    placeholderMessage: "Send a normal Discord-visible message.",
+    placeholderCommand: "Run a supported WebShare command, for example /usage-history.",
     channels: "Channels",
     members: "Members",
     memberHelp: "Tick a person before sending if that message may ping them. Unselected raw mentions stay inert.",
     writeAs: "via",
-    modeAgent: "Agent route: mention the bot to ask it from the shared Discord target.",
-    modeMessage: "Channel route: send a normal Discord-visible message.",
-    modeCommand: "Command route: leading slash runs a bot command.",
-    placeholderAgent: "Type a Discord message. Mention the bot to ask the agent; start with / to run a bot command.",
-    placeholderMessage: "Type a Discord message. Mention the bot to ask the agent; start with / to run a bot command.",
-    placeholderCommand: "Type a Discord message. Mention the bot to ask the agent; start with / to run a bot command.",
+    modeAgent: "Agent route: ask the agent from the displayed Discord target.",
+    modeMessage: "Message route: send a normal Discord-visible message. Mentions only ping when explicitly selected.",
+    modeCommand: "Command route: leading slash selects this route. WebShare only runs supported scheduling and usage commands.",
+    sourceMessageCompact: "message link or ID",
+    threadCreateHint: "Create a managed WebShare thread",
     attachFiles: "Attach files",
-    sourceMessageCompact: "source message ID",
-    threadCreateHint: "Threads",
     systemAuthor: "WebShare",
     botAuthor: "KDB Bot",
     agentAuthor: "KDB Agent",
@@ -162,6 +193,37 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     noThreadMessages: "No thread messages captured yet.",
     replyingTo: "Replying to",
     repliedMessage: "message",
+    server: "Server",
+    shareIdentity: "Acting as",
+    shareStopped: "Share stopped.",
+    shareRevoked: "Share revoked.",
+    permissionLost: "Opener permission changed; this WebShare is no longer active.",
+    stopShare: "Stop share",
+    revokeShare: "Emergency revoke",
+    revokeConfirm: "Revoke this WebShare link now? Use this only if the link may have leaked. The browser will lose write access.",
+    stopConfirm: "Stop this WebShare session for the displayed target?",
+    routeLabel: "Route",
+    mobileThreads: "Channels and threads",
+    closeThreadDrawer: "Close channels and threads",
+    createThreadFromMessage: "Create thread from this message",
+    sourceMessageInvalid: "Use a Discord message link or message ID for the source message.",
+    newMessages: "New messages",
+    jumpToLatest: "Jump to latest",
+    partialMirror: "Live partial mirror; open Discord for full history and unsupported content.",
+    targetType: "Target type",
+    shareStatus: "Share status",
+    writeUnavailable: "Writes unavailable in this state.",
+    targetTypeChannel: "Channel",
+    targetTypeThread: "Thread",
+    shareActive: "Active",
+    shareCreated: "Created",
+    shareConnecting: "Connecting",
+    shareDisconnected: "Disconnected",
+    shareExpired: "Expired",
+    sendTarget: "Send target",
+    willPing: "Will ping",
+    commandConfirm: "Run this potentially disruptive bot command against the displayed Discord target?",
+    commandNotAllowed: "This bot command is not available from WebShare.",
   },
   "zh-TW": {
     appTitle: "KDB WebShare",
@@ -179,8 +241,8 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     capabilities: "能力",
     eventLog: "事件紀錄",
     composer: "撰寫",
-    agentPrompt: "Agent prompt",
-    channelMessage: "頻道訊息",
+    agentPrompt: "詢問 agent",
+    channelMessage: "訊息",
     botCommand: "Bot 指令",
     messageText: "訊息內容",
     command: "指令",
@@ -189,16 +251,19 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     interruptAgent: "中斷 agent",
     mentions: "已選 mention",
     mentionHelp: "v1 僅允許選定使用者與 bot mention。",
-    noMentionEveryone: "角色 mention、@everyone 與 @here 刻意不提供。",
+    noMentionEveryone: "角色 mention、@everyone 與 @here 刻意不可使用。",
     threads: "討論串",
     currentThread: "目前討論串",
     selectThread: "選擇討論串",
     createThread: "建立討論串",
     threadName: "討論串名稱",
-    sourceMessage: "來源訊息 ID（可選）",
+    sourceMessage: "來源訊息連結或 ID（可選）",
     viewOnly: "僅檢視連結",
     writeLink: "控制連結",
     eventNone: "尚無事件。",
+    placeholderAgent: "從此 Discord 目標詢問 agent。",
+    placeholderMessage: "送出一般、會出現在 Discord 的訊息。",
+    placeholderCommand: "執行 WebShare 支援的指令，例如 /usage-history。",
     locale: "語言",
     targetChannel: "目標頻道",
     uploadComplete: "已完成",
@@ -211,17 +276,14 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     notConnected: "尚未連線",
     channels: "頻道",
     members: "成員",
-    memberHelp: "如果訊息可能 ping 某人，送出前先勾選。未勾選的原始 mention 會保持無效。",
+    memberHelp: "若這則訊息需要 ping，送出前請勾選對象。未勾選的原始 mention 會保持 inert。",
     writeAs: "透過",
-    modeAgent: "Agent 路由：mention bot 就會從共享的 Discord 目標詢問 agent。",
-    modeMessage: "頻道路由：送出一般、會出現在 Discord 的訊息。",
-    modeCommand: "指令路由：開頭輸入 / 會執行 bot 指令。",
-    placeholderAgent: "輸入 Discord 訊息。mention bot 會詢問 agent；開頭輸入 / 會執行 bot 指令。",
-    placeholderMessage: "輸入 Discord 訊息。mention bot 會詢問 agent；開頭輸入 / 會執行 bot 指令。",
-    placeholderCommand: "輸入 Discord 訊息。mention bot 會詢問 agent；開頭輸入 / 會執行 bot 指令。",
+    sourceMessageCompact: "訊息連結或 ID",
+    threadCreateHint: "建立受 WebShare 管理的討論串",
+    modeAgent: "Agent 路由：從目前顯示的 Discord 目標詢問 agent。",
+    modeMessage: "訊息路由：送出一般、會出現在 Discord 的訊息。只有明確選取的 mention 會 ping。",
+    modeCommand: "指令路由：開頭輸入 / 會選取此路由。WebShare 只執行支援的排程與用量指令。",
     attachFiles: "附加檔案",
-    sourceMessageCompact: "來源訊息 ID",
-    threadCreateHint: "討論串",
     systemAuthor: "WebShare",
     botAuthor: "KDB Bot",
     agentAuthor: "KDB Agent",
@@ -243,6 +305,37 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     noThreadMessages: "尚未擷取此討論串訊息。",
     replyingTo: "回覆",
     repliedMessage: "訊息",
+    server: "伺服器",
+    shareIdentity: "操作身分",
+    shareStopped: "分享已停止。",
+    shareRevoked: "分享已撤銷。",
+    permissionLost: "開啟者權限已變更；此 WebShare 不再有效。",
+    stopShare: "停止分享",
+    revokeShare: "緊急撤銷",
+    revokeConfirm: "現在撤銷此 WebShare 連結？只有在連結可能外洩時使用。瀏覽器將失去寫入權限。",
+    stopConfirm: "要停止目前顯示目標的 WebShare 工作階段嗎？",
+    routeLabel: "路由",
+    mobileThreads: "頻道與討論串",
+    closeThreadDrawer: "關閉頻道與討論串",
+    createThreadFromMessage: "從這則訊息建立討論串",
+    sourceMessageInvalid: "來源訊息請使用 Discord 訊息連結或訊息 ID。",
+    newMessages: "新訊息",
+    jumpToLatest: "跳到最新",
+    partialMirror: "即時局部鏡像；完整歷史與不支援內容請回 Discord 查看。",
+    targetType: "目標類型",
+    shareStatus: "分享狀態",
+    writeUnavailable: "目前狀態無法寫入。",
+    targetTypeChannel: "頻道",
+    targetTypeThread: "討論串",
+    shareActive: "使用中",
+    shareCreated: "已建立",
+    shareConnecting: "連線中",
+    shareDisconnected: "已中斷",
+    shareExpired: "已過期",
+    sendTarget: "送出目標",
+    willPing: "將會 ping",
+    commandConfirm: "要對目前顯示的 Discord 目標執行這個可能影響運作的 bot 指令嗎？",
+    commandNotAllowed: "WebShare 不提供此 bot 指令。",
   },
 };
 

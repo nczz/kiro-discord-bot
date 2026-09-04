@@ -65,6 +65,15 @@ A write-capable WebShare can:
 
 The browser does not gain access to arbitrary Discord channels, raw local paths, or direct ACP sessions. Each action rechecks the opener's Discord access and channel management state. If the opener loses access or management authority, new actions are rejected and the share becomes degraded or revoked.
 
+The WebShare command bridge is intentionally narrow: browser-originated bot commands are limited to WebShare-safe scheduling and usage commands such as `cron-list`, `cron-run`, `remind`, and `usage-history`. Path, session, runtime, setup, MCP, model, engine, restart/reset, and nested WebShare commands are unavailable from the browser.
+
+
+## Live Mirror Limits
+
+The browser surface is an operator control panel, not a complete Discord client. It mirrors the current target after the browser joins and may show recent in-browser session history, but Discord remains the source of truth for full backlog, permissions, embeds, reactions, polls, components, modals, slash-command UI, and messages sent while the share was offline.
+
+Open Discord when exact history, unsupported Discord-native UI, or audit-grade message context matters. WebShare never exposes raw bot runtime paths, ACP state files, arbitrary channel history, or unscoped attachments to fill those gaps.
+
 ## Mentions
 
 WebShare v1 supports only explicit selected user mentions plus the bot mention. It does not support role mentions, `@everyone`, or `@here`.

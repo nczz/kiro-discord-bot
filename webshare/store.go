@@ -160,8 +160,8 @@ func (s *Store) MarkConnected(ctx context.Context, shareID string, at time.Time)
 	if at.IsZero() {
 		at = time.Now().UTC()
 	}
-	_, err := s.db.ExecContext(ctx, `UPDATE webshare_sessions SET status=?, updated_at=?, last_connected_at=? WHERE share_id=?`, string(StatusActive), encodeTime(at.UTC()), encodeTime(at.UTC()), shareID)
-	return err
+	res, err := s.db.ExecContext(ctx, `UPDATE webshare_sessions SET status=?, updated_at=?, last_connected_at=? WHERE share_id=? AND status IN ('created','connecting','active','disconnected')`, string(StatusActive), encodeTime(at.UTC()), encodeTime(at.UTC()), shareID)
+	return oneRow(res, err)
 }
 
 func (s *Store) MarkPeerSeen(ctx context.Context, shareID string, at time.Time) error {
@@ -172,10 +172,130 @@ func (s *Store) MarkPeerSeen(ctx context.Context, shareID string, at time.Time) 
 	return err
 }
 
+func (s *Store) AcceptPeerSequence(ctx context.Context, shareID string, peerID uint32, seq uint64, at time.Time) (bool, error) {
+	shareID = strings.TrimSpace(shareID)
+	if shareID == "" {
+		return false, fmt.Errorf("share id is required")
+	}
+	if seq > uint64(1<<63-1) {
+		return false, fmt.Errorf("peer sequence exceeds storage range")
+	}
+	if at.IsZero() {
+		at = time.Now().UTC()
+	} else {
+		at = at.UTC()
+	}
+	res, err := s.db.ExecContext(ctx, `INSERT INTO webshare_peer_sequences(share_id,peer_id,highest_seq,updated_at) VALUES(?,?,?,?) ON CONFLICT(share_id,peer_id) DO UPDATE SET highest_seq=excluded.highest_seq, updated_at=excluded.updated_at WHERE excluded.highest_seq > webshare_peer_sequences.highest_seq`, shareID, int64(peerID), int64(seq), encodeTime(at))
+	if err != nil {
+		return false, err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return affected > 0, nil
+}
+
+func (s *Store) ClaimAction(ctx context.Context, shareID, actionID, actionType string, at time.Time) (bool, error) {
+	shareID = strings.TrimSpace(shareID)
+	actionID = strings.TrimSpace(actionID)
+	if shareID == "" || actionID == "" {
+		return false, fmt.Errorf("share id and action id are required")
+	}
+	if at.IsZero() {
+		at = time.Now().UTC()
+	} else {
+		at = at.UTC()
+	}
+	res, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO webshare_action_receipts(share_id,action_id,action_type,created_at) VALUES(?,?,?,?)`, shareID, actionID, strings.TrimSpace(actionType), encodeTime(at))
+	if err != nil {
+		return false, err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return affected > 0, nil
+}
+
 func (s *Store) Revoke(ctx context.Context, shareID, byUserID, reason string) error {
 	now := time.Now().UTC()
 	res, err := s.db.ExecContext(ctx, `UPDATE webshare_sessions SET status=?, updated_at=?, revoked_at=?, revoked_by_user_id=?, revoke_reason=? WHERE share_id=?`, string(StatusRevoked), encodeTime(now), encodeTime(now), byUserID, reason, shareID)
 	return oneRow(res, err)
+}
+
+type PruneResult struct {
+	ExpiredShares         int64
+	DeletedShares         int64
+	DeletedEvents         int64
+	DeletedManagedThreads int64
+	DeletedAttachmentRefs int64
+	DeletedPeerSequences  int64
+	DeletedActionReceipts int64
+}
+
+func (r PruneResult) Total() int64 {
+	return r.ExpiredShares + r.DeletedShares + r.DeletedEvents + r.DeletedManagedThreads + r.DeletedAttachmentRefs + r.DeletedPeerSequences + r.DeletedActionReceipts
+}
+
+func (s *Store) PruneStale(ctx context.Context, now time.Time, activeTTL, historyTTL time.Duration) (PruneResult, error) {
+	if now.IsZero() {
+		now = time.Now().UTC()
+	} else {
+		now = now.UTC()
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return PruneResult{}, err
+	}
+	var out PruneResult
+	exec := func(dest *int64, query string, args ...any) error {
+		res, err := tx.ExecContext(ctx, query, args...)
+		if err != nil {
+			return err
+		}
+		*dest, err = res.RowsAffected()
+		return err
+	}
+	if activeTTL > 0 {
+		cutoff := encodeTime(now.Add(-activeTTL))
+		if err := exec(&out.ExpiredShares, `UPDATE webshare_sessions SET status=?, updated_at=? WHERE status IN ('created','connecting','active','disconnected') AND updated_at < ?`, string(StatusExpired), encodeTime(now), cutoff); err != nil {
+			_ = tx.Rollback()
+			return PruneResult{}, err
+		}
+	}
+	if err := exec(&out.DeletedAttachmentRefs, `DELETE FROM webshare_attachment_refs WHERE expires_at != '' AND expires_at < ?`, encodeTime(now)); err != nil {
+		_ = tx.Rollback()
+		return PruneResult{}, err
+	}
+	if historyTTL > 0 {
+		cutoff := encodeTime(now.Add(-historyTTL))
+		staleShares := `SELECT share_id FROM webshare_sessions WHERE status NOT IN ('created','connecting','active','disconnected') AND updated_at < ?`
+		if err := exec(&out.DeletedEvents, `DELETE FROM webshare_events WHERE share_id IN (`+staleShares+`)`, cutoff); err != nil {
+			_ = tx.Rollback()
+			return PruneResult{}, err
+		}
+		if err := exec(&out.DeletedManagedThreads, `DELETE FROM webshare_managed_child_threads WHERE share_id IN (`+staleShares+`)`, cutoff); err != nil {
+			_ = tx.Rollback()
+			return PruneResult{}, err
+		}
+		if err := exec(&out.DeletedPeerSequences, `DELETE FROM webshare_peer_sequences WHERE share_id IN (`+staleShares+`)`, cutoff); err != nil {
+			_ = tx.Rollback()
+			return PruneResult{}, err
+		}
+		if err := exec(&out.DeletedActionReceipts, `DELETE FROM webshare_action_receipts WHERE share_id IN (`+staleShares+`)`, cutoff); err != nil {
+			_ = tx.Rollback()
+			return PruneResult{}, err
+		}
+		if err := exec(&out.DeletedShares, `DELETE FROM webshare_sessions WHERE status NOT IN ('created','connecting','active','disconnected') AND updated_at < ?`, cutoff); err != nil {
+			_ = tx.Rollback()
+			return PruneResult{}, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return PruneResult{}, err
+	}
+	return out, nil
 }
 
 func (s *Store) RecordEvent(ctx context.Context, e Event) (int64, error) {

@@ -76,4 +76,20 @@ CREATE TABLE IF NOT EXISTS webshare_attachment_refs (
 );
 
 CREATE INDEX IF NOT EXISTS webshare_attachment_refs_scope ON webshare_attachment_refs(share_id, ref_id, expires_at);
+
+CREATE TABLE IF NOT EXISTS webshare_peer_sequences (
+  share_id TEXT NOT NULL,
+  peer_id INTEGER NOT NULL,
+  highest_seq INTEGER NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(share_id, peer_id)
+);
+
+CREATE TABLE IF NOT EXISTS webshare_action_receipts (
+  share_id TEXT NOT NULL,
+  action_id TEXT NOT NULL,
+  action_type TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(share_id, action_id)
+);
 `

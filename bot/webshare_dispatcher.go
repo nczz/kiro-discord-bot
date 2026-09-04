@@ -62,6 +62,9 @@ func (b *Bot) HandleWebShareAction(ctx context.Context, shareID string, action w
 	if err != nil || share == nil || !share.Status.ActiveLocking() {
 		return webshare.ServerEvent{Type: "error", Status: "rejected", ReasonCode: "share_not_active", Content: L.Get("webshare.none")}
 	}
+	if !b.webshareShareHasCurrentAuthority(ctx, *share, share.TargetID) {
+		return b.websharePermissionLostEvent(ctx, *share, share.TargetID, action)
+	}
 	if action.Type == "" || action.Type == "hello" || action.Type == "status" {
 		return b.webshareWelcomeEvent(*share)
 	}
@@ -69,25 +72,29 @@ func (b *Bot) HandleWebShareAction(ctx context.Context, shareID string, action w
 		b.recordWebShareAudit(*share, webshare.EventActionRejected, share.OpenerUserID, action.DisplayName, share.TargetID, false, "write_token_invalid", map[string]any{"action": action.Type})
 		return webshare.ServerEvent{Type: "error", Status: "rejected", ReasonCode: "write_token_invalid", Content: L.Get("webshare.rejected")}
 	}
-	if !b.userCanManageAuditTarget(b.discord, share.OpenerUserID, share.TargetID) {
-		_ = b.webshareStore.MarkStatus(ctx, share.ShareID, webshare.StatusDegraded)
-		b.recordWebShareAudit(*share, webshare.EventActionRejected, share.OpenerUserID, action.DisplayName, share.TargetID, false, "opener_permission_lost", map[string]any{"action": action.Type})
-		return webshare.ServerEvent{Type: "error", Status: "rejected", ReasonCode: "opener_permission_lost", Content: L.Get("webshare.rejected")}
+	if !webshareActionCapabilityAllowed(share.Capabilities, action.Type) {
+		b.recordWebShareAudit(*share, webshare.EventActionRejected, share.OpenerUserID, action.DisplayName, share.TargetID, false, "capability_disabled", map[string]any{"action": action.Type})
+		return webshare.ServerEvent{Type: "error", Status: "rejected", ReasonCode: "capability_disabled", Content: L.Get("webshare.rejected")}
 	}
 
 	requestedThreadID := action.TargetThreadID
 	if action.Type == "select_thread" {
 		requestedThreadID = action.ThreadID
 	}
+	if !webshareActionThreadTargetAllowed(*share, requestedThreadID) {
+		b.recordWebShareAudit(*share, webshare.EventActionRejected, share.OpenerUserID, action.DisplayName, share.TargetID, false, "capability_disabled", map[string]any{"action": action.Type, "capability": "select_thread"})
+		return webshare.ServerEvent{Type: "error", Status: "rejected", ReasonCode: "capability_disabled", Content: L.Get("webshare.rejected")}
+	}
 	targetID, parentID, err := b.webshareResolveActionTarget(ctx, *share, requestedThreadID)
 	if err != nil {
 		b.recordWebShareAudit(*share, webshare.EventActionRejected, share.OpenerUserID, action.DisplayName, share.TargetID, false, "target_scope", map[string]any{"action": action.Type})
 		return webshare.ServerEvent{Type: "error", Status: "rejected", ReasonCode: "target_scope", Content: err.Error()}
 	}
-	if targetID != share.TargetID && !b.userCanManageAuditTarget(b.discord, share.OpenerUserID, targetID) {
-		_ = b.webshareStore.MarkStatus(ctx, share.ShareID, webshare.StatusDegraded)
-		b.recordWebShareAudit(*share, webshare.EventActionRejected, share.OpenerUserID, action.DisplayName, targetID, false, "opener_permission_lost", map[string]any{"action": action.Type})
-		return webshare.ServerEvent{Type: "error", Status: "rejected", ReasonCode: "opener_permission_lost", Content: L.Get("webshare.rejected")}
+	if targetID != share.TargetID && !b.webshareShareHasCurrentAuthority(ctx, *share, targetID) {
+		return b.websharePermissionLostEvent(ctx, *share, targetID, action)
+	}
+	if event := b.claimWebShareAction(ctx, *share, action, targetID); event != nil {
+		return *event
 	}
 
 	b.recordWebShareAudit(*share, webshare.EventActionRequested, share.OpenerUserID, action.DisplayName, targetID, true, "", map[string]any{"action": action.Type})
@@ -113,11 +120,15 @@ func (b *Bot) HandleWebShareAction(ctx context.Context, shareID string, action w
 	case "fetch_attachment", "fetch_discord_attachment":
 		return b.webshareFetchAttachment(ctx, *share, action)
 	case "stop", "revoke":
-		if err := b.webshareStore.Revoke(ctx, share.ShareID, share.OpenerUserID, action.Type); err != nil {
+		reason := "stopped"
+		if action.Type == "revoke" {
+			reason = "revoked"
+		}
+		if err := b.webshareStore.Revoke(ctx, share.ShareID, share.OpenerUserID, reason); err != nil {
 			return webshare.ServerEvent{Type: "error", Status: "error", ReasonCode: "revoke_failed", Content: err.Error()}
 		}
-		b.stopWebShareHost(share.ShareID)
-		return webshare.ServerEvent{Type: "share_revoked", Status: "ok"}
+		b.stopWebShareHostSoon(share.ShareID)
+		return webshare.ServerEvent{Type: "bye", Status: "ok", ReasonCode: reason}
 	default:
 		b.recordWebShareAudit(*share, webshare.EventActionRejected, share.OpenerUserID, action.DisplayName, targetID, false, "unknown_action", map[string]any{"action": action.Type})
 		return webshare.ServerEvent{Type: "error", Status: "rejected", ReasonCode: "unknown_action", Content: L.Get("webshare.unknown_action")}
@@ -133,6 +144,92 @@ func (b *Bot) webshareActionCanWrite(share webshare.Share, action webshare.Clien
 		return false
 	}
 	return webshare.VerifyTokenHash(token, share.WriteTokenHash)
+}
+
+func webshareActionCapabilityAllowed(caps webshare.Capabilities, actionType string) bool {
+	if !caps.Write {
+		return false
+	}
+	switch actionType {
+	case "prompt", "send_agent_prompt":
+		return caps.SendAgentPrompt
+	case "post_channel_message":
+		return caps.PostChannelMessage
+	case "run_bot_command":
+		return caps.RunBotCommand
+	case "create_thread":
+		return caps.CreateThread
+	case "select_thread":
+		return caps.SelectThread
+	case "interrupt", "interrupt_agent":
+		return caps.InterruptAgent
+	case "upload_init", "upload_chunk", "upload_finish", "upload_attachment":
+		return caps.Upload
+	case "fetch_attachment", "fetch_discord_attachment":
+		return caps.FetchAttachment
+	case "stop", "revoke":
+		return caps.Write
+	default:
+		return true
+	}
+}
+
+func webshareActionThreadTargetAllowed(share webshare.Share, requestedThreadID string) bool {
+	requestedThreadID = strings.TrimSpace(requestedThreadID)
+	if requestedThreadID == "" {
+		return true
+	}
+	if share.TargetType == webshare.TargetThread && requestedThreadID == share.TargetID {
+		return true
+	}
+	return share.Capabilities.SelectThread
+}
+
+func (b *Bot) webshareShareHasCurrentAuthority(_ context.Context, share webshare.Share, targetID string) bool {
+	targetID = strings.TrimSpace(targetID)
+	if targetID == "" {
+		targetID = share.TargetID
+	}
+	return b.userCanManageAuditTarget(b.discord, share.OpenerUserID, targetID)
+}
+
+func (b *Bot) websharePermissionLostEvent(ctx context.Context, share webshare.Share, targetID string, action webshare.ClientAction) webshare.ServerEvent {
+	_ = b.webshareStore.MarkStatus(ctx, share.ShareID, webshare.StatusDegraded)
+	b.recordWebShareAudit(share, webshare.EventActionRejected, share.OpenerUserID, action.DisplayName, targetID, false, "opener_permission_lost", map[string]any{"action": action.Type})
+	b.stopWebShareHostSoon(share.ShareID)
+	return webshare.ServerEvent{Type: "bye", Status: "rejected", ReasonCode: "permission_lost", Content: L.Get("webshare.rejected")}
+}
+
+func (b *Bot) claimWebShareAction(ctx context.Context, share webshare.Share, action webshare.ClientAction, targetID string) *webshare.ServerEvent {
+	if !webshareActionRequiresID(action.Type) {
+		return nil
+	}
+	actionID := strings.TrimSpace(action.EventID)
+	if actionID == "" {
+		b.recordWebShareAudit(share, webshare.EventActionRejected, share.OpenerUserID, action.DisplayName, targetID, false, "action_id_required", map[string]any{"action": action.Type})
+		event := webshare.ServerEvent{Type: "error", Status: "rejected", ReasonCode: "action_id_required", Content: L.Get("webshare.rejected")}
+		return &event
+	}
+	claimed, err := b.webshareStore.ClaimAction(ctx, share.ShareID, actionID, action.Type, time.Now())
+	if err != nil {
+		event := webshare.ServerEvent{Type: "error", Status: "error", ReasonCode: "action_id_failed", Content: err.Error()}
+		return &event
+	}
+	if !claimed {
+		b.recordWebShareAudit(share, webshare.EventActionRejected, share.OpenerUserID, action.DisplayName, targetID, false, "action_replayed", map[string]any{"action": action.Type, "action_id": actionID})
+		event := webshare.ServerEvent{Type: "error", Status: "rejected", ReasonCode: "action_replayed", Content: L.Get("webshare.rejected")}
+		return &event
+	}
+	return nil
+}
+
+func webshareActionRequiresID(actionType string) bool {
+	switch actionType {
+	case "prompt", "send_agent_prompt", "post_channel_message", "run_bot_command", "create_thread", "select_thread", "interrupt", "interrupt_agent", "upload_init", "upload_chunk", "upload_attachment", "upload_finish", "fetch_attachment", "fetch_discord_attachment", "stop", "revoke":
+		return true
+	default:
+		return false
+	}
 }
 
 func decodeWebShareWriteToken(raw string) ([]byte, error) {
@@ -181,6 +278,11 @@ func (b *Bot) webshareTargetView(share webshare.Share) map[string]any {
 		view["threadID"] = share.TargetID
 	}
 	if b != nil && b.discord != nil {
+		if b.discord.State != nil {
+			if guild, err := b.discord.State.Guild(share.GuildID); err == nil && guild != nil && strings.TrimSpace(guild.Name) != "" {
+				view["guildName"] = guild.Name
+			}
+		}
 		if ch, err := b.discord.Channel(share.TargetID); err == nil && ch != nil {
 			if share.TargetType == webshare.TargetThread {
 				view["threadName"] = ch.Name
@@ -258,7 +360,7 @@ func webshareSelectedThread(share webshare.Share) string {
 func (b *Bot) websharePrompt(ctx context.Context, share webshare.Share, action webshare.ClientAction, targetID, parentID string) webshare.ServerEvent {
 	localPaths, refs, err := b.websharePreparePromptInputs(ctx, share, action, targetID, parentID)
 	if err != nil {
-		return webshare.ServerEvent{Type: "error", Status: "rejected", ReasonCode: "attachment_scope", Content: err.Error()}
+		return webshare.ServerEvent{Type: "error", Status: "rejected", ReasonCode: "attachment_scope", Content: L.Get("webshare.attachment_scope")}
 	}
 	action.Text = b.stripWebShareBotMention(action.Text)
 	if strings.TrimSpace(action.Text) == "" {
@@ -286,7 +388,12 @@ func (b *Bot) websharePrompt(ctx context.Context, share webshare.Share, action w
 	selfID := b.webshareSelfID()
 	prompt := buildPromptThreadWithMentions(action.Text, localPaths, websharePromptParent(share, targetID, parentID), websharePromptThread(share, targetID, parentID), share.GuildID, share.OpenerUsername, share.OpenerUserID, b.peerPromptContext(selfID), refs)
 	final := func(content string) {
-		b.recordWebShareAudit(share, "webshare_agent_result", share.OpenerUserID, action.DisplayName, targetID, true, "", map[string]any{"bytes": len(content)})
+		redacted := secrets.RedactEnv(content)
+		b.recordWebShareAudit(share, "webshare_agent_result", share.OpenerUserID, action.DisplayName, targetID, true, "", map[string]any{"bytes": len(redacted)})
+		finalEvent := webshare.ServerEvent{Type: "agent_event", Status: "ok", Event: map[string]any{"eventID": webshareEventID("agent-final", targetID), "timestamp": time.Now().UTC().Format(time.RFC3339Nano), "status": "complete", "content": redacted}}
+		if !b.sendWebShareHostEvent(share.ShareID, finalEvent) {
+			b.recordWebShareAudit(share, webshare.EventActionRejected, share.OpenerUserID, action.DisplayName, targetID, false, "webshare_final_mirror_failed", map[string]any{"message_id": messageID})
+		}
 		if messageID != "" && !threadTarget {
 			if err := channel.SendLongReplyWithMentions(b.discord, targetID, messageID, content, refs); err != nil {
 				b.recordWebShareAudit(share, webshare.EventActionRejected, share.OpenerUserID, action.DisplayName, targetID, false, "webshare_final_reply_failed", map[string]any{"message_id": messageID, "error": err.Error()})
@@ -295,11 +402,11 @@ func (b *Bot) websharePrompt(ctx context.Context, share webshare.Share, action w
 	}
 	if threadTarget {
 		if err := b.manager.WebShareEnqueueThread(b.discord, channel.WebSharePrompt{GuildID: share.GuildID, ParentChannelID: websharePromptParent(share, targetID, parentID), ThreadID: targetID, MessageID: messageID, Prompt: prompt, UserID: share.OpenerUserID, Username: share.OpenerUsername, Attachments: localPaths, MentionRefs: refs, FinalReply: final}); err != nil {
-			return webshare.ServerEvent{Type: "error", Status: "error", ReasonCode: "enqueue_failed", Content: err.Error()}
+			return webshareEnqueueFailureEvent()
 		}
 	} else {
 		if err := b.manager.WebShareEnqueue(b.discord, channel.WebSharePrompt{GuildID: share.GuildID, ChannelID: share.TargetID, MessageID: messageID, Prompt: prompt, UserID: share.OpenerUserID, Username: share.OpenerUsername, Attachments: localPaths, MentionRefs: refs, DeliveryMode: channel.DeliveryInline, FinalReply: final}); err != nil {
-			return webshare.ServerEvent{Type: "error", Status: "error", ReasonCode: "enqueue_failed", Content: err.Error()}
+			return webshareEnqueueFailureEvent()
 		}
 	}
 	return webshare.ServerEvent{Type: "agent_event", Status: "queued", Event: map[string]any{"eventID": webshareEventID("agent-queued", targetID), "timestamp": time.Now().UTC().Format(time.RFC3339Nano), "status": "queued"}}
@@ -461,7 +568,7 @@ func (b *Bot) websharePostChannelMessage(ctx context.Context, share webshare.Sha
 	refs := b.webshareMentionRefs(share, action.AllowedMentions)
 	files, attachmentViews, closeFiles, err := b.webshareDiscordMessageFiles(ctx, share, action, targetID)
 	if err != nil {
-		return webshare.ServerEvent{Type: "error", Status: "rejected", ReasonCode: "attachment_scope", Content: err.Error()}
+		return webshare.ServerEvent{Type: "error", Status: "rejected", ReasonCode: "attachment_scope", Content: L.Get("webshare.attachment_scope")}
 	}
 	defer closeFiles()
 	text := replaceSelectedRawMentions(action.Text, refs)
@@ -724,81 +831,21 @@ func (b *Bot) webshareRunBotCommand(ctx context.Context, share webshare.Share, a
 	if name == "" {
 		return webshare.ServerEvent{Type: "error", Status: "rejected", ReasonCode: "command_required", Content: L.Get("webshare.command_required")}
 	}
+	if name == "webshare" {
+		return webshare.ServerEvent{Type: "command_result", Status: "rejected", ReasonCode: "webshare_command_forbidden", Content: L.Get("webshare.rejected")}
+	}
+	allowed, known := webshareCommandAvailability(name)
+	if !allowed {
+		if known {
+			return webshare.ServerEvent{Type: "command_result", Status: "rejected", ReasonCode: "command_unavailable", Content: L.Get("webshare.command_unavailable")}
+		}
+		return webshare.ServerEvent{Type: "command_result", Status: "rejected", ReasonCode: "unknown_command", Content: L.Get("webshare.unknown_command")}
+	}
 	args = webshareCommandArgs(args, action.Args)
 	var replies []string
 	ctxCmd := cmdCtx{channelID: websharePromptParent(share, targetID, parentID), targetID: targetID, inThread: parentID != "" || share.TargetType == webshare.TargetThread, guildID: share.GuildID, userID: share.OpenerUserID, username: share.OpenerUsername, reply: func(s string) { replies = append(replies, s) }, replyWithMetadata: func(s string, _ map[string]any) { replies = append(replies, s) }, replyWithComponents: func(s string, _ []discordgo.MessageComponent, _ map[string]any) { replies = append(replies, s) }}
 	ctxCmd.args = args
 	switch name {
-	case "start":
-		b.cmdStart(ctxCmd)
-	case "cwd":
-		b.cmdCwd(ctxCmd)
-	case "help":
-		b.cmdHelp(ctxCmd)
-	case "status":
-		b.cmdStatus(ctxCmd)
-	case "usage":
-		b.cmdUsage(ctxCmd)
-	case "doctor":
-		b.cmdDoctor(ctxCmd)
-	case "audit":
-		b.cmdAudit(ctxCmd)
-	case "mcp":
-		b.cmdMCP(ctxCmd)
-	case "skill":
-		b.cmdSkill(ctxCmd)
-	case "steering":
-		b.cmdSteering(ctxCmd)
-	case "a2a":
-		if !b.a2aConfig.Enabled() {
-			replies = append(replies, L.Get("a2a.disabled"))
-			break
-		}
-		b.cmdA2A(ctxCmd)
-	case "pause":
-		b.cmdPause(ctxCmd)
-	case "back":
-		b.cmdBack(ctxCmd)
-	case "silent":
-		b.cmdSilent(ctxCmd)
-	case "thread":
-		b.cmdThreadMode(ctxCmd)
-	case "webhook":
-		b.cmdWebhook(ctxCmd)
-	case "reset":
-		b.cmdReset(ctxCmd)
-	case "restart":
-		b.cmdRestart(ctxCmd)
-	case "cancel":
-		b.cmdCancel(ctxCmd)
-	case "interrupt":
-		b.cmdInterrupt(ctxCmd)
-	case "compact":
-		b.cmdCompact(ctxCmd)
-	case "clear":
-		b.cmdClear(ctxCmd)
-	case "model":
-		b.cmdModel(ctxCmd)
-	case "models":
-		b.cmdModels(ctxCmd)
-	case "agent":
-		b.cmdAgent(ctxCmd)
-	case "engine":
-		b.cmdEngine(ctxCmd)
-	case "resume":
-		b.cmdResume(ctxCmd)
-	case "session":
-		b.cmdSession(ctxCmd)
-	case "close":
-		b.cmdClose(ctxCmd)
-	case "close-thread":
-		b.cmdCloseThread(ctxCmd)
-	case "memory":
-		b.cmdMemory(ctxCmd)
-	case "flashmemory":
-		b.cmdFlashMemory(ctxCmd)
-	case "webshare":
-		b.cmdWebShare(ctxCmd)
 	case "cron-list":
 		b.cmdWebShareCronList(ctxCmd)
 	case "cron-run":
@@ -807,12 +854,25 @@ func (b *Bot) webshareRunBotCommand(ctx context.Context, share webshare.Share, a
 		b.cmdWebShareRemind(ctxCmd)
 	case "usage-history":
 		b.cmdWebShareUsageHistory(ctxCmd)
-	case "cron", "cron-prompt":
-		return webshare.ServerEvent{Type: "command_result", Status: "rejected", ReasonCode: "command_requires_discord_component", Content: L.Get("webshare.command_component_required")}
 	default:
 		return webshare.ServerEvent{Type: "command_result", Status: "rejected", ReasonCode: "unknown_command", Content: L.Get("webshare.unknown_command")}
 	}
 	return webshare.ServerEvent{Type: "command_result", Status: "ok", Content: strings.Join(replies, "\n")}
+}
+
+func webshareCommandAvailability(name string) (allowed bool, known bool) {
+	switch name {
+	case "cron-list", "cron-run", "remind", "usage-history":
+		return true, true
+	case "help", "status", "usage", "pause", "back", "silent", "thread", "interrupt", "compact", "clear", "model", "models", "engine", "close", "close-thread", "start", "cwd", "doctor", "audit", "mcp", "skill", "steering", "a2a", "webhook", "reset", "restart", "cancel", "agent", "resume", "session", "memory", "flashmemory", "cron", "cron-prompt":
+		return false, true
+	default:
+		return false, false
+	}
+}
+
+func webshareEnqueueFailureEvent() webshare.ServerEvent {
+	return webshare.ServerEvent{Type: "error", Status: "error", ReasonCode: "enqueue_failed", Content: L.Get("webshare.enqueue_failed")}
 }
 
 func webshareCommandArgs(raw string, values map[string]any) string {
@@ -892,7 +952,7 @@ func (b *Bot) webshareUploadInit(ctx context.Context, share webshare.Share, acti
 	}
 	cwd, err := b.manager.ValidateCWD(b.manager.TargetCWDPath(targetID, parentID))
 	if err != nil {
-		return webshare.ServerEvent{Type: "upload_state", Status: "rejected", UploadID: action.UploadID, ReasonCode: "cwd_invalid", Reason: err.Error()}
+		return webshare.ServerEvent{Type: "upload_state", Status: "rejected", UploadID: action.UploadID, ReasonCode: "cwd_invalid", Reason: L.Get("webshare.cwd_invalid")}
 	}
 	uploadID := strings.TrimSpace(action.UploadID)
 	if uploadID == "" {
@@ -901,11 +961,11 @@ func (b *Bot) webshareUploadInit(ctx context.Context, share webshare.Share, acti
 	filename := webshare.SafeAttachmentFilename(action.Name)
 	dir := webshare.UploadDir(cwd, share.ShareID, webshare.SafeAttachmentFilename(uploadID))
 	if err := os.MkdirAll(dir, 0755); err != nil {
-		return webshare.ServerEvent{Type: "upload_state", Status: "rejected", UploadID: uploadID, ReasonCode: "upload_write_failed", Reason: err.Error()}
+		return webshare.ServerEvent{Type: "upload_state", Status: "rejected", UploadID: uploadID, ReasonCode: "upload_write_failed", Reason: L.Get("webshare.upload_write_failed")}
 	}
 	path := filepath.Join(dir, filename)
 	if err := os.WriteFile(path, nil, 0644); err != nil {
-		return webshare.ServerEvent{Type: "upload_state", Status: "rejected", UploadID: uploadID, ReasonCode: "upload_write_failed", Reason: err.Error()}
+		return webshare.ServerEvent{Type: "upload_state", Status: "rejected", UploadID: uploadID, ReasonCode: "upload_write_failed", Reason: L.Get("webshare.upload_write_failed")}
 	}
 	b.webshareUploadMu.Lock()
 	if b.webshareUploads == nil {
@@ -922,14 +982,14 @@ func (b *Bot) webshareUploadChunk(share webshare.Share, action webshare.ClientAc
 	session := b.webshareUploads[webshareUploadKey(share.ShareID, uploadID)]
 	b.webshareUploadMu.Unlock()
 	if session == nil {
-		return webshare.ServerEvent{Type: "upload_state", Status: "rejected", UploadID: uploadID, ReasonCode: "upload_not_found", Reason: webshare.ErrNotFound.Error()}
+		return webshare.ServerEvent{Type: "upload_state", Status: "rejected", UploadID: uploadID, ReasonCode: "upload_not_found", Reason: L.Get("webshare.upload_not_found")}
 	}
 	if action.Seq != session.nextSeq {
-		return webshare.ServerEvent{Type: "upload_state", Status: "rejected", UploadID: uploadID, ReasonCode: "upload_sequence", Reason: "unexpected upload chunk sequence"}
+		return webshare.ServerEvent{Type: "upload_state", Status: "rejected", UploadID: uploadID, ReasonCode: "upload_sequence", Reason: L.Get("webshare.upload_sequence")}
 	}
 	raw, err := decodeWebShareBytes(action.Bytes)
 	if err != nil {
-		return webshare.ServerEvent{Type: "upload_state", Status: "rejected", UploadID: uploadID, ReasonCode: "bad_upload", Reason: err.Error()}
+		return webshare.ServerEvent{Type: "upload_state", Status: "rejected", UploadID: uploadID, ReasonCode: "bad_upload", Reason: L.Get("webshare.bad_upload")}
 	}
 	if b.attachmentMaxBytes > 0 && session.received+int64(len(raw)) > b.attachmentMaxBytes {
 		b.clearWebShareUpload(session)
@@ -937,15 +997,15 @@ func (b *Bot) webshareUploadChunk(share webshare.Share, action webshare.ClientAc
 	}
 	f, err := os.OpenFile(session.path, os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
-		return webshare.ServerEvent{Type: "upload_state", Status: "rejected", UploadID: uploadID, ReasonCode: "upload_write_failed", Reason: err.Error()}
+		return webshare.ServerEvent{Type: "upload_state", Status: "rejected", UploadID: uploadID, ReasonCode: "upload_write_failed", Reason: L.Get("webshare.upload_write_failed")}
 	}
 	_, writeErr := f.Write(raw)
 	closeErr := f.Close()
 	if writeErr != nil {
-		return webshare.ServerEvent{Type: "upload_state", Status: "rejected", UploadID: uploadID, ReasonCode: "upload_write_failed", Reason: writeErr.Error()}
+		return webshare.ServerEvent{Type: "upload_state", Status: "rejected", UploadID: uploadID, ReasonCode: "upload_write_failed", Reason: L.Get("webshare.upload_write_failed")}
 	}
 	if closeErr != nil {
-		return webshare.ServerEvent{Type: "upload_state", Status: "rejected", UploadID: uploadID, ReasonCode: "upload_write_failed", Reason: closeErr.Error()}
+		return webshare.ServerEvent{Type: "upload_state", Status: "rejected", UploadID: uploadID, ReasonCode: "upload_write_failed", Reason: L.Get("webshare.upload_write_failed")}
 	}
 	_, _ = session.hash.Write(raw)
 	session.received += int64(len(raw))
@@ -957,25 +1017,26 @@ func (b *Bot) webshareUploadFinish(ctx context.Context, share webshare.Share, ac
 	uploadID := strings.TrimSpace(action.UploadID)
 	b.webshareUploadMu.Lock()
 	session := b.webshareUploads[webshareUploadKey(share.ShareID, uploadID)]
+
 	if session != nil {
 		delete(b.webshareUploads, webshareUploadKey(share.ShareID, uploadID))
 	}
 	b.webshareUploadMu.Unlock()
 	if session == nil {
-		return webshare.ServerEvent{Type: "upload_state", Status: "rejected", UploadID: uploadID, ReasonCode: "upload_not_found", Reason: webshare.ErrNotFound.Error()}
+		return webshare.ServerEvent{Type: "upload_state", Status: "rejected", UploadID: uploadID, ReasonCode: "upload_not_found", Reason: L.Get("webshare.upload_not_found")}
 	}
 	if session.size > 0 && session.received != session.size {
 		b.clearWebShareUpload(session)
-		return webshare.ServerEvent{Type: "upload_state", Status: "rejected", UploadID: uploadID, ReasonCode: "upload_size_mismatch", Reason: "uploaded byte count mismatch"}
+		return webshare.ServerEvent{Type: "upload_state", Status: "rejected", UploadID: uploadID, ReasonCode: "upload_size_mismatch", Reason: L.Get("webshare.upload_size_mismatch")}
 	}
 	if session.sha256 != "" && !webshareDigestMatches(session.hash.Sum(nil), session.sha256) {
 		b.clearWebShareUpload(session)
-		return webshare.ServerEvent{Type: "upload_state", Status: "rejected", UploadID: uploadID, ReasonCode: "upload_hash_mismatch", Reason: "uploaded file digest mismatch"}
+		return webshare.ServerEvent{Type: "upload_state", Status: "rejected", UploadID: uploadID, ReasonCode: "upload_hash_mismatch", Reason: L.Get("webshare.upload_hash_mismatch")}
 	}
 	ref, err := b.webshareStore.IssueAttachmentRef(ctx, webshare.AttachmentRef{ID: uploadID, ShareID: share.ShareID, TargetID: session.targetID, MessageID: "web-upload-" + uploadID, AttachmentID: uploadID, Filename: session.filename, Size: session.received, ContentType: session.mime, Metadata: map[string]any{"local_path": session.path, "source": "webshare_upload"}})
 	if err != nil {
 		b.clearWebShareUpload(session)
-		return webshare.ServerEvent{Type: "upload_state", Status: "rejected", UploadID: uploadID, ReasonCode: "attachment_ref_failed", Reason: err.Error()}
+		return webshare.ServerEvent{Type: "upload_state", Status: "rejected", UploadID: uploadID, ReasonCode: "attachment_ref_failed", Reason: L.Get("webshare.attachment_ref_failed")}
 	}
 	b.recordWebShareAudit(share, webshare.EventUploadCompleted, share.OpenerUserID, action.DisplayName, session.targetID, true, "", map[string]any{"attachment_ref": ref.ID, "bytes": session.received, "filename": session.filename})
 	return webshare.ServerEvent{Type: "upload_state", Status: "complete", UploadID: uploadID, Metadata: map[string]any{"attachmentRef": ref.ID, "filename": ref.Filename, "size": ref.Size, "mime": ref.ContentType}}
@@ -996,20 +1057,29 @@ func (b *Bot) webshareUploadOneShot(ctx context.Context, share webshare.Share, a
 func (b *Bot) webshareFetchAttachment(ctx context.Context, share webshare.Share, action webshare.ClientAction) webshare.ServerEvent {
 	ref, err := b.webshareStore.ResolveAttachmentRef(ctx, share.ShareID, action.AttachmentRef)
 	if err != nil {
-		return webshare.ServerEvent{Type: "error", Status: "rejected", ReasonCode: "attachment_ref_invalid", Content: err.Error()}
+		return webshare.ServerEvent{Type: "error", Status: "rejected", ReasonCode: "attachment_ref_invalid", Content: L.Get("webshare.attachment_ref_invalid")}
+	}
+	maxInline := webshareMaxInlineAttachmentBytes(b.webshareConfig.frameLimit())
+	if maxInline > 0 && ref.Size > maxInline {
+		b.recordWebShareAudit(share, webshare.EventActionRejected, share.OpenerUserID, action.DisplayName, ref.TargetID, false, "attachment_frame_limit", map[string]any{"attachment_ref": ref.ID, "bytes": ref.Size, "max_inline_bytes": maxInline})
+		return webshare.ServerEvent{Type: "error", Status: "rejected", ReasonCode: "attachment_frame_limit", Content: L.Get("webshare.rejected"), Metadata: map[string]any{"maxBytes": maxInline}}
 	}
 	var data []byte
 	if p, _ := ref.Metadata["local_path"].(string); p != "" {
 		clean, err := b.validatedWebShareLocalAttachmentPath(share, ref, p)
 		if err != nil {
-			return webshare.ServerEvent{Type: "error", Status: "rejected", ReasonCode: "attachment_scope", Content: err.Error()}
+			return webshare.ServerEvent{Type: "error", Status: "rejected", ReasonCode: "attachment_scope", Content: L.Get("webshare.attachment_scope")}
 		}
 		data, err = os.ReadFile(clean)
 	} else {
 		data, err = b.fetchDiscordAttachmentBytes(ref)
 	}
 	if err != nil {
-		return webshare.ServerEvent{Type: "error", Status: "error", ReasonCode: "attachment_fetch_failed", Content: err.Error()}
+		return webshare.ServerEvent{Type: "error", Status: "error", ReasonCode: "attachment_fetch_failed", Content: L.Get("webshare.attachment_fetch_failed")}
+	}
+	if maxInline > 0 && int64(len(data)) > maxInline {
+		b.recordWebShareAudit(share, webshare.EventActionRejected, share.OpenerUserID, action.DisplayName, ref.TargetID, false, "attachment_frame_limit", map[string]any{"attachment_ref": ref.ID, "bytes": len(data), "max_inline_bytes": maxInline})
+		return webshare.ServerEvent{Type: "error", Status: "rejected", ReasonCode: "attachment_frame_limit", Content: L.Get("webshare.rejected"), Metadata: map[string]any{"maxBytes": maxInline}}
 	}
 	streamID := webshareEventID("att", ref.ID)
 	b.recordWebShareAudit(share, webshare.EventAttachmentFetched, share.OpenerUserID, action.DisplayName, ref.TargetID, true, "", map[string]any{"attachment_ref": ref.ID, "bytes": len(data), "filename": ref.Filename})
@@ -1039,6 +1109,13 @@ func decodeWebShareBytes(raw string) ([]byte, error) {
 		return b, nil
 	}
 	return base64.StdEncoding.DecodeString(raw)
+}
+
+func webshareMaxInlineAttachmentBytes(frameLimit int64) int64 {
+	if frameLimit <= 8192 {
+		return 0
+	}
+	return (frameLimit - 8192) * 3 / 4
 }
 
 func webshareDigestMatches(sum []byte, expected string) bool {

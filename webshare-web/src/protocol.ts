@@ -153,11 +153,13 @@ export type ClientAction = (
   | { type: "create_thread"; sourceMessageID?: string; name: string; autoArchiveDuration?: number }
   | { type: "select_thread"; threadID: string }
   | { type: "interrupt_agent"; jobID?: string }
+  | { type: "stop" }
+  | { type: "revoke" }
   | { type: "upload_init"; uploadID?: string; name: string; mime: string; size: number; sha256?: string }
   | { type: "upload_chunk"; uploadID: string; seq: number; bytes: string }
   | { type: "upload_finish"; uploadID: string }
   | { type: "fetch_discord_attachment"; attachmentRef: string }
-) & { writeToken?: string };
+) & { writeToken?: string; eventID?: string };
 
 export type ServerEvent =
   | { type: "welcome"; share: ShareView; target: TargetView; opener: ActorView; capabilities: Capabilities; mentionableUsers?: MentionableUser[]; mentionableBot?: MentionableBot; threads?: ThreadView[]; selectedThreadID?: string }

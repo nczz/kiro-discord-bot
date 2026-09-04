@@ -168,6 +168,60 @@ func TestBinaryFramesRouteBetweenGuestAndHost(t *testing.T) {
 	}
 }
 
+func TestRelayMetricsExposeCurrentPeersAndForwardingCounts(t *testing.T) {
+	cfg := DefaultConfig()
+	cfg.HostToken = testHostToken
+	cfg.WriteTimeout = time.Second
+	relay, err := NewServer(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	server := httptest.NewServer(relay)
+	defer server.Close()
+
+	host, _, err := dialRelay(server.URL, "metrics", "host", testHostToken)
+	if err != nil {
+		t.Fatalf("host: %v", err)
+	}
+	defer host.Close()
+	guest, _, err := dialRelay(server.URL, "metrics", "guest", "")
+	if err != nil {
+		t.Fatalf("guest: %v", err)
+	}
+	defer guest.Close()
+	if err := guest.WriteMessage(websocket.BinaryMessage, frame(0, []byte("to-host"))); err != nil {
+		t.Fatalf("guest write: %v", err)
+	}
+	if _, _, err := readMessage(host); err != nil {
+		t.Fatalf("host read: %v", err)
+	}
+	if err := host.WriteMessage(websocket.BinaryMessage, frame(1, []byte("to-guest"))); err != nil {
+		t.Fatalf("host write: %v", err)
+	}
+	if _, _, err := readMessage(guest); err != nil {
+		t.Fatalf("guest read: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	rec := httptest.NewRecorder()
+	relay.MetricsHandler().ServeHTTP(rec, req)
+	body := rec.Body.String()
+	for _, want := range []string{
+		"webshare_relay_rooms 1",
+		"webshare_relay_hosts 1",
+		"webshare_relay_guests 1",
+		"webshare_relay_frames_guest_to_host_total 1",
+		"webshare_relay_frames_host_to_guest_total 1",
+		"webshare_relay_bytes_guest_to_host_total 11",
+		"webshare_relay_bytes_host_to_guest_total 12",
+		"webshare_relay_malformed_frames_total 0",
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("metrics missing %q in:\n%s", want, body)
+		}
+	}
+}
+
 func TestHostDisconnectClosesGuests(t *testing.T) {
 	server := newTestRelay(t)
 	defer server.Close()

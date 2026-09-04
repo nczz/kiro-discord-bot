@@ -201,7 +201,19 @@ func TestWebShareStartStatusStopRevoke(t *testing.T) {
 	if !strings.Contains(replies[len(replies)-1], active[0].ShareID) {
 		t.Fatalf("status reply = %q, want share id", replies[len(replies)-1])
 	}
+	ch := make(chan webshare.ServerEvent, 1)
+	b.webshareMu.Lock()
+	b.webshareHosts = map[string]*webshareHostLoop{active[0].ShareID: {send: ch}}
+	b.webshareMu.Unlock()
 	b.cmdWebShare(ctxWithArgs(ctx, "stop"))
+	select {
+	case event := <-ch:
+		if event.Type != "bye" || event.ReasonCode != "stopped" {
+			t.Fatalf("stop terminal event = %+v", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("missing stop terminal event")
+	}
 	if got, _ := store.GetShare(context.Background(), active[0].ShareID); got.Status != webshare.StatusRevoked {
 		t.Fatalf("stop status = %s", got.Status)
 	}
@@ -212,7 +224,19 @@ func TestWebShareStartStatusStopRevoke(t *testing.T) {
 	if len(active) != 1 {
 		t.Fatalf("active after second start = %d", len(active))
 	}
+	ch = make(chan webshare.ServerEvent, 1)
+	b.webshareMu.Lock()
+	b.webshareHosts = map[string]*webshareHostLoop{active[0].ShareID: {send: ch}}
+	b.webshareMu.Unlock()
 	b.cmdWebShare(ctxWithArgs(ctx, "revoke "+active[0].ShareID+" emergency"))
+	select {
+	case event := <-ch:
+		if event.Type != "bye" || event.ReasonCode != "revoked" {
+			t.Fatalf("revoke terminal event = %+v", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("missing revoke terminal event")
+	}
 	if got, _ := store.GetShare(context.Background(), active[0].ShareID); got.Status != webshare.StatusRevoked || got.RevokeReason != "emergency" {
 		t.Fatalf("revoke result = status %s reason %q", got.Status, got.RevokeReason)
 	}
@@ -502,6 +526,15 @@ func TestWebShareThreadCreateValidationAuditRedactionAndAttachmentFetch(t *testi
 	if _, err := store.ResolveAttachmentRef(context.Background(), "wrong-share", ref.ID); err == nil {
 		t.Fatal("wrong share resolved attachment ref")
 	}
+	b.webshareConfig = WebShareConfig{MaxFrameBytes: 10000}
+	tooLarge, err := store.IssueAttachmentRef(context.Background(), webshare.AttachmentRef{ShareID: share.ShareID, TargetID: share.TargetID, MessageID: "msg-large", AttachmentID: "att-large", Filename: "large.bin", Size: webshareMaxInlineAttachmentBytes(10000) + 1, Metadata: map[string]any{"source": "discord_attachment"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got = b.webshareFetchAttachment(context.Background(), share, webshare.ClientAction{AttachmentRef: tooLarge.ID})
+	if got.Status != "rejected" || got.ReasonCode != "attachment_frame_limit" {
+		t.Fatalf("oversized fetch event = %+v", got)
+	}
 }
 
 func TestWebShareCreateThreadIncludesServerTimestamp(t *testing.T) {
@@ -564,10 +597,53 @@ func TestWebShareChunkedUploadIssuesScopedAttachmentRef(t *testing.T) {
 	}
 }
 
+func TestWebShareUploadAndFetchErrorsDoNotExposeLocalPaths(t *testing.T) {
+	L.Load("en")
+	store, share := newTestWebShareStoreAndShare(t)
+	missingProject := filepath.Join(t.TempDir(), "missing-project")
+	b := &Bot{manager: channel.NewManager(channel.ManagerConfig{DataDir: t.TempDir(), DefaultCWD: missingProject}), webshareStore: store, attachmentMaxBytes: 1024}
+
+	init := b.webshareUploadInit(context.Background(), share, webshare.ClientAction{Name: "note.txt", MIME: "text/plain", Size: 1}, share.TargetID, "")
+	if init.Status != "rejected" || init.ReasonCode != "cwd_invalid" {
+		t.Fatalf("init = %+v", init)
+	}
+	if strings.Contains(init.Reason, missingProject) || strings.Contains(init.Reason, "working directory not found") {
+		t.Fatalf("upload init leaked local path/error: %q", init.Reason)
+	}
+
+	project := t.TempDir()
+	b.manager = channel.NewManager(channel.ManagerConfig{DataDir: t.TempDir(), DefaultCWD: project})
+	outsidePath := filepath.Join(t.TempDir(), "outside-secret.txt")
+	ref, err := store.IssueAttachmentRef(context.Background(), webshare.AttachmentRef{ShareID: share.ShareID, TargetID: share.TargetID, MessageID: "web-upload-missing", AttachmentID: "missing", Filename: "missing.txt", Size: 1, Metadata: map[string]any{"local_path": outsidePath}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fetch := b.webshareFetchAttachment(context.Background(), share, webshare.ClientAction{AttachmentRef: ref.ID})
+	if fetch.Status != "rejected" || fetch.ReasonCode != "attachment_scope" {
+		t.Fatalf("fetch = %+v", fetch)
+	}
+	if strings.Contains(fetch.Content, outsidePath) || strings.Contains(fetch.Content, project) {
+		t.Fatalf("attachment fetch leaked local path/error: %q", fetch.Content)
+	}
+	post := b.websharePostChannelMessage(context.Background(), share, webshare.ClientAction{Text: "with stale attachment", Attachments: []webshare.AttachmentRef{{ID: ref.ID}}}, share.TargetID, "")
+	if post.Status != "rejected" || post.ReasonCode != "attachment_scope" {
+		t.Fatalf("post = %+v", post)
+	}
+	if strings.Contains(post.Content, outsidePath) || strings.Contains(post.Content, project) {
+		t.Fatalf("post attachment error leaked local path/error: %q", post.Content)
+	}
+	prompt := b.websharePrompt(context.Background(), share, webshare.ClientAction{Text: "hello", Attachments: []webshare.AttachmentRef{{ID: ref.ID}}}, share.TargetID, "")
+	if prompt.Status != "rejected" || prompt.ReasonCode != "attachment_scope" {
+		t.Fatalf("prompt = %+v", prompt)
+	}
+	if strings.Contains(prompt.Content, outsidePath) || strings.Contains(prompt.Content, project) {
+		t.Fatalf("prompt attachment error leaked local path/error: %q", prompt.Content)
+	}
+}
+
 func TestWebShareBroadcastsLiveDiscordMessage(t *testing.T) {
 	store, share := newTestWebShareStoreAndShare(t)
-	ch := make(chan webshare.ServerEvent, 1)
-	b := &Bot{webshareStore: store, webshareHosts: map[string]*webshareHostLoop{share.ShareID: {send: ch}}}
+	b, ch := newTestWebShareBroadcastBot(t, store, share, 1)
 	msg := &discordgo.MessageCreate{Message: &discordgo.Message{ID: "msg-1", ChannelID: share.TargetID, GuildID: share.GuildID, Content: "hello", Author: &discordgo.User{ID: "user-2", Username: "Bob"}}}
 	b.broadcastWebShareDiscordMessage(context.Background(), msg, "")
 	select {
@@ -594,8 +670,7 @@ func TestWebShareThreadTargetBroadcastUsesShareParentWhenResolverMisses(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	ch := make(chan webshare.ServerEvent, 3)
-	b := &Bot{webshareStore: store, webshareHosts: map[string]*webshareHostLoop{share.ShareID: {send: ch}}}
+	b, ch := newTestWebShareBroadcastBot(t, store, *share, 3)
 
 	createdAt := time.Date(2026, 9, 1, 3, 0, 0, 0, time.UTC)
 	updatedAt := createdAt.Add(time.Minute)
@@ -626,8 +701,7 @@ func TestWebShareThreadTargetBroadcastUsesShareParentWhenResolverMisses(t *testi
 
 func TestWebShareDeleteBroadcastUsesServerTimestampFallback(t *testing.T) {
 	store, share := newTestWebShareStoreAndShare(t)
-	ch := make(chan webshare.ServerEvent, 1)
-	b := &Bot{webshareStore: store, webshareHosts: map[string]*webshareHostLoop{share.ShareID: {send: ch}}}
+	b, ch := newTestWebShareBroadcastBot(t, store, share, 1)
 	before := time.Now().UTC()
 	b.broadcastWebShareDiscordMessageDelete(context.Background(), &discordgo.MessageDelete{Message: &discordgo.Message{ID: "msg-delete-zero", ChannelID: share.TargetID, GuildID: share.GuildID}}, "")
 	select {
@@ -651,8 +725,7 @@ func TestWebShareDeleteBroadcastUsesServerTimestampFallback(t *testing.T) {
 
 func TestWebShareBroadcastIncludesReplyReference(t *testing.T) {
 	store, share := newTestWebShareStoreAndShare(t)
-	ch := make(chan webshare.ServerEvent, 1)
-	b := &Bot{webshareStore: store, webshareHosts: map[string]*webshareHostLoop{share.ShareID: {send: ch}}}
+	b, ch := newTestWebShareBroadcastBot(t, store, share, 1)
 	msg := &discordgo.MessageCreate{Message: &discordgo.Message{
 		ID:        "reply-1",
 		ChannelID: share.TargetID,
@@ -690,10 +763,7 @@ func TestWebShareBroadcastIncludesReplyReference(t *testing.T) {
 
 func TestWebShareBroadcastIncludesFriendlyMentionMetadata(t *testing.T) {
 	store, share := newTestWebShareStoreAndShare(t)
-	ch := make(chan webshare.ServerEvent, 1)
-	ds := &discordgo.Session{State: discordgo.NewState()}
-	ds.State.User = &discordgo.User{ID: "bot-1", Username: "M5Bot", Bot: true}
-	b := &Bot{discord: ds, webshareStore: store, webshareHosts: map[string]*webshareHostLoop{share.ShareID: {send: ch}}}
+	b, ch := newTestWebShareBroadcastBot(t, store, share, 1)
 	msg := &discordgo.MessageCreate{Message: &discordgo.Message{
 		ID:        "msg-mention-1",
 		ChannelID: share.TargetID,
@@ -722,10 +792,10 @@ func TestWebShareBroadcastIncludesFriendlyMentionMetadata(t *testing.T) {
 
 func TestWebShareBroadcastsOtherBotMessagesWithoutAgentHandoff(t *testing.T) {
 	store, share := newTestWebShareStoreAndShare(t)
+	ds := webshareAuthoritySession(t)
 	ch := make(chan webshare.ServerEvent, 1)
-	ds := testPeerPermissionSession(t, nil)
 	b := &Bot{
-		guildID:             "guild-1",
+		guildID:             share.GuildID,
 		discord:             ds,
 		manager:             channel.NewManager(channel.ManagerConfig{}),
 		seen:                newSeenMessages(),
@@ -754,9 +824,11 @@ func TestWebShareBroadcastsOtherBotMessagesWithoutAgentHandoff(t *testing.T) {
 
 func TestWebShareBroadcastsThreadLifecycleAndRegistersChild(t *testing.T) {
 	store, share := newTestWebShareStoreAndShare(t)
-	ch := make(chan webshare.ServerEvent, 1)
-	b := &Bot{webshareStore: store, webshareHosts: map[string]*webshareHostLoop{share.ShareID: {send: ch}}}
+	b, ch := newTestWebShareBroadcastBot(t, store, share, 1)
 	thread := &discordgo.Channel{ID: "thread-42", GuildID: share.GuildID, ParentID: share.TargetID, Name: "Spec Review", Type: discordgo.ChannelTypeGuildPublicThread}
+	if err := b.discord.State.ChannelAdd(thread); err != nil {
+		t.Fatalf("ChannelAdd thread: %v", err)
+	}
 	b.broadcastWebShareThreadLifecycle(context.Background(), thread, "created")
 	select {
 	case event := <-ch:
@@ -795,9 +867,11 @@ func TestWebShareSkipsUnmanagedThreadLifecycle(t *testing.T) {
 	for _, action := range []string{"updated", "deleted"} {
 		t.Run(action, func(t *testing.T) {
 			store, share := newTestWebShareStoreAndShare(t)
-			ch := make(chan webshare.ServerEvent, 1)
-			b := &Bot{webshareStore: store, webshareHosts: map[string]*webshareHostLoop{share.ShareID: {send: ch}}}
+			b, ch := newTestWebShareBroadcastBot(t, store, share, 1)
 			thread := &discordgo.Channel{ID: "thread-42", GuildID: share.GuildID, ParentID: share.TargetID, Name: "Historic Thread", Type: discordgo.ChannelTypeGuildPublicThread}
+			if err := b.discord.State.ChannelAdd(thread); err != nil {
+				t.Fatalf("ChannelAdd thread: %v", err)
+			}
 
 			b.broadcastWebShareThreadLifecycle(context.Background(), thread, action)
 			select {
@@ -821,9 +895,11 @@ func TestWebShareBroadcastsManagedThreadUpdates(t *testing.T) {
 	if err := store.RegisterManagedChildThread(context.Background(), webshare.ManagedChildThread{ShareID: share.ShareID, ParentChannelID: share.TargetID, ThreadID: "thread-42", Name: "Old Name"}); err != nil {
 		t.Fatal(err)
 	}
-	ch := make(chan webshare.ServerEvent, 1)
-	b := &Bot{webshareStore: store, webshareHosts: map[string]*webshareHostLoop{share.ShareID: {send: ch}}}
+	b, ch := newTestWebShareBroadcastBot(t, store, share, 1)
 	thread := &discordgo.Channel{ID: "thread-42", GuildID: share.GuildID, ParentID: share.TargetID, Name: "New Name", Type: discordgo.ChannelTypeGuildPublicThread}
+	if err := b.discord.State.ChannelAdd(thread); err != nil {
+		t.Fatalf("ChannelAdd thread: %v", err)
+	}
 
 	b.broadcastWebShareThreadLifecycle(context.Background(), thread, "updated")
 	select {
@@ -891,8 +967,7 @@ func TestWebShareSkipsPartialMessageUpdates(t *testing.T) {
 
 func TestWebShareMessageUpdateCanClearAttachments(t *testing.T) {
 	store, share := newTestWebShareStoreAndShare(t)
-	ch := make(chan webshare.ServerEvent, 1)
-	b := &Bot{webshareStore: store, webshareHosts: map[string]*webshareHostLoop{share.ShareID: {send: ch}}}
+	b, ch := newTestWebShareBroadcastBot(t, store, share, 1)
 	emptyAttachments := []*discordgo.MessageAttachment{}
 	b.broadcastWebShareDiscordMessageUpdate(context.Background(), &discordgo.MessageUpdate{Message: &discordgo.Message{
 		ID:          "message-2",
@@ -927,7 +1002,200 @@ func mustSessionStore(t *testing.T, dataDir string) *channel.SessionStore {
 	return store
 }
 
+func TestWebShareLiveAuthorityLossTerminatesInsteadOfBroadcast(t *testing.T) {
+	store, share := newTestWebShareStoreAndShare(t)
+	ch := make(chan webshare.ServerEvent, 1)
+	b := &Bot{discord: testPeerPermissionSession(t, nil), webshareStore: store, webshareHosts: map[string]*webshareHostLoop{share.ShareID: {send: ch}}}
+
+	b.broadcastWebShareDiscordMessage(context.Background(), &discordgo.MessageCreate{Message: &discordgo.Message{
+		ID:        "msg-denied",
+		ChannelID: share.TargetID,
+		GuildID:   share.GuildID,
+		Content:   "must not mirror",
+		Author:    &discordgo.User{ID: "user-2", Username: "Bob"},
+	}}, "")
+	select {
+	case event := <-ch:
+		if event.Type != "bye" || event.ReasonCode != "permission_lost" {
+			t.Fatalf("permission loss event = %+v", event)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("missing permission loss terminal event")
+	}
+	got, err := store.GetShare(context.Background(), share.ShareID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != webshare.StatusDegraded {
+		t.Fatalf("share status = %s, want degraded", got.Status)
+	}
+	select {
+	case event := <-ch:
+		t.Fatalf("live content leaked after permission loss: %+v", event)
+	default:
+	}
+}
+
+func TestWebShareDispatcherRejectsCapabilityBypass(t *testing.T) {
+	store, share, token := newTestWebShareStoreShareAndToken(t, webshare.Capabilities{View: true, Write: true, PostChannelMessage: false})
+	b := &Bot{discord: webshareAuthoritySession(t), webshareStore: store}
+
+	got := b.HandleWebShareAction(context.Background(), share.ShareID, webshare.ClientAction{Type: "post_channel_message", Text: "bypass", WriteToken: token, EventID: "evt-capability-bypass"})
+	if got.Status != "rejected" || got.ReasonCode != "capability_disabled" {
+		t.Fatalf("capability bypass event = %+v", got)
+	}
+}
+
+func TestWebShareDispatcherRequiresSelectCapabilityForThreadTarget(t *testing.T) {
+	store, share, token := newTestWebShareStoreShareAndToken(t, webshare.Capabilities{View: true, Write: true, PostChannelMessage: true, SelectThread: false})
+	if err := store.RegisterManagedChildThread(context.Background(), webshare.ManagedChildThread{ShareID: share.ShareID, ParentChannelID: share.TargetID, ThreadID: "thread-1", Name: "Spec Review"}); err != nil {
+		t.Fatal(err)
+	}
+	b := &Bot{discord: webshareAuthoritySession(t), webshareStore: store}
+
+	got := b.HandleWebShareAction(context.Background(), share.ShareID, webshare.ClientAction{Type: "post_channel_message", Text: "bypass", TargetThreadID: "thread-1", WriteToken: token, EventID: "evt-thread-target-bypass"})
+	if got.Status != "rejected" || got.ReasonCode != "capability_disabled" {
+		t.Fatalf("thread target capability bypass event = %+v", got)
+	}
+}
+
+func TestWebShareDispatcherRequiresAndPersistsActionID(t *testing.T) {
+	store, share, token := newTestWebShareStoreShareAndToken(t, webshare.WriteCapabilities())
+	if err := store.RegisterManagedChildThread(context.Background(), webshare.ManagedChildThread{ShareID: share.ShareID, ParentChannelID: share.TargetID, ThreadID: "thread-1", Name: "Spec Review"}); err != nil {
+		t.Fatal(err)
+	}
+	b := &Bot{discord: webshareAuthoritySession(t), webshareStore: store}
+	action := webshare.ClientAction{Type: "select_thread", ThreadID: "thread-1", WriteToken: token}
+	if got := b.HandleWebShareAction(context.Background(), share.ShareID, action); got.Status != "rejected" || got.ReasonCode != "action_id_required" {
+		t.Fatalf("missing action id event = %+v", got)
+	}
+
+	action.EventID = "evt-select-thread"
+	if got := b.HandleWebShareAction(context.Background(), share.ShareID, action); got.Type != "thread_event" || got.Status != "ok" {
+		t.Fatalf("first action event = %+v", got)
+	}
+	reconnected := &Bot{discord: webshareAuthoritySession(t), webshareStore: store}
+	if got := reconnected.HandleWebShareAction(context.Background(), share.ShareID, action); got.Status != "rejected" || got.ReasonCode != "action_replayed" {
+		t.Fatalf("replayed action event = %+v", got)
+	}
+}
+
+func TestWebShareCommandBridgeRejectsNestedWebShare(t *testing.T) {
+	store, share, token := newTestWebShareStoreShareAndToken(t, webshare.WriteCapabilities())
+	b := &Bot{discord: webshareAuthoritySession(t), webshareStore: store}
+
+	got := b.HandleWebShareAction(context.Background(), share.ShareID, webshare.ClientAction{Type: "run_bot_command", Command: "webshare start", WriteToken: token, EventID: "evt-nested-webshare"})
+	if got.Type != "command_result" || got.Status != "rejected" || got.ReasonCode != "webshare_command_forbidden" {
+		t.Fatalf("nested webshare command event = %+v", got)
+	}
+}
+
+func TestWebShareCommandBridgeRejectsPathAndSessionCommands(t *testing.T) {
+	L.Load("en")
+	store, share, token := newTestWebShareStoreShareAndToken(t, webshare.WriteCapabilities())
+	b := &Bot{discord: webshareAuthoritySession(t), webshareStore: store}
+	for _, command := range []string{"cwd", "doctor", "session", "start /tmp", "resume abc", "mcp list", "status", "model bad", "engine bad"} {
+		got := b.HandleWebShareAction(context.Background(), share.ShareID, webshare.ClientAction{Type: "run_bot_command", Command: command, WriteToken: token, EventID: "evt-forbidden-" + command})
+		if got.Type != "command_result" || got.Status != "rejected" || got.ReasonCode != "command_unavailable" {
+			t.Fatalf("%s command event = %+v", command, got)
+		}
+		if strings.Contains(got.Content, "/") || strings.Contains(strings.ToLower(got.Content), "cwd") || strings.Contains(strings.ToLower(got.Content), "session") {
+			t.Fatalf("%s command leaked sensitive detail: %q", command, got.Content)
+		}
+	}
+}
+
+func TestWebSharePromptEnqueueErrorDoesNotExposeLocalPaths(t *testing.T) {
+	L.Load("en")
+	dataDir := t.TempDir()
+	targetCWD := t.TempDir()
+	allowedRoot := t.TempDir()
+	store, share, token := newTestWebShareStoreShareAndToken(t, webshare.WriteCapabilities())
+	rt := &recordingDiscordTransport{}
+	ds := webshareAuthoritySession(t)
+	ds.Client = &http.Client{Transport: rt}
+	manager := channel.NewManager(channel.ManagerConfig{DataDir: dataDir, DefaultCWD: targetCWD, AllowedCwdRoots: allowedRoot})
+	b := &Bot{discord: ds, manager: manager, webshareStore: store, webshareWebhookByChannel: map[string]webshareWebhookCredential{"channel-1": {ID: "webshare-hook-1", Token: "webshare-token-1"}}, webshareWebhookIDs: map[string]bool{}}
+
+	got := b.HandleWebShareAction(context.Background(), share.ShareID, webshare.ClientAction{Type: "send_agent_prompt", Text: "hello", WriteToken: token, EventID: "evt-enqueue-error"})
+	if got.Type != "error" || got.Status != "error" || got.ReasonCode != "enqueue_failed" {
+		t.Fatalf("enqueue error event = %+v", got)
+	}
+	if strings.Contains(got.Content, targetCWD) || strings.Contains(got.Content, allowedRoot) || strings.Contains(got.Content, "ALLOWED_CWD_ROOTS") {
+		t.Fatalf("enqueue error leaked path detail: %q", got.Content)
+	}
+}
+
+func TestWebShareDispatcherStopReturnsTerminalBye(t *testing.T) {
+	store, share, token := newTestWebShareStoreShareAndToken(t, webshare.WriteCapabilities())
+	b := &Bot{discord: webshareAuthoritySession(t), webshareStore: store}
+
+	got := b.HandleWebShareAction(context.Background(), share.ShareID, webshare.ClientAction{Type: "stop", WriteToken: token, EventID: "evt-stop"})
+	if got.Type != "bye" || got.ReasonCode != "stopped" {
+		t.Fatalf("stop event = %+v", got)
+	}
+	stored, err := store.GetShare(context.Background(), share.ShareID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Status != webshare.StatusRevoked {
+		t.Fatalf("stored status = %s, want revoked", stored.Status)
+	}
+}
+
+func TestWebShareMarkConnectedDoesNotReviveRevokedShare(t *testing.T) {
+	store, share := newTestWebShareStoreAndShare(t)
+	if err := store.Revoke(context.Background(), share.ShareID, share.OpenerUserID, "stopped"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.MarkConnected(context.Background(), share.ShareID, time.Now()); err == nil {
+		t.Fatal("MarkConnected revived revoked share")
+	}
+	stored, err := store.GetShare(context.Background(), share.ShareID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Status != webshare.StatusRevoked {
+		t.Fatalf("stored status = %s, want revoked", stored.Status)
+	}
+}
+
+func TestWebShareStoreAcceptPeerSequencePersists(t *testing.T) {
+	store, share := newTestWebShareStoreAndShare(t)
+	if ok, err := store.AcceptPeerSequence(context.Background(), share.ShareID, 7, 1, time.Now()); err != nil || !ok {
+		t.Fatalf("first sequence ok=%v err=%v", ok, err)
+	}
+	for _, seq := range []uint64{1, 0} {
+		if ok, err := store.AcceptPeerSequence(context.Background(), share.ShareID, 7, seq, time.Now()); err != nil || ok {
+			t.Fatalf("replayed sequence %d ok=%v err=%v", seq, ok, err)
+		}
+	}
+	if ok, err := store.AcceptPeerSequence(context.Background(), share.ShareID, 7, 2, time.Now()); err != nil || !ok {
+		t.Fatalf("higher sequence ok=%v err=%v", ok, err)
+	}
+}
+
+func webshareAuthoritySession(t *testing.T) *discordgo.Session {
+	t.Helper()
+	return testPeerPermissionSession(t, []*discordgo.PermissionOverwrite{userMemberManageOverwrite("viewer", discordgo.PermissionManageChannels)})
+}
+
+func newTestWebShareBroadcastBot(t *testing.T, store *webshare.Store, share webshare.Share, buffer int) (*Bot, chan webshare.ServerEvent) {
+	t.Helper()
+	if buffer <= 0 {
+		buffer = 1
+	}
+	ch := make(chan webshare.ServerEvent, buffer)
+	return &Bot{discord: webshareAuthoritySession(t), guildID: share.GuildID, webshareStore: store, webshareHosts: map[string]*webshareHostLoop{share.ShareID: {send: ch}}}, ch
+}
+
 func newTestWebShareStoreAndShare(t *testing.T) (*webshare.Store, webshare.Share) {
+	t.Helper()
+	store, share, _ := newTestWebShareStoreShareAndToken(t, webshare.WriteCapabilities())
+	return store, share
+}
+
+func newTestWebShareStoreShareAndToken(t *testing.T, caps webshare.Capabilities) (*webshare.Store, webshare.Share, string) {
 	t.Helper()
 	store, err := webshare.OpenStore(context.Background(), t.TempDir())
 	if err != nil {
@@ -938,9 +1206,9 @@ func newTestWebShareStoreAndShare(t *testing.T) (*webshare.Store, webshare.Share
 	if err != nil {
 		t.Fatal(err)
 	}
-	share, err := store.CreateShare(context.Background(), webshare.CreateShareRequest{ShareID: mat.ShareID, GuildID: "guild-1", TargetType: webshare.TargetChannel, TargetID: "channel-1", OpenerUserID: "viewer", OpenerUsername: "Viewer", RelayURL: "wss://relay/r", PublicBaseURL: "https://relay", RoomID: mat.RoomID, RoomKey: mat.RoomKey, WriteToken: mat.WriteToken, Capabilities: webshare.WriteCapabilities(), Status: webshare.StatusActive, Now: time.Now()})
+	share, err := store.CreateShare(context.Background(), webshare.CreateShareRequest{ShareID: mat.ShareID, GuildID: "guild-1", TargetType: webshare.TargetChannel, TargetID: "channel-1", OpenerUserID: "viewer", OpenerUsername: "Viewer", RelayURL: "wss://relay/r", PublicBaseURL: "https://relay", RoomID: mat.RoomID, RoomKey: mat.RoomKey, WriteToken: mat.WriteToken, Capabilities: caps, Status: webshare.StatusActive, Now: time.Now()})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return store, *share
+	return store, *share, base64.RawURLEncoding.EncodeToString(mat.WriteToken)
 }

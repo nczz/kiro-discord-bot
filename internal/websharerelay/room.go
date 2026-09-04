@@ -13,13 +13,24 @@ type Hub struct {
 	cfg    Config
 	logger *slog.Logger
 
-	mu    sync.Mutex
-	rooms map[string]*room
+	mu                sync.Mutex
+	rooms             map[string]*room
+	framesGuestToHost uint64
+	framesHostToGuest uint64
+	bytesGuestToHost  uint64
+	bytesHostToGuest  uint64
+	malformedFrames   uint64
 }
 
 type Stats struct {
-	Rooms  int
-	Guests int
+	Rooms             int
+	Hosts             int
+	Guests            int
+	FramesGuestToHost uint64
+	FramesHostToGuest uint64
+	BytesGuestToHost  uint64
+	BytesHostToGuest  uint64
+	MalformedFrames   uint64
 }
 
 type room struct {
@@ -49,8 +60,18 @@ func NewHub(cfg Config, logger *slog.Logger) *Hub {
 func (h *Hub) Stats() Stats {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	stats := Stats{Rooms: len(h.rooms)}
+	stats := Stats{
+		Rooms:             len(h.rooms),
+		FramesGuestToHost: h.framesGuestToHost,
+		FramesHostToGuest: h.framesHostToGuest,
+		BytesGuestToHost:  h.bytesGuestToHost,
+		BytesHostToGuest:  h.bytesHostToGuest,
+		MalformedFrames:   h.malformedFrames,
+	}
 	for _, r := range h.rooms {
+		if r.host != nil && !r.closed {
+			stats.Hosts++
+		}
 		stats.Guests += len(r.guests)
 	}
 	return stats
@@ -152,6 +173,10 @@ func (h *Hub) forwardFromGuest(p *peer, frame []byte) error {
 	if r != nil && !r.closed {
 		host = r.host
 	}
+	if host != nil {
+		h.framesGuestToHost++
+		h.bytesGuestToHost += uint64(len(out))
+	}
 	h.mu.Unlock()
 	if host == nil {
 		return net.ErrClosed
@@ -177,6 +202,10 @@ func (h *Hub) forwardFromHost(p *peer, frame []byte) error {
 			recipients = append(recipients, guest)
 		}
 	}
+	if len(recipients) > 0 {
+		h.framesHostToGuest += uint64(len(recipients))
+		h.bytesHostToGuest += uint64(len(frame) * len(recipients))
+	}
 	h.mu.Unlock()
 
 	for _, recipient := range recipients {
@@ -186,6 +215,12 @@ func (h *Hub) forwardFromHost(p *peer, frame []byte) error {
 		}
 	}
 	return nil
+}
+
+func (h *Hub) recordMalformedFrame() {
+	h.mu.Lock()
+	h.malformedFrames++
+	h.mu.Unlock()
 }
 
 func (p *peer) writeBinary(frame []byte, timeout time.Duration) error {

@@ -26,6 +26,10 @@ func (b *Bot) broadcastWebShareDiscordMessage(ctx context.Context, m *discordgo.
 		if !webshareShareCoversTarget(b.webshareStore, share, m.ChannelID, parentChannelID) {
 			continue
 		}
+		if !b.webshareShareHasCurrentAuthority(ctx, share, webshareLiveAuthorityTarget(share, m.ChannelID, parentChannelID)) {
+			_ = b.sendWebShareHostEvent(share.ShareID, b.websharePermissionLostEvent(ctx, share, webshareLiveAuthorityTarget(share, m.ChannelID, parentChannelID), webshare.ClientAction{Type: "live_authority_check", DisplayName: share.OpenerUsername}))
+			continue
+		}
 		loop := b.webshareHostLoop(share.ShareID)
 		if loop == nil {
 			continue
@@ -158,6 +162,10 @@ func (b *Bot) broadcastWebShareDiscordEvent(ctx context.Context, guildID, channe
 		if !webshareShareCoversTarget(b.webshareStore, share, channelID, parentChannelID) {
 			continue
 		}
+		if !b.webshareShareHasCurrentAuthority(ctx, share, webshareLiveAuthorityTarget(share, channelID, parentChannelID)) {
+			_ = b.sendWebShareHostEvent(share.ShareID, b.websharePermissionLostEvent(ctx, share, webshareLiveAuthorityTarget(share, channelID, parentChannelID), webshare.ClientAction{Type: "live_authority_check", DisplayName: share.OpenerUsername}))
+			continue
+		}
 		loop := b.webshareHostLoop(share.ShareID)
 		if loop == nil {
 			continue
@@ -185,6 +193,14 @@ func (b *Bot) broadcastWebShareThreadLifecycle(ctx context.Context, ch *discordg
 			continue
 		}
 		if !webshareShareCoversThreadLifecycle(share, ch) {
+			continue
+		}
+		authorityTarget := webshareLiveAuthorityTarget(share, ch.ID, ch.ParentID)
+		if action == "deleted" && strings.TrimSpace(ch.ParentID) != "" {
+			authorityTarget = ch.ParentID
+		}
+		if !b.webshareShareHasCurrentAuthority(ctx, share, authorityTarget) {
+			_ = b.sendWebShareHostEvent(share.ShareID, b.websharePermissionLostEvent(ctx, share, authorityTarget, webshare.ClientAction{Type: "live_authority_check", DisplayName: share.OpenerUsername}))
 			continue
 		}
 		if share.TargetType == webshare.TargetChannel {
@@ -223,6 +239,13 @@ func webshareShareCoversThreadLifecycle(share webshare.Share, ch *discordgo.Chan
 		return share.TargetID == ch.ID
 	}
 	return share.TargetType == webshare.TargetChannel && share.TargetID == ch.ParentID
+}
+
+func webshareLiveAuthorityTarget(share webshare.Share, channelID, parentChannelID string) string {
+	if share.TargetType == webshare.TargetChannel && strings.TrimSpace(parentChannelID) != "" {
+		return channelID
+	}
+	return share.TargetID
 }
 
 func webshareEventParent(share webshare.Share, channelID, parentChannelID string) string {

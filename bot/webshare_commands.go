@@ -180,7 +180,8 @@ func (b *Bot) cmdWebShareStop(ctx cmdCtx) {
 		ctx.reply(commandError(err))
 		return
 	}
-	b.stopWebShareHost(share.ShareID)
+	_ = b.sendWebShareHostEvent(share.ShareID, webshare.ServerEvent{Type: "bye", Status: "ok", ReasonCode: "stopped"})
+	b.stopWebShareHostSoon(share.ShareID)
 	b.recordWebShareAudit(share, webshare.EventRevoked, ctx.userID, ctx.username, share.TargetID, true, "stopped", map[string]any{"subcommand": "stop"})
 	ctx.reply(L.Get("webshare.stopped"))
 }
@@ -224,7 +225,8 @@ func (b *Bot) cmdWebShareRevoke(ctx cmdCtx, shareID, reason string) {
 		ctx.reply(commandError(err))
 		return
 	}
-	b.stopWebShareHost(share.ShareID)
+	_ = b.sendWebShareHostEvent(share.ShareID, webshare.ServerEvent{Type: "bye", Status: "ok", ReasonCode: "revoked"})
+	b.stopWebShareHostSoon(share.ShareID)
 	b.recordWebShareAudit(share, webshare.EventRevoked, ctx.userID, ctx.username, share.TargetID, true, "revoked", map[string]any{"subcommand": "revoke", "reason_code": reason})
 	ctx.reply(L.Get("webshare.revoked"))
 }

@@ -12,6 +12,7 @@ const (
 	StatusDisconnected Status = "disconnected"
 	StatusRevoked      Status = "revoked"
 	StatusDegraded     Status = "degraded"
+	StatusExpired      Status = "expired"
 )
 
 func (s Status) ActiveLocking() bool {

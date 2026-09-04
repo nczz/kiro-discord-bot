@@ -1,6 +1,7 @@
 package heartbeat
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"os"
@@ -8,6 +9,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/nczz/kiro-discord-bot/webshare"
 )
 
 // CleanupTask deletes attachment files older than retainDays.
@@ -36,7 +39,8 @@ func (c *CleanupTask) ShouldRun(now time.Time) bool {
 
 func (c *CleanupTask) Run() error {
 	c.lastRun = time.Now()
-	cutoff := time.Now().AddDate(0, 0, -c.retainDays)
+	now := time.Now()
+	cutoff := now.AddDate(0, 0, -c.retainDays)
 	count := 0
 
 	entries, err := os.ReadDir(c.dataDir)
@@ -55,7 +59,29 @@ func (c *CleanupTask) Run() error {
 	if count > 0 {
 		log.Printf("[cleanup] removed %d expired attachments (retain=%d days)", count, c.retainDays)
 	}
+	c.pruneWebShare(now)
 	return nil
+}
+
+func (c *CleanupTask) pruneWebShare(now time.Time) {
+	if _, err := os.Stat(webshare.SQLitePath(c.dataDir)); err != nil {
+		return
+	}
+	store, err := webshare.OpenStore(context.Background(), c.dataDir)
+	if err != nil {
+		log.Printf("[cleanup] open webshare store: %v", err)
+		return
+	}
+	defer store.Close()
+	ttl := time.Duration(c.retainDays) * 24 * time.Hour
+	result, err := store.PruneStale(context.Background(), now, ttl, ttl)
+	if err != nil {
+		log.Printf("[cleanup] prune webshare store: %v", err)
+		return
+	}
+	if result.Total() > 0 {
+		log.Printf("[cleanup] pruned webshare state expired_shares=%d deleted_shares=%d deleted_events=%d deleted_child_threads=%d deleted_attachment_refs=%d deleted_peer_sequences=%d deleted_action_receipts=%d", result.ExpiredShares, result.DeletedShares, result.DeletedEvents, result.DeletedManagedThreads, result.DeletedAttachmentRefs, result.DeletedPeerSequences, result.DeletedActionReceipts)
+	}
 }
 
 func (c *CleanupTask) projectAttachmentRoots() []string {

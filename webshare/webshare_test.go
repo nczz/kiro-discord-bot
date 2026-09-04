@@ -190,6 +190,95 @@ func TestStoreActiveUniquenessRevokeChildThreadAndAttachmentScope(t *testing.T) 
 	}
 }
 
+func TestStorePruneStaleExpiresAndDeletesWebShareState(t *testing.T) {
+	ctx := context.Background()
+	store, err := OpenStore(ctx, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	now := time.Now().UTC()
+	old := now.Add(-48 * time.Hour)
+	roomKey := fixedBytes(RoomKeySize, 21)
+	writeToken := fixedBytes(WriteTokenSize, 61)
+	create := func(id, roomID, targetID string, status Status, at time.Time) {
+		t.Helper()
+		_, err := store.CreateShare(ctx, CreateShareRequest{
+			ShareID: id, GuildID: "g1", TargetType: TargetChannel, TargetID: targetID, OpenerUserID: "u1",
+			RelayURL: "wss://relay/r", PublicBaseURL: "https://relay", RoomID: roomID,
+			RoomKey: roomKey, WriteToken: writeToken, Capabilities: WriteCapabilities(), Status: status, Now: at,
+		})
+		if err != nil {
+			t.Fatalf("create %s: %v", id, err)
+		}
+	}
+	create("ws_old_active", "wr_old_active", "c-old", StatusActive, old)
+	create("ws_fresh_active", "wr_fresh_active", "c-fresh", StatusActive, now)
+	create("ws_revoked_old", "wr_revoked_old", "c-revoked", StatusRevoked, old)
+	if err := store.RegisterManagedChildThread(ctx, ManagedChildThread{ShareID: "ws_revoked_old", ParentChannelID: "c-revoked", ThreadID: "t-revoked", Name: "old child", CreatedAt: old}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RecordEvent(ctx, Event{ShareID: "ws_revoked_old", Type: "relay.replay", TargetID: "c-revoked", CreatedAt: old}); err != nil {
+		t.Fatal(err)
+	}
+	if accepted, err := store.AcceptPeerSequence(ctx, "ws_revoked_old", 7, 1, old); err != nil || !accepted {
+		t.Fatalf("accept peer sequence accepted=%v err=%v", accepted, err)
+	}
+	if claimed, err := store.ClaimAction(ctx, "ws_revoked_old", "act-1", "prompt", old); err != nil || !claimed {
+		t.Fatalf("claim action claimed=%v err=%v", claimed, err)
+	}
+	expiredRef, err := store.IssueAttachmentRef(ctx, AttachmentRef{ShareID: "ws_fresh_active", TargetID: "c-fresh", MessageID: "m-expired", AttachmentID: "a-expired", Filename: "old.txt", Size: 1, ExpiresAt: old})
+	if err != nil {
+		t.Fatal(err)
+	}
+	liveRef, err := store.IssueAttachmentRef(ctx, AttachmentRef{ShareID: "ws_fresh_active", TargetID: "c-fresh", MessageID: "m-live", AttachmentID: "a-live", Filename: "live.txt", Size: 1, ExpiresAt: now.Add(time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := store.PruneStale(ctx, now, 24*time.Hour, 24*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ExpiredShares != 1 || result.DeletedShares != 1 || result.DeletedEvents != 1 || result.DeletedManagedThreads != 1 || result.DeletedAttachmentRefs != 1 || result.DeletedPeerSequences != 1 || result.DeletedActionReceipts != 1 {
+		t.Fatalf("unexpected prune result: %+v", result)
+	}
+	oldActive, err := store.GetShare(ctx, "ws_old_active")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if oldActive.Status != StatusExpired {
+		t.Fatalf("old active status = %s, want expired", oldActive.Status)
+	}
+	if _, err := store.GetShare(ctx, "ws_revoked_old"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("revoked old share lookup = %v", err)
+	}
+	active, err := store.ListActive(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(active) != 1 || active[0].ShareID != "ws_fresh_active" {
+		t.Fatalf("active shares = %+v", active)
+	}
+	if _, err := store.ResolveAttachmentRef(ctx, "ws_fresh_active", expiredRef.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expired ref lookup = %v", err)
+	}
+	if _, err := store.ResolveAttachmentRef(ctx, "ws_fresh_active", liveRef.ID); err != nil {
+		t.Fatalf("live ref lookup: %v", err)
+	}
+	var peerSequences, actionReceipts int
+	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM webshare_peer_sequences WHERE share_id=?`, "ws_revoked_old").Scan(&peerSequences); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM webshare_action_receipts WHERE share_id=?`, "ws_revoked_old").Scan(&actionReceipts); err != nil {
+		t.Fatal(err)
+	}
+	if peerSequences != 0 || actionReceipts != 0 {
+		t.Fatalf("retained replay/idempotency rows peer=%d action=%d", peerSequences, actionReceipts)
+	}
+}
+
 func TestDisplayNameSanitizer(t *testing.T) {
 	redact := func(s string) string { return strings.ReplaceAll(s, "secret", "") }
 	got := SanitizeDisplayName(" \x00<@123456> @everyone Alice secret\n", redact)

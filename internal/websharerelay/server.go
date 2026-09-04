@@ -58,15 +58,14 @@ func (s *Server) MetricsHandler() http.Handler {
 		}
 		stats := s.hub.Stats()
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-		_, _ = w.Write([]byte("# HELP webshare_relay_rooms Current relay rooms.\n"))
-		_, _ = w.Write([]byte("# TYPE webshare_relay_rooms gauge\n"))
-		_, _ = w.Write([]byte("webshare_relay_rooms "))
-		_, _ = w.Write([]byte(intString(stats.Rooms)))
-		_, _ = w.Write([]byte("\n# HELP webshare_relay_guests Current relay guest peers.\n"))
-		_, _ = w.Write([]byte("# TYPE webshare_relay_guests gauge\n"))
-		_, _ = w.Write([]byte("webshare_relay_guests "))
-		_, _ = w.Write([]byte(intString(stats.Guests)))
-		_, _ = w.Write([]byte("\n"))
+		writeMetric(w, "webshare_relay_rooms", "Current relay rooms.", "gauge", intString(stats.Rooms))
+		writeMetric(w, "webshare_relay_hosts", "Current relay host peers.", "gauge", intString(stats.Hosts))
+		writeMetric(w, "webshare_relay_guests", "Current relay guest peers.", "gauge", intString(stats.Guests))
+		writeMetric(w, "webshare_relay_frames_guest_to_host_total", "Relay frames forwarded from guests to hosts.", "counter", uint64String(stats.FramesGuestToHost))
+		writeMetric(w, "webshare_relay_frames_host_to_guest_total", "Relay frames forwarded from hosts to guests.", "counter", uint64String(stats.FramesHostToGuest))
+		writeMetric(w, "webshare_relay_bytes_guest_to_host_total", "Relay bytes forwarded from guests to hosts.", "counter", uint64String(stats.BytesGuestToHost))
+		writeMetric(w, "webshare_relay_bytes_host_to_guest_total", "Relay bytes forwarded from hosts to guests.", "counter", uint64String(stats.BytesHostToGuest))
+		writeMetric(w, "webshare_relay_malformed_frames_total", "Relay binary frames rejected as malformed.", "counter", uint64String(stats.MalformedFrames))
 	})
 }
 
@@ -79,9 +78,15 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	stats := s.hub.Stats()
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"ok":     true,
-		"rooms":  stats.Rooms,
-		"guests": stats.Guests,
+		"ok":                     true,
+		"rooms":                  stats.Rooms,
+		"guests":                 stats.Guests,
+		"hosts":                  stats.Hosts,
+		"frames_guest_to_host":   stats.FramesGuestToHost,
+		"frames_host_to_guest":   stats.FramesHostToGuest,
+		"bytes_guest_to_host":    stats.BytesGuestToHost,
+		"bytes_host_to_guest":    stats.BytesHostToGuest,
+		"malformed_frames_total": stats.MalformedFrames,
 	})
 }
 
@@ -178,6 +183,7 @@ func (s *Server) readLoop(p *peer, idleTimeout time.Duration, forward func(*peer
 			return
 		}
 		if _, _, err := parsePeerFrame(frame, s.cfg.MaxFrameBytes); err != nil {
+			s.hub.recordMalformedFrame()
 			p.closeWith(CloseBadFrame, "bad frame", s.cfg.WriteTimeout)
 			return
 		}
@@ -187,7 +193,37 @@ func (s *Server) readLoop(p *peer, idleTimeout time.Duration, forward func(*peer
 	}
 }
 
+func writeMetric(w http.ResponseWriter, name, help, metricType, value string) {
+	_, _ = w.Write([]byte("# HELP "))
+	_, _ = w.Write([]byte(name))
+	_, _ = w.Write([]byte(" "))
+	_, _ = w.Write([]byte(help))
+	_, _ = w.Write([]byte("\n# TYPE "))
+	_, _ = w.Write([]byte(name))
+	_, _ = w.Write([]byte(" "))
+	_, _ = w.Write([]byte(metricType))
+	_, _ = w.Write([]byte("\n"))
+	_, _ = w.Write([]byte(name))
+	_, _ = w.Write([]byte(" "))
+	_, _ = w.Write([]byte(value))
+	_, _ = w.Write([]byte("\n"))
+}
+
 func intString(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	var buf [20]byte
+	i := len(buf)
+	for n > 0 {
+		i--
+		buf[i] = byte('0' + n%10)
+		n /= 10
+	}
+	return string(buf[i:])
+}
+
+func uint64String(n uint64) string {
 	if n == 0 {
 		return "0"
 	}

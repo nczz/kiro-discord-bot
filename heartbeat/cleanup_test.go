@@ -1,11 +1,14 @@
 package heartbeat
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/nczz/kiro-discord-bot/webshare"
 )
 
 func TestCleanupTaskRemovesExpiredProjectCWDAttachments(t *testing.T) {
@@ -53,6 +56,53 @@ func TestCleanupTaskStillRemovesExpiredLegacyChannelAttachments(t *testing.T) {
 	if _, err := os.Stat(freshPath); err != nil {
 		t.Fatalf("fresh legacy attachment missing: %v", err)
 	}
+}
+
+func TestCleanupTaskPrunesStaleWebShareState(t *testing.T) {
+	dataDir := t.TempDir()
+	ctx := context.Background()
+	store, err := webshare.OpenStore(ctx, dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.CreateShare(ctx, webshare.CreateShareRequest{
+		ShareID: "ws-old", GuildID: "g1", TargetType: webshare.TargetChannel, TargetID: "c1", OpenerUserID: "u1",
+		RelayURL: "wss://relay/r", PublicBaseURL: "https://relay", RoomID: "wr-old",
+		RoomKey: fixedCleanupBytes(webshare.RoomKeySize, 3), WriteToken: fixedCleanupBytes(webshare.WriteTokenSize, 41),
+		Capabilities: webshare.WriteCapabilities(), Status: webshare.StatusActive, Now: time.Now().AddDate(0, 0, -8),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	task := NewCleanupTask(dataDir, 7)
+	if err := task.Run(); err != nil {
+		t.Fatalf("cleanup run: %v", err)
+	}
+
+	store, err = webshare.OpenStore(ctx, dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	got, err := store.GetShare(ctx, "ws-old")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != webshare.StatusExpired {
+		t.Fatalf("webshare status = %s, want expired", got.Status)
+	}
+}
+
+func fixedCleanupBytes(n int, seed byte) []byte {
+	b := make([]byte, n)
+	for i := range b {
+		b[i] = seed + byte(i)
+	}
+	return b
 }
 
 func writeAttachmentFile(t *testing.T, path string, modTime time.Time) {

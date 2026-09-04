@@ -91,6 +91,7 @@ func (b *Bot) runWebShareHost(ctx context.Context, share webshare.Share, outboun
 		}
 		if err := b.hostWebShareOnce(ctx, *current, roomKey, outbound); err != nil && ctx.Err() == nil {
 			log.Printf("[webshare] host disconnected share=%s: %v", share.ShareID, err)
+			b.recordWebShareAudit(*current, webshare.EventActionRejected, current.OpenerUserID, current.OpenerUsername, current.TargetID, false, "webshare_host_disconnected", map[string]any{"error": err.Error()})
 		}
 		t := time.NewTimer(backoff)
 		select {
@@ -123,6 +124,7 @@ func (b *Bot) hostWebShareOnce(ctx context.Context, share webshare.Share, roomKe
 	b.recordWebShareAudit(share, webshare.EventConnected, share.OpenerUserID, share.OpenerUsername, share.TargetID, true, "", nil)
 
 	peerReplay := make(map[uint32]uint64)
+	relayPeerBindings := make(map[uint32]uint32)
 	var seqMu sync.Mutex
 	var seq uint64
 	var writeMu sync.Mutex
@@ -151,6 +153,7 @@ func (b *Bot) hostWebShareOnce(ctx context.Context, share webshare.Share, roomKe
 			case event := <-outbound:
 				if err := sendEvent(0, event); err != nil {
 					log.Printf("[webshare] broadcast event share=%s: %v", share.ShareID, err)
+					b.recordWebShareAudit(share, webshare.EventActionRejected, share.OpenerUserID, share.OpenerUsername, share.TargetID, false, "webshare_broadcast_write_failed", map[string]any{"error": err.Error(), "event_type": event.Type})
 					return
 				}
 			}
@@ -166,26 +169,52 @@ func (b *Bot) hostWebShareOnce(ctx context.Context, share webshare.Share, roomKe
 		}
 		peerID, payload, err := parseWebSharePeerFrame(frame, b.webshareConfig.frameLimit())
 		if err != nil {
-			return err
+			log.Printf("[webshare] ignored malformed relay frame share=%s: %v", share.ShareID, err)
+			b.recordWebShareAudit(share, webshare.EventActionRejected, share.OpenerUserID, share.OpenerUsername, share.TargetID, false, "malformed_frame", map[string]any{"error": err.Error()})
+			continue
 		}
 		var env webshare.FrameEnvelope
 		if err := json.Unmarshal(payload, &env); err != nil {
-			return err
+			log.Printf("[webshare] ignored malformed envelope share=%s relay_peer=%d: %v", share.ShareID, peerID, err)
+			b.recordWebShareAudit(share, webshare.EventActionRejected, share.OpenerUserID, share.OpenerUsername, share.TargetID, false, "malformed_frame", map[string]any{"relay_peer": peerID, "error": err.Error()})
+			continue
 		}
-		if env.Sequence <= peerReplay[peerID] {
-			log.Printf("[webshare] ignored replayed guest frame share=%s peer=%d seq=%d", share.ShareID, peerID, env.Sequence)
+		if boundEnvelopePeer, ok := relayPeerBindings[peerID]; ok && boundEnvelopePeer != env.PeerID {
+			log.Printf("[webshare] ignored peer rebinding share=%s relay_peer=%d bound=%d envelope=%d seq=%d", share.ShareID, peerID, boundEnvelopePeer, env.PeerID, env.Sequence)
+			b.recordWebShareAudit(share, webshare.EventActionRejected, share.OpenerUserID, share.OpenerUsername, share.TargetID, false, "peer_mismatch", map[string]any{"relay_peer": peerID, "bound_envelope_peer": boundEnvelopePeer, "envelope_peer": env.PeerID})
+			continue
+		}
+		if last, ok := peerReplay[env.PeerID]; ok && env.Sequence <= last {
+			log.Printf("[webshare] ignored replayed guest frame share=%s peer=%d seq=%d", share.ShareID, env.PeerID, env.Sequence)
+			b.recordWebShareAudit(share, webshare.EventActionRejected, share.OpenerUserID, share.OpenerUsername, share.TargetID, false, "replayed_frame", map[string]any{"peer": env.PeerID, "seq": env.Sequence})
 			continue
 		}
 		plain, err := webshare.OpenEnvelope(roomKey, share.RoomID, webshare.DirectionGuestToHost, env, nil)
 		if err != nil {
+			log.Printf("[webshare] ignored bad encrypted envelope share=%s relay_peer=%d envelope_peer=%d seq=%d: %v", share.ShareID, peerID, env.PeerID, env.Sequence, err)
+			b.recordWebShareAudit(share, webshare.EventActionRejected, share.OpenerUserID, share.OpenerUsername, share.TargetID, false, "malformed_frame", map[string]any{"relay_peer": peerID, "envelope_peer": env.PeerID, "seq": env.Sequence, "error": err.Error()})
+			continue
+		}
+		if _, ok := relayPeerBindings[peerID]; !ok {
+			relayPeerBindings[peerID] = env.PeerID
+		}
+		accepted, err := b.webshareStore.AcceptPeerSequence(context.Background(), share.ShareID, env.PeerID, env.Sequence, time.Now())
+		if err != nil {
 			return err
 		}
-		peerReplay[peerID] = env.Sequence
+		if !accepted {
+			log.Printf("[webshare] ignored persisted replayed guest frame share=%s peer=%d seq=%d", share.ShareID, env.PeerID, env.Sequence)
+			b.recordWebShareAudit(share, webshare.EventActionRejected, share.OpenerUserID, share.OpenerUsername, share.TargetID, false, "replayed_frame", map[string]any{"peer": env.PeerID, "seq": env.Sequence})
+			continue
+		}
+		peerReplay[env.PeerID] = env.Sequence
 		var action webshare.ClientAction
 		if webshare.FrameType(env.Type) == webshare.FrameTypeClientAction || webshare.FrameType(env.Type) == webshare.FrameTypeHello {
 			action, err = webshare.UnmarshalClientAction(plain)
 			if err != nil {
-				return err
+				log.Printf("[webshare] ignored malformed action share=%s relay_peer=%d envelope_peer=%d seq=%d: %v", share.ShareID, peerID, env.PeerID, env.Sequence, err)
+				b.recordWebShareAudit(share, webshare.EventActionRejected, share.OpenerUserID, share.OpenerUsername, share.TargetID, false, "malformed_action", map[string]any{"relay_peer": peerID, "envelope_peer": env.PeerID, "seq": env.Sequence, "error": err.Error()})
+				continue
 			}
 		} else {
 			continue
@@ -193,9 +222,17 @@ func (b *Bot) hostWebShareOnce(ctx context.Context, share webshare.Share, roomKe
 		_ = b.webshareStore.MarkPeerSeen(context.Background(), share.ShareID, time.Now())
 		if err := sendEvent(peerID, b.HandleWebShareAction(context.Background(), share.ShareID, action)); err != nil {
 			log.Printf("[webshare] write event share=%s: %v", share.ShareID, err)
+			b.recordWebShareAudit(share, webshare.EventActionRejected, share.OpenerUserID, action.DisplayName, share.TargetID, false, "webshare_direct_write_failed", map[string]any{"error": err.Error(), "relay_peer": peerID, "envelope_peer": env.PeerID, "action": action.Type})
 		}
 	}
 	return ctx.Err()
+}
+
+func (b *Bot) stopWebShareHostSoon(shareID string) {
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		b.stopWebShareHost(shareID)
+	}()
 }
 
 func webshareRelayURL(base, roomID string) (string, error) {
