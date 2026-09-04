@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   allowedMentionSelectionForDraft,
   commandName,
+  displayDiscordMentions,
   highRiskCommand,
   mentionPreviewNames,
   resolveDraftMode,
@@ -19,11 +20,13 @@ const picker = (overrides = {}) => ({
   ...overrides,
 });
 
-test("slash selects command route but bot mention does not select agent route", () => {
-  assert.equal(resolveDraftMode("message", "hello <@bot-1>"), "message");
-  assert.equal(resolveDraftMode("agent", "<@bot-1> help"), "agent");
-  assert.equal(resolveDraftMode("message", " /status"), "command");
-  assert.equal(resolveDraftMode("command", "plain text"), "command");
+test("slash selects command route and bot mention selects agent route", () => {
+  const { bot } = picker();
+  assert.equal(resolveDraftMode("message", "hello <@bot-1>", bot), "agent");
+  assert.equal(resolveDraftMode("message", "hello <@!bot-1>", bot), "agent");
+  assert.equal(resolveDraftMode("agent", "<@bot-1> help", bot), "agent");
+  assert.equal(resolveDraftMode("message", " /status", bot), "command");
+  assert.equal(resolveDraftMode("command", "plain text", bot), "command");
 });
 
 test("command names and WebShare command availability are classified explicitly", () => {
@@ -57,6 +60,15 @@ test("mention preview names match the exact mentions that can ping", () => {
   assert.deepEqual(mentionPreviewNames("@Kiro hi", state, true, true), []);
   assert.deepEqual(mentionPreviewNames("<@user-2> <@bot-1>", state, true, true), ["@Kiro", "@Bob"]);
   assert.deepEqual(mentionPreviewNames("<@user-2> <@bot-1>", state, true, false), ["@Bob"]);
+});
+
+test("display mentions renders raw and structured mentions as names", () => {
+  const state = picker({
+    users: [{ id: "123456789012345678", displayName: "mxp.tw", username: "mxp" }],
+    bot: { id: "999999999999999999", displayName: "KDB" },
+  });
+  assert.equal(displayDiscordMentions("[[discord:user:123456789012345678]] hi <@999999999999999999>", [], state), "@mxp.tw hi @KDB");
+  assert.equal(displayDiscordMentions("<@\u200b111111111111111111> <#222222222222222222> <@&333333333333333333>", [], state), "@Discord user #channel @role");
 });
 
 test("thread source accepts Discord message links or snowflake IDs", () => {

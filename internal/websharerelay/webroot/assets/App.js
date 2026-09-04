@@ -1,7 +1,7 @@
 import { continueAcceptedUpload, downloadURL, queueUploads, selectedAttachmentRefs } from "./attachments.js";
 import { deriveSessionKeys, openJSON, parseJoinFragment, sealJSON, writeTokenProof } from "./crypto.js";
 import { clear, el, formatBytes } from "./dom.js";
-import { allowedMentionSelectionForDraft, commandName, highRiskCommand, mentionPreviewNames, resolveDraftMode, webshareCommandAllowed } from "./composer.js";
+import { allowedMentionSelectionForDraft, commandName, displayDiscordMentions, draftMentionsBot, highRiskCommand, mentionPreviewNames, resolveDraftMode, webshareCommandAllowed } from "./composer.js";
 import { parseDiscordMessageReference, suggestedThreadName } from "./threads.js";
 import { chooseLocale, setLocale, t } from "./i18n.js";
 import { hasCapability, PROTOCOL_VERSION } from "./protocol.js";
@@ -173,7 +173,7 @@ function applyServerEvent(event) {
             applyThreadEvent(event.event);
             break;
         case "agent_event":
-            pushMessage("agent", t(state.locale, "agentAuthor"), event.event.content ?? event.event.status, { timestamp: event.event.timestamp });
+            pushMessage("agent", t(state.locale, "agentAuthor"), event.event.content ?? event.event.status, { timestamp: event.event.timestamp, mentions: event.event.mentions });
             break;
         case "command_result":
             pushMessage("command", t(state.locale, "botAuthor"), event.content || event.status);
@@ -974,10 +974,10 @@ function allowedMentionSelection(text = state.draft.text) {
     return allowedMentionSelectionForDraft(text, state.mentionPicker, canWrite("mentionUsers"), canWrite("mentionBot"));
 }
 function currentDraftMode(text = state.draft.text) {
-    const mode = resolveDraftMode(state.draft.mode, text);
-    if (mode !== state.draft.mode)
+    const mode = resolveDraftMode(state.draft.mode, text, modeWritable("agent") ? state.mentionPicker.bot : undefined);
+    if (mode === "command" && mode !== state.draft.mode)
         state.draft.mode = mode;
-    return state.draft.mode;
+    return mode;
 }
 function actionWithWriteToken(action) {
     const eventID = action.type === "hello" ? action.eventID : action.eventID ?? crypto.randomUUID();
@@ -1148,7 +1148,7 @@ function pushMessage(kind, author, content, options = {}) {
         message.deleted = true;
     if (options.thread)
         message.thread = options.thread;
-    state.liveAnnouncement = `${author}: ${content.slice(0, 160)}`;
+    state.liveAnnouncement = `${author}: ${displayDiscordMentions(content, options.mentions ?? [], state.mentionPicker).slice(0, 160)}`;
     if (options.threadMessage)
         message.threadMessage = true;
     if (options.replyTo)
@@ -1235,6 +1235,8 @@ function composerPlaceholder() {
 function composerHint(mode) {
     if (mode === "command")
         return t(state.locale, "modeCommand");
+    if (mode === "agent" && state.draft.mode === "message" && modeWritable("agent") && draftMentionsBot(state.draft.text, state.mentionPicker.bot))
+        return t(state.locale, "modeMentionAgent");
     if (mode === "agent")
         return t(state.locale, "modeAgent");
     return t(state.locale, "modeMessage");
@@ -1576,28 +1578,7 @@ function safeMarkdownHref(href) {
     return undefined;
 }
 function displayMessageContent(message) {
-    if (!message.content)
-        return "";
-    const mentions = new Map();
-    for (const mention of message.mentions ?? [])
-        mentions.set(mention.id, mention);
-    if (state.mentionPicker.bot)
-        mentions.set(state.mentionPicker.bot.id, { ...state.mentionPicker.bot, bot: true, kind: "bot" });
-    for (const user of state.mentionPicker.users)
-        mentions.set(user.id, { ...user, kind: "user" });
-    return message.content.replace(/<(@!?|@&|#)(\d+)>/g, (token, prefix, id) => {
-        const mention = mentions.get(id);
-        if (mention) {
-            if (mention.kind === "channel" || prefix === "#")
-                return `#${mention.displayName}`;
-            return `@${mention.displayName}`;
-        }
-        if (prefix === "#")
-            return "#channel";
-        if (prefix === "@&")
-            return "@role";
-        return "@Discord user";
-    });
+    return displayDiscordMentions(message.content, message.mentions ?? [], state.mentionPicker);
 }
 function threadJump(thread) {
     const button = el("button", { className: "thread-jump", text: `${t(state.locale, "openThread")} · ${t(state.locale, "replyInThread")} # ${thread.name}` });
@@ -1629,6 +1610,6 @@ function createThreadFromMessageButton(message) {
 }
 function replyPreview(replyTo) {
     const author = replyTo.author?.displayName ?? t(state.locale, "repliedMessage");
-    const content = replyTo.deleted ? t(state.locale, "messageDeleted") : replyTo.content ?? replyTo.messageID;
+    const content = replyTo.deleted ? t(state.locale, "messageDeleted") : displayDiscordMentions(replyTo.content ?? replyTo.messageID, replyTo.mentions ?? [], state.mentionPicker);
     return el("div", { className: "reply-preview", text: `${t(state.locale, "replyingTo")} ${author}: ${content.slice(0, 160)}` });
 }

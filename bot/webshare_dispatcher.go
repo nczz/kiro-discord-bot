@@ -386,26 +386,27 @@ func (b *Bot) websharePrompt(ctx context.Context, share webshare.Share, action w
 		b.sendWebShareHostEvent(share.ShareID, webshareMessageEventForTarget(share, targetID, parentID, record))
 	}
 	selfID := b.webshareSelfID()
-	prompt := buildPromptThreadWithMentions(action.Text, localPaths, websharePromptParent(share, targetID, parentID), websharePromptThread(share, targetID, parentID), share.GuildID, share.OpenerUsername, share.OpenerUserID, b.peerPromptContext(selfID), refs)
+	promptRefs := appendMentionRefs(refs, webshareUserMentionRefs(b.peerMentionRefs(selfID))...)
+	prompt := buildPromptThreadWithMentions(action.Text, localPaths, websharePromptParent(share, targetID, parentID), websharePromptThread(share, targetID, parentID), share.GuildID, share.OpenerUsername, share.OpenerUserID, b.peerPromptContext(selfID), promptRefs)
 	final := func(content string) {
 		redacted := secrets.RedactEnv(content)
 		b.recordWebShareAudit(share, "webshare_agent_result", share.OpenerUserID, action.DisplayName, targetID, true, "", map[string]any{"bytes": len(redacted)})
-		finalEvent := webshare.ServerEvent{Type: "agent_event", Status: "ok", Event: map[string]any{"eventID": webshareEventID("agent-final", targetID), "timestamp": time.Now().UTC().Format(time.RFC3339Nano), "status": "complete", "content": redacted}}
+		finalEvent := webshare.ServerEvent{Type: "agent_event", Status: "ok", Event: map[string]any{"eventID": webshareEventID("agent-final", targetID), "timestamp": time.Now().UTC().Format(time.RFC3339Nano), "status": "complete", "content": redacted, "mentions": webshareMentionsFromRefs(promptRefs)}}
 		if !b.sendWebShareHostEvent(share.ShareID, finalEvent) {
 			b.recordWebShareAudit(share, webshare.EventActionRejected, share.OpenerUserID, action.DisplayName, targetID, false, "webshare_final_mirror_failed", map[string]any{"message_id": messageID})
 		}
 		if messageID != "" && !threadTarget {
-			if err := channel.SendLongReplyWithMentions(b.discord, targetID, messageID, content, refs); err != nil {
+			if err := channel.SendLongReplyWithMentions(b.discord, targetID, messageID, content, promptRefs); err != nil {
 				b.recordWebShareAudit(share, webshare.EventActionRejected, share.OpenerUserID, action.DisplayName, targetID, false, "webshare_final_reply_failed", map[string]any{"message_id": messageID, "error": err.Error()})
 			}
 		}
 	}
 	if threadTarget {
-		if err := b.manager.WebShareEnqueueThread(b.discord, channel.WebSharePrompt{GuildID: share.GuildID, ParentChannelID: websharePromptParent(share, targetID, parentID), ThreadID: targetID, MessageID: messageID, Prompt: prompt, UserID: share.OpenerUserID, Username: share.OpenerUsername, Attachments: localPaths, MentionRefs: refs, FinalReply: final}); err != nil {
+		if err := b.manager.WebShareEnqueueThread(b.discord, channel.WebSharePrompt{GuildID: share.GuildID, ParentChannelID: websharePromptParent(share, targetID, parentID), ThreadID: targetID, MessageID: messageID, Prompt: prompt, UserID: share.OpenerUserID, Username: share.OpenerUsername, Attachments: localPaths, MentionRefs: promptRefs, FinalReply: final}); err != nil {
 			return webshareEnqueueFailureEvent()
 		}
 	} else {
-		if err := b.manager.WebShareEnqueue(b.discord, channel.WebSharePrompt{GuildID: share.GuildID, ChannelID: share.TargetID, MessageID: messageID, Prompt: prompt, UserID: share.OpenerUserID, Username: share.OpenerUsername, Attachments: localPaths, MentionRefs: refs, DeliveryMode: channel.DeliveryInline, FinalReply: final}); err != nil {
+		if err := b.manager.WebShareEnqueue(b.discord, channel.WebSharePrompt{GuildID: share.GuildID, ChannelID: share.TargetID, MessageID: messageID, Prompt: prompt, UserID: share.OpenerUserID, Username: share.OpenerUsername, Attachments: localPaths, MentionRefs: promptRefs, DeliveryMode: channel.DeliveryInline, FinalReply: final}); err != nil {
 			return webshareEnqueueFailureEvent()
 		}
 	}
@@ -550,22 +551,39 @@ func (b *Bot) webshareBotMentionRef(share webshare.Share) (discordmention.Ref, b
 	return discordmention.UserRef(u.ID, u.Username), true
 }
 
+func webshareUserMentionRefs(refs []discordmention.Ref) []discordmention.Ref {
+	out := make([]discordmention.Ref, 0, len(refs))
+	for _, ref := range refs {
+		if ref.Kind == "user" {
+			out = append(out, ref)
+		}
+	}
+	return out
+}
+
 func (b *Bot) stripWebShareBotMention(text string) string {
 	text = strings.TrimSpace(text)
 	if b == nil || b.discord == nil || b.discord.State == nil || b.discord.State.User == nil {
 		return text
 	}
 	u := b.discord.State.User
-	for _, token := range []string{"<@" + u.ID + ">", "<@!" + u.ID + ">", "@" + u.Username, "@" + displayOrDefault(u.Username)} {
-		if strings.HasPrefix(strings.ToLower(text), strings.ToLower(strings.TrimSpace(token))) {
-			return strings.TrimSpace(text[len(strings.TrimSpace(token)):])
+	for _, token := range []string{"<@" + u.ID + ">", "<@!" + u.ID + ">"} {
+		text = strings.ReplaceAll(text, token, "")
+	}
+	text = strings.TrimSpace(text)
+	for _, token := range []string{"@" + u.Username, "@" + displayOrDefault(u.Username)} {
+		token = strings.TrimSpace(token)
+		if token != "" && token != "@" && strings.HasPrefix(strings.ToLower(text), strings.ToLower(token)) {
+			return strings.TrimSpace(text[len(token):])
 		}
 	}
 	return text
 }
 
 func (b *Bot) websharePostChannelMessage(ctx context.Context, share webshare.Share, action webshare.ClientAction, targetID, parentID string) webshare.ServerEvent {
-	refs := b.webshareMentionRefs(share, action.AllowedMentions)
+	selection := action.AllowedMentions
+	selection.Bot = false
+	refs := b.webshareMentionRefs(share, selection)
 	files, attachmentViews, closeFiles, err := b.webshareDiscordMessageFiles(ctx, share, action, targetID)
 	if err != nil {
 		return webshare.ServerEvent{Type: "error", Status: "rejected", ReasonCode: "attachment_scope", Content: L.Get("webshare.attachment_scope")}

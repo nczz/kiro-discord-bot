@@ -62,6 +62,7 @@ export interface MessageReferenceView {
   guildID?: string;
   author?: ActorView;
   content?: string;
+  mentions?: MentionView[];
   deleted?: boolean;
 }
 
@@ -144,6 +145,7 @@ export interface SanitizedAgentEvent {
   jobID?: string;
   status: "queued" | "running" | "final" | "error" | "interrupted" | string;
   content?: string;
+  mentions?: MentionView[];
 }
 export type ClientAction = (
   | { type: "hello"; proto: typeof PROTOCOL_VERSION; displayName: string }

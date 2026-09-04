@@ -15,6 +15,7 @@ import (
 	"github.com/bwmarrin/discordgo"
 	"github.com/nczz/kiro-discord-bot/audit"
 	"github.com/nczz/kiro-discord-bot/channel"
+	"github.com/nczz/kiro-discord-bot/internal/discordmention"
 	L "github.com/nczz/kiro-discord-bot/locale"
 	"github.com/nczz/kiro-discord-bot/webshare"
 )
@@ -386,6 +387,27 @@ func TestWebSharePostMessageHonorsMentionCapabilities(t *testing.T) {
 	if len(payload.AllowedMentions.Users) != 0 {
 		t.Fatalf("allowed users = %+v, want none", payload.AllowedMentions.Users)
 	}
+
+	rt = &recordingDiscordTransport{}
+	ds.Client = &http.Client{Transport: rt}
+	share.Capabilities = webshare.Capabilities{Write: true, PostChannelMessage: true, MentionBot: true}
+	b.websharePostChannelMessage(context.Background(), share, webshare.ClientAction{Text: "hello <@999999999999999999>", AllowedMentions: webshare.AllowedMentionSelection{Bot: true}}, "channel-1", "")
+	_, bodies = rt.Snapshot()
+	if len(bodies) != 1 {
+		t.Fatalf("discord requests = %d", len(bodies))
+	}
+	var botPayload struct {
+		Content         string `json:"content"`
+		AllowedMentions struct {
+			Users []string `json:"users"`
+		} `json:"allowed_mentions"`
+	}
+	if err := json.Unmarshal([]byte(bodies[0]), &botPayload); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(botPayload.Content, "<@999999999999999999>") || len(botPayload.AllowedMentions.Users) != 0 {
+		t.Fatalf("channel post bot mention bypass content=%q users=%+v", botPayload.Content, botPayload.AllowedMentions.Users)
+	}
 }
 
 func TestWebSharePostMessageReportsWebhookPermissionMissing(t *testing.T) {
@@ -410,12 +432,35 @@ func TestWebSharePromptRecordContentMentionsBotAndStripsTrigger(t *testing.T) {
 	if text != "please check" {
 		t.Fatalf("stripped text = %q", text)
 	}
+	if got := b.stripWebShareBotMention("please check <@999999999999999999>"); got != "please check" {
+		t.Fatalf("raw bot mention stripped text = %q", got)
+	}
 	content, allowed := b.websharePromptRecordBody(share, text, nil)
 	if content != "<@999999999999999999> please check" {
 		t.Fatalf("visible prompt content = %q", content)
 	}
 	if len(allowed.Users) != 1 || allowed.Users[0] != "999999999999999999" {
 		t.Fatalf("allowed users = %+v", allowed.Users)
+	}
+}
+
+func TestWebSharePeerMentionRefsRenderAgentFinalNames(t *testing.T) {
+	b := &Bot{peers: parseBotPeers("KDB:999999999999999999,ReviewBot:819486221511163904:777777777777777777")}
+	refs := webshareUserMentionRefs(b.peerMentionRefs("999999999999999999"))
+	content, allowed := discordmention.Render("[[discord:user:819486221511163904]] hi", refs)
+	if content != "<@819486221511163904> hi" {
+		t.Fatalf("rendered peer mention = %q", content)
+	}
+	if len(allowed.Users) != 1 || allowed.Users[0] != "819486221511163904" {
+		t.Fatalf("allowed users = %+v", allowed.Users)
+	}
+	roleContent, roleAllowed := discordmention.Render("[[discord:role:777777777777777777]] hi", refs)
+	if roleContent != "Discord role hi" || len(roleAllowed.Roles) != 0 {
+		t.Fatalf("webshare role mention rendered content=%q allowed=%+v", roleContent, roleAllowed.Roles)
+	}
+	views := webshareMentionsFromRefs(refs)
+	if len(views) != 1 || views[0]["id"] != "819486221511163904" || views[0]["displayName"] != "ReviewBot" {
+		t.Fatalf("webshare mention views = %+v", views)
 	}
 }
 
@@ -741,8 +786,11 @@ func TestWebShareBroadcastIncludesReplyReference(t *testing.T) {
 			ID:        "root-1",
 			ChannelID: share.TargetID,
 			GuildID:   share.GuildID,
-			Content:   "root context",
+			Content:   "root <@user-3>",
 			Author:    &discordgo.User{ID: "user-1", Username: "Alice"},
+			Mentions: []*discordgo.User{
+				{ID: "user-3", Username: "Carol"},
+			},
 		},
 	}}
 	b.broadcastWebShareDiscordMessage(context.Background(), msg, "")
@@ -752,8 +800,12 @@ func TestWebShareBroadcastIncludesReplyReference(t *testing.T) {
 	if !ok {
 		t.Fatalf("replyTo missing: %#v", payload)
 	}
-	if replyTo["messageID"] != "root-1" || replyTo["content"] != "root context" {
+	if replyTo["messageID"] != "root-1" || replyTo["content"] != "root <@user-3>" {
 		t.Fatalf("replyTo = %#v", replyTo)
+	}
+	mentions := replyTo["mentions"].([]map[string]any)
+	if len(mentions) != 1 || mentions[0]["displayName"] != "Carol" {
+		t.Fatalf("reply mentions = %#v", mentions)
 	}
 	author := replyTo["author"].(map[string]any)
 	if author["displayName"] != "Alice" {

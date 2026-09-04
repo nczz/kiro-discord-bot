@@ -349,6 +349,9 @@ func discordReplyReferenceFromMessage(m *discordgo.Message) map[string]any {
 			out["author"] = map[string]any{"id": referenced.Author.ID, "displayName": displayOrDefault(referenced.Author.Username), "username": referenced.Author.Username}
 		}
 		out["content"] = secrets.RedactEnv(referenced.Content)
+		if len(referenced.Mentions) > 0 {
+			out["mentions"] = discordMentionsFromUsers(referenced.Mentions)
+		}
 	}
 	if _, ok := out["messageID"]; !ok {
 		return nil

@@ -51,6 +51,7 @@ type MessageKey =
   | "memberHelp"
   | "writeAs"
   | "modeAgent"
+  | "modeMentionAgent"
   | "modeMessage"
   | "modeCommand"
   | "placeholderAgent"
@@ -167,7 +168,8 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     memberHelp: "Tick a person before sending if that message may ping them. Unselected raw mentions stay inert.",
     writeAs: "via",
     modeAgent: "Agent route: ask the agent from the displayed Discord target.",
-    modeMessage: "Message route: send a normal Discord-visible message. Mentions only ping when explicitly selected.",
+    modeMentionAgent: "Bot mention detected: sending through the agent route to match Discord behavior.",
+    modeMessage: "Message route: send a normal Discord-visible message. Mentioning the bot switches to the agent route; other mentions only ping when explicitly selected.",
     modeCommand: "Command route: leading slash selects this route. WebShare only runs supported scheduling and usage commands.",
     sourceMessageCompact: "message link or ID",
     threadCreateHint: "Create a managed WebShare thread",
@@ -281,7 +283,8 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     sourceMessageCompact: "訊息連結或 ID",
     threadCreateHint: "建立受 WebShare 管理的討論串",
     modeAgent: "Agent 路由：從目前顯示的 Discord 目標詢問 agent。",
-    modeMessage: "訊息路由：送出一般、會出現在 Discord 的訊息。只有明確選取的 mention 會 ping。",
+    modeMentionAgent: "偵測到 bot mention：會依 Discord 習慣改走詢問 agent 路徑。",
+    modeMessage: "訊息路由：送出一般、會出現在 Discord 的訊息。mention bot 會切換到 agent 路徑；其他 mention 只有明確選取才會 ping。",
     modeCommand: "指令路由：開頭輸入 / 會選取此路由。WebShare 只執行支援的排程與用量指令。",
     attachFiles: "附加檔案",
     systemAuthor: "WebShare",

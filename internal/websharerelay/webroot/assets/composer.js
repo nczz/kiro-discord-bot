@@ -1,5 +1,10 @@
-export function resolveDraftMode(selectedMode, text) {
-    return text.trimStart().startsWith("/") && selectedMode !== "command" ? "command" : selectedMode;
+export function resolveDraftMode(selectedMode, text, bot) {
+    const trimmed = text.trimStart();
+    if (trimmed.startsWith("/") && selectedMode !== "command")
+        return "command";
+    if (selectedMode === "message" && draftMentionsBot(text, bot))
+        return "agent";
+    return selectedMode;
 }
 export function commandName(command) {
     return command.trim().split(/\s+/u)[0]?.toLowerCase() ?? "";
@@ -59,4 +64,37 @@ export function mentionPreviewNames(text, picker, canMentionUsers, canMentionBot
         }
     }
     return names;
+}
+export function displayDiscordMentions(text, mentions = [], picker) {
+    if (!text)
+        return "";
+    const lookup = new Map();
+    for (const mention of mentions)
+        lookup.set(mention.id, mention);
+    if (picker?.bot)
+        lookup.set(picker.bot.id, { ...picker.bot, bot: true, kind: "bot" });
+    for (const user of picker?.users ?? [])
+        lookup.set(user.id, { ...user, kind: "user" });
+    const label = (kind, id, fallbackPrefix) => {
+        const mention = lookup.get(id);
+        if (mention) {
+            if (mention.kind === "channel" || kind === "channel")
+                return `#${mention.displayName}`;
+            return `@${mention.displayName}`;
+        }
+        if (kind === "channel")
+            return "#channel";
+        if (kind === "role")
+            return "@role";
+        return fallbackPrefix;
+    };
+    return text
+        .replace(/\[\[discord:(user|role):(\d+)\]\]/g, (_token, kind, id) => label(kind, id, kind === "role" ? "@role" : "@Discord user"))
+        .replace(/<(@!?|@&|#)\u200b?(\d+)>/g, (_token, prefix, id) => {
+        if (prefix === "#")
+            return label("channel", id, "#channel");
+        if (prefix === "@&")
+            return label("role", id, "@role");
+        return label("user", id, "@Discord user");
+    });
 }

@@ -255,12 +255,8 @@ input:focus, textarea:focus, select:focus, button:focus-visible, .upload-icon:fo
 }
 .delegation-notice { display: grid; gap: 0.25rem; }
 .trust-bar {
-  position: sticky;
-  top: 0;
-  z-index: 2;
   border-color: rgba(88, 101, 242, 0.75);
   background: linear-gradient(135deg, rgba(88, 101, 242, 0.18), rgba(35, 36, 40, 0.96));
-  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.22);
 }
 .mobile-thread-panel {
   display: none;
