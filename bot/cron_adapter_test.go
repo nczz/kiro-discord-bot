@@ -13,6 +13,7 @@ import (
 	"github.com/bwmarrin/discordgo"
 	"github.com/nczz/kiro-discord-bot/acp"
 	"github.com/nczz/kiro-discord-bot/audit"
+	"github.com/nczz/kiro-discord-bot/channel"
 	"github.com/nczz/kiro-discord-bot/heartbeat"
 	"github.com/nczz/kiro-discord-bot/internal/botegress"
 	L "github.com/nczz/kiro-discord-bot/locale"
@@ -184,6 +185,70 @@ func TestCronAdapterDrainSafeEgressFlushesThreadTarget(t *testing.T) {
 	if len(actions) != 0 {
 		t.Fatalf("pending actions = %+v, want empty", actions)
 	}
+}
+
+func TestCronAdapterPrepareCronThreadAddsCreatorOnlyForNewThread(t *testing.T) {
+	rt := &recordingDiscordTransport{}
+	ds, err := discordgo.New("Bot test")
+	if err != nil {
+		t.Fatalf("new discord session: %v", err)
+	}
+	ds.Client = &http.Client{Transport: rt}
+	manager := channel.NewManager(channel.ManagerConfig{DataDir: t.TempDir()})
+	defer manager.StopAll()
+	adapter := &cronAdapter{botNotifier{bot: &Bot{discord: ds, manager: manager}}}
+
+	threadID, created, err := adapter.prepareCronThread(ds, &heartbeat.CronJob{
+		ChannelID:   "channel-1",
+		CreatedByID: "user-1",
+	}, "Daily report")
+	if err != nil {
+		t.Fatalf("prepareCronThread: %v", err)
+	}
+	if !created || threadID == "" {
+		t.Fatalf("prepareCronThread created=%v threadID=%q, want new thread", created, threadID)
+	}
+	paths, _ := rt.Snapshot()
+	if !containsPath(paths, "/thread-members/user-1") {
+		t.Fatalf("new cron thread should add creator once; paths=%v", paths)
+	}
+}
+
+func TestCronAdapterPrepareCronThreadDoesNotReaddCreatorForExistingThread(t *testing.T) {
+	rt := &recordingDiscordTransport{}
+	ds, err := discordgo.New("Bot test")
+	if err != nil {
+		t.Fatalf("new discord session: %v", err)
+	}
+	ds.Client = &http.Client{Transport: rt}
+	manager := channel.NewManager(channel.ManagerConfig{DataDir: t.TempDir()})
+	defer manager.StopAll()
+	adapter := &cronAdapter{botNotifier{bot: &Bot{discord: ds, manager: manager}}}
+
+	threadID, created, err := adapter.prepareCronThread(ds, &heartbeat.CronJob{
+		ChannelID:   "channel-1",
+		ThreadID:    "thread-1",
+		CreatedByID: "user-1",
+	}, "Daily report")
+	if err != nil {
+		t.Fatalf("prepareCronThread: %v", err)
+	}
+	if created || threadID != "thread-1" {
+		t.Fatalf("prepareCronThread created=%v threadID=%q, want existing thread-1", created, threadID)
+	}
+	paths, _ := rt.Snapshot()
+	if containsPath(paths, "/thread-members/user-1") {
+		t.Fatalf("existing cron thread must not re-add creator who may have left; paths=%v", paths)
+	}
+}
+
+func containsPath(paths []string, fragment string) bool {
+	for _, path := range paths {
+		if strings.Contains(path, fragment) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestBuildCronCardDisplaysRunsInCronTimezone(t *testing.T) {

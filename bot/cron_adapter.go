@@ -127,11 +127,9 @@ func (a *cronAdapter) RecordAgentResponse(agent *acp.Agent, job *heartbeat.CronJ
 	})
 }
 
-func (a *cronAdapter) AskAgentInThread(ctx context.Context, agent *acp.Agent, job *heartbeat.CronJob, threadName, prompt string) (string, string, bool, error) {
-	ds := a.bot.discord
+func (a *cronAdapter) prepareCronThread(ds *discordgo.Session, job *heartbeat.CronJob, threadName string) (string, bool, error) {
 	channelID := job.ChannelID
 	existingThreadID := job.ThreadID
-	mentionID := job.MentionID
 	createdByID := job.CreatedByID
 	loc := a.bot.cronLocationOrLocal()
 	archiveDur := a.bot.manager.ThreadArchive()
@@ -157,15 +155,36 @@ func (a *cronAdapter) AskAgentInThread(ctx context.Context, agent *acp.Agent, jo
 		}
 	}
 
+	createdThread := false
 	if threadID == "" {
 		// Create new thread
 		thread, err := ds.ThreadStart(channelID, threadName, discordgo.ChannelTypeGuildPublicThread, archiveDur)
 		if err != nil {
-			return "", "", false, fmt.Errorf("create thread: %w", err)
+			return "", false, fmt.Errorf("create thread: %w", err)
 		}
 		threadID = thread.ID
+		createdThread = true
 		// Post initial separator for new thread
 		_, _ = sendDiscordText(ds, threadID, fmt.Sprintf("── %s ──", time.Now().In(loc).Format("01/02 15:04")), nil)
+	}
+
+	// Add creator only when a cron thread is first created. Later runs must not
+	// re-add users who left the thread or changed Discord notification settings.
+	if createdThread && createdByID != "" {
+		_ = ds.ThreadMemberAdd(threadID, createdByID)
+	}
+
+	return threadID, createdThread, nil
+}
+
+func (a *cronAdapter) AskAgentInThread(ctx context.Context, agent *acp.Agent, job *heartbeat.CronJob, threadName, prompt string) (string, string, bool, error) {
+	ds := a.bot.discord
+	channelID := job.ChannelID
+	mentionID := job.MentionID
+	loc := a.bot.cronLocationOrLocal()
+	threadID, _, err := a.prepareCronThread(ds, job, threadName)
+	if err != nil {
+		return "", "", false, err
 	}
 
 	targetStateKey := channelID
@@ -176,11 +195,6 @@ func (a *cronAdapter) AskAgentInThread(ctx context.Context, agent *acp.Agent, jo
 		log.Printf("[cron-adapter] write bot-tools target state key=%s channel=%s target=%s: %v", targetStateKey, channelID, threadID, err)
 	}
 	defer a.bot.manager.ClearBotToolsTargetState(targetStateKey)
-
-	// Add creator to thread so they get notifications
-	if createdByID != "" {
-		_ = ds.ThreadMemberAdd(threadID, createdByID)
-	}
 
 	// Update thread title with execution start timestamp
 	execTS := time.Now().In(loc).Format("01/02 15:04")
