@@ -62,6 +62,8 @@ MCP_DISCORD_MEMBER_SCAN_LIMIT=5000
 
 Empty allowlists preserve legacy unrestricted behavior. Production deployments should prefer explicit guild/channel allowlists when the bot has broad Discord access.
 
+For standalone `mcp-discord` processes, do not rely on the channel-policy injection path. Set `MCP_DISCORD_READ_ONLY=true` unless writes are required; when writes are required, keep `MCP_DISCORD_ALLOW_DESTRUCTIVE=false` and enumerate only non-destructive tools in `MCP_DISCORD_ALLOWED_WRITE_TOOLS`. Bot-managed channel sessions inject these guards from the channel policy automatically.
+
 ## Enable Per Channel
 
 Registration adds the server to the catalog. The bot's default bot-tools setup automatically enables only `discord_resolve_mentions` for `mcp-discord` when this catalog entry is present, matching the default-on bot-native image URL egress behavior while keeping broader Discord REST tools closed.

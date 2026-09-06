@@ -15,11 +15,14 @@
 | `bot_current_time` | Read | 回傳 bot 在 `CRON_TIMEZONE` 下的精確目前日期時間、星期、時段與本週範圍。 |
 | `bot_resolve_date_range` | Read | 用結構化欄位解析 calendar range，避免 agent 自己心算日期。 |
 | `bot_list_cron` | Read | 列出目前頻道的排程任務。 |
+| `bot_list_monitor` | Read | 列出目前頻道的背景監控。 |
 | `bot_send_file` | Write, non-destructive | 將 sanitized file upload 排入 Discord delivery queue。 |
 | `bot_send_image_url` | Write, non-destructive | 從允許的 non-secret URL 抓取 JPEG/PNG 圖片並排入 Discord delivery queue。 |
 | `bot_create_cron` | Write, non-destructive | 排入建立 scheduled task 的請求。 |
 | `bot_update_cron` | Write, non-destructive, idempotent | 排入修改既有 recurring cron job 的 name、schedule、prompt 或 enabled state。 |
 | `bot_create_reminder` | Write, non-destructive | 排入一次性提醒，交由 bot scheduler 到期發送。 |
+| `bot_create_monitor` | Write, non-destructive | 排入建立背景監控的請求；它會靜默檢查，只在條件命中時通知。 |
+| `bot_update_monitor` | Write, non-destructive, idempotent | 排入修改既有 monitor 的 name、schedule、check prompt、notify condition 或 enabled state。 |
 | `bot_query_channel_history` | Read | 搜尋或分頁讀取目前 channel/thread context 的已儲存歷史。 |
 | `bot_memory_list` | Read | 列出目前 parent channel 的 persistent memory rules。 |
 | `bot_memory_add` | Write, non-destructive | 排入使用者明確要求、且已 audit-recorded 的 channel memory rule。 |
@@ -44,6 +47,7 @@
 | --- | --- | --- |
 | `bot_send_message` | Write, non-destructive | 排入額外 Discord message。 |
 | `bot_delete_cron` | Write, destructive | 排入刪除 scheduled task 的請求。 |
+| `bot_delete_monitor` | Write, destructive | 排入刪除背景監控的請求。 |
 | `bot_query_audit` | Read, sensitive | 查詢 scoped audit timeline rows。 |
 | `bot_memory_remove` | Write, destructive | 排入移除一筆已列出的 persistent memory rule。 |
 | `bot_memory_clear` | Write, destructive | 排入清空目前 channel 所有 persistent memory rules。 |
@@ -53,6 +57,9 @@
 | `bot_skills_channel_inventory` | Read/admin | 讓已驗證的 channel manager 列出 channel/project 已安裝 skills，包含已停用項目。 |
 | `bot_skills_channel_enable` / `bot_skills_channel_disable` / `bot_skills_channel_remove` / `bot_skills_channel_restore` / `bot_skills_channel_rollback` | Write/admin | 使用 channel management permission 管理 channel/project skill lifecycle。 |
 | `bot_skills_server_disable` / `bot_skills_server_remove` / `bot_skills_server_restore` / `bot_skills_server_rollback` | Write/admin | 管理 server-wide skills；預設關閉且 server-management scoped。 |
+
+
+Monitor tools 還有 manager gate：即使 channel policy 已啟用工具，`bot_list_monitor`、`bot_create_monitor`、`bot_update_monitor` 與 `bot_delete_monitor` 仍要求已驗證 Discord requester 對目標頻道具備 Manage Channels 權限。
 
 `/audit <prompt>` 會暫時只授權 `bot_query_audit` 給私密 audit investigation agent。該 agent 不能使用一般 Discord egress tools。
 
@@ -64,7 +71,7 @@ Recurring cron 管理在 runtime 中是 channel scope；thread ID 會依需要�
 
 Persistent memory 是 parent-channel scope。`bot_memory_add` 只在使用者明確說「記住」時預設可用，會拒絕看似 secret 的文字，透過 pending bot-side queue 寫入，並在 main bot 套用前先記錄 audit event。`bot_memory_remove` 與 `bot_memory_clear` 預設不啟用。
 
-「10 分鐘後提醒我」、「明天 09:00 提醒某人」、「2026-08-13 14:25」、「8/13 14:25」這類一次性提醒應使用 `bot_create_reminder`。每天、每週或週期性自動化才使用 `bot_create_cron`。
+「10 分鐘後提醒我」、「明天 09:00 提醒某人」、「2026-08-13 14:25」、「8/13 14:25」這類一次性提醒應使用 `bot_create_reminder`。每次執行都應公開可見的每天、每週或週期性自動化才使用 `bot_create_cron`。週期性背景檢查、且只有另一個 `notify_when` 條件命中才應公開發訊時，使用 `bot_create_monitor`。
 
 ## A2A Bot Tools
 
@@ -98,7 +105,7 @@ File egress 採保守設計：
 - `bot_send_image_url` 會由 bot server-side 抓取 non-secret HTTP(S) 圖片 URL，不做 host 或 path allowlist。URL path 不需要包含圖片檔名；Discord 顯示名稱由 `filename` 參數決定。bot 仍會拒絕 URL credentials，並在 queue delivery 前驗證抓回來的 bytes。
 - PDF、DOCX、XLSX 會轉成 sanitized text 再上傳。
 - `bot_send_file` 不會把原始 binary 文件傳回 Discord。
-- Private audit job 會完全停用 message 與 file egress。
+- Private audit job 與靜默 monitor check 會停用 bot-tools write actions。Monitor check 期間 agent 可以讀取已授權內容，但不能排入 Discord egress、cron/reminder 變更、monitor 變更或 persistent memory write。
 
 ## Incoming Discord Attachments
 

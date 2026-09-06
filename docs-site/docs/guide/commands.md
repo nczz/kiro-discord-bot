@@ -65,7 +65,7 @@ See [Daily Workflows](daily-workflows.md) for the operational difference between
 | `/mcp manage` | Open the private MCP policy panel, scan tools, and manage tool allowlists. |
 | `/audit [limit]` | Privately inspect recent audit events for the current channel or thread. |
 | `/usage [user]` | Privately show guild-wide agent usage for today, week, and month-to-date, including credits or USD cost when the engine reports metering metadata. Members see their own usage by default; members with Manage Guild or Administrator permission may omit `user` for all users or choose another member. |
-| `/usage-history [user] [period] [status] [source]` | Privately inspect guild-wide detailed usage records. Period choices: `7d`, `30d`, `this-month`, `last-month`; status choices: `all`, `success`, `failed`; source choices: `all`, `message`, `webhook`, `webshare`, `command`, `cron`. Members can inspect their own history; inspecting another member requires Manage Guild or Administrator permission. |
+| `/usage-history [user] [period] [status] [source]` | Privately inspect guild-wide detailed usage records. Period choices: `7d`, `30d`, `this-month`, `last-month`; status choices: `all`, `success`, `failed`; source choices: `all`, `message`, `webhook`, `webshare`, `command`, `cron`, `monitor`. Members can inspect their own history; inspecting another member requires Manage Guild or Administrator permission. |
 
 Use slash `/audit` for audit data and slash `/usage` or `/usage-history` for usage data. Text `!audit` does not return audit rows, and text `!usage` only returns a slash-only notice, because Discord cannot make those replies private.
 
@@ -85,7 +85,7 @@ Use scoped skills to save reviewed reusable procedures for a server, channel, pr
 
 ## A2A
 
-Use A2A commands only after NATS is configured and the channel has an A2A policy. Bots with A2A disabled do not register `/a2a` or `bot_a2a_*` MCP tools, so ordinary sessions do not spend context on unavailable delegation surfaces. For setup from NATS server through Discord policy, see [Enable A2A with NATS](a2a-nats-setup.md). For protocol terms, see [A2A Protocol Model](a2a-protocol.md).
+Use A2A commands only after NATS/process A2A is enabled; bots with A2A disabled do not register `/a2a` or `bot_a2a_*` MCP tools, so ordinary sessions do not spend context on unavailable delegation surfaces. Start with `/a2a peers`, then have a channel manager run `/a2a allow peer_agent:<runtime>` in the receiving channel to establish receiver consent. Delegation and status flows require the relevant enabled policy/readiness. For setup from NATS server through Discord policy, see [Enable A2A with NATS](a2a-nats-setup.md). For protocol terms, see [A2A Protocol Model](a2a-protocol.md).
 
 | Command | Purpose |
 | --- | --- |
@@ -98,7 +98,7 @@ Use A2A commands only after NATS is configured and the channel has an A2A policy
 | `/a2a authorize task:<task> approve:true_or_false` | Approve or deny when a task is `TASK_STATE_AUTH_REQUIRED`. |
 | `/a2a revoke peer_agent:<runtime>` | Stop allowing that exact runtime to send work into this channel. |
 
-Expert policy changes are intentionally kept out of the normal `/a2a` slash surface. Use the manager-scoped bot-tools policy workflow when changing capabilities, delegation targets, transcript sharing, or policy-wide limits.
+Expert policy changes are intentionally kept out of the normal `/a2a` slash surface. Normal commands cover peer discovery, receiver-side allow/revoke, task queueing, status, cancellation, input, and authorization. Capabilities, outbound delegate targets, transcript sharing, and policy-wide limits require the trusted admin/operator policy path; do not expect a normal bot-tools policy workflow for these changes.
 
 
 ## Scheduling
@@ -109,11 +109,16 @@ Expert policy changes are intentionally kept out of the normal `/a2a` slash surf
 | `/cron-prompt <description>` | Create a scheduled task from natural language. |
 | `/cron-list` | List scheduled tasks with management buttons. |
 | `/cron-run <name>` | Run a scheduled task manually. |
+| `/monitor-prompt <description>` | Create a background monitor from natural language. |
+| `/monitor-list` | List background monitors with pause/resume/run/edit/delete buttons. |
+| `/monitor-run <name>` | Run a monitor check manually. It still only posts publicly if the condition matches. |
 | `/remind <time> <content>` | Create a one-time reminder that tags the requester when due. |
 
-Scheduling commands must be run in the parent channel. Cron agents use the channel's current CWD at execution time.
+Scheduling commands must be run in the parent channel. Cron agents use the channel's current CWD at execution time. Monitor checks also use the current CWD, but a false monitor condition creates no public Discord artifact: no thread, no parent link, no progress, and no final message.
 
-See [Cron and Reminders](cron-reminders.md) for scheduling scope, MCP-created jobs, and owner expectations.
+Monitor slash commands (`/monitor-prompt`, `/monitor-list`, `/monitor-run`, and monitor management buttons) require Manage Channels permission for the target channel.
+
+See [Cron and Reminders](cron-reminders.md) for scheduling scope, monitor behavior, MCP-created jobs, and owner expectations.
 
 ## Thread-only Helpers
 

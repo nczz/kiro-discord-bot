@@ -248,7 +248,7 @@ A2A does not bypass existing bot boundaries:
 | `/a2a ask` | Send a normal task to a peer runtime. |
 | `/a2a revoke` | Stop allowing a peer runtime to delegate into this channel. |
 | `/a2a status` | Inspect durable local task state and events. |
-| `bot_a2a_*` tools | Agent-facing MCP surface for policy, delegation, status, and peer inspection. |
+| `bot_a2a_*` tools | Agent-facing MCP surface for high-level peer inspection, receiver consent, delegation, task status, cancellation, input replies, and authorization replies. Expert policy get/plan/apply tools are not registered in the normal bot-tools surface. |
 
 Do not inspect or edit raw `data/a2a/*.sqlite` files for normal operation.
 

@@ -61,6 +61,8 @@ MCP_DISCORD_ALLOWED_WRITE_TOOLS=discord_send_message,discord_reply_message
 MCP_DISCORD_ALLOW_DESTRUCTIVE=false
 ```
 
+For standalone `mcp-discord` processes, default to read-only or explicitly enumerate the non-destructive write tools that are allowed. Bot-managed channel sessions inject these policy environment variables automatically.
+
 Then use `/mcp status` and `/mcp manage` in the target Discord channel.
 
 [mcp]: https://nczz.github.io/kiro-discord-bot/guide/mcp.html

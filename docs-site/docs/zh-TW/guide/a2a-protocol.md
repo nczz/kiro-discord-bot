@@ -248,7 +248,7 @@ A2A 不會繞過既有 bot 邊界：
 | `/a2a ask` | 對 peer runtime 送出一般 task。 |
 | `/a2a revoke` | 停止允許 peer runtime 委派工作到此頻道。 |
 | `/a2a status` | 查看 durable local task state 與 events。 |
-| `bot_a2a_*` tools | Agent-facing MCP surface，用於 policy、delegation、status 與 peer inspection。 |
+| `bot_a2a_*` tools | Agent-facing MCP surface，用於 high-level peer inspection、receiver consent、delegation、task status、cancellation、input replies 與 authorization replies。Expert policy get/plan/apply tools 不會註冊在一般 bot-tools surface。 |
 
 一般操作不要檢查或編輯 raw `data/a2a/*.sqlite` files。
 

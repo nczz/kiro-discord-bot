@@ -19,7 +19,7 @@ MCP server 可能需要額外 Discord REST 存取。bot 的 channel policy 不�
 
 ## 私密回應
 
-管理面板與敏感查詢會在 Discord 支援時使用 ephemeral private response。包含 `/cwd`、`/status`、`/usage`、`/usage-history`、`/doctor`、`/audit`、`/models`、`/memory`、`/flashmemory`、`/mcp manage`、`/steering`、`/cron-list` 與 `/webshare`。
+管理面板與敏感查詢會在 Discord 支援時使用 ephemeral private response。包含 `/cwd`、`/status`、`/usage`、`/usage-history`、`/doctor`、`/audit`、`/a2a`、`/models`、`/memory`、`/flashmemory`、`/mcp manage`、`/steering`、`/cron-list`、`/cron-run`、`/cron-prompt`、`/monitor-list`、`/monitor-run`、`/monitor-prompt` 與 `/webshare`。
 
 文字指令不一定能提供 Discord private response。Audit 資料請使用 slash `/audit`；usage data 請使用 slash `/usage` 或 `/usage-history`。文字 `!audit` 不會回傳 audit rows 或 prompt 調查報告，文字 `!usage` 只會提示改用 slash。
 

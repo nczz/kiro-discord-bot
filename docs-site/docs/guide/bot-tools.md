@@ -15,11 +15,14 @@ On first channel setup, these safe tools are enabled by default:
 | `bot_current_time` | Read | Return the bot's exact current date/time, weekday, day period, and current week in `CRON_TIMEZONE`. |
 | `bot_resolve_date_range` | Read | Resolve structured calendar ranges without agent-side date math. |
 | `bot_list_cron` | Read | List scheduled jobs for the current channel. |
+| `bot_list_monitor` | Read | List background monitors for the current channel. |
 | `bot_send_file` | Write, non-destructive | Queue a sanitized file upload for Discord delivery. |
 | `bot_send_image_url` | Write, non-destructive | Queue a JPEG/PNG image fetched from an allowed non-secret URL for Discord delivery. |
 | `bot_create_cron` | Write, non-destructive | Queue creation of a scheduled task. |
 | `bot_update_cron` | Write, non-destructive, idempotent | Queue changes to an existing recurring cron job: name, schedule, prompt, or enabled state. |
 | `bot_create_reminder` | Write, non-destructive | Queue a one-time reminder delivered by the bot scheduler. |
+| `bot_create_monitor` | Write, non-destructive | Queue creation of a background monitor that checks silently and only notifies when its condition matches. |
+| `bot_update_monitor` | Write, non-destructive, idempotent | Queue changes to an existing monitor: name, schedule, check prompt, notify condition, or enabled state. |
 | `bot_query_channel_history` | Read | Search or page through stored history for the current channel or thread context. |
 | `bot_memory_list` | Read | List persistent memory rules for the current parent channel. |
 | `bot_memory_add` | Write, non-destructive | Queue an explicitly requested, audit-recorded channel memory rule. |
@@ -44,6 +47,7 @@ These tools are available but not enabled by default:
 | --- | --- | --- |
 | `bot_send_message` | Write, non-destructive | Queue an additional Discord message. |
 | `bot_delete_cron` | Write, destructive | Queue deletion of a scheduled task. |
+| `bot_delete_monitor` | Write, destructive | Queue deletion of a background monitor. |
 | `bot_query_audit` | Read, sensitive | Query scoped audit timeline rows. |
 | `bot_memory_remove` | Write, destructive | Queue removal of one listed persistent memory rule. |
 | `bot_memory_clear` | Write, destructive | Queue removal of all persistent memory rules for the current channel. |
@@ -53,6 +57,9 @@ These tools are available but not enabled by default:
 | `bot_skills_channel_inventory` | Read/admin | List installed channel/project skills, including disabled skills, for an authenticated channel manager. |
 | `bot_skills_channel_enable` / `bot_skills_channel_disable` / `bot_skills_channel_remove` / `bot_skills_channel_restore` / `bot_skills_channel_rollback` | Write/admin | Manage channel/project skill lifecycle with channel management permission. |
 | `bot_skills_server_disable` / `bot_skills_server_remove` / `bot_skills_server_restore` / `bot_skills_server_rollback` | Write/admin | Manage server-wide skills; default-off and server-management scoped. |
+
+
+Monitor tools are additionally manager-gated: `bot_list_monitor`, `bot_create_monitor`, `bot_update_monitor`, and `bot_delete_monitor` require an authenticated Discord requester with Manage Channels permission for the target channel, even when channel policy enables the tool.
 
 `/audit <prompt>` temporarily grants only `bot_query_audit` to the private audit investigation agent. That agent cannot use normal Discord egress tools.
 
@@ -64,7 +71,7 @@ Thread IDs are normalized to the parent channel for recurring cron management wh
 
 Persistent memory is parent-channel scoped. `bot_memory_add` is default-enabled only for explicit "remember this" requests, rejects secret-like text, writes through the pending bot-side queue, and records an audit event before the main bot applies it. `bot_memory_remove` and `bot_memory_clear` are not default-enabled.
 
-Use `bot_create_reminder` for one-time reminders such as "in 10 minutes", "tomorrow at 09:00", "2026-08-13 14:25", or "8/13 14:25". Use `bot_create_cron` only for recurring jobs such as daily, weekly, or periodic automation.
+Use `bot_create_reminder` for one-time reminders such as "in 10 minutes", "tomorrow at 09:00", "2026-08-13 14:25", or "8/13 14:25". Use `bot_create_cron` only for recurring jobs that should visibly run every time. Use `bot_create_monitor` for recurring background checks that must produce no public Discord message unless the separate `notify_when` condition matches.
 
 ## A2A Bot Tools
 
@@ -98,7 +105,7 @@ File egress is intentionally conservative:
 - `bot_send_image_url` fetches non-secret HTTP(S) image URLs server-side without host or path allowlisting. The URL path does not need to contain an image filename; the `filename` argument controls the Discord display name. The bot still rejects URL credentials and validates the fetched bytes before queueing delivery.
 - PDF, DOCX, and XLSX files are converted to sanitized text before upload.
 - Original binary documents are not uploaded back to Discord by `bot_send_file`.
-- Private audit jobs disable message and file egress completely.
+- Private audit jobs and silent monitor checks disable bot-tools write actions. During a monitor check, the agent can read allowed context but cannot queue Discord egress, cron/reminder changes, monitor changes, or persistent memory writes.
 
 ## Incoming Discord Attachments
 

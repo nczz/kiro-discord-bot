@@ -62,6 +62,8 @@ MCP_DISCORD_MEMBER_SCAN_LIMIT=5000
 
 空 allowlist 會保留舊版 unrestricted 行為。正式環境若 bot 有廣泛 Discord 權限，建議明確設定 guild/channel allowlist。
 
+Standalone `mcp-discord` process 不會走 bot 的 channel-policy injection path；除非必要，請設定 `MCP_DISCORD_READ_ONLY=true`。若必須開寫入，請維持 `MCP_DISCORD_ALLOW_DESTRUCTIVE=false`，並只在 `MCP_DISCORD_ALLOWED_WRITE_TOOLS` 列出非破壞性 tools。Bot 管理的頻道 session 會從 channel policy 自動注入這些 guards。
+
 ## 依頻道啟用
 
 註冊會把 server 加進 catalog。當這個 catalog entry 存在時，bot 的 default bot-tools setup 會自動只替 `mcp-discord` 開啟 `discord_resolve_mentions`，行為對齊預設開啟的 bot-native image URL egress，但其他 Discord REST tools 仍維持關閉。

@@ -242,6 +242,9 @@ Agents 可以使用內建高階 `bot-tools` MCP tools：
 - `bot_a2a_trust_peer`
 - `bot_a2a_delegate`
 - `bot_a2a_task_status`
+- `bot_a2a_cancel`
+- `bot_a2a_input_reply`
+- `bot_a2a_auth_reply`
 
 不要直接編輯 `data/a2a/*.sqlite`。
 

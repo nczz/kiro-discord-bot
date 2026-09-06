@@ -65,7 +65,7 @@ Memory、flash memory、steering 與 session cleanup 的操作差異見 [日常�
 | `/mcp manage` | 開啟私密 MCP policy panel，掃描 tools 並管理 allowlist。 |
 | `/audit [limit]` | 私密檢視目前 channel/thread 的 audit events。 |
 | `/usage [user]` | 私密顯示全伺服器今日、本周、本月至今的 agent 用量；engine 有回傳 metering metadata 時會包含 credits 或 USD cost。一般成員預設只看自己；具備管理伺服器或系統管理員權限者可留空查看所有使用者或指定其他成員。 |
-| `/usage-history [user] [period] [status] [source]` | 私密查詢全伺服器詳細用量紀錄。`period` 可選 `7d`、`30d`、`this-month`、`last-month`；`status` 可選 `all`、`success`、`failed`；`source` 可選 `all`、`message`、`webhook`、`webshare`、`command`、`cron`。一般成員可查詢自己；查詢其他成員需要管理伺服器或系統管理員權限。 |
+| `/usage-history [user] [period] [status] [source]` | 私密查詢全伺服器詳細用量紀錄。`period` 可選 `7d`、`30d`、`this-month`、`last-month`；`status` 可選 `all`、`success`、`failed`；`source` 可選 `all`、`message`、`webhook`、`webshare`、`command`、`cron`、`monitor`。一般成員可查詢自己；查詢其他成員需要管理伺服器或系統管理員權限。 |
 
 Audit data 請使用 slash `/audit`；usage data 請使用 slash `/usage` 或 `/usage-history`。文字 `!audit` 不回傳 audit rows，文字 `!usage` 只會提示改用 slash，因為 Discord 無法讓這類文字回覆變成 private。
 
@@ -85,7 +85,7 @@ Audit rows、audit prompt investigations 與 usage attribution 的行為見 [Aud
 
 ## A2A
 
-只有在 NATS 已設定且 channel 有 A2A policy 後才使用 A2A commands。未啟用 A2A 的 bot 不會註冊 `/a2a` 或 `bot_a2a_*` MCP tools，避免一般 session 浪費 context 在不可用的委派介面上。從 NATS server、`.env` 到 Discord policy 的完整 setup 見 [使用 NATS 啟用 A2A](a2a-nats-setup.md)。協議關鍵字見 [A2A 協議模型](a2a-protocol.md)。
+只有在 NATS/process A2A 已啟用後才使用 A2A commands；未啟用 A2A 的 bot 不會註冊 `/a2a` 或 `bot_a2a_*` MCP tools，避免一般 session 浪費 context 在不可用的委派介面上。先執行 `/a2a peers`，再由接收端頻道管理員在該頻道執行 `/a2a allow peer_agent:<runtime>` 建立 receiver consent。Delegation 與 status flows 需要相對應的 enabled policy/readiness。從 NATS server、`.env` 到 Discord policy 的完整 setup 見 [使用 NATS 啟用 A2A](a2a-nats-setup.md)。協議關鍵字見 [A2A 協議模型](a2a-protocol.md)。
 
 | Command | 用途 |
 | --- | --- |
@@ -98,7 +98,7 @@ Audit rows、audit prompt investigations 與 usage attribution 的行為見 [Aud
 | `/a2a authorize task:<task> approve:true_or_false` | 當 task 是 `TASK_STATE_AUTH_REQUIRED` 時 approve 或 deny。 |
 | `/a2a revoke peer_agent:<runtime>` | 停止允許該精確 runtime 傳工作到此頻道。 |
 
-進階 policy changes 刻意不放在一般 `/a2a` slash surface。要變更 capabilities、delegation targets、transcript sharing 或 policy-wide limits 時，使用 manager-scoped bot-tools policy workflow。
+進階 policy changes 刻意不放在一般 `/a2a` slash surface。一般 commands 只涵蓋 peer discovery、接收端 allow/revoke、task queueing、status、cancel、input 與 authorization。Capabilities、outbound delegate targets、transcript sharing、policy-wide limits 必須走受信任的 admin/operator policy path；不要期待一般 bot-tools policy workflow 可變更這些設定。
 
 
 ## 排程
@@ -109,11 +109,16 @@ Audit rows、audit prompt investigations 與 usage attribution 的行為見 [Aud
 | `/cron-prompt <description>` | 用自然語言建立 scheduled task。 |
 | `/cron-list` | 列出 scheduled tasks 與管理按鈕。 |
 | `/cron-run <name>` | 手動執行 scheduled task。 |
+| `/monitor-prompt <description>` | 用自然語言建立背景監控。 |
+| `/monitor-list` | 列出背景監控與 pause/resume/run/edit/delete 按鈕。 |
+| `/monitor-run <name>` | 手動執行監控檢查；仍然只有條件命中時才公開發訊。 |
 | `/remind <time> <content>` | 建立一次性 reminder，到期時 tag requester。 |
 
-排程指令必須在 parent channel 使用。Cron agent 執行時使用該頻道當下 CWD。
+排程指令必須在 parent channel 使用。Cron agent 執行時使用該頻道當下 CWD。Monitor check 也使用目前 CWD，但條件未命中時不會產生任何公開 Discord artifact：沒有 thread、沒有 parent link、沒有 progress、沒有 final message。
 
-Scheduling scope、MCP-created jobs 與 owner expectations 見 [Cron 與提醒](cron-reminders.md)。
+Monitor slash commands（`/monitor-prompt`、`/monitor-list`、`/monitor-run` 與 monitor 管理按鈕）要求 requester 對目標頻道具備 Manage Channels 權限。
+
+Scheduling scope、monitor 行為、MCP-created jobs 與 owner expectations 見 [Cron 與提醒](cron-reminders.md)。
 
 ## Thread Helpers
 
