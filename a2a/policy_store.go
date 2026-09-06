@@ -80,46 +80,7 @@ func OpenPolicyStore(dataDir string, agentID AgentID) (*SQLitePolicyStore, error
 	if err != nil {
 		return nil, err
 	}
-	if err := normalizePolicyStoreForRuntimeAllowlist(context.Background(), db); err != nil {
-		_ = db.Close()
-		return nil, err
-	}
 	return &SQLitePolicyStore{db: db, agentID: agentID}, nil
-}
-
-func normalizePolicyStoreForRuntimeAllowlist(ctx context.Context, db *sql.DB) error {
-	const migrationName = "runtime_allowlist_frontend_v1"
-	tx, err := db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS a2a_policy_normalizations (
-		name TEXT PRIMARY KEY,
-		applied_at TEXT NOT NULL
-	)`); err != nil {
-		return err
-	}
-	var applied int
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(1) FROM a2a_policy_normalizations WHERE name=?`, migrationName).Scan(&applied); err != nil {
-		return err
-	}
-	if applied > 0 {
-		return tx.Commit()
-	}
-	if _, err := tx.ExecContext(ctx, `UPDATE channel_a2a_policy SET
-		accept_from_json='[]',
-		delegate_to_json='[]',
-		delegate_skills_json='[]',
-		co_present_from_json='[]',
-		auto_delegate_enabled=0,
-		remote_tool_policy_json='{"allow_memory_write":false}'`); err != nil {
-		return err
-	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO a2a_policy_normalizations(name, applied_at) VALUES(?, ?)`, migrationName, time.Now().UTC().Format(sqliteTimeFormat)); err != nil {
-		return err
-	}
-	return tx.Commit()
 }
 
 func (s *SQLitePolicyStore) Close() error { return closeSQL(s.db) }
@@ -162,6 +123,7 @@ func policyStoreMigrations() []string {
 }
 
 func (s *SQLitePolicyStore) Save(ctx context.Context, p ChannelA2APolicy, updatedBy string) error {
+	p.ChannelRef = strings.TrimSpace(p.ChannelRef)
 	if err := validateChannelA2APolicy(p); err != nil {
 		return err
 	}
@@ -279,11 +241,19 @@ func (s *SQLitePolicyStore) Get(ctx context.Context, guildID, channelID string) 
 	return p, nil
 }
 
+func ValidateChannelA2APolicy(p ChannelA2APolicy) error {
+	return validateChannelA2APolicy(p)
+}
+
 func validateChannelA2APolicy(p ChannelA2APolicy) error {
 	if strings.TrimSpace(p.GuildID) == "" || strings.TrimSpace(p.ChannelID) == "" {
 		return fmt.Errorf("guild_id and channel_id are required")
 	}
-	if p.Enabled && strings.TrimSpace(p.ChannelRef) == "" {
+	channelRef := strings.TrimSpace(p.ChannelRef)
+	if channelRef != "" && !skillSlugPattern.MatchString(channelRef) {
+		return fmt.Errorf("channel_ref is invalid")
+	}
+	if p.Enabled && channelRef == "" {
 		return fmt.Errorf("channel_ref is required when enabled")
 	}
 	if p.Enabled {
@@ -345,15 +315,17 @@ func validateChannelA2APolicy(p ChannelA2APolicy) error {
 			if err := ValidateAgentID(AgentID(target.RuntimeAgentID)); err != nil {
 				return err
 			}
-		} else {
-			if target.AgentID != "*" {
-				if err := ValidateAgentID(AgentID(target.AgentID)); err != nil {
-					return err
-				}
+		} else if target.AgentID != "*" {
+			if err := ValidateAgentID(AgentID(target.AgentID)); err != nil {
+				return err
 			}
-			if strings.TrimSpace(target.ChannelRef) == "" {
-				return fmt.Errorf("delegate target channel_ref is required")
-			}
+		}
+		channelRef := strings.TrimSpace(target.ChannelRef)
+		if strings.TrimSpace(target.RuntimeAgentID) == "" && channelRef == "" {
+			return fmt.Errorf("delegate target channel_ref is required")
+		}
+		if channelRef != "" && channelRef != "*" && !skillSlugPattern.MatchString(channelRef) {
+			return fmt.Errorf("delegate target channel_ref %q is invalid", target.ChannelRef)
 		}
 		if !skillPattern.MatchString(target.SkillID) {
 			return fmt.Errorf("delegate target skill %q is invalid", target.SkillID)

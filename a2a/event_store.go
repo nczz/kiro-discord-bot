@@ -63,7 +63,7 @@ func appendEvent(ctx context.Context, db *sql.DB, event EventRow) error {
 	}
 	var existing EventRow
 	var state, payload, created string
-	err = db.QueryRowContext(ctx, `SELECT id, task_id, revision, event_type, COALESCE(state,''), COALESCE(payload_json,''), created_at FROM a2a_task_events WHERE task_id=? AND revision=?`, event.TaskID, event.Revision).Scan(&existing.ID, &existing.TaskID, &existing.Revision, &existing.EventType, &state, &payload, &created)
+	err = db.QueryRowContext(ctx, `SELECT id, task_id, revision, event_type, COALESCE(state,''), COALESCE(payload_json,''), created_at FROM a2a_task_events WHERE task_id=? AND revision=? AND event_type=?`, event.TaskID, event.Revision, event.EventType).Scan(&existing.ID, &existing.TaskID, &existing.Revision, &existing.EventType, &state, &payload, &created)
 	if err != nil {
 		return err
 	}

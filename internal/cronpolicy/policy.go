@@ -40,6 +40,16 @@ func ScheduleFieldDescription(tz string) string {
 	return fmt.Sprintf("5-field cron expression in the bot cron timezone %s. Do not convert to UTC. Example: '0 9 * * *' means 09:00 in %s.", tz, tz)
 }
 
+// MonitorCreateToolDescription returns the bot_create_monitor tool description.
+func MonitorCreateToolDescription(tz string) string {
+	return fmt.Sprintf("Create a recurring background monitor in this Discord channel. Use when the user wants periodic checks that stay silent unless a separate notify condition is satisfied. Do not use this for ordinary cron jobs that should always post each run; use bot_create_cron for those. The schedule must be a 5-field cron expression. The check_prompt says what to inspect; notify_when says the condition that permits a visible Discord notification. %s", SchedulePolicy(tz))
+}
+
+// MonitorUpdateToolDescription returns the bot_update_monitor tool description.
+func MonitorUpdateToolDescription(tz string) string {
+	return fmt.Sprintf("Update, pause, or resume an existing background monitor without deleting it. First call bot_list_monitor to obtain the exact job_id and current values. Send only fields the user asked to change; omitted fields remain unchanged. Set enabled=false to pause while preserving history, or enabled=true to resume. For deletion use bot_delete_monitor. Changing schedule or resuming computes the next future check and does not backfill missed checks. %s", SchedulePolicy(tz))
+}
+
 // ReminderToolDescription returns the bot_create_reminder tool description.
 func ReminderToolDescription(tz string) string {
 	tz = TimezoneName(tz)

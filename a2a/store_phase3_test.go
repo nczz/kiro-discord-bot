@@ -3,7 +3,10 @@ package a2a
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -47,6 +50,13 @@ func TestTaskStoreCreateInboundOutboundAndReplay(t *testing.T) {
 	if err := store.AppendEvent(ctx, event); err != nil {
 		t.Fatalf("idempotent AppendEvent: %v", err)
 	}
+	artifactEvent := EventRow{TaskID: "task_one", Revision: 1, EventType: "artifact", State: TaskStateWorking, PayloadJSON: `{"artifact":true}`}
+	if err := store.AppendEvent(ctx, artifactEvent); err != nil {
+		t.Fatalf("same revision different event type AppendEvent: %v", err)
+	}
+	if err := store.AppendEvent(ctx, artifactEvent); err != nil {
+		t.Fatalf("idempotent same revision artifact AppendEvent: %v", err)
+	}
 	if err := store.AppendEvent(ctx, EventRow{TaskID: "task_one", Revision: 1, EventType: "status", State: TaskStateFailed, PayloadJSON: `{}`}); err == nil {
 		t.Fatal("changed replay accepted")
 	}
@@ -54,8 +64,62 @@ func TestTaskStoreCreateInboundOutboundAndReplay(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReplayEvents: %v", err)
 	}
-	if len(replayed) != 1 || replayed[0].Revision != 1 {
+	if len(replayed) != 2 || replayed[0].Revision != 1 || replayed[1].Revision != 1 {
 		t.Fatalf("unexpected replay: %+v", replayed)
+	}
+}
+
+func TestTaskRequestFromRowDoesNotInferSharedDiscordContext(t *testing.T) {
+	row := TaskRow{
+		MessageID:             "msg-1",
+		ClientTaskRef:         "client-1",
+		ContextID:             "ctx-1",
+		FromAgent:             "eve-local",
+		ToAgent:               "adam-n200-case",
+		ChannelID:             "channel-1",
+		GuildID:               "guild-1",
+		ChannelRef:            "case",
+		SkillID:               "review",
+		ResultVisibility:      "transparent",
+		DiscordTranscriptMode: "co_present",
+		DiscordContextJSON:    `{"guildId":"guild-1","channelId":"channel-1","threadId":"thread-1"}`,
+	}
+	req := taskRequestFromRow(row)
+	if req.Delivery.ShareDiscordContext || req.Delivery.CoPresentFrom != "" {
+		t.Fatalf("delivery sharing = share:%v from:%q, want persisted context without inferred sharing", req.Delivery.ShareDiscordContext, req.Delivery.CoPresentFrom)
+	}
+	if req.Delivery.DiscordContext == nil || req.Delivery.DiscordReplyChannelID != "channel-1" || req.Delivery.DiscordReplyThreadID != "thread-1" {
+		t.Fatalf("discord delivery = %+v context=%+v, want channel/thread from persisted context", req.Delivery, req.Delivery.DiscordContext)
+	}
+}
+
+func TestTaskRequestFromEnvelopeForExistingRowKeepsEnvelopePayload(t *testing.T) {
+	env := newEnvelope("eve-local", "adam-n200-case", EnvelopeTypeTask, "msg-1", "", 0, []byte(`{"a2a":{"message":{"parts":[{"kind":"text","text":"from envelope"}]}},"channelRef":"wire-channel","skillId":"wire/skill","userVisibleSummary":"visible summary","clientTaskRef":"wire-client","contextId":"wire-context","delivery":{"timeoutSec":9,"maxDelegationDepth":2,"discordContext":{"guildId":"guild-wire","channelId":"channel-wire","threadId":"thread-wire"},"resultVisibility":"transparent","discordTranscriptMode":"co_present"},"auditMetadata":{"origin":"wire"}}`))
+	row := TaskRow{
+		MessageID:             "msg-1",
+		ClientTaskRef:         "stored-client",
+		ContextID:             "stored-context",
+		FromAgent:             "eve-local",
+		ToAgent:               "adam-n200-case",
+		ChannelID:             "channel-stored",
+		GuildID:               "guild-stored",
+		ChannelRef:            "stored-channel",
+		SkillID:               "stored/skill",
+		ResultVisibility:      "proxy",
+		DiscordTranscriptMode: "delegator",
+	}
+	req, err := taskRequestFromEnvelopeForExistingRow(env, Subject{Kind: SubjectKindTask, From: "eve-local", To: "adam-n200-case", MessageID: "msg-1"}, row)
+	if err != nil {
+		t.Fatalf("taskRequestFromEnvelopeForExistingRow: %v", err)
+	}
+	if !strings.Contains(string(req.Payload), "from envelope") || req.UserVisibleSummary != "visible summary" || req.AuditMetadata["origin"] != "wire" {
+		t.Fatalf("rehydrated envelope-only fields = payload:%s summary:%q audit:%v", req.Payload, req.UserVisibleSummary, req.AuditMetadata)
+	}
+	if req.ChannelID != "channel-stored" || req.GuildID != "guild-stored" || req.ChannelRef != "stored-channel" || req.SkillID != "stored/skill" || req.ResultVisibility != "proxy" || req.DiscordTranscriptMode != "delegator" {
+		t.Fatalf("rehydrated policy fields = %+v, want persisted row policy", req)
+	}
+	if req.Delivery.TimeoutSec != 9 || req.Delivery.MaxDelegationDepth != 2 || req.Delivery.DiscordReplyChannelID != "channel-wire" || req.Delivery.DiscordReplyThreadID != "thread-wire" {
+		t.Fatalf("rehydrated delivery = %+v, want envelope execution delivery", req.Delivery)
 	}
 }
 
@@ -65,6 +129,7 @@ func TestTaskStorePersistsOriginRuntimeRef(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenTaskStore: %v", err)
 	}
+
 	defer store.Close()
 
 	row := phase3TaskRow("origin_ref_msg")
@@ -92,6 +157,123 @@ func TestTaskStorePersistsOriginRuntimeRef(t *testing.T) {
 		got.OriginRuntimeRef.DisplayName != "隨口問" ||
 		got.OriginRuntimeRef.DiscordThreadID != "thread" {
 		t.Fatalf("origin runtime ref = %+v", got.OriginRuntimeRef)
+	}
+}
+func TestFetchObjectRefValidatesMetadataBeforeBackendRead(t *testing.T) {
+	backend := newMemoryObjectBackend()
+	store, err := OpenObjectStore(t.TempDir(), WithObjectBackend(backend))
+	if err != nil {
+		t.Fatalf("OpenObjectStore: %v", err)
+	}
+	defer store.Close()
+	_, _, err = store.FetchObjectRef(context.Background(), ObjectRef{ArtifactID: "artifact-1", TaskID: "task_one", Bucket: "evil-bucket", Key: "tasks/task_one/artifact-1/file.txt", Digest: "sha256:" + strings.Repeat("a", 64), Size: 1, MediaType: "text/plain"})
+	if err == nil || !strings.Contains(err.Error(), "bucket") {
+		t.Fatalf("FetchObjectRef invalid metadata = %v, want bucket rejection", err)
+	}
+	if backend.gets != 0 {
+		t.Fatalf("FetchObjectRef read backend %d times before metadata validation", backend.gets)
+	}
+}
+
+func TestObjectStoreMigratesLegacyObjectRefsOnce(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "a2a", "objects.sqlite")
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `CREATE TABLE a2a_object_refs (
+		artifact_id TEXT PRIMARY KEY,
+		task_id TEXT NOT NULL,
+		bucket TEXT NOT NULL,
+		key TEXT NOT NULL,
+		digest TEXT NOT NULL,
+		size INTEGER NOT NULL,
+		media_type TEXT NOT NULL,
+		expires_at TEXT,
+		created_at TEXT NOT NULL
+	)`); err != nil {
+		_ = db.Close()
+		t.Fatalf("create legacy refs: %v", err)
+	}
+	content := []byte("legacy artifact")
+	key := objectKey("task_legacy", "artifact-1", "legacy.txt")
+	if _, err := db.ExecContext(ctx, `INSERT INTO a2a_object_refs(artifact_id, task_id, bucket, key, digest, size, media_type, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`, "artifact-1", "task_legacy", DefaultObjectBucket, key, "sha256:"+sha256ForTest(content), len(content), "text/plain", nil, time.Now().UTC().Format(sqliteTimeFormat)); err != nil {
+		_ = db.Close()
+		t.Fatalf("insert legacy ref: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close legacy db: %v", err)
+	}
+	backend := newMemoryObjectBackend()
+	backend.objects[DefaultObjectBucket+"/"+key] = content
+	store, err := OpenObjectStore(dir, WithObjectBackend(backend))
+	if err != nil {
+		t.Fatalf("OpenObjectStore migrated legacy refs: %v", err)
+	}
+	got, ref, err := store.FetchObject(ctx, "task_legacy", "artifact-1")
+	if err != nil {
+		t.Fatalf("FetchObject migrated ref: %v", err)
+	}
+	if string(got) != string(content) || ref.TaskID != "task_legacy" {
+		t.Fatalf("migrated ref fetch got=%q ref=%+v", got, ref)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close migrated store: %v", err)
+	}
+	reopened, err := OpenObjectStore(dir, WithObjectBackend(backend))
+	if err != nil {
+		t.Fatalf("OpenObjectStore after migration: %v", err)
+	}
+	if err := reopened.Close(); err != nil {
+		t.Fatalf("close reopened store: %v", err)
+	}
+	verifyDB, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("sql.Open verify: %v", err)
+	}
+	defer verifyDB.Close()
+	composite, err := objectRefsHaveCompositePrimaryKey(ctx, verifyDB)
+	if err != nil {
+		t.Fatalf("objectRefsHaveCompositePrimaryKey: %v", err)
+	}
+	if !composite {
+		t.Fatal("legacy refs were not migrated to composite primary key")
+	}
+	var migratedTables int
+	if err := verifyDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'a2a_object_refs_migrated'`).Scan(&migratedTables); err != nil {
+		t.Fatalf("count migrated table: %v", err)
+	}
+	if migratedTables != 0 {
+		t.Fatalf("temporary migration table remains: %d", migratedTables)
+	}
+}
+
+func TestArtifactFetchFailureIsRetryableEventDelivery(t *testing.T) {
+	err := fmt.Errorf("%s: object store temporarily unavailable", ErrorArtifactFetchFailed)
+	if permanentEventDeliveryError(err) {
+		t.Fatal("artifact fetch failure was classified as permanent")
+	}
+}
+
+func TestExistingInboundTaskSubjectMustMatchStoredRow(t *testing.T) {
+	row := TaskRow{FromAgent: "alice-runtime", ToAgent: "bob-runtime", ExecutorAgent: "bob-runtime"}
+	if err := validateExistingInboundTaskSubject(row, Subject{From: "alice-runtime", To: "bob-runtime"}); err != nil {
+		t.Fatalf("matching subject rejected: %v", err)
+	}
+	if err := validateExistingInboundTaskSubject(row, Subject{From: "mallory-runtime", To: "bob-runtime"}); err == nil {
+		t.Fatal("subject with mismatched sender accepted")
+	}
+	if err := validateExistingInboundTaskSubject(row, Subject{From: "alice-runtime", To: "eve-runtime"}); err == nil {
+		t.Fatal("subject with mismatched target accepted")
+	}
+	row.ExecutorAgent = "other-runtime"
+	if err := validateExistingInboundTaskSubject(row, Subject{From: "alice-runtime", To: "bob-runtime"}); err == nil {
+		t.Fatal("subject with mismatched executor accepted")
 	}
 }
 
@@ -255,6 +437,28 @@ func TestPolicyStoreValidationAndPersistence(t *testing.T) {
 	}
 	bad = policy
 	bad.ChannelID = "other"
+	bad.ChannelRef = "case/alpha"
+	if err := store.Save(ctx, bad, "manager"); err == nil {
+		t.Fatal("invalid channel_ref accepted")
+	}
+	bad = policy
+	bad.ChannelID = "other"
+	bad.Enabled = false
+	bad.Discoverable = false
+	bad.ChannelRef = "case/alpha"
+	if err := store.Save(ctx, bad, "manager"); err == nil {
+		t.Fatal("disabled invalid channel_ref accepted")
+	}
+	bad = policy
+	bad.ChannelID = "other"
+	bad.ChannelRef = "other"
+	bad.DelegateTargets = []DelegateTargetPolicy{{RuntimeAgentID: "eve-local-backend", ChannelRef: "case/alpha", SkillID: "backend/review"}}
+	if err := store.Save(ctx, bad, "manager"); err == nil {
+		t.Fatal("invalid delegate target channel_ref accepted")
+	}
+
+	bad = policy
+	bad.ChannelID = "other"
 	bad.ChannelRef = "backend"
 	if err := store.Save(ctx, bad, "manager"); err == nil {
 		t.Fatal("duplicate channel_ref accepted")
@@ -287,7 +491,7 @@ func TestPolicyStoreValidationAndPersistence(t *testing.T) {
 		t.Fatalf("runtime references were not rewritten: %+v", gotDelegator)
 	}
 }
-func TestPolicyStoreOpenNormalizesLegacyFrontendAllowlists(t *testing.T) {
+func TestPolicyStoreOpenPreservesLegacyFrontendAllowlists(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()
 	db, err := openA2ASQLite(dir, "policy.sqlite", policyStoreMigrations())
@@ -334,8 +538,8 @@ func TestPolicyStoreOpenNormalizesLegacyFrontendAllowlists(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if len(got.AcceptFrom) != 0 || len(got.AcceptSkills) != 1 || got.AcceptSkills[0] != "task" || len(got.DelegateTo) != 0 || len(got.DelegateSkills) != 0 || len(got.CoPresentFrom) != 0 || got.AutoDelegateEnabled || got.RemoteToolPolicy.AllowMemoryWrite {
-		t.Fatalf("legacy frontend allowlists or skill restriction were not normalized safely: %+v", got)
+	if got.AcceptFrom[0] != "legacy-bot" || got.DelegateTo[0] != "legacy-bot" || got.DelegateSkills[0] != "review" || got.CoPresentFrom[0] != "legacy-bot" || !got.AutoDelegateEnabled || !got.RemoteToolPolicy.AllowMemoryWrite {
+		t.Fatalf("legacy frontend allowlists or operator policy were not preserved: %+v", got)
 	}
 	if len(got.AcceptFromRuntimes) != 1 || got.AcceptFromRuntimes[0] != "runtime-bot" || len(got.DelegateTargets) != 1 || got.DelegateTargets[0].RuntimeAgentID != "runtime-bot" || got.DelegateTargets[0].SkillID != "general/task" || len(got.CoPresentFromRuntimes) != 1 || got.CoPresentFromRuntimes[0] != "runtime-bot" || len(got.CoPresentTargetChannels) != 1 {
 		t.Fatalf("runtime allowlist fields were not preserved: %+v", got)
@@ -415,12 +619,24 @@ func TestObjectStoreStoresFetchesAndPrunesBackendBytes(t *testing.T) {
 	if strings.Contains(ref.Key, "..") || !strings.HasPrefix(ref.Key, "tasks/task_object/artifact-image/") {
 		t.Fatalf("unsafe key generated: %q", ref.Key)
 	}
-	got, gotRef, err := store.FetchObject(ctx, "artifact-image")
+	got, gotRef, err := store.FetchObject(ctx, "task_object", "artifact-image")
 	if err != nil {
 		t.Fatalf("FetchObject: %v", err)
 	}
 	if string(got) != string(content) || gotRef.Digest != "sha256:"+sha256ForTest(content) {
 		t.Fatalf("bad fetch got=%q ref=%+v", got, gotRef)
+	}
+	secondContent := []byte("second-image")
+	secondRef, err := store.PutObject(ctx, "task_second", "artifact-image", "other.png", "image/png", secondContent, 1)
+	if err != nil {
+		t.Fatalf("PutObject second task: %v", err)
+	}
+	gotAgain, gotAgainRef, err := store.FetchObject(ctx, "task_object", "artifact-image")
+	if err != nil {
+		t.Fatalf("FetchObject first task after colliding artifact id: %v", err)
+	}
+	if string(gotAgain) != string(content) || gotAgainRef.TaskID != "task_object" || secondRef.TaskID != "task_second" {
+		t.Fatalf("object refs were not scoped by task: first=%q ref=%+v second=%+v", gotAgain, gotAgainRef, secondRef)
 	}
 	expired := gotRef
 	expired.ArtifactID = "artifact-expired"
@@ -444,6 +660,7 @@ func TestObjectStoreStoresFetchesAndPrunesBackendBytes(t *testing.T) {
 
 type memoryObjectBackend struct {
 	objects map[string][]byte
+	gets    int
 }
 
 func newMemoryObjectBackend() *memoryObjectBackend {
@@ -456,6 +673,7 @@ func (b *memoryObjectBackend) PutObject(_ context.Context, bucket string, key st
 }
 
 func (b *memoryObjectBackend) GetObject(_ context.Context, bucket string, key string) ([]byte, error) {
+	b.gets++
 	content, ok := b.objects[bucket+"/"+key]
 	if !ok {
 		return nil, fmt.Errorf("missing object")

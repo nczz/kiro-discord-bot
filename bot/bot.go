@@ -31,6 +31,8 @@ type Bot struct {
 	safeEgress               *safeEgressTask
 	cronStore                *heartbeat.CronStore
 	cronTask                 *heartbeat.CronTask
+	monitorStore             *heartbeat.MonitorStore
+	monitorTask              *heartbeat.MonitorTask
 	auditRecorder            *audit.Recorder
 	skillsStore              *skills.Store
 	a2aNode                  *a2a.Node
@@ -51,7 +53,8 @@ type Bot struct {
 	manualPeers              []BotPeer
 	peerPermMu               sync.Mutex
 	peerPermCache            map[string]peerPermissionCacheEntry
-	cronPromptCache          cronPromptStore // parsed cron jobs awaiting button confirmation
+	cronPromptCache          cronPromptStore    // parsed cron jobs awaiting button confirmation
+	monitorPromptCache       monitorPromptStore // parsed monitor jobs awaiting button confirmation
 	a2aConfirmations         *a2aPolicyConfirmationStore
 	setupPromptMu            sync.Mutex
 	setupPromptCooldown      *setupPromptCooldown
@@ -211,6 +214,14 @@ func NewFromConfig(cfg BotConfig) (*Bot, error) {
 		return nil, err
 	}
 	b.cronStore = cronStore
+	monitorStore, err := heartbeat.NewMonitorStore(cfg.DataDir)
+	if err != nil {
+		if b.auditRecorder != nil {
+			b.auditRecorder.Close()
+		}
+		return nil, err
+	}
+	b.monitorStore = monitorStore
 
 	hb := heartbeat.New(cfg.HeartbeatSec)
 	n := botNotifier{bot: b}
@@ -224,6 +235,10 @@ func NewFromConfig(cfg BotConfig) (*Bot, error) {
 	cronTask.RecalcAll()
 	hb.Register(cronTask)
 	b.cronTask = cronTask
+	monitorTask := heartbeat.NewMonitorTask(monitorStore, &monitorAdapter{n}, cfg.DataDir, cfg.CronTimezone, cfg.GuildID, cfg.CronTimeoutMin)
+	monitorTask.RecalcAll()
+	hb.Register(monitorTask)
+	b.monitorTask = monitorTask
 	hb.Register(heartbeat.NewThreadCleanupTask(&threadCleanupAdapter{n}, cfg.ThreadAgentIdleSec, cfg.ThreadAgentMax))
 	hb.Register(heartbeat.NewChannelCleanupTask(&channelCleanupAdapter{n}, cfg.ChannelAgentIdleSec))
 	if cfg.A2A.Enabled() {

@@ -17,9 +17,11 @@ import (
 	"github.com/bwmarrin/discordgo"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
+	"github.com/nczz/kiro-discord-bot/internal/botegress"
 	"github.com/nczz/kiro-discord-bot/internal/discordfmt"
 	"github.com/nczz/kiro-discord-bot/internal/discordmention"
 	"github.com/nczz/kiro-discord-bot/internal/secrets"
+	L "github.com/nczz/kiro-discord-bot/locale"
 )
 
 var dg *discordgo.Session
@@ -104,19 +106,103 @@ func envBool(key string, def bool) bool {
 	}
 }
 
+func envInt(key string, def int) int {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return def
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return def
+	}
+	return n
+}
+
+func discordAttachmentMaxBytes() int64 {
+	mb := envInt("ATTACHMENT_MAX_MB", 25)
+	if mb <= 0 {
+		mb = 25
+	}
+	return int64(mb) * 1024 * 1024
+}
+
+func discordDownloadTimeout() time.Duration {
+	seconds := envInt("DOWNLOAD_TIMEOUT_SEC", 120)
+	if seconds <= 0 {
+		seconds = 120
+	}
+	return time.Duration(seconds) * time.Second
+}
+
+func copyDiscordAttachmentToFile(dst string, body io.Reader, contentLength, maxBytes int64) (int64, error) {
+	if maxBytes > 0 && contentLength > maxBytes {
+		return 0, fmt.Errorf("attachment exceeds max size")
+	}
+	f, err := os.Create(dst)
+	if err != nil {
+		return 0, fmt.Errorf("create file: %w", err)
+	}
+	reader := body
+	if maxBytes > 0 {
+		reader = io.LimitReader(body, maxBytes+1)
+	}
+	n, copyErr := io.Copy(f, reader)
+	closeErr := f.Close()
+	if copyErr != nil {
+		_ = os.Remove(dst)
+		return n, fmt.Errorf("write file: %w", copyErr)
+	}
+	if closeErr != nil {
+		_ = os.Remove(dst)
+		return n, fmt.Errorf("write file: %w", closeErr)
+	}
+	if maxBytes > 0 && n > maxBytes {
+		_ = os.Remove(dst)
+		return n, fmt.Errorf("attachment exceeds max size")
+	}
+	return n, nil
+}
+
 func ensureGuildAllowed(guildID string) error {
+	guildID = strings.TrimSpace(guildID)
+	if bound := strings.TrimSpace(os.Getenv("BOT_TOOLS_GUILD_ID")); bound != "" && guildID != bound {
+		return fmt.Errorf("guild %s is not allowed for this mcp-discord session", guildID)
+	}
 	if policy.guildAllowed(guildID) {
 		return nil
 	}
 	return fmt.Errorf("guild %s is not allowed by MCP_DISCORD_ALLOWED_GUILDS", guildID)
 }
 
+func ensureBoundDiscordChannel(channelID string) error {
+	channelID = strings.TrimSpace(channelID)
+	parent := strings.TrimSpace(os.Getenv("BOT_TOOLS_CHANNEL_ID"))
+	target := strings.TrimSpace(os.Getenv("BOT_TOOLS_TARGET_CHANNEL_ID"))
+	if parent == "" && target == "" {
+		if currentTargetStateChannelID() == "" {
+			return nil
+		}
+	}
+	currentTarget := currentTargetStateChannelID()
+	if channelID == parent || (target != "" && channelID == target) || (currentTarget != "" && channelID == currentTarget) {
+		return nil
+	}
+	return fmt.Errorf("channel %s is not allowed for this mcp-discord session", channelID)
+}
+
 func ensureChannelAllowed(channelID string) error {
-	if !policy.channelIDAllowed(channelID) {
+	channelID = strings.TrimSpace(channelID)
+	if err := ensureBoundDiscordChannel(channelID); err != nil {
+		return err
+	}
+	if !policy.channelIDAllowed(channelID) && !dynamicTargetAllowedByParentAllowlist(channelID) {
 		return fmt.Errorf("channel %s is not allowed by MCP_DISCORD_ALLOWED_CHANNELS", channelID)
 	}
-	if len(policy.allowedGuilds) == 0 {
+	if len(policy.allowedGuilds) == 0 && strings.TrimSpace(os.Getenv("BOT_TOOLS_GUILD_ID")) == "" {
 		return nil
+	}
+	if dg == nil {
+		return fmt.Errorf("discord session is unavailable for guild-bound channel authorization")
 	}
 	ch, err := dg.Channel(channelID)
 	if err != nil {
@@ -128,34 +214,163 @@ func ensureChannelAllowed(channelID string) error {
 	return ensureGuildAllowed(ch.GuildID)
 }
 
-func resolveWriteTargetChannel(requestedChannelID string) string {
-	target := currentTargetStateChannelID()
+func discordChannelVisibleForList(ch *discordgo.Channel) bool {
+	if ch == nil {
+		return false
+	}
+	if strings.TrimSpace(ch.GuildID) != "" {
+		if err := ensureGuildAllowed(ch.GuildID); err != nil {
+			return false
+		}
+	}
+	return discordChannelIDVisibleForList(ch.ID, ch.ParentID)
+}
+
+func discordChannelIDVisibleForList(channelID, parentID string) bool {
+	channelID = strings.TrimSpace(channelID)
+	parentID = strings.TrimSpace(parentID)
+	if channelID == "" {
+		return false
+	}
+	if discordChannelIDMatchesBinding(channelID) && (policy.channelIDAllowed(channelID) || parentID != "" && policy.channelIDAllowed(parentID)) {
+		return true
+	}
+	if parentID != "" && discordChannelIDMatchesBinding(parentID) && policy.channelIDAllowed(parentID) {
+		return true
+	}
+	return false
+}
+
+func discordChannelIDMatchesBinding(channelID string) bool {
+	parent := strings.TrimSpace(os.Getenv("BOT_TOOLS_CHANNEL_ID"))
+	target := strings.TrimSpace(os.Getenv("BOT_TOOLS_TARGET_CHANNEL_ID"))
+	currentTarget := currentTargetStateChannelID()
+	if parent == "" && target == "" && currentTarget == "" {
+		return true
+	}
+	return channelID == parent || channelID == target || channelID == currentTarget
+}
+
+func dynamicTargetAllowedByParentAllowlist(channelID string) bool {
+	currentTarget := currentTargetStateChannelID()
+	parent := strings.TrimSpace(os.Getenv("BOT_TOOLS_CHANNEL_ID"))
+	if currentTarget == "" || strings.TrimSpace(channelID) != currentTarget || parent == "" || !policy.channelIDAllowed(parent) || dg == nil {
+		return false
+	}
+	ch, err := dg.Channel(currentTarget)
+	if err != nil {
+		return false
+	}
+	return isDiscordThreadChannel(ch.Type) && strings.TrimSpace(ch.ParentID) == parent
+}
+
+func discordUserGuildScope(req mcp.CallToolRequest) (string, error) {
+	guildID := strings.TrimSpace(req.GetString("guild_id", ""))
+	channelID := strings.TrimSpace(req.GetString("channel_id", ""))
+	if guildID == "" {
+		guildID = strings.TrimSpace(os.Getenv("BOT_TOOLS_GUILD_ID"))
+	}
+	if channelID != "" {
+		if err := ensureChannelAllowed(channelID); err != nil {
+			return "", err
+		}
+		if guildID == "" {
+			if dg == nil {
+				return "", fmt.Errorf("discord session is unavailable for channel-scoped user lookup")
+			}
+			ch, err := dg.Channel(channelID)
+			if err != nil {
+				return "", fmt.Errorf("resolve channel guild: %w", err)
+			}
+			guildID = strings.TrimSpace(ch.GuildID)
+		}
+	}
+	if guildID == "" {
+		return "", fmt.Errorf("guild_id or channel_id is required for scoped user lookup")
+	}
+	if err := ensureGuildAllowed(guildID); err != nil {
+		return "", err
+	}
+	return guildID, nil
+}
+
+func resolveWriteTargetChannel(requestedChannelID string) (string, error) {
+	state, ok, err := currentTargetState()
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		return requestedChannelID, nil
+	}
+	target := strings.TrimSpace(state.TargetChannelID)
 	if target == "" {
-		return requestedChannelID
+		return "", fmt.Errorf("bot-tools target state is missing target_channel_id")
 	}
-	if err := ensureGuildForDynamicTarget(target); err != nil {
-		log.Printf("[mcp-discord] ignoring dynamic target %s for requested channel %s: %v", target, requestedChannelID, err)
-		return requestedChannelID
+	if target == requestedChannelID {
+		return target, nil
 	}
-	return target
+	if dg == nil {
+		return "", fmt.Errorf("dynamic target %s cannot be verified", target)
+	}
+	ch, err := dg.Channel(target)
+	if err != nil {
+		return "", fmt.Errorf("dynamic target %s cannot be verified: %w", target, err)
+	}
+	if !isDiscordThreadChannel(ch.Type) || strings.TrimSpace(ch.ParentID) != requestedChannelID {
+		return "", fmt.Errorf("dynamic target %s is not allowed for requested channel %s", target, requestedChannelID)
+	}
+	if ch.GuildID != "" {
+		if err := ensureGuildAllowed(ch.GuildID); err != nil {
+			return "", fmt.Errorf("dynamic target %s is not allowed: %w", target, err)
+		}
+	}
+	return target, nil
+}
+
+func isDiscordThreadChannel(channelType discordgo.ChannelType) bool {
+	switch channelType {
+	case discordgo.ChannelTypeGuildNewsThread, discordgo.ChannelTypeGuildPublicThread, discordgo.ChannelTypeGuildPrivateThread:
+		return true
+	default:
+		return false
+	}
 }
 
 func currentTargetStateChannelID() string {
-	path := strings.TrimSpace(os.Getenv("BOT_TOOLS_TARGET_STATE_PATH"))
-	if path == "" {
-		return ""
-	}
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
-	var state struct {
-		TargetChannelID string `json:"target_channel_id"`
-	}
-	if err := json.Unmarshal(raw, &state); err != nil {
+	state, ok, err := currentTargetState()
+	if !ok || err != nil {
 		return ""
 	}
 	return strings.TrimSpace(state.TargetChannelID)
+}
+
+func currentTargetState() (mentionTargetState, bool, error) {
+	path := strings.TrimSpace(os.Getenv("BOT_TOOLS_TARGET_STATE_PATH"))
+	if path == "" {
+		return mentionTargetState{}, false, nil
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return mentionTargetState{}, true, fmt.Errorf("bot-tools write actions are disabled until the bot-tools target state can be verified")
+	}
+	var state mentionTargetState
+	if err := json.Unmarshal(raw, &state); err != nil {
+		return state, true, fmt.Errorf("bot-tools write actions are disabled until the bot-tools target state can be verified")
+	}
+	if state.RemoteA2A {
+		return state, true, nil
+	}
+	return state, true, nil
+}
+
+func botToolsWriteDisabledMessage(state mentionTargetState) string {
+	if state.RemoteA2A {
+		return "Discord write actions are disabled for remote A2A tasks."
+	}
+	if strings.TrimSpace(state.Source) == "monitor" {
+		return "Bot-tools write actions are disabled during monitor background checks."
+	}
+	return "Bot-tools write actions are disabled for this private bot task."
 }
 
 func ensureGuildForDynamicTarget(channelID string) error {
@@ -170,7 +385,117 @@ func ensureGuildForDynamicTarget(channelID string) error {
 }
 
 func ensureWriteAllowed(tool string, destructive bool) error {
-	return policy.writeAllowed(tool, destructive)
+	if err := policy.writeAllowed(tool, destructive); err != nil {
+		return err
+	}
+	state, ok, err := currentTargetState()
+	if err != nil {
+		return err
+	}
+	if ok && state.RemoteA2A {
+		return fmt.Errorf("Discord write actions are disabled for remote A2A tasks")
+	}
+	if ok && state.DisableEgress {
+		return fmt.Errorf("%s", botToolsWriteDisabledMessage(state))
+	}
+	if ok && strings.TrimSpace(state.TargetChannelID) == "" {
+		return fmt.Errorf("bot-tools target state is missing target_channel_id")
+	}
+	if destructive {
+		if !ok || strings.TrimSpace(state.RequesterID) == "" || strings.TrimSpace(state.RequesterName) == "" {
+			return fmt.Errorf("Discord mutation tools require authenticated channel manager context")
+		}
+		if !state.CanManageChannel {
+			return fmt.Errorf("Discord mutation tools require channel management permissions")
+		}
+	}
+	return nil
+}
+
+func discordSanitizedTempRoot() string {
+	if dataDir := strings.TrimSpace(os.Getenv("DATA_DIR")); dataDir != "" {
+		return filepath.Join(dataDir, "egress", "sanitized")
+	}
+	return filepath.Join(os.TempDir(), "kiro-discord-bot-mcp-discord-sanitized")
+}
+
+func prepareDiscordUploadFile(filePath string) (botegress.SanitizedFile, *os.File, func(), error) {
+	prepared, err := botegress.PrepareSanitizedFile(filePath, secrets.FromEnv(), discordSanitizedTempRoot())
+	if err != nil {
+		return botegress.SanitizedFile{}, nil, nil, err
+	}
+	if prepared.SensitivePath {
+		ext := strings.ToLower(filepath.Ext(prepared.DisplayName))
+		switch ext {
+		case ".jpg", ".jpeg", ".png":
+		default:
+			ext = ".txt"
+		}
+		prepared.DisplayName = "sanitized-upload" + ext
+	}
+	f, err := os.Open(prepared.Path)
+	if err != nil {
+		_ = os.Remove(prepared.Path)
+		return botegress.SanitizedFile{}, nil, nil, err
+	}
+	cleanup := func() {
+		_ = f.Close()
+		_ = os.Remove(prepared.Path)
+	}
+	return prepared, f, cleanup, nil
+}
+
+func safeDiscordUploadError(err error) string {
+	if err == nil {
+		return "file is unavailable or unsafe to upload"
+	}
+	msg := err.Error()
+	for _, allowed := range []string{
+		"file_path is required",
+		"directories cannot be sent as files",
+		"file exceeds sanitizable size limit",
+		"redacted file exceeds sanitizable size limit",
+		"file type is not safely redactable as text",
+		"image exceeds upload size limit",
+		"image dimensions exceed upload limit",
+		"invalid image file",
+	} {
+		if strings.Contains(msg, allowed) {
+			return allowed
+		}
+	}
+	return "file is unavailable or unsafe to upload"
+}
+
+func authorizeWriteChannel(tool string, destructive bool, requestedChannelID string) (string, error) {
+	if err := ensureChannelAllowed(requestedChannelID); err != nil {
+		return "", err
+	}
+	if err := ensureWriteAllowed(tool, destructive); err != nil {
+		return "", err
+	}
+	return resolveWriteTargetChannel(requestedChannelID)
+}
+
+func authorizeMessageWriteChannel(tool string, destructive bool, requestedChannelID string) error {
+	requestedChannelID = strings.TrimSpace(requestedChannelID)
+	if err := ensureChannelAllowed(requestedChannelID); err != nil {
+		return err
+	}
+	if err := ensureWriteAllowed(tool, destructive); err != nil {
+		return err
+	}
+	if target := currentTargetStateChannelID(); target != "" && requestedChannelID != target {
+		return fmt.Errorf("channel %s is not the active bot-tools target", requestedChannelID)
+	}
+	return nil
+}
+
+func authorizeCreateThreadChannel(requestedChannelID string) error {
+	if currentTargetStateChannelID() != "" {
+		return fmt.Errorf("discord_create_thread is not allowed while a dynamic bot-tools target is active")
+	}
+	return authorizeMessageWriteChannel("discord_create_thread", false, requestedChannelID)
 }
 
 func validateDiscordAttachmentURL(raw string) (*url.URL, error) {
@@ -187,6 +512,69 @@ func validateDiscordAttachmentURL(raw string) (*url.URL, error) {
 	default:
 		return nil, fmt.Errorf("attachment url host %q is not allowed", u.Hostname())
 	}
+}
+
+func discordAttachmentChannelID(u *url.URL) (string, error) {
+	if u == nil {
+		return "", fmt.Errorf("attachment url is required")
+	}
+	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+	if len(parts) < 3 || parts[0] != "attachments" || strings.TrimSpace(parts[1]) == "" {
+		return "", fmt.Errorf("attachment url must include a Discord attachment channel path")
+	}
+	return parts[1], nil
+}
+
+func authorizeAttachmentChannel(channelID string) error {
+	channelID = strings.TrimSpace(channelID)
+	if channelID == "" {
+		return fmt.Errorf("attachment channel id is required")
+	}
+	state, ok, err := currentTargetState()
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return ensureChannelAllowed(channelID)
+	}
+	target := strings.TrimSpace(state.TargetChannelID)
+	if target == "" {
+		return fmt.Errorf("bot-tools target state is missing target_channel_id")
+	}
+	parent := strings.TrimSpace(os.Getenv("BOT_TOOLS_CHANNEL_ID"))
+	if parent == "" {
+		parent = target
+	}
+	if parent != "" {
+		if err := ensureChannelAllowed(parent); err != nil {
+			return err
+		}
+	}
+	if target != parent {
+		if channelID == target {
+			return ensureGuildForDynamicTarget(channelID)
+		}
+		return fmt.Errorf("attachment channel %s is not allowed for bot-tools target %s", channelID, target)
+	}
+	if channelID == parent {
+		return nil
+	}
+	if dg == nil {
+		return fmt.Errorf("attachment channel %s cannot be verified against bot-tools target state", channelID)
+	}
+	ch, err := dg.Channel(channelID)
+	if err != nil {
+		return fmt.Errorf("attachment channel %s cannot be verified: %w", channelID, err)
+	}
+	if isDiscordThreadChannel(ch.Type) && strings.TrimSpace(ch.ParentID) == parent {
+		if ch.GuildID != "" {
+			if err := ensureGuildAllowed(ch.GuildID); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	return fmt.Errorf("attachment channel %s is not allowed for bot-tools target %s", channelID, target)
 }
 
 func resolveDownloadDir(requested string) (string, error) {
@@ -216,7 +604,7 @@ func resolveDownloadDir(requested string) (string, error) {
 	if rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator))) {
 		return absRequested, nil
 	}
-	return "", fmt.Errorf("save_dir must be inside MCP_DISCORD_DOWNLOAD_DIR (%s)", policyRoot)
+	return "", fmt.Errorf("save_dir must be inside MCP_DISCORD_DOWNLOAD_DIR")
 }
 
 func canonicalPathForPolicy(path string) (string, error) {
@@ -268,6 +656,16 @@ func safeAttachmentFilename(raw string) string {
 		return "attachment"
 	}
 	return name
+}
+
+func discordUploadCaption(raw string, sensitivePath bool) string {
+	if !sensitivePath {
+		return raw
+	}
+	if raw != "" {
+		raw += "\n"
+	}
+	return raw + L.Get("egress.sensitive_path_notice")
 }
 
 func sendDiscordMessageParts(channelID, content string) ([]*discordgo.Message, error) {
@@ -430,6 +828,7 @@ func ensureDiscord() error {
 }
 
 func main() {
+	L.Load(os.Getenv("BOT_LOCALE"))
 	s := server.NewMCPServer("mcp-discord", "1.0.0", server.WithToolCapabilities(false))
 
 	// 1. List channels
@@ -452,7 +851,7 @@ func main() {
 			}
 			var lines []string
 			for _, ch := range channels {
-				if ch.Type == discordgo.ChannelTypeGuildText {
+				if ch.Type == discordgo.ChannelTypeGuildText && discordChannelVisibleForList(ch) {
 					lines = append(lines, fmt.Sprintf("#%s (%s)", ch.Name, ch.ID))
 				}
 			}
@@ -504,13 +903,11 @@ func main() {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			chID, _ := req.RequireString("channel_id")
-			if err := ensureChannelAllowed(chID); err != nil {
+			targetID, err := authorizeWriteChannel("discord_send_message", false, chID)
+			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
-			if err := ensureWriteAllowed("discord_send_message", false); err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
-			}
-			chID = resolveWriteTargetChannel(chID)
+			chID = targetID
 			content, _ := req.RequireString("content")
 			msgs, err := sendDiscordMessageParts(chID, content)
 			if err != nil {
@@ -533,10 +930,7 @@ func main() {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			chID, _ := req.RequireString("channel_id")
-			if err := ensureChannelAllowed(chID); err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
-			}
-			if err := ensureWriteAllowed("discord_reply_message", false); err != nil {
+			if err := authorizeMessageWriteChannel("discord_reply_message", false, chID); err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			msgID, _ := req.RequireString("message_id")
@@ -562,10 +956,7 @@ func main() {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			chID, _ := req.RequireString("channel_id")
-			if err := ensureChannelAllowed(chID); err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
-			}
-			if err := ensureWriteAllowed("discord_add_reaction", false); err != nil {
+			if err := authorizeMessageWriteChannel("discord_add_reaction", false, chID); err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			msgID, _ := req.RequireString("message_id")
@@ -694,33 +1085,23 @@ func main() {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			chID, _ := req.RequireString("channel_id")
-			if err := ensureChannelAllowed(chID); err != nil {
+			targetID, err := authorizeWriteChannel("discord_send_file", false, chID)
+			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
-			if err := ensureWriteAllowed("discord_send_file", false); err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
-			}
-			chID = resolveWriteTargetChannel(chID)
+			chID = targetID
 			filePath, _ := req.RequireString("file_path")
 			rawContent := req.GetString("content", "")
-			content, mentionRefs := renderDiscordTextMentions(secrets.RedactEnv(rawContent))
 
-			f, err := os.Open(filePath)
+			prepared, f, cleanup, err := prepareDiscordUploadFile(filePath)
 			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("open file: %v", err)), nil
+				return mcp.NewToolResultError("file could not be prepared for safe upload: " + safeDiscordUploadError(err)), nil
 			}
-			defer f.Close()
-
-			info, err := f.Stat()
-			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("stat file: %v", err)), nil
-			}
-			if info.Size() > 25*1024*1024 {
-				return mcp.NewToolResultError("file exceeds 25MB Discord limit"), nil
-			}
-
+			defer cleanup()
+			rawCaption := discordUploadCaption(rawContent, prepared.SensitivePath)
+			content, mentionRefs := renderDiscordTextMentions(secrets.RedactEnv(rawCaption))
 			if len(discordfmt.Split(content, discordMessageLimit)) > 1 {
-				if _, err := sendDiscordMessageParts(chID, rawContent); err != nil {
+				if _, err := sendDiscordMessageParts(chID, rawCaption); err != nil {
 					return mcp.NewToolResultError(err.Error()), nil
 				}
 				content = ""
@@ -731,7 +1112,7 @@ func main() {
 				AllowedMentions: discordmention.AllowedMentionsForRendered(content, mentionRefs),
 				Flags:           discordgo.MessageFlagsSuppressEmbeds,
 				Files: []*discordgo.File{{
-					Name:   filepath.Base(filePath),
+					Name:   prepared.DisplayName,
 					Reader: f,
 				}},
 			})
@@ -796,10 +1177,20 @@ func main() {
 			if err := ensureDiscord(); err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
+			if err := ensureWriteAllowed("discord_download_attachment", false); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
 			url, _ := req.RequireString("url")
 			saveDir := req.GetString("save_dir", os.TempDir())
 			parsedURL, err := validateDiscordAttachmentURL(url)
 			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			attachmentChannelID, err := discordAttachmentChannelID(parsedURL)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			if err := authorizeAttachmentChannel(attachmentChannelID); err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			saveDir, err = resolveDownloadDir(saveDir)
@@ -811,7 +1202,11 @@ func main() {
 				return mcp.NewToolResultError(fmt.Sprintf("create dir: %v", err)), nil
 			}
 
-			resp, err := http.Get(url)
+			httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+			if err != nil {
+				return mcp.NewToolResultError(fmt.Sprintf("download: %v", err)), nil
+			}
+			resp, err := (&http.Client{Timeout: discordDownloadTimeout()}).Do(httpReq)
 			if err != nil {
 				return mcp.NewToolResultError(fmt.Sprintf("download: %v", err)), nil
 			}
@@ -824,14 +1219,9 @@ func main() {
 			ts := time.Now().Format("20060102-150405")
 			dst := filepath.Join(saveDir, ts+"-"+name)
 
-			f, err := os.Create(dst)
+			n, err := copyDiscordAttachmentToFile(dst, resp.Body, resp.ContentLength, discordAttachmentMaxBytes())
 			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("create file: %v", err)), nil
-			}
-			n, err := io.Copy(f, resp.Body)
-			f.Close()
-			if err != nil {
-				return mcp.NewToolResultError(fmt.Sprintf("write file: %v", err)), nil
+				return mcp.NewToolResultError(err.Error()), nil
 			}
 			abs, _ := filepath.Abs(dst)
 			return mcp.NewToolResultText(fmt.Sprintf("Saved %s (%d bytes)", abs, n)), nil
@@ -851,10 +1241,7 @@ func main() {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			chID, _ := req.RequireString("channel_id")
-			if err := ensureChannelAllowed(chID); err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
-			}
-			if err := ensureWriteAllowed("discord_edit_message", true); err != nil {
+			if err := authorizeMessageWriteChannel("discord_edit_message", true, chID); err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			msgID, _ := req.RequireString("message_id")
@@ -889,10 +1276,7 @@ func main() {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			chID, _ := req.RequireString("channel_id")
-			if err := ensureChannelAllowed(chID); err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
-			}
-			if err := ensureWriteAllowed("discord_delete_message", true); err != nil {
+			if err := authorizeMessageWriteChannel("discord_delete_message", true, chID); err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			msgID, _ := req.RequireString("message_id")
@@ -953,13 +1337,11 @@ func main() {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			chID, _ := req.RequireString("channel_id")
-			if err := ensureChannelAllowed(chID); err != nil {
+			targetID, err := authorizeWriteChannel("discord_send_embed", false, chID)
+			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
-			if err := ensureWriteAllowed("discord_send_embed", false); err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
-			}
-			chID = resolveWriteTargetChannel(chID)
+			chID = targetID
 			title, _ := req.RequireString("title")
 			embed := &discordgo.MessageEmbed{
 				Title:       title,
@@ -1003,10 +1385,7 @@ func main() {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			chID, _ := req.RequireString("channel_id")
-			if err := ensureChannelAllowed(chID); err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
-			}
-			if err := ensureWriteAllowed("discord_pin_message", true); err != nil {
+			if err := authorizeMessageWriteChannel("discord_pin_message", true, chID); err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			msgID, _ := req.RequireString("message_id")
@@ -1038,10 +1417,7 @@ func main() {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			chID, _ := req.RequireString("channel_id")
-			if err := ensureChannelAllowed(chID); err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
-			}
-			if err := ensureWriteAllowed("discord_create_thread", false); err != nil {
+			if err := authorizeCreateThreadChannel(chID); err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			msgID, _ := req.RequireString("message_id")
@@ -1078,7 +1454,9 @@ func main() {
 			}
 			var lines []string
 			for _, t := range tl.Threads {
-				lines = append(lines, fmt.Sprintf("#%s (%s) parent:%s", t.Name, t.ID, t.ParentID))
+				if discordChannelVisibleForList(t) {
+					lines = append(lines, fmt.Sprintf("#%s (%s) parent:%s", t.Name, t.ID, t.ParentID))
+				}
 			}
 			return mcp.NewToolResultText(strings.Join(lines, "\n")), nil
 		},
@@ -1098,10 +1476,7 @@ func main() {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			chID, _ := req.RequireString("channel_id")
-			if err := ensureChannelAllowed(chID); err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
-			}
-			if err := ensureWriteAllowed("discord_remove_reaction", true); err != nil {
+			if err := authorizeMessageWriteChannel("discord_remove_reaction", true, chID); err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			msgID, _ := req.RequireString("message_id")
@@ -1167,6 +1542,9 @@ func main() {
 			if err := ensureWriteAllowed("discord_edit_channel_topic", true); err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
+			if target := currentTargetStateChannelID(); target != "" && target != chID {
+				return mcp.NewToolResultError("discord_edit_channel_topic is not available for dynamically targeted bot tasks"), nil
+			}
 			topic, _ := req.RequireString("topic")
 			_, err := dg.ChannelEdit(chID, &discordgo.ChannelEdit{Topic: topic})
 			if err != nil {
@@ -1205,18 +1583,28 @@ func main() {
 	// 23. Get user
 	s.AddTool(
 		mcp.NewTool("discord_get_user",
-			mcp.WithDescription("Get info about a specific user by ID"),
+			mcp.WithDescription("Get info about a specific user by ID after verifying membership in an allowed guild"),
 			mcp.WithString("user_id", mcp.Required(), mcp.Description("User ID")),
+			mcp.WithString("guild_id", mcp.Description("Guild/server ID. Defaults to bound bot-tools guild.")),
+			mcp.WithString("channel_id", mcp.Description("Channel ID used to derive an allowed guild when guild_id is omitted.")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			if err := ensureDiscord(); err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			userID, _ := req.RequireString("user_id")
-			u, err := dg.User(userID)
+			guildID, err := discordUserGuildScope(req)
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
+			member, err := dg.GuildMember(guildID, userID)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			if member == nil || member.User == nil {
+				return mcp.NewToolResultError("user is not a member of the scoped guild"), nil
+			}
+			u := member.User
 			bot := ""
 			if u.Bot {
 				bot = " 🤖"

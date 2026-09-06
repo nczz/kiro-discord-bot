@@ -184,6 +184,142 @@ func TestRunHTTPReturnsJSONRPCErrorOnUpstreamFailure(t *testing.T) {
 	}
 }
 
+func TestRunHTTPRedactsDiagnostics(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(500)
+		_, _ = w.Write([]byte("upstream token=secret-token"))
+	}))
+	defer srv.Close()
+
+	cfg := Config{URL: strings.Replace(srv.URL, "http://", "http://user:pass@", 1) + "/mcp?token=secret-token#frag", AllowAllTools: true}
+	stdin := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}` + "\n")
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	if err := Run(context.Background(), cfg, stdin, &stdout, &stderr); err != nil {
+		t.Fatalf("runHTTP should not fail on upstream error: %v", err)
+	}
+	combined := stdout.String() + "\n" + stderr.String()
+	for _, secret := range []string{"user:pass", "token=secret-token", "upstream token=secret-token", "#frag"} {
+		if strings.Contains(combined, secret) {
+			t.Fatalf("HTTP diagnostics leaked %q in stdout=%q stderr=%q", secret, stdout.String(), stderr.String())
+		}
+	}
+	if !strings.Contains(stdout.String(), "upstream returned status 500") || !strings.Contains(stderr.String(), "returned 500") {
+		t.Fatalf("HTTP diagnostics = stdout:%q stderr:%q, want sanitized status", stdout.String(), stderr.String())
+	}
+}
+
+func TestRunSSERedactsDiagnostics(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/sse", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			t.Error("response writer does not support flush")
+			return
+		}
+		_, _ = io.WriteString(w, "event: endpoint\n")
+		_, _ = io.WriteString(w, "data: /messages/?session_id=secret-token\n\n")
+		flusher.Flush()
+		<-r.Context().Done()
+	})
+	mux.HandleFunc("/messages/", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte("upstream token=secret-token"))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	cfg := Config{URL: srv.URL + "/sse?token=secret-token#frag", AllowAllTools: true}
+	stdin := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}` + "\n")
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	if err := Run(context.Background(), cfg, stdin, &stdout, &stderr); err != nil {
+		t.Fatalf("runSSE should not fail on upstream error: %v", err)
+	}
+	combined := stdout.String() + "\n" + stderr.String()
+	for _, secret := range []string{"token=secret-token", "session_id=secret-token", "upstream token=secret-token", "#frag"} {
+		if strings.Contains(combined, secret) {
+			t.Fatalf("SSE diagnostics leaked %q in stdout=%q stderr=%q", secret, stdout.String(), stderr.String())
+		}
+	}
+	if !strings.Contains(stdout.String(), "upstream returned status 500") || !strings.Contains(stderr.String(), "returned 500") {
+		t.Fatalf("SSE diagnostics = stdout:%q stderr:%q, want sanitized status", stdout.String(), stderr.String())
+	}
+}
+
+func TestRunSSERedactsPostNetworkErrors(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/sse", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			t.Error("response writer does not support flush")
+			return
+		}
+		_, _ = io.WriteString(w, "event: endpoint\n")
+		_, _ = io.WriteString(w, "data: /messages/?session_id=secret-token\n\n")
+		flusher.Flush()
+		<-r.Context().Done()
+	})
+	mux.HandleFunc("/messages/", func(w http.ResponseWriter, r *http.Request) {
+		hijacker, ok := w.(http.Hijacker)
+		if !ok {
+			t.Error("response writer does not support hijack")
+			return
+		}
+		conn, _, err := hijacker.Hijack()
+		if err != nil {
+			t.Errorf("hijack: %v", err)
+			return
+		}
+		_ = conn.Close()
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	cfg := Config{URL: srv.URL + "/sse?token=secret-token#frag", AllowAllTools: true}
+	stdin := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}` + "\n")
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	if err := Run(context.Background(), cfg, stdin, &stdout, &stderr); err != nil {
+		t.Fatalf("runSSE should not fail on post network error: %v", err)
+	}
+	combined := stdout.String() + "\n" + stderr.String()
+	for _, secret := range []string{"token=secret-token", "session_id=secret-token", "#frag"} {
+		if strings.Contains(combined, secret) {
+			t.Fatalf("SSE POST network diagnostics leaked %q in stdout=%q stderr=%q", secret, stdout.String(), stderr.String())
+		}
+	}
+	if !strings.Contains(stdout.String(), "sse post failed") || !strings.Contains(stderr.String(), "request to") {
+		t.Fatalf("SSE POST network diagnostics = stdout:%q stderr:%q", stdout.String(), stderr.String())
+	}
+}
+
+func TestRunSSERedactsStartupErrors(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("server should be closed before Run")
+	}))
+	rawURL := srv.URL + "/sse?token=secret-token#frag"
+	srv.Close()
+
+	err := Run(context.Background(), Config{URL: rawURL, AllowAllTools: true}, strings.NewReader(""), io.Discard, io.Discard)
+	if err == nil {
+		t.Fatal("RunSSE returned nil for startup connection failure")
+	}
+	for _, secret := range []string{"token=secret-token", "#frag"} {
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("SSE startup error leaked %q: %v", secret, err)
+		}
+	}
+	if !strings.Contains(err.Error(), "request failed") {
+		t.Fatalf("SSE startup error = %v, want sanitized request failure", err)
+	}
+}
+
 func TestRunHTTPSupportsStreamableHTTPSessionAndSSEResponses(t *testing.T) {
 	var sawAccept bool
 	var sawSession bool
@@ -420,6 +556,26 @@ collect:
 	}
 	if !strings.Contains(byID["3"], `"result"`) {
 		t.Fatalf("allowed tool not forwarded: %s", byID["3"])
+	}
+}
+
+func TestResolveSSEEndpointStaysOnConfiguredOrigin(t *testing.T) {
+	got, err := resolveSSEEndpoint("https://mcp.example.test/sse", "/messages/?session_id=test")
+	if err != nil {
+		t.Fatalf("relative endpoint rejected: %v", err)
+	}
+	if got != "https://mcp.example.test/messages/?session_id=test" {
+		t.Fatalf("resolved endpoint = %q", got)
+	}
+	for _, endpoint := range []string{
+		"http://mcp.example.test/messages/",
+		"https://evil.example.test/messages/",
+		"https://user:pass@mcp.example.test/messages/",
+		"file:///tmp/socket",
+	} {
+		if got, err := resolveSSEEndpoint("https://mcp.example.test/sse", endpoint); err == nil {
+			t.Fatalf("endpoint %q resolved to %q, want denial", endpoint, got)
+		}
 	}
 }
 

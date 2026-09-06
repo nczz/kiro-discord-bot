@@ -89,6 +89,13 @@ func addPhase5ChannelMeta(t *testing.T, h *phase5Harness, id, guildID string) {
 	}
 }
 
+func addPhase5ThreadMeta(t *testing.T, h *phase5Harness, id, guildID, parentID string) {
+	t.Helper()
+	if err := channelmeta.Upsert(h.dataDir, channelmeta.Entry{ID: id, GuildID: guildID, Type: "thread", ParentChannelID: parentID}); err != nil {
+		t.Fatalf("channelmeta.Upsert: %v", err)
+	}
+}
+
 func phase5Request() a2a.TaskExecutionRequest {
 	return a2a.TaskExecutionRequest{
 		MessageID:          "msg_phase5",
@@ -365,7 +372,9 @@ func TestManagerA2ACoPresentInitialTaskUsesSharedDiscordThread(t *testing.T) {
 		policy.DiscordTranscriptMode = "co_present"
 		policy.ShareDiscordContext = true
 		policy.CoPresentFrom = []string{"eve-local"}
+		policy.CoPresentTargetChannels = []string{"thread-shared"}
 	})
+	addPhase5ChannelMeta(t, h, "thread-shared", "guild-1")
 	dc := a2a.DiscordContext{GuildID: "guild-1", ChannelID: "channel-1", ThreadID: "thread-shared"}
 	raw, _ := json.Marshal(dc)
 	req := phase5Request()
@@ -403,6 +412,61 @@ func TestManagerA2ACoPresentInitialTaskUsesSharedDiscordThread(t *testing.T) {
 	}
 }
 
+func TestManagerA2ACoPresentPolicyChannelWithUntrustedThreadRejects(t *testing.T) {
+	h := newPhase5Harness(t, func(policy *a2a.ChannelA2APolicy, cfg *a2a.Config) {
+		policy.ResultVisibility = "transparent"
+		policy.DiscordTranscriptMode = "co_present"
+		policy.ShareDiscordContext = true
+		policy.CoPresentFrom = []string{"eve-local"}
+	})
+	dc := a2a.DiscordContext{GuildID: "guild-1", ChannelID: "channel-1", ThreadID: "thread-untrusted"}
+	raw, _ := json.Marshal(dc)
+	req := phase5Request()
+	req.GuildID = "guild-1"
+	req.ChannelID = "channel-1"
+	req.ResultVisibility = "transparent"
+	req.DiscordTranscriptMode = "co_present"
+	req.Delivery.ShareDiscordContext = true
+	req.Delivery.CoPresentFrom = "eve-local"
+	req.Delivery.DiscordContext = &dc
+	req.Delivery.DiscordContextJSON = raw
+
+	res, err := h.manager.AdmitA2ATask(context.Background(), req)
+	if err != nil {
+		t.Fatalf("AdmitA2ATask error: %v", err)
+	}
+	if res.Accepted || res.Error.Code != a2a.ErrorPolicyDenied {
+		t.Fatalf("co-present accepted untrusted thread for policy channel: %#v", res)
+	}
+}
+
+func TestManagerA2ACoPresentOmittedSenderUsesRequestSource(t *testing.T) {
+	h := newPhase5Harness(t, func(policy *a2a.ChannelA2APolicy, cfg *a2a.Config) {
+		policy.ResultVisibility = "transparent"
+		policy.DiscordTranscriptMode = "co_present"
+		policy.ShareDiscordContext = true
+		policy.CoPresentFrom = []string{"other-bot"}
+	})
+	dc := a2a.DiscordContext{GuildID: "guild-1", ChannelID: "channel-1"}
+	raw, _ := json.Marshal(dc)
+	req := phase5Request()
+	req.GuildID = "guild-1"
+	req.ChannelID = "channel-1"
+	req.ResultVisibility = "transparent"
+	req.DiscordTranscriptMode = "co_present"
+	req.Delivery.ShareDiscordContext = true
+	req.Delivery.DiscordContext = &dc
+	req.Delivery.DiscordContextJSON = raw
+
+	res, err := h.manager.AdmitA2ATask(context.Background(), req)
+	if err != nil {
+		t.Fatalf("AdmitA2ATask error: %v", err)
+	}
+	if res.Accepted || res.Error.Code != a2a.ErrorPolicyDenied {
+		t.Fatalf("co-present accepted omitted disallowed sender: %#v", res)
+	}
+}
+
 func TestManagerA2ACoPresentSameGuildTargetRequiresAllowlist(t *testing.T) {
 	h := newPhase5Harness(t, func(policy *a2a.ChannelA2APolicy, cfg *a2a.Config) {
 		policy.ResultVisibility = "transparent"
@@ -431,7 +495,7 @@ func TestManagerA2ACoPresentSameGuildTargetRequiresAllowlist(t *testing.T) {
 	}
 }
 
-func TestManagerA2ACoPresentSameGuildTargetAllowlistAdmits(t *testing.T) {
+func TestManagerA2ACoPresentChannelAllowlistDoesNotAuthorizeThread(t *testing.T) {
 	h := newPhase5Harness(t, func(policy *a2a.ChannelA2APolicy, cfg *a2a.Config) {
 		policy.ResultVisibility = "transparent"
 		policy.DiscordTranscriptMode = "co_present"
@@ -456,14 +520,39 @@ func TestManagerA2ACoPresentSameGuildTargetAllowlistAdmits(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AdmitA2ATask error: %v", err)
 	}
+	if res.Accepted || res.Error.Code != a2a.ErrorPolicyDenied {
+		t.Fatalf("channel allowlist authorized unallowlisted thread: %#v", res)
+	}
+}
+
+func TestManagerA2ACoPresentParentAllowlistAdmitsVerifiedThread(t *testing.T) {
+	h := newPhase5Harness(t, func(policy *a2a.ChannelA2APolicy, cfg *a2a.Config) {
+		policy.ResultVisibility = "transparent"
+		policy.DiscordTranscriptMode = "co_present"
+		policy.ShareDiscordContext = true
+		policy.CoPresentFrom = []string{"eve-local"}
+		policy.CoPresentTargetChannels = []string{"channel-1"}
+	})
+	addPhase5ThreadMeta(t, h, "thread-shared", "guild-1", "channel-1")
+	dc := a2a.DiscordContext{GuildID: "guild-1", ChannelID: "channel-1", ThreadID: "thread-shared"}
+	raw, _ := json.Marshal(dc)
+	req := phase5Request()
+	req.GuildID = "guild-1"
+	req.ChannelID = "channel-1"
+	req.ResultVisibility = "transparent"
+	req.DiscordTranscriptMode = "co_present"
+	addPhase5ChannelMeta(t, h, "channel-1", "guild-1")
+	req.Delivery.ShareDiscordContext = true
+	req.Delivery.CoPresentFrom = "eve-local"
+	req.Delivery.DiscordContext = &dc
+	req.Delivery.DiscordContextJSON = raw
+
+	res, err := h.manager.AdmitA2ATask(context.Background(), req)
+	if err != nil {
+		t.Fatalf("AdmitA2ATask error: %v", err)
+	}
 	if !res.Accepted {
-		t.Fatalf("same-guild cross-channel co-present rejected with target allowlist: %#v", res.Error)
-	}
-	if threadID := a2aConversationThreadID(res.Admission); threadID != "thread-shared" {
-		t.Fatalf("conversation thread = %q, want allowlisted target thread", threadID)
-	}
-	if res.Admission.Request.ChannelID != "channel-1" {
-		t.Fatalf("execution channel = %q, want executor policy channel", res.Admission.Request.ChannelID)
+		t.Fatalf("verified parent-thread co-present rejected: %#v", res)
 	}
 }
 
@@ -566,6 +655,8 @@ func TestManagerA2AThreadRefInheritsParentChannelPolicy(t *testing.T) {
 		policy.ShareDiscordContext = true
 		policy.CoPresentFrom = []string{"eve-local"}
 	})
+	addPhase5ChannelMeta(t, h, "channel-1", "guild-1")
+	addPhase5ThreadMeta(t, h, "thread-1", "guild-1", "channel-1")
 	req := phase5Request()
 	req.GuildID = "guild-1"
 	req.ChannelID = "channel-1"
@@ -589,6 +680,34 @@ func TestManagerA2AThreadRefInheritsParentChannelPolicy(t *testing.T) {
 	}
 }
 
+func TestManagerA2AThreadRefRequiresVerifiedParentMetadata(t *testing.T) {
+	h := newPhase5Harness(t, func(policy *a2a.ChannelA2APolicy, cfg *a2a.Config) {
+		policy.ResultVisibility = "transparent"
+		policy.DiscordTranscriptMode = "co_present"
+		policy.ShareDiscordContext = true
+		policy.CoPresentFrom = []string{"eve-local"}
+		policy.CoPresentTargetChannels = []string{"thread-1"}
+	})
+	req := phase5Request()
+	req.GuildID = "guild-1"
+	req.ChannelID = "channel-1"
+	req.ChannelRef = "discord-thread-1"
+	req.ResultVisibility = "transparent"
+	req.DiscordTranscriptMode = "co_present"
+	req.Delivery.ShareDiscordContext = true
+	req.Delivery.CoPresentFrom = "eve-local"
+	req.Delivery.DiscordContext = &a2a.DiscordContext{GuildID: "guild-1", ChannelID: "channel-1", ThreadID: "thread-1"}
+	req.OriginRuntimeRef = a2a.OriginRuntimeRef{DiscordGuildID: "guild-1", DiscordChannelID: "channel-1", DiscordThreadID: "thread-1"}
+
+	res, err := h.manager.AdmitA2ATask(context.Background(), req)
+	if err != nil {
+		t.Fatalf("AdmitA2ATask error: %v", err)
+	}
+	if res.Accepted || res.Error.Code != a2a.ErrorChannelNotEnabled {
+		t.Fatalf("unverified thread-ref result = %#v, want channel_not_enabled", res)
+	}
+}
+
 func TestManagerA2AThreadRefDoesNotInheritWrongParent(t *testing.T) {
 	h := newPhase5Harness(t, nil)
 	req := phase5Request()
@@ -603,6 +722,23 @@ func TestManagerA2AThreadRefDoesNotInheritWrongParent(t *testing.T) {
 	}
 	if res.Accepted || res.Error.Code != a2a.ErrorChannelNotEnabled {
 		t.Fatalf("wrong-parent thread-ref result = %#v, want channel_not_enabled", res)
+	}
+}
+
+func TestManagerA2ADirectDiscordRefRejectsSpoofedOrigin(t *testing.T) {
+	h := newPhase5Harness(t, nil)
+	req := phase5Request()
+	req.GuildID = "guild-1"
+	req.ChannelID = "channel-1"
+	req.ChannelRef = "discord-channel-1"
+	req.OriginRuntimeRef = a2a.OriginRuntimeRef{DiscordGuildID: "guild-evil", DiscordChannelID: "channel-1"}
+
+	res, err := h.manager.AdmitA2ATask(context.Background(), req)
+	if err != nil {
+		t.Fatalf("AdmitA2ATask error: %v", err)
+	}
+	if res.Accepted || res.Error.Code != a2a.ErrorChannelNotEnabled {
+		t.Fatalf("spoofed direct Discord ref result = %#v, want channel_not_enabled", res)
 	}
 }
 
@@ -687,7 +823,7 @@ func TestManagerA2AThreadCreationFailureReleasesWorker(t *testing.T) {
 	}
 }
 
-func TestManagerA2AUsageAttributedToOriginRequester(t *testing.T) {
+func TestManagerA2AUsageAttributesRemoteTaskToSendingAgent(t *testing.T) {
 	h := newPhase5Harness(t, nil)
 	h.agent.metrics = acp.TurnMetrics{
 		MeteringUsage:  []acp.MeteringItem{{Value: 0.25, Unit: "credit"}},
@@ -707,21 +843,33 @@ func TestManagerA2AUsageAttributedToOriginRequester(t *testing.T) {
 	if result.State != a2a.TaskStateCompleted {
 		t.Fatalf("RunA2ATask state = %s, want completed", result.State)
 	}
-	page, err := h.manager.usage.QueryHistory(UsageHistoryOptions{
+	originPage, err := h.manager.usage.QueryHistory(UsageHistoryOptions{
 		GuildID: "guild-1",
 		UserID:  "discord-user-1",
 		From:    time.Now().Add(-time.Hour),
 		To:      time.Now().Add(time.Hour),
 	})
 	if err != nil {
-		t.Fatalf("QueryHistory: %v", err)
+		t.Fatalf("QueryHistory origin: %v", err)
 	}
-	if len(page.Records) != 1 {
-		t.Fatalf("usage records = %d, want 1", len(page.Records))
+	if len(originPage.Records) != 0 {
+		t.Fatalf("origin requester records = %d, want 0", len(originPage.Records))
 	}
-	rec := page.Records[0]
-	if rec.Username != "alice" || rec.Source != "a2a" || rec.MessageID != "msg_phase5" || rec.ContextUsage != 42 || rec.DurationMs != 1234 {
-		t.Fatalf("usage record = %+v, want origin requester A2A metrics", rec)
+	agentPage, err := h.manager.usage.QueryHistory(UsageHistoryOptions{
+		GuildID: "guild-1",
+		UserID:  "eve-local",
+		From:    time.Now().Add(-time.Hour),
+		To:      time.Now().Add(time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("QueryHistory agent: %v", err)
+	}
+	if len(agentPage.Records) != 1 {
+		t.Fatalf("agent usage records = %d, want 1", len(agentPage.Records))
+	}
+	rec := agentPage.Records[0]
+	if rec.Username != "A2A eve-local" || rec.Source != "a2a" || rec.MessageID != "msg_phase5" || rec.ContextUsage != 42 || rec.DurationMs != 1234 {
+		t.Fatalf("usage record = %+v, want remote agent A2A metrics", rec)
 	}
 }
 

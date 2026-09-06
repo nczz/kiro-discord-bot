@@ -2,6 +2,8 @@ package botmcp
 
 import (
 	"context"
+	"os"
+	"strings"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -35,7 +37,11 @@ func registerA2ATools(s *server.MCPServer) {
 		}},
 	} {
 		spec := spec
+		writeAction := spec.tool.Name != ToolA2APeers && spec.tool.Name != ToolA2ATaskStatus
 		s.AddTool(spec.tool, func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			if writeAction && botToolsWriteDisabled() && !a2aWriteAllowedWithBotEgressDisabled(spec.tool.Name) {
+				return botToolsWriteDisabledResult(), nil
+			}
 			svc, err := NewA2AServiceFromEnv(ctx)
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
@@ -49,6 +55,22 @@ func registerA2ATools(s *server.MCPServer) {
 			}
 			return a2aToolResult(resp)
 		})
+	}
+}
+
+func a2aWriteAllowedWithBotEgressDisabled(name string) bool {
+	state, ok := currentTargetState()
+	if ok && (strings.TrimSpace(state.Source) == "monitor" || !state.RemoteA2A) {
+		return false
+	}
+	if !ok && strings.TrimSpace(os.Getenv("BOT_TOOLS_TARGET_STATE_PATH")) != "" {
+		return false
+	}
+	switch name {
+	case ToolA2ADelegate, ToolA2ACancel, ToolA2AInputReply, ToolA2AAuthReply:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -126,7 +148,11 @@ func a2aWriteTool(name, description string, destructive bool, idempotent bool) m
 
 func authenticatedA2AMCPManageChannels() bool {
 	state, ok := currentTargetState()
-	return ok && state.CanManageChannel
+	return ok &&
+		!state.RemoteA2A &&
+		state.CanManageChannel &&
+		strings.TrimSpace(state.RequesterID) != "" &&
+		strings.TrimSpace(state.RequesterName) != ""
 }
 
 func addA2AContextFields(t *mcp.Tool) {

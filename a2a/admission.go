@@ -95,6 +95,15 @@ func taskRequestFromEnvelope(env Envelope, subject Subject) (TaskExecutionReques
 		raw, _ := json.Marshal(delivery.DiscordContext)
 		delivery.DiscordContextJSON = raw
 	}
+	guildID := ""
+	channelID := ""
+	if delivery.DiscordContext != nil {
+		guildID = strings.TrimSpace(delivery.DiscordContext.GuildID)
+		channelID = strings.TrimSpace(delivery.DiscordContext.ChannelID)
+	}
+	if channelID == "" {
+		channelID = strings.TrimSpace(delivery.DiscordReplyChannelID)
+	}
 	created, _, _ := parseEnvelopeTime("createdAt", env.CreatedAt)
 	expires, _, _ := parseEnvelopeTime("expiresAt", env.ExpiresAt)
 	return TaskExecutionRequest{
@@ -103,6 +112,8 @@ func taskRequestFromEnvelope(env Envelope, subject Subject) (TaskExecutionReques
 		ContextID:             strings.TrimSpace(firstNonEmpty(payload.ContextID, string(env.TaskID))),
 		From:                  subject.From,
 		To:                    subject.To,
+		ChannelID:             channelID,
+		GuildID:               guildID,
 		ChannelRef:            strings.TrimSpace(payload.ChannelRef),
 		SkillID:               strings.TrimSpace(payload.SkillID),
 		UserVisibleSummary:    strings.TrimSpace(payload.UserVisibleSummary),

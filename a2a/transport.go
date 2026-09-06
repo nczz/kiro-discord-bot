@@ -330,13 +330,31 @@ func (p *Publisher) SendTask(ctx context.Context, req TaskExecutionRequest) (Tas
 	}
 	row := TaskRow{}
 	if p.tasks != nil {
-		row, err = p.tasks.CreateOutbound(ctx, TaskRow{ClientTaskRef: req.ClientTaskRef, MessageID: req.MessageID, ContextID: req.ContextID, FromAgent: req.From, ToAgent: req.To, ChannelID: req.ChannelID, GuildID: req.GuildID, ChannelRef: req.ChannelRef, SkillID: req.SkillID, State: TaskStateSubmitted, ResultVisibility: firstNonEmpty(req.ResultVisibility, "proxy"), DiscordTranscriptMode: firstNonEmpty(req.DiscordTranscriptMode, "delegator"), OriginRequester: req.OriginRequester, OriginRuntimeRef: req.OriginRuntimeRef})
+		row, err = p.tasks.CreateOutbound(ctx, TaskRow{ClientTaskRef: req.ClientTaskRef, MessageID: req.MessageID, ContextID: req.ContextID, FromAgent: req.From, ToAgent: req.To, ChannelID: req.ChannelID, GuildID: req.GuildID, ChannelRef: req.ChannelRef, SkillID: req.SkillID, State: TaskStateSubmitted, ResultVisibility: firstNonEmpty(req.ResultVisibility, "proxy"), DiscordTranscriptMode: firstNonEmpty(req.DiscordTranscriptMode, "delegator"), DiscordContextJSON: discordContextJSONForTask(req, delivery), OriginRequester: req.OriginRequester, OriginRuntimeRef: req.OriginRuntimeRef})
 		if err != nil {
 			return TaskRow{}, err
 		}
 	}
 	_, err = p.node.Publish(ctx, TaskSubject(req.From, req.To, req.MessageID), envRaw, TaskNatsMsgID(req.From, req.To, req.MessageID))
 	return row, err
+}
+
+func discordContextJSONForTask(req TaskExecutionRequest, delivery DeliveryOptions) string {
+	if len(delivery.DiscordContextJSON) > 0 {
+		return string(delivery.DiscordContextJSON)
+	}
+	if delivery.DiscordContext != nil {
+		raw, _ := json.Marshal(delivery.DiscordContext)
+		return string(raw)
+	}
+	channelID := strings.TrimSpace(firstNonEmpty(delivery.DiscordReplyChannelID, req.ChannelID))
+	threadID := strings.TrimSpace(delivery.DiscordReplyThreadID)
+	guildID := strings.TrimSpace(req.GuildID)
+	if channelID == "" && threadID == "" && guildID == "" {
+		return ""
+	}
+	raw, _ := json.Marshal(DiscordContext{GuildID: guildID, ChannelID: channelID, ThreadID: threadID})
+	return string(raw)
 }
 
 func (p *Publisher) PublishControl(ctx context.Context, to AgentID, taskID TaskID, kind string, revision int64, payload ControlPayload) error {
@@ -384,7 +402,15 @@ func (p *Publisher) PublishResult(ctx context.Context, delegator AgentID, result
 
 func (p *Publisher) PublishArtifact(ctx context.Context, delegator AgentID, taskID TaskID, revision int64, artifact TaskExecutionArtifact) error {
 	payload := TaskEventPayload{TaskID: taskID, State: TaskStateWorking, Revision: revision, Artifact: &artifact}
-	return p.publishEvent(ctx, delegator, taskID, EventKindArtifact, MessageID(artifact.ID), revision, payload)
+	return p.publishEvent(ctx, delegator, taskID, EventKindArtifact, artifactEventMessageID(taskID, revision, artifact), revision, payload)
+}
+
+func artifactEventMessageID(taskID TaskID, revision int64, artifact TaskExecutionArtifact) MessageID {
+	messageID := MessageID(strings.TrimSpace(artifact.ID))
+	if ValidateMessageID(messageID) == nil {
+		return messageID
+	}
+	return MessageID(fmt.Sprintf("%s_artifact_%d", taskID, revision))
 }
 
 func (p *Publisher) publishPreAcceptEvent(ctx context.Context, delegator AgentID, messageID MessageID, kind string, payload TaskEventPayload) error {
@@ -438,15 +464,26 @@ func (t *Transport) handleTaskMessage(ctx context.Context, msg jetstream.Msg) er
 		return fmt.Errorf("task subject target mismatch")
 	}
 	if row, err := t.tasks.GetByDirectionMessage(ctx, "inbound", subject.MessageID); err == nil && row.LocalID != "" {
+		if err := validateExistingInboundTaskSubject(row, subject); err != nil {
+			_ = msg.TermWithReason(err.Error())
+			return err
+		}
 		if row.Terminal {
 			if row.State == TaskStateRejected {
 				_ = t.publisherFrom(row.ExecutorAgent).PublishRejected(ctx, row.FromAgent, row.MessageID, row.ClientTaskRef, row.Error)
 			} else {
 				_ = t.publisherFrom(row.ExecutorAgent).PublishResult(ctx, row.FromAgent, TaskExecutionResult{TaskID: row.TaskID, State: row.State, Revision: row.Revision, Error: row.Error}, row.MessageID)
 			}
-		} else if t.markStarted(row.LocalID) {
-			admission := A2AAdmission{AdmissionKey: row.LocalID, TaskID: row.TaskID, State: row.State, Revision: row.Revision, Request: taskRequestFromRow(row)}
-			go t.runAccepted(admission)
+		} else {
+			req, reqErr := taskRequestFromEnvelopeForExistingRow(env, subject, row)
+			if reqErr != nil {
+				_ = msg.Nak()
+				return reqErr
+			}
+			if t.markStarted(row.LocalID) {
+				admission := A2AAdmission{AdmissionKey: row.LocalID, TaskID: row.TaskID, State: row.State, Revision: row.Revision, Request: req}
+				go t.runAccepted(admission)
+			}
 		}
 		return msg.DoubleAck(ctx)
 	} else if err != nil && !errors.Is(err, sql.ErrNoRows) {
@@ -745,8 +782,28 @@ func (t *Transport) handleEventMessage(ctx context.Context, msg jetstream.Msg) e
 			return err
 		}
 		if t.eventSink != nil {
-			if err := t.eventSink(ctx, row, subject.EventKind, payload); err != nil {
-				t.log("[a2a] event delivery failed task=%s kind=%s: %v", subject.TaskKey, subject.EventKind, err)
+			delivered, err := t.tasks.EventDeliveryExists(ctx, TaskID(subject.TaskKey), revision, subject.EventKind)
+			if err != nil {
+				_ = msg.Nak()
+				return err
+			}
+			if !delivered {
+				if err := t.eventSink(ctx, row, subject.EventKind, payload); err != nil {
+					t.log("[a2a] event delivery failed task=%s kind=%s: %v", subject.TaskKey, subject.EventKind, err)
+					if permanentEventDeliveryError(err) {
+						if markErr := t.tasks.MarkEventDelivered(ctx, TaskID(subject.TaskKey), revision, subject.EventKind); markErr != nil {
+							_ = msg.Nak()
+							return markErr
+						}
+						break
+					}
+					_ = msg.Nak()
+					return err
+				}
+				if err := t.tasks.MarkEventDelivered(ctx, TaskID(subject.TaskKey), revision, subject.EventKind); err != nil {
+					_ = msg.Nak()
+					return err
+				}
 			}
 		}
 	default:
@@ -816,13 +873,26 @@ func (t *Transport) runAccepted(admission A2AAdmission) {
 		result.Revision = admission.Revision + 1
 	}
 	pub := t.publisherFrom(admission.Request.To)
-	for i, artifact := range result.Artifacts {
-		if artifact.ID == "" {
-			artifact.ID = fmt.Sprintf("artifact-%d", i+1)
+	baseRevision := result.Revision
+	var unpublishedArtifacts []TaskExecutionArtifact
+	publishedArtifacts := 0
+	for i := range result.Artifacts {
+		if result.Artifacts[i].ID == "" {
+			result.Artifacts[i].ID = fmt.Sprintf("artifact-%d", i+1)
 		}
-		if err := pub.PublishArtifact(context.Background(), admission.Request.From, result.TaskID, result.Revision+int64(i), artifact); err != nil {
+		artifact := result.Artifacts[i]
+		if err := pub.PublishArtifact(context.Background(), admission.Request.From, result.TaskID, baseRevision+int64(publishedArtifacts), artifact); err != nil {
 			t.log("[a2a] publish artifact task=%s artifact=%s: %v", result.TaskID, artifact.ID, err)
+			unpublishedArtifacts = append(unpublishedArtifacts, artifact)
+			continue
 		}
+		publishedArtifacts++
+	}
+	if publishedArtifacts > 0 {
+		result.Revision = baseRevision + int64(publishedArtifacts)
+	}
+	if len(result.Artifacts) > 0 {
+		result.Artifacts = unpublishedArtifacts
 	}
 	var pubErr error
 	if IsTerminalState(result.State) {
@@ -835,6 +905,15 @@ func (t *Transport) runAccepted(admission A2AAdmission) {
 	}
 }
 
+func validateExistingInboundTaskSubject(row TaskRow, subject Subject) error {
+	if row.FromAgent != subject.From || row.ToAgent != subject.To {
+		return fmt.Errorf("task replay subject does not match stored row")
+	}
+	if row.ExecutorAgent != "" && row.ExecutorAgent != subject.To {
+		return fmt.Errorf("task replay executor does not match stored row")
+	}
+	return nil
+}
 func (t *Transport) markStarted(key string) bool {
 	key = strings.TrimSpace(key)
 	if key == "" {
@@ -850,7 +929,102 @@ func (t *Transport) markStarted(key string) bool {
 }
 
 func taskRequestFromRow(row TaskRow) TaskExecutionRequest {
-	return TaskExecutionRequest{MessageID: row.MessageID, ClientTaskRef: row.ClientTaskRef, ContextID: row.ContextID, From: row.FromAgent, To: row.ToAgent, ChannelID: row.ChannelID, GuildID: row.GuildID, ChannelRef: row.ChannelRef, SkillID: row.SkillID, ResultVisibility: row.ResultVisibility, DiscordTranscriptMode: row.DiscordTranscriptMode, Delivery: DeliveryOptions{DiscordContextJSON: json.RawMessage(row.DiscordContextJSON)}, OriginRequester: row.OriginRequester, OriginRuntimeRef: row.OriginRuntimeRef}
+	delivery := DeliveryOptions{DiscordContextJSON: json.RawMessage(row.DiscordContextJSON)}
+	if strings.TrimSpace(row.DiscordContextJSON) != "" {
+		var dc DiscordContext
+		if err := json.Unmarshal([]byte(row.DiscordContextJSON), &dc); err == nil {
+			delivery.DiscordContext = &dc
+			delivery.DiscordReplyChannelID = strings.TrimSpace(dc.ChannelID)
+			delivery.DiscordReplyThreadID = strings.TrimSpace(dc.ThreadID)
+		}
+	}
+	return TaskExecutionRequest{MessageID: row.MessageID, ClientTaskRef: row.ClientTaskRef, ContextID: row.ContextID, From: row.FromAgent, To: row.ToAgent, ChannelID: row.ChannelID, GuildID: row.GuildID, ChannelRef: row.ChannelRef, SkillID: row.SkillID, ResultVisibility: row.ResultVisibility, DiscordTranscriptMode: row.DiscordTranscriptMode, Delivery: delivery, OriginRequester: row.OriginRequester, OriginRuntimeRef: row.OriginRuntimeRef}
+}
+
+func taskRequestFromEnvelopeForExistingRow(env Envelope, subject Subject, row TaskRow) (TaskExecutionRequest, error) {
+	req, err := taskRequestFromEnvelope(env, subject)
+	if err != nil {
+		return TaskExecutionRequest{}, err
+	}
+	persisted := taskRequestFromRow(row)
+	persisted.UserVisibleSummary = req.UserVisibleSummary
+	persisted.Payload = req.Payload
+	persisted.CreatedAt = req.CreatedAt
+	persisted.ExpiresAt = req.ExpiresAt
+	persisted.AuditMetadata = req.AuditMetadata
+	if persisted.ClientTaskRef == "" {
+		persisted.ClientTaskRef = req.ClientTaskRef
+	}
+	if persisted.ContextID == "" {
+		persisted.ContextID = req.ContextID
+	}
+	if persisted.ChannelID == "" {
+		persisted.ChannelID = req.ChannelID
+	}
+	if persisted.GuildID == "" {
+		persisted.GuildID = req.GuildID
+	}
+	if persisted.ChannelRef == "" {
+		persisted.ChannelRef = req.ChannelRef
+	}
+	if persisted.SkillID == "" {
+		persisted.SkillID = req.SkillID
+	}
+	if persisted.ResultVisibility == "" {
+		persisted.ResultVisibility = req.ResultVisibility
+	}
+	if persisted.DiscordTranscriptMode == "" {
+		persisted.DiscordTranscriptMode = req.DiscordTranscriptMode
+	}
+	if persisted.OriginRequester.DiscordUserID == "" {
+		persisted.OriginRequester = req.OriginRequester
+	}
+	if persisted.OriginRuntimeRef.RuntimeAgentID == "" {
+		persisted.OriginRuntimeRef = req.OriginRuntimeRef
+	}
+	delivery := persisted.Delivery
+	delivery.TimeoutSec = req.Delivery.TimeoutSec
+	delivery.RequiresConfirmation = req.Delivery.RequiresConfirmation
+	delivery.MaxDelegationDepth = req.Delivery.MaxDelegationDepth
+	if len(delivery.DiscordContextJSON) == 0 && delivery.DiscordContext == nil {
+		delivery.DiscordContext = req.Delivery.DiscordContext
+		delivery.DiscordContextJSON = req.Delivery.DiscordContextJSON
+	}
+	if delivery.DiscordContext != nil {
+		if delivery.DiscordReplyChannelID == "" {
+			delivery.DiscordReplyChannelID = strings.TrimSpace(delivery.DiscordContext.ChannelID)
+		}
+		if delivery.DiscordReplyThreadID == "" {
+			delivery.DiscordReplyThreadID = strings.TrimSpace(delivery.DiscordContext.ThreadID)
+		}
+	}
+	if delivery.DiscordReplyChannelID == "" {
+		delivery.DiscordReplyChannelID = req.Delivery.DiscordReplyChannelID
+	}
+	if delivery.DiscordReplyThreadID == "" {
+		delivery.DiscordReplyThreadID = req.Delivery.DiscordReplyThreadID
+	}
+	if !delivery.ShareDiscordContext {
+		delivery.ShareDiscordContext = req.Delivery.ShareDiscordContext
+	}
+	if delivery.CoPresentFrom == "" {
+		delivery.CoPresentFrom = req.Delivery.CoPresentFrom
+	}
+	persisted.Delivery = delivery
+	return persisted, nil
+}
+
+func permanentEventDeliveryError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	for _, code := range []ErrorCode{ErrorPolicyDenied, ErrorUnsupportedMediaType, ErrorPayloadTooLarge} {
+		if strings.Contains(msg, string(code)) {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *Publisher) checkEventRate(now time.Time) error {

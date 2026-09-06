@@ -135,10 +135,24 @@ func TestMCPPolicyToACPServerPreservesCatalogEnvOnly(t *testing.T) {
 	}
 }
 
+func TestMCPPolicyToACPServerConstrainsMCPDiscordWritePolicy(t *testing.T) {
+	p := MCPChannelPolicy{GuildID: "guild-1", ChannelID: "channel-1", ServerName: mcpDiscordServerName, Enabled: true, ReadOnly: false, AllowDestructive: false, AllowedTools: []string{"discord_send_message", "discord_delete_message"}}
+	entry := MCPCatalogEntry{Name: mcpDiscordServerName, Command: "mcp-discord", Env: map[string]string{"DATA_DIR": t.TempDir(), "MCP_DISCORD_ALLOW_DESTRUCTIVE": "true"}}
+	cfg := p.ToACPServer(entry, "/tmp/bot", "guild-1", "channel-1", "thread-1")
+	targetEnv := proxyTargetEnv(t, cfg.Env)
+	if targetEnv["MCP_DISCORD_READ_ONLY"] != "false" || targetEnv["MCP_DISCORD_ALLOW_DESTRUCTIVE"] != "false" {
+		t.Fatalf("mcp-discord write policy env = %+v, want channel policy booleans", targetEnv)
+	}
+	if targetEnv["MCP_DISCORD_ALLOWED_WRITE_TOOLS"] != "discord_delete_message,discord_send_message" {
+		t.Fatalf("mcp-discord allowed writes = %q, want effective tool allowlist", targetEnv["MCP_DISCORD_ALLOWED_WRITE_TOOLS"])
+	}
+}
+
 func TestRedactedCatalogEntryDoesNotPersistEnvSecrets(t *testing.T) {
 	entry := MCPCatalogEntry{
 		Name:    "generic-tools",
 		Command: "/tmp/generic-tools",
+		URL:     "https://user:pass@example.com/mcp?token=secret#frag",
 		Env:     map[string]string{"TOKEN": "secret-token"},
 		Headers: map[string]string{"Authorization": "Bearer secret-token"},
 	}
@@ -148,6 +162,12 @@ func TestRedactedCatalogEntryDoesNotPersistEnvSecrets(t *testing.T) {
 	}
 	if got.Headers["Authorization"] == "Bearer secret-token" {
 		t.Fatalf("catalog redaction leaked header value")
+	}
+	if strings.Contains(got.URL, "user") || strings.Contains(got.URL, "pass") || strings.Contains(got.URL, "token=secret") || strings.Contains(got.URL, "frag") {
+		t.Fatalf("catalog redaction leaked URL secret: %q", got.URL)
+	}
+	if got.URL != "https://example.com/mcp" {
+		t.Fatalf("catalog redaction URL = %q, want sanitized URL", got.URL)
 	}
 	if entry.Env["TOKEN"] != "secret-token" {
 		t.Fatalf("redaction should not mutate runtime catalog")
@@ -263,6 +283,28 @@ func TestToACPServerURLType(t *testing.T) {
 	}
 }
 
+func TestManagerSkipsURLBindingSensitiveMCPServers(t *testing.T) {
+	dir := t.TempDir()
+	m := NewManager(ManagerConfig{DataDir: dir, GuildID: "guild-1"})
+	defer m.StopAll()
+	m.RegisterBuiltinMCP("bot-tools", []string{"mcp-bot"}, map[string]string{"DATA_DIR": dir})
+	m.mcpPolicies.RegisterBuiltin(MCPCatalogEntry{Name: mcpDiscordServerName, URL: "http://127.0.0.1:18900"})
+
+	if err := m.SetMCPTool("channel-1", "user-1", "bot-tools", botmcp.ToolCurrentTime, true); err != nil {
+		t.Fatalf("set bot-tools policy: %v", err)
+	}
+	if err := m.SetMCPPolicy("channel-1", "user-1", mcpDiscordServerName, true, "full"); err != nil {
+		t.Fatalf("set URL mcp-discord policy: %v", err)
+	}
+	got := m.agentOptsForChannel("channel-1").MCPServers
+	if len(got) != 1 || got[0].Name != "bot-tools" {
+		t.Fatalf("URL mcp-discord should be skipped for channel-bound bot tools: %+v", got)
+	}
+	if got[0].Env["BOT_TOOLS_CHANNEL_ALLOW_ALL_TOOLS"] != "false" || strings.Contains(got[0].Env["BOT_TOOLS_CHANNEL_ALLOWED_TOOLS_JSON"], "discord_") {
+		t.Fatalf("skipped URL mcp-discord leaked into bot-tools effective policy env: %+v", got[0].Env)
+	}
+}
+
 func TestManagerAgentOptionsApplyChannelMCPPolicy(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "mcp.json")
@@ -371,6 +413,9 @@ func TestManagerBuiltinMCPRequiresExplicitPolicy(t *testing.T) {
 	if targetEnv["BOT_TOOLS_TARGET_STATE_PATH"] != filepath.Join(dir, "bot-tools-targets", "channel-1.json") {
 		t.Fatalf("builtin env missing dynamic target state path: %+v", targetEnv)
 	}
+	if discordEnv["BOT_TOOLS_CHANNEL_ID"] != "channel-1" || discordEnv["BOT_TOOLS_TARGET_CHANNEL_ID"] != "channel-1" || discordEnv["BOT_TOOLS_GUILD_ID"] != "guild-1" {
+		t.Fatalf("mcp-discord env missing channel binding: %+v", discordEnv)
+	}
 	if discordEnv["BOT_TOOLS_TARGET_STATE_PATH"] != filepath.Join(dir, "bot-tools-targets", "channel-1.json") {
 		t.Fatalf("mcp-discord env missing dynamic target state path: %+v", discordEnv)
 	}
@@ -408,6 +453,9 @@ func TestManagerBuiltinMCPRequiresExplicitPolicy(t *testing.T) {
 	if tempEnv["BOT_TOOLS_TARGET_STATE_PATH"] != filepath.Join(dir, "bot-tools-targets", "cron-job-1.json") {
 		t.Fatalf("temp target state path = %q, want cron-specific path", tempEnv["BOT_TOOLS_TARGET_STATE_PATH"])
 	}
+	if tempDiscordEnv["BOT_TOOLS_CHANNEL_ID"] != "channel-1" || tempDiscordEnv["BOT_TOOLS_TARGET_CHANNEL_ID"] != "channel-1" || tempDiscordEnv["BOT_TOOLS_GUILD_ID"] != "guild-1" {
+		t.Fatalf("temp mcp-discord env missing channel binding: %+v", tempDiscordEnv)
+	}
 	if tempDiscordEnv["BOT_TOOLS_TARGET_STATE_PATH"] != filepath.Join(dir, "bot-tools-targets", "cron-job-1.json") {
 		t.Fatalf("temp mcp-discord target state path = %q, want cron-specific path", tempDiscordEnv["BOT_TOOLS_TARGET_STATE_PATH"])
 	}
@@ -434,6 +482,9 @@ func TestManagerBuiltinMCPRequiresExplicitPolicy(t *testing.T) {
 	}
 	if threadEnv["BOT_TOOLS_TARGET_STATE_PATH"] != filepath.Join(dir, "bot-tools-targets", "thread-1.json") {
 		t.Fatalf("thread target state path = %q, want target-scoped thread state path", threadEnv["BOT_TOOLS_TARGET_STATE_PATH"])
+	}
+	if threadDiscordEnv["BOT_TOOLS_CHANNEL_ID"] != "channel-1" || threadDiscordEnv["BOT_TOOLS_TARGET_CHANNEL_ID"] != "thread-1" || threadDiscordEnv["BOT_TOOLS_GUILD_ID"] != "guild-1" {
+		t.Fatalf("thread mcp-discord env missing target binding: %+v", threadDiscordEnv)
 	}
 	if threadDiscordEnv["BOT_TOOLS_TARGET_STATE_PATH"] != filepath.Join(dir, "bot-tools-targets", "thread-1.json") {
 		t.Fatalf("thread mcp-discord target state path = %q, want target-scoped thread state path", threadDiscordEnv["BOT_TOOLS_TARGET_STATE_PATH"])
@@ -466,7 +517,7 @@ func TestManagerEnableDefaultBotToolsUsesSafeAllowlist(t *testing.T) {
 	if !p.Enabled || p.AllowAllTools || p.ReadOnly || p.AllowDestructive {
 		t.Fatalf("default bot-tools policy is not safe-write allowlist: %+v", p)
 	}
-	if tools := strings.Join(p.EffectiveTools(), ","); strings.Contains(tools, "bot_delete_cron") || strings.Contains(tools, "bot_send_message") || strings.Contains(tools, "bot_query_audit") || strings.Contains(tools, "bot_send_image_base64") || !strings.Contains(tools, "bot_send_file") || !strings.Contains(tools, "bot_send_image_url") || !strings.Contains(tools, "bot_query_channel_history") || !strings.Contains(tools, "bot_create_cron") || !strings.Contains(tools, "bot_update_cron") || !strings.Contains(tools, "bot_create_reminder") {
+	if tools := strings.Join(p.EffectiveTools(), ","); strings.Contains(tools, "bot_delete_cron") || strings.Contains(tools, "bot_delete_monitor") || strings.Contains(tools, "bot_send_message") || strings.Contains(tools, "bot_query_audit") || strings.Contains(tools, "bot_send_image_base64") || !strings.Contains(tools, "bot_send_file") || !strings.Contains(tools, "bot_send_image_url") || !strings.Contains(tools, "bot_query_channel_history") || !strings.Contains(tools, "bot_create_cron") || !strings.Contains(tools, "bot_update_cron") || !strings.Contains(tools, "bot_create_reminder") || !strings.Contains(tools, "bot_list_monitor") || !strings.Contains(tools, "bot_create_monitor") || !strings.Contains(tools, "bot_update_monitor") {
 		t.Fatalf("unexpected default tools: %q", tools)
 	}
 }
@@ -635,7 +686,7 @@ func TestLegacyDefaultBotToolsPolicyDropsEgressTools(t *testing.T) {
 	if strings.Contains(tools, "bot_query_audit") {
 		t.Fatalf("legacy default audit query tool was not removed: %+v", got.EffectiveTools())
 	}
-	if !strings.Contains(tools, "bot_create_cron") || !strings.Contains(tools, "bot_create_reminder") || !strings.Contains(tools, "bot_send_file") || !strings.Contains(tools, "bot_send_image_url") || !strings.Contains(tools, "bot_query_channel_history") || strings.Contains(tools, "bot_send_image_base64") {
+	if !strings.Contains(tools, "bot_create_cron") || !strings.Contains(tools, "bot_create_reminder") || !strings.Contains(tools, "bot_send_file") || !strings.Contains(tools, "bot_send_image_url") || !strings.Contains(tools, "bot_query_channel_history") || !strings.Contains(tools, "bot_list_monitor") || !strings.Contains(tools, "bot_create_monitor") || !strings.Contains(tools, "bot_update_monitor") || strings.Contains(tools, "bot_send_image_base64") {
 		t.Fatalf("legacy normalization removed allowed default tools: %+v", got.EffectiveTools())
 	}
 }
@@ -721,7 +772,7 @@ func TestPreviousSafeDefaultBotToolsPolicyAddsNewHistoryTool(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !containsString(got.EffectiveTools(), "bot_send_image_url") || !containsString(got.EffectiveTools(), "bot_query_channel_history") || containsString(got.EffectiveTools(), "bot_send_image_base64") {
+	if !containsString(got.EffectiveTools(), "bot_send_image_url") || !containsString(got.EffectiveTools(), "bot_query_channel_history") || !containsString(got.EffectiveTools(), "bot_list_monitor") || !containsString(got.EffectiveTools(), "bot_create_monitor") || !containsString(got.EffectiveTools(), "bot_update_monitor") || containsString(got.EffectiveTools(), "bot_send_image_base64") {
 		t.Fatalf("previous safe default policy did not gain current safe tools: %+v", got.EffectiveTools())
 	}
 }
@@ -754,8 +805,70 @@ func TestImmediatePreviousSafeDefaultBotToolsPolicyReplacesBase64ImageTool(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !containsString(got.EffectiveTools(), "bot_send_image_url") || containsString(got.EffectiveTools(), "bot_send_image_base64") {
+	if !containsString(got.EffectiveTools(), "bot_send_image_url") || !containsString(got.EffectiveTools(), "bot_list_monitor") || !containsString(got.EffectiveTools(), "bot_create_monitor") || !containsString(got.EffectiveTools(), "bot_update_monitor") || containsString(got.EffectiveTools(), "bot_send_image_base64") {
 		t.Fatalf("immediate previous safe default policy did not replace base64 image egress: %+v", got.EffectiveTools())
+	}
+}
+
+func TestPreviousSafeDefaultBotToolsPolicyAddsMonitorTools(t *testing.T) {
+	dir := t.TempDir()
+	store, err := OpenMCPPolicyStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	previous := defaultMCPPolicy("guild-1", "channel-1", "bot-tools")
+	previous.Enabled, previous.Preset, previous.ReadOnly = true, "safe-write", false
+	previous.AllowAllTools, previous.AllowDestructive = false, false
+	previous.AllowedTools = []string{
+		"bot_data_summary",
+		"bot_list_channel_data",
+		"bot_list_cron",
+		"bot_send_file",
+		"bot_create_cron",
+		"bot_create_reminder",
+		"bot_update_cron",
+		"bot_send_image_url",
+		"bot_query_channel_history",
+	}
+	if err := store.SetPolicy(context.Background(), previous); err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.GetPolicy(context.Background(), "guild-1", "channel-1", "bot-tools")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"bot_list_monitor", "bot_create_monitor", "bot_update_monitor"} {
+		if !containsString(got.EffectiveTools(), want) {
+			t.Fatalf("previous safe default policy did not gain %s: %+v", want, got.EffectiveTools())
+		}
+	}
+	if containsString(got.EffectiveTools(), "bot_delete_monitor") {
+		t.Fatalf("previous safe default policy gained destructive monitor delete: %+v", got.EffectiveTools())
+	}
+}
+
+func TestImmediatePreviousFullSafeDefaultBotToolsPolicyAddsMonitorTools(t *testing.T) {
+	p := defaultMCPPolicy("guild-1", "channel-1", "bot-tools")
+	p.Enabled, p.Preset, p.ReadOnly = true, "safe-write", false
+	p.AllowAllTools, p.AllowDestructive = false, false
+	p.AllowedTools = removeStringSet(append([]string(nil), botmcp.DefaultSafeToolNamesForA2A(false)...), monitorBotToolNames())
+
+	got := normalizeLegacyDefaultBotToolsPolicy(p)
+	if !sameStringSet(got.EffectiveTools(), botmcp.DefaultSafeToolNamesForA2A(false)) {
+		t.Fatalf("immediate previous full safe default = %+v, want %+v", got.EffectiveTools(), botmcp.DefaultSafeToolNamesForA2A(false))
+	}
+}
+
+func TestImmediatePreviousFullA2ASafeDefaultBotToolsPolicyAddsMonitorTools(t *testing.T) {
+	p := defaultMCPPolicy("guild-1", "channel-1", "bot-tools")
+	p.Enabled, p.Preset, p.ReadOnly = true, "safe-write", false
+	p.AllowAllTools, p.AllowDestructive = false, false
+	p.AllowedTools = removeStringSet(append([]string(nil), botmcp.DefaultSafeToolNamesForA2A(true)...), monitorBotToolNames())
+
+	got := normalizeLegacyDefaultBotToolsPolicy(p)
+	if !sameStringSet(got.EffectiveTools(), botmcp.DefaultSafeToolNamesForA2A(true)) {
+		t.Fatalf("immediate previous full A2A safe default = %+v, want %+v", got.EffectiveTools(), botmcp.DefaultSafeToolNamesForA2A(true))
 	}
 }
 
@@ -813,6 +926,28 @@ func TestCustomBotToolsPolicyWithA2ADelegateGainsA2AControlTools(t *testing.T) {
 	}
 	if containsString(got.EffectiveTools(), botmcp.ToolSendMessage) || containsString(got.EffectiveTools(), botmcp.ToolQueryAudit) {
 		t.Fatalf("custom A2A allowlist gained unrelated sensitive tools: %+v", got.EffectiveTools())
+	}
+}
+
+func TestCustomBotToolsPolicyWithReadOnlyA2ADoesNotGainWriteTools(t *testing.T) {
+	p := defaultMCPPolicy("guild-1", "channel-1", "bot-tools")
+	p.Enabled = true
+	p.Preset = "safe-write"
+	p.ReadOnly = false
+	p.AllowAllTools = false
+	p.AllowDestructive = false
+	p.AllowedTools = []string{botmcp.ToolA2APeers, botmcp.ToolA2ATaskStatus}
+
+	got := normalizeLegacyDefaultBotToolsPolicy(p)
+	for _, want := range []string{botmcp.ToolA2APeers, botmcp.ToolA2ATaskStatus} {
+		if !containsString(got.EffectiveTools(), want) {
+			t.Fatalf("custom read-only A2A allowlist lost %s: %+v", want, got.EffectiveTools())
+		}
+	}
+	for _, blocked := range []string{botmcp.ToolA2ATrustPeer, botmcp.ToolA2ADelegate, botmcp.ToolA2ACancel, botmcp.ToolA2AInputReply, botmcp.ToolA2AAuthReply} {
+		if containsString(got.EffectiveTools(), blocked) {
+			t.Fatalf("custom read-only A2A allowlist gained write tool %s: %+v", blocked, got.EffectiveTools())
+		}
 	}
 }
 

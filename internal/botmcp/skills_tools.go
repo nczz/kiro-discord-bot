@@ -51,10 +51,16 @@ func registerSkillTools(s *server.MCPServer) {
 		return skillJSONResult(result, err), nil
 	})
 	s.AddTool(skillUsageTool(), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		if botToolsWriteDisabled() {
+			return botToolsWriteDisabledResult(), nil
+		}
 		result, err := skillUsageRecord(ctx, dataDir(), req)
 		return skillJSONResult(result, err), nil
 	})
 	s.AddTool(skillCreateTool(), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		if botToolsWriteDisabled() {
+			return botToolsWriteDisabledResult(), nil
+		}
 		result, err := skillCreate(ctx, dataDir(), req)
 		return skillJSONResult(result, err), nil
 	})
@@ -63,22 +69,37 @@ func registerSkillTools(s *server.MCPServer) {
 		return skillJSONResult(result, err), nil
 	})
 	s.AddTool(skillChannelLifecycleTool(ToolSkillsChannelEnable, "Enable a previously installed channel/project skill for this authenticated Discord channel context."), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		if botToolsWriteDisabled() {
+			return botToolsWriteDisabledResult(), nil
+		}
 		result, err := skillChannelSetEnabled(ctx, dataDir(), req, true, "enable")
 		return skillJSONResult(result, err), nil
 	})
 	s.AddTool(skillChannelLifecycleTool(ToolSkillsChannelDisable, "Disable an installed channel/project skill for this authenticated Discord channel context. This is reversible."), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		if botToolsWriteDisabled() {
+			return botToolsWriteDisabledResult(), nil
+		}
 		result, err := skillChannelSetEnabled(ctx, dataDir(), req, false, "disable")
 		return skillJSONResult(result, err), nil
 	})
 	s.AddTool(skillChannelLifecycleTool(ToolSkillsChannelRemove, "Soft-remove an installed channel/project skill for this authenticated Discord channel context. This is reversible through restore."), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		if botToolsWriteDisabled() {
+			return botToolsWriteDisabledResult(), nil
+		}
 		result, err := skillChannelSetEnabled(ctx, dataDir(), req, false, "remove")
 		return skillJSONResult(result, err), nil
 	})
 	s.AddTool(skillChannelLifecycleTool(ToolSkillsChannelRestore, "Restore a disabled or removed channel/project skill for this authenticated Discord channel context."), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		if botToolsWriteDisabled() {
+			return botToolsWriteDisabledResult(), nil
+		}
 		result, err := skillChannelSetEnabled(ctx, dataDir(), req, true, "restore")
 		return skillJSONResult(result, err), nil
 	})
 	s.AddTool(skillChannelRollbackTool(), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		if botToolsWriteDisabled() {
+			return botToolsWriteDisabledResult(), nil
+		}
 		result, err := skillChannelRollback(ctx, dataDir(), req)
 		return skillJSONResult(result, err), nil
 	})
@@ -99,18 +120,30 @@ func registerSkillTools(s *server.MCPServer) {
 		return skillJSONResult(result, err), nil
 	})
 	s.AddTool(skillChannelLifecycleTool(ToolSkillsServerDisable, "Disable a Discord server-wide skill. Requires authenticated Discord server management context."), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		if botToolsWriteDisabled() {
+			return botToolsWriteDisabledResult(), nil
+		}
 		result, err := skillServerSetEnabled(ctx, dataDir(), req, false, "disable")
 		return skillJSONResult(result, err), nil
 	})
 	s.AddTool(skillChannelLifecycleTool(ToolSkillsServerRemove, "Soft-remove a Discord server-wide skill. Requires authenticated Discord server management context."), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		if botToolsWriteDisabled() {
+			return botToolsWriteDisabledResult(), nil
+		}
 		result, err := skillServerSetEnabled(ctx, dataDir(), req, false, "remove")
 		return skillJSONResult(result, err), nil
 	})
 	s.AddTool(skillChannelLifecycleTool(ToolSkillsServerRestore, "Restore a Discord server-wide skill. Requires authenticated Discord server management context."), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		if botToolsWriteDisabled() {
+			return botToolsWriteDisabledResult(), nil
+		}
 		result, err := skillServerSetEnabled(ctx, dataDir(), req, true, "restore")
 		return skillJSONResult(result, err), nil
 	})
 	s.AddTool(skillServerRollbackTool(), func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		if botToolsWriteDisabled() {
+			return botToolsWriteDisabledResult(), nil
+		}
 		result, err := skillServerRollback(ctx, dataDir(), req)
 		return skillJSONResult(result, err), nil
 	})
@@ -330,6 +363,10 @@ func skillCreate(ctx context.Context, dataDir string, req mcp.CallToolRequest) (
 	if err != nil {
 		return nil, err
 	}
+	actor, err := authenticatedSkillCreateActor(req, draft)
+	if err != nil {
+		return nil, err
+	}
 	store, err := openSkillsStore(dataDir)
 	if err != nil {
 		return nil, err
@@ -338,16 +375,6 @@ func skillCreate(ctx context.Context, dataDir string, req mcp.CallToolRequest) (
 	draft, err = store.CreateDraft(ctx, draft)
 	if err != nil {
 		return nil, err
-	}
-	actor := skills.MutationActor{
-		GuildID:         draft.GuildID,
-		ChannelID:       draft.ChannelID,
-		TargetChannelID: firstNonEmptySkill(os.Getenv("BOT_TOOLS_TARGET_CHANNEL_ID"), draft.ChannelID),
-		ActorUsername:   strings.TrimSpace(req.GetString("requested_by", "")),
-		SourceMessageID: req.GetString("message_id", ""),
-		AgentSessionID:  req.GetString("agent_session_id", ""),
-		MCPServerName:   "bot-tools",
-		MCPToolName:     ToolSkillCreate,
 	}
 	materialized, err := materializeSkillDraft(draft, req.GetBool("overwrite_materialized", false))
 	if err != nil {
@@ -364,8 +391,27 @@ func skillCreate(ctx context.Context, dataDir string, req mcp.CallToolRequest) (
 }
 
 func skillDraftFromRequest(req mcp.CallToolRequest, sourceType string) (skills.Draft, error) {
+	if err := validateBoundSkillProjectCWD(req); err != nil {
+		return skills.Draft{}, err
+	}
 	rc := skillResolveContext(req)
-	return skills.NewDraftFromMarkdown(skills.DraftInput{Name: req.GetString("name", ""), Slug: req.GetString("slug", ""), Description: req.GetString("description", ""), ScopeType: req.GetString("scope_type", ""), GuildID: rc.GuildID, ChannelID: rc.ChannelID, ProjectCWD: strings.TrimSpace(req.GetString("project_cwd", "")), SourceType: sourceType, SourceRef: req.GetString("source_ref", ""), SourceMessageRefs: parseStringList(req.GetString("source_message_ids", "")), ContentMarkdown: req.GetString("content_markdown", ""), RequiredTools: parseStringList(req.GetString("required_tools", "")), RiskLevel: req.GetString("risk_level", ""), CreatedBy: req.GetString("requested_by", ""), TTL: skillDraftTTL()})
+	return skills.NewDraftFromMarkdown(skills.DraftInput{
+		Name:              req.GetString("name", ""),
+		Slug:              req.GetString("slug", ""),
+		Description:       req.GetString("description", ""),
+		ScopeType:         req.GetString("scope_type", ""),
+		GuildID:           rc.GuildID,
+		ChannelID:         rc.ChannelID,
+		ProjectCWD:        rc.ProjectCWD,
+		SourceType:        sourceType,
+		SourceRef:         req.GetString("source_ref", ""),
+		SourceMessageRefs: parseStringList(req.GetString("source_message_ids", "")),
+		ContentMarkdown:   req.GetString("content_markdown", ""),
+		RequiredTools:     parseStringList(req.GetString("required_tools", "")),
+		RiskLevel:         req.GetString("risk_level", ""),
+		CreatedBy:         req.GetString("requested_by", ""),
+		TTL:               skillDraftTTL(),
+	})
 }
 
 func materializeSkillDraft(draft skills.Draft, overwrite bool) (skills.MaterializedFile, error) {
@@ -380,6 +426,9 @@ func materializeSkillDraft(draft skills.Draft, overwrite bool) (skills.Materiali
 }
 
 func skillChannelInventory(ctx context.Context, dataDir string, req mcp.CallToolRequest) (map[string]any, error) {
+	if err := validateBoundSkillProjectCWD(req); err != nil {
+		return nil, err
+	}
 	if _, err := authenticatedChannelSkillActor(req, "inventory"); err != nil {
 		return nil, err
 	}
@@ -389,7 +438,6 @@ func skillChannelInventory(ctx context.Context, dataDir string, req mcp.CallTool
 	}
 	defer store.Close()
 	rc := skillResolveContext(req)
-	rc.ProjectCWD = firstNonEmptySkill(req.GetString("project_cwd", ""), rc.ProjectCWD)
 	results, err := store.ListInstalled(ctx, rc, req.GetString("query", ""), req.GetInt("limit", 10))
 	if err != nil {
 		return nil, err
@@ -398,13 +446,15 @@ func skillChannelInventory(ctx context.Context, dataDir string, req mcp.CallTool
 }
 
 func skillChannelSetEnabled(ctx context.Context, dataDir string, req mcp.CallToolRequest, enabled bool, action string) (map[string]any, error) {
+	if err := validateBoundSkillProjectCWD(req); err != nil {
+		return nil, err
+	}
 	store, err := openSkillsStore(dataDir)
 	if err != nil {
 		return nil, err
 	}
 	defer store.Close()
 	rc := skillResolveContext(req)
-	rc.ProjectCWD = firstNonEmptySkill(req.GetString("project_cwd", ""), rc.ProjectCWD)
 	scope := channelSkillScope(req, rc)
 	actor, err := authenticatedChannelSkillActor(req, action)
 	if err != nil {
@@ -418,13 +468,15 @@ func skillChannelSetEnabled(ctx context.Context, dataDir string, req mcp.CallToo
 }
 
 func skillChannelRollback(ctx context.Context, dataDir string, req mcp.CallToolRequest) (map[string]any, error) {
+	if err := validateBoundSkillProjectCWD(req); err != nil {
+		return nil, err
+	}
 	store, err := openSkillsStore(dataDir)
 	if err != nil {
 		return nil, err
 	}
 	defer store.Close()
 	rc := skillResolveContext(req)
-	rc.ProjectCWD = firstNonEmptySkill(req.GetString("project_cwd", ""), rc.ProjectCWD)
 	scope := channelSkillScope(req, rc)
 	actor, err := authenticatedChannelSkillActor(req, "rollback")
 	if err != nil {
@@ -447,10 +499,38 @@ func channelSkillScope(req mcp.CallToolRequest, rc skills.ResolveContext) string
 	return skills.ScopeChannel
 }
 
+func authenticatedSkillCreateActor(req mcp.CallToolRequest, draft skills.Draft) (skills.MutationActor, error) {
+	var (
+		actor skills.MutationActor
+		err   error
+	)
+	if draft.ProposedScopeType == skills.ScopeGuild {
+		actor, err = authenticatedServerSkillActor(req, ToolSkillCreate)
+	} else {
+		actor, err = authenticatedChannelSkillActor(req, ToolSkillCreate)
+	}
+	if err != nil {
+		return skills.MutationActor{}, err
+	}
+	if actor.GuildID == "" {
+		actor.GuildID = draft.GuildID
+	}
+	if actor.ChannelID == "" {
+		actor.ChannelID = draft.ChannelID
+	}
+	if actor.ActorUsername == "" {
+		actor.ActorUsername = strings.TrimSpace(req.GetString("requested_by", ""))
+	}
+	return actor, nil
+}
+
 func authenticatedChannelSkillActor(req mcp.CallToolRequest, toolName string) (skills.MutationActor, error) {
 	state, ok := currentTargetState()
 	if !ok || strings.TrimSpace(state.RequesterID) == "" {
 		return skills.MutationActor{}, fmt.Errorf("skill lifecycle tools require authenticated Discord request context")
+	}
+	if state.RemoteA2A {
+		return skills.MutationActor{}, fmt.Errorf("skill lifecycle tools require a local Discord request context")
 	}
 	if !state.CanManageChannel {
 		return skills.MutationActor{}, fmt.Errorf("skill lifecycle tools require Discord channel management permission for the current target")
@@ -557,6 +637,9 @@ func authenticatedServerSkillActor(req mcp.CallToolRequest, toolName string) (sk
 	if !ok || strings.TrimSpace(state.RequesterID) == "" {
 		return skills.MutationActor{}, fmt.Errorf("server skill management requires authenticated Discord request context")
 	}
+	if state.RemoteA2A {
+		return skills.MutationActor{}, fmt.Errorf("server skill management requires a local Discord request context")
+	}
 	if !state.CanManageGuild {
 		return skills.MutationActor{}, fmt.Errorf("server skill management requires Discord server management permission")
 	}
@@ -581,6 +664,26 @@ func openSkillsStore(dataDir string) (*skills.Store, error) {
 		return skills.OpenPath(path)
 	}
 	return skills.Open(dataDir)
+}
+
+func validateBoundSkillProjectCWD(req mcp.CallToolRequest) error {
+	bound := strings.TrimSpace(os.Getenv("BOT_TOOLS_PROJECT_CWD"))
+	requested := strings.TrimSpace(req.GetString("project_cwd", ""))
+	if bound == "" || requested == "" {
+		return nil
+	}
+	cleanBound, err := filepath.Abs(bound)
+	if err != nil {
+		cleanBound = filepath.Clean(bound)
+	}
+	cleanRequested, err := filepath.Abs(requested)
+	if err != nil {
+		cleanRequested = filepath.Clean(requested)
+	}
+	if cleanRequested != cleanBound {
+		return fmt.Errorf("project_cwd is not allowed for this bot-tools session")
+	}
+	return nil
 }
 
 func skillResolveContext(req mcp.CallToolRequest) skills.ResolveContext {

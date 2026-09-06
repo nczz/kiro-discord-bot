@@ -391,6 +391,11 @@ func (b *Bot) handleA2AComponent(ds *discordgo.Session, i *discordgo.Interaction
 		return
 	}
 	action, stateID := parts[2], parts[3]
+	rawChannelID := i.ChannelID
+	channelID := rawChannelID
+	if parent := resolveThreadParent(ds, rawChannelID); parent != "" {
+		channelID = parent
+	}
 	entry, ok := b.a2aConfirmations.Get(stateID)
 	if !ok {
 		b.respondA2AComponentUpdate(ds, i, L.Get("a2a.confirm.expired"), nil)
@@ -407,7 +412,7 @@ func (b *Bot) handleA2AComponent(ds *discordgo.Session, i *discordgo.Interaction
 		return
 	}
 	requiresManager := !isA2ADelegateConfirmation(entry.Payload.Subcommand)
-	if requiresManager && !b.userCanManageAuditTarget(ds, userID, i.ChannelID) {
+	if requiresManager && !b.userCanManageChannelTarget(ds, userID, i.ChannelID) {
 		respondInteractionEphemeral(ds, i, L.Get("a2a.remedy.manager_required"))
 		return
 	}
@@ -426,15 +431,15 @@ func (b *Bot) handleA2AComponent(ds *discordgo.Session, i *discordgo.Interaction
 		}
 		entry.Payload.Request.RequestedBy = username
 		entry.Payload.Request.RequestedByID = userID
-		resp := b.applyA2APolicyConfirmation(entry.Payload, i.GuildID, i.ChannelID)
+		resp := b.applyA2APolicyConfirmation(entry.Payload, i.GuildID, channelID, rawChannelID)
 		b.respondA2AComponentUpdate(ds, i, formatA2AResponse(resp), nil)
 	default:
 		respondInteractionEphemeral(ds, i, L.Get("a2a.confirm.invalid"))
 	}
 }
 
-func (b *Bot) applyA2APolicyConfirmation(payload a2aSlashPayload, guildID, channelID string) botmcp.A2AToolResponse {
-	svc, err := botmcp.NewA2AService(botmcp.A2AServiceConfig{DataDir: b.dataDir, Config: botmcp.A2AConfigFromEnv(), Node: b.a2aNode, BoundGuildID: guildID, BoundChannelID: channelID, BoundTargetID: channelID, AuditEnabled: true, AuditRecordContent: true, ConnectNATS: false})
+func (b *Bot) applyA2APolicyConfirmation(payload a2aSlashPayload, guildID, channelID, targetID string) botmcp.A2AToolResponse {
+	svc, err := botmcp.NewA2AService(botmcp.A2AServiceConfig{DataDir: b.dataDir, Config: botmcp.A2AConfigFromEnv(), Node: b.a2aNode, BoundGuildID: guildID, BoundChannelID: channelID, BoundTargetID: targetID, AuditEnabled: true, AuditRecordContent: true, ConnectNATS: false})
 	if err != nil {
 		return botmcp.A2AToolResponse{OK: false, Message: err.Error()}
 	}
@@ -552,24 +557,53 @@ func formatA2AResponse(resp botmcp.A2AToolResponse) string {
 	}
 	switch {
 	case resp.Task != nil:
-		return formatA2ATask(*resp.Task, resp.Message)
+		return formatA2ATask(*resp.Task, localizedA2AResponseTitle(resp.Message, "a2a.task.title"))
 	case resp.Tasks != nil:
 		return formatA2ATaskList(resp.Tasks)
 	case resp.Peers != nil:
-		return formatA2APeers(resp.Peers, resp.Policy)
+		return formatA2APeers(resp.Peers, resp.PeerPolicy, resp.DeliveryReadiness)
 	case resp.Policy != nil:
-		return formatA2APolicy(resp.Message, *resp.Policy)
+		return formatA2APolicy(localizedA2AResponseTitle(resp.Message, "a2a.policy.current"), *resp.Policy)
 	default:
-		return a2aBulletTitle(resp.Message)
+		return a2aBulletTitle(localizedA2AResponseTitle(resp.Message, "a2a.response.ok"))
 	}
+}
+
+func localizedA2AResponseTitle(message, fallbackKey string) string {
+	switch strings.TrimSpace(message) {
+	case "A2A task sent":
+		return L.Get("a2a.response.task_sent")
+	case "A2A task loaded":
+		return L.Get("a2a.response.task_loaded")
+	case "A2A policy loaded":
+		return L.Get("a2a.response.policy_loaded")
+	case "A2A policy applied":
+		return L.Get("a2a.response.policy_applied")
+	case "A2A peer allowed":
+		return L.Get("a2a.response.peer_allowed")
+	case "A2A peer revoked":
+		return L.Get("a2a.response.peer_revoked")
+	case "A2A control published":
+		return L.Get("a2a.response.control_published")
+	}
+	if strings.HasPrefix(strings.TrimSpace(message), "A2A request queued;") {
+		return L.Get("a2a.response.task_queued")
+	}
+	if strings.HasPrefix(strings.TrimSpace(message), "A2A task loaded;") {
+		return L.Get("a2a.response.task_loaded")
+	}
+	if fallbackKey != "" {
+		return L.Get(fallbackKey)
+	}
+	return L.Get("a2a.response.ok")
 }
 
 func formatA2AConfirmation(resp botmcp.A2AToolResponse) string {
 	var sb strings.Builder
-	sb.WriteString(L.Getf("a2a.confirmation_required", resp.ConfirmationSummary, resp.ChangeID))
+	sb.WriteString(L.Getf("a2a.confirmation_required", localizedA2AConfirmationSummary(resp), resp.ChangeID))
 	if len(resp.RiskLabels) > 0 {
 		sb.WriteString("\n")
-		sb.WriteString(L.Getf("a2a.risk_labels", strings.Join(resp.RiskLabels, ", ")))
+		sb.WriteString(L.Getf("a2a.risk_labels", strings.Join(localizedA2ARiskLabels(resp.RiskLabels), ", ")))
 	}
 	if resp.ExpiresAt != "" {
 		sb.WriteString("\n")
@@ -584,8 +618,59 @@ func formatA2AConfirmation(resp botmcp.A2AToolResponse) string {
 	return sb.String()
 }
 
+func localizedA2AConfirmationSummary(resp botmcp.A2AToolResponse) string {
+	if strings.TrimSpace(resp.Message) == "A2A delegation requires confirmation" {
+		target := valueOrNone(a2aMetadataString(resp.Metadata, "target_agent"))
+		channelRef := valueOrNone(a2aMetadataString(resp.Metadata, "target_channel_ref"))
+		skillID := valueOrNone(a2aMetadataString(resp.Metadata, "skill_id"))
+		resultVisibility := valueOrNone(a2aMetadataString(resp.Metadata, "result_visibility"))
+		transcriptMode := valueOrNone(a2aMetadataString(resp.Metadata, "discord_transcript_mode"))
+		return L.Getf("a2a.confirm.delegate_summary", target, channelRef, skillID, resultVisibility, transcriptMode)
+	}
+	if strings.TrimSpace(resp.Message) == "A2A policy change planned" && resp.Policy != nil {
+		return L.Get("a2a.confirm.policy_summary")
+	}
+	if strings.TrimSpace(resp.ConfirmationSummary) != "" {
+		return resp.ConfirmationSummary
+	}
+	return L.Get("a2a.response.ok")
+}
+
+func a2aMetadataString(meta map[string]interface{}, key string) string {
+	if len(meta) == 0 {
+		return ""
+	}
+	if value, ok := meta[key].(string); ok {
+		return strings.TrimSpace(value)
+	}
+	return ""
+}
+
+func localizedA2ARiskLabels(labels []string) []string {
+	out := make([]string, 0, len(labels))
+	for _, label := range labels {
+		switch strings.TrimSpace(label) {
+		case "policy_change":
+			out = append(out, L.Get("a2a.risk.policy_change"))
+		case "enable_a2a":
+			out = append(out, L.Get("a2a.risk.enable_a2a"))
+		case "remote_delegation":
+			out = append(out, L.Get("a2a.risk.remote_delegation"))
+		case "discord_context":
+			out = append(out, L.Get("a2a.risk.discord_context"))
+		case "remote_task":
+			out = append(out, L.Get("a2a.risk.remote_task"))
+		case "data_egress":
+			out = append(out, L.Get("a2a.risk.data_egress"))
+		default:
+			out = append(out, L.Get("a2a.risk.unknown"))
+		}
+	}
+	return out
+}
+
 func formatA2AError(resp botmcp.A2AToolResponse) string {
-	msg := L.Getf("a2a.error", resp.Message)
+	msg := L.Getf("a2a.error", localizedA2AErrorText(resp))
 	lower := strings.ToLower(resp.Message)
 	var hint string
 	switch {
@@ -606,7 +691,39 @@ func formatA2AError(resp botmcp.A2AToolResponse) string {
 	return msg + "\n" + hint
 }
 
-func formatA2APeers(peers []botmcp.A2APeerSummary, policy *a2a.ChannelA2APolicy) string {
+func localizedA2AErrorText(resp botmcp.A2AToolResponse) string {
+	lower := strings.ToLower(resp.Message)
+	switch resp.ErrorCode {
+	case a2a.ErrorUnknownAgent:
+		return L.Get("a2a.error.peer_unknown")
+	case a2a.ErrorChannelNotEnabled:
+		return L.Get("a2a.error.channel_disabled")
+	case a2a.ErrorSkillNotAllowed, a2a.ErrorUnauthorizedTarget, a2a.ErrorCapabilityDenied:
+		return L.Get("a2a.error.not_delegated")
+	case a2a.ErrorUnknownSkill:
+		return L.Get("a2a.error.unknown_skill")
+	case a2a.ErrorTaskNotFound:
+		return L.Get("a2a.error.task_not_found")
+	case a2a.ErrorTimeout:
+		return L.Get("a2a.error.timeout")
+	}
+	switch {
+	case strings.Contains(lower, "target peer is unknown"):
+		return L.Get("a2a.error.peer_unknown")
+	case strings.Contains(lower, "channel a2a policy is disabled"), strings.Contains(lower, "channel_ref is not enabled"):
+		return L.Get("a2a.error.channel_disabled")
+	case strings.Contains(lower, "not delegated"), strings.Contains(lower, "skill is not delegated"):
+		return L.Get("a2a.error.not_delegated")
+	case strings.Contains(lower, "does not expose skill"), strings.Contains(lower, "unknown_skill"):
+		return L.Get("a2a.error.unknown_skill")
+	case strings.Contains(lower, "managechannels"), strings.Contains(lower, "manager required"):
+		return L.Get("a2a.error.manager_required")
+	default:
+		return L.Get("a2a.error.generic")
+	}
+}
+
+func formatA2APeers(peers []botmcp.A2APeerSummary, peerPolicy *botmcp.A2APeerPolicySummary, readiness *botmcp.A2APolicyDeliveryReadiness) string {
 	var sb strings.Builder
 	sb.WriteString(L.Get("a2a.peers.title"))
 	sb.WriteString("\n")
@@ -635,16 +752,59 @@ func formatA2APeers(peers []botmcp.A2APeerSummary, policy *a2a.ChannelA2APolicy)
 				skills = L.Get("a2a.none")
 			}
 			label := firstNonEmpty(peer.DisplayName, peer.Name, peer.AgentID)
-			reason := firstNonEmpty(peer.DelegationReason, allowed)
+			reason := localizedA2APeerReason(firstNonEmpty(peer.DelegationReason, allowed))
 			sb.WriteString(L.Getf("a2a.peers.row_human", label, peer.AgentID, valueOrNone(peer.BotAgentID), valueOrNone(peer.ChannelRef), state, trust, allowed, reason, skills))
 			sb.WriteString("\n")
 		}
 	}
-	if policy != nil {
+	if peerPolicy != nil {
 		sb.WriteString("\n")
-		sb.WriteString(formatA2APolicy(L.Get("a2a.policy.current"), *policy))
+		sb.WriteString(L.Get("a2a.peers.policy_title"))
+		sb.WriteString("\n")
+		sb.WriteString(L.Getf("a2a.peers.policy_runtime", valueOrNone(peerPolicy.CurrentRuntimeAgentID), valueOrNone(peerPolicy.CurrentChannelRef), yesNo(peerPolicy.Enabled)))
+		sb.WriteString("\n")
+		sb.WriteString(L.Getf("a2a.peers.policy_inbound", joinOrNone(append([]string{}, peerPolicy.InboundAllowedRuntimes...)), joinOrNone(peerPolicy.LegacyInboundAllowedAgents), joinAcceptSkills(peerPolicy.InboundAcceptedSkills)))
+		sb.WriteString("\n")
+		sb.WriteString(L.Getf("a2a.peers.policy_outbound", joinPeerDelegateTargetsOrNone(peerPolicy.OutboundDelegateTargets)))
+	}
+	if readiness != nil {
+		sb.WriteString("\n")
+		sb.WriteString(L.Getf("a2a.peers.readiness", valueOrNone(readiness.ResultVisibility), valueOrNone(readiness.DiscordTranscriptMode), yesNo(readiness.CoPresentReady), joinOrNone(localizedA2ACoPresentMissing(readiness.CoPresentMissing))))
 	}
 	return sb.String()
+}
+
+func joinPeerDelegateTargetsOrNone(targets []botmcp.A2ADelegateTargetSummary) string {
+	if len(targets) == 0 {
+		return L.Get("a2a.none")
+	}
+	out := make([]string, 0, len(targets))
+	for _, target := range targets {
+		peer := firstNonEmptyA2A(target.RuntimeAgentID, target.AgentID)
+		out = append(out, fmt.Sprintf("%s@%s/%s", valueOrNone(peer), valueOrNone(target.ChannelRef), valueOrNone(target.SkillID)))
+	}
+	return strings.Join(out, ", ")
+}
+
+func localizedA2APeerReason(reason string) string {
+	switch strings.TrimSpace(reason) {
+	case "allowed", "allowed by current channel inbound policy":
+		return L.Get("a2a.peers.reason.allowed")
+	case "channel A2A policy disabled":
+		return L.Get("a2a.peers.reason.channel_disabled")
+	case "no inbound runtime allowlist":
+		return L.Get("a2a.peers.reason.no_inbound_allowlist")
+	case "not accepted by current channel policy":
+		return L.Get("a2a.peers.reason.not_accepted")
+	case "peer stale":
+		return L.Get("a2a.peers.reason.peer_stale")
+	case "missing runtime delegate target":
+		return L.Get("a2a.peers.reason.missing_runtime_delegate_target")
+	case "missing delegate target or skill":
+		return L.Get("a2a.peers.reason.missing_delegate_target")
+	default:
+		return reason
+	}
 }
 
 func formatA2APolicy(title string, policy a2a.ChannelA2APolicy) string {
@@ -706,7 +866,32 @@ func coPresentReadiness(policy a2a.ChannelA2APolicy) string {
 	if len(missing) == 0 {
 		return L.Get("a2a.policy.co_present.ready")
 	}
-	return L.Getf("a2a.policy.co_present.blocked", strings.Join(missing, ", "))
+	return L.Getf("a2a.policy.co_present.blocked", strings.Join(localizedA2ACoPresentMissing(missing), ", "))
+}
+
+func localizedA2ACoPresentMissing(missing []string) []string {
+	out := make([]string, 0, len(missing))
+	for _, reason := range missing {
+		switch strings.TrimSpace(reason) {
+		case "enabled=true":
+			out = append(out, L.Get("a2a.co_present_missing.enabled"))
+		case "accept_from or accept_from_runtimes":
+			out = append(out, L.Get("a2a.co_present_missing.accept_from"))
+		case "accept_skills includes task/general_task or is empty to allow all capabilities":
+			out = append(out, L.Get("a2a.co_present_missing.accept_skills"))
+		case "result_visibility=transparent":
+			out = append(out, L.Get("a2a.co_present_missing.result_visibility"))
+		case "discord_transcript_mode=co_present":
+			out = append(out, L.Get("a2a.co_present_missing.transcript_mode"))
+		case "share_discord_context=true":
+			out = append(out, L.Get("a2a.co_present_missing.share_context"))
+		case "co_present_from or co_present_from_runtimes", "co_present_from_runtimes":
+			out = append(out, L.Get("a2a.co_present_missing.allowed_sources"))
+		default:
+			out = append(out, L.Get("a2a.co_present_missing.unknown"))
+		}
+	}
+	return out
 }
 
 func formatA2AEventDetail(value string) string {

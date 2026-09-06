@@ -24,6 +24,14 @@ var mentionIDPattern = regexp.MustCompile(`^<@!?([0-9]+)>$|^([0-9]{5,})$`)
 type mentionTargetState struct {
 	TargetChannelID       string               `json:"target_channel_id"`
 	DisableEgress         bool                 `json:"disable_egress,omitempty"`
+	RemoteA2A             bool                 `json:"remote_a2a,omitempty"`
+	AllowMemoryWrite      bool                 `json:"allow_memory_write,omitempty"`
+	DelegationDepth       int                  `json:"delegation_depth,omitempty"`
+	RequesterID           string               `json:"requester_id,omitempty"`
+	RequesterName         string               `json:"requester_name,omitempty"`
+	Source                string               `json:"source,omitempty"`
+	CanManageChannel      bool                 `json:"can_manage_channel,omitempty"`
+	CanManageGuild        bool                 `json:"can_manage_guild,omitempty"`
 	AllowedMentionUserIDs []string             `json:"allowed_mention_user_ids,omitempty"`
 	MentionRefs           []discordmention.Ref `json:"mention_refs,omitempty"`
 }
@@ -66,13 +74,10 @@ func registerResolveMentionsTool(s *server.MCPServer) {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			chID, _ := req.RequireString("channel_id")
-			if err := ensureChannelAllowed(chID); err != nil {
+			targetID, err := authorizeWriteChannel("discord_resolve_mentions", false, chID)
+			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
-			if err := ensureWriteAllowed("discord_resolve_mentions", false); err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
-			}
-			targetID := resolveWriteTargetChannel(chID)
 			guildID, err := guildIDForMentionTarget(targetID)
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil

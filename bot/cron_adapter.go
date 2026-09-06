@@ -128,53 +128,13 @@ func (a *cronAdapter) RecordAgentResponse(agent *acp.Agent, job *heartbeat.CronJ
 }
 
 func (a *cronAdapter) prepareCronThread(ds *discordgo.Session, job *heartbeat.CronJob, threadName string) (string, bool, error) {
-	channelID := job.ChannelID
-	existingThreadID := job.ThreadID
-	createdByID := job.CreatedByID
-	loc := a.bot.cronLocationOrLocal()
-	archiveDur := a.bot.manager.ThreadArchive()
-	if archiveDur <= 0 {
-		archiveDur = 1440
-	}
-
-	// Try to reuse existing thread
-	threadID := existingThreadID
-	if threadID != "" {
-		// Test if thread is still accessible by sending the run separator
-		sep := fmt.Sprintf("── %s ──", time.Now().In(loc).Format("01/02 15:04"))
-		if _, err := sendDiscordText(ds, threadID, sep, nil); err != nil {
-			// Thread gone or archived — try to unarchive
-			if _, uerr := ds.ChannelEditComplex(threadID, &discordgo.ChannelEdit{
-				Archived: boolPtr(false),
-				Locked:   boolPtr(false),
-			}); uerr != nil {
-				threadID = "" // give up, create new
-			} else if _, err2 := sendDiscordText(ds, threadID, sep, nil); err2 != nil {
-				threadID = "" // still can't send, create new
-			}
-		}
-	}
-
-	createdThread := false
-	if threadID == "" {
-		// Create new thread
-		thread, err := ds.ThreadStart(channelID, threadName, discordgo.ChannelTypeGuildPublicThread, archiveDur)
-		if err != nil {
-			return "", false, fmt.Errorf("create thread: %w", err)
-		}
-		threadID = thread.ID
-		createdThread = true
-		// Post initial separator for new thread
-		_, _ = sendDiscordText(ds, threadID, fmt.Sprintf("── %s ──", time.Now().In(loc).Format("01/02 15:04")), nil)
-	}
-
-	// Add creator only when a cron thread is first created. Later runs must not
-	// re-add users who left the thread or changed Discord notification settings.
-	if createdThread && createdByID != "" {
-		_ = ds.ThreadMemberAdd(threadID, createdByID)
-	}
-
-	return threadID, createdThread, nil
+	return a.bot.prepareScheduledThread(ds, scheduledThreadRequest{
+		ParentChannelID:  job.ChannelID,
+		ExistingThreadID: job.ThreadID,
+		CreatedByID:      job.CreatedByID,
+		ThreadName:       threadName,
+		Location:         a.bot.cronLocationOrLocal(),
+	})
 }
 
 func (a *cronAdapter) AskAgentInThread(ctx context.Context, agent *acp.Agent, job *heartbeat.CronJob, threadName, prompt string) (string, string, bool, error) {
@@ -199,7 +159,7 @@ func (a *cronAdapter) AskAgentInThread(ctx context.Context, agent *acp.Agent, jo
 	// Update thread title with execution start timestamp
 	execTS := time.Now().In(loc).Format("01/02 15:04")
 	ds.ChannelEditComplex(threadID, &discordgo.ChannelEdit{
-		Name: threadName + " · " + execTS,
+		Name: truncateDiscordThreadName(threadName + " · " + execTS),
 	})
 
 	// Notify channel with thread link

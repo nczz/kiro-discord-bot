@@ -314,6 +314,7 @@ func (s *A2AService) Close() {
 }
 
 func (s *A2AService) Peers(ctx context.Context, req A2AToolRequest) (A2AToolResponse, error) {
+	req = s.normalizeBoundContext(req)
 	if err := s.validateContext(req, false); err != nil {
 		return responseError(err), nil
 	}
@@ -554,6 +555,7 @@ func policyRuntimeTargetChannelRef(policy a2a.ChannelA2APolicy, agent, skill str
 }
 
 func (s *A2AService) PolicyGet(ctx context.Context, req A2AToolRequest) (A2AToolResponse, error) {
+	req = s.normalizeBoundContext(req)
 	if err := s.validateContext(req, false); err != nil {
 		return responseError(err), nil
 	}
@@ -565,6 +567,7 @@ func (s *A2AService) PolicyGet(ctx context.Context, req A2AToolRequest) (A2ATool
 }
 
 func (s *A2AService) RuntimePreflight(ctx context.Context, req A2AToolRequest) (A2AToolResponse, error) {
+	req = s.normalizeBoundContext(req)
 	if err := s.validateContext(req, true); err != nil {
 		return responseError(err), nil
 	}
@@ -580,6 +583,7 @@ func (s *A2AService) RuntimePreflight(ctx context.Context, req A2AToolRequest) (
 }
 
 func (s *A2AService) TaskStatus(ctx context.Context, req A2AToolRequest) (A2AToolResponse, error) {
+	req = s.normalizeBoundContext(req)
 	if err := s.validateContext(req, false); err != nil {
 		return responseError(err), nil
 	}
@@ -625,7 +629,11 @@ func (s *A2AService) TaskStatus(ctx context.Context, req A2AToolRequest) (A2AToo
 		if err := authorizeTaskStatus(row, req); err != nil {
 			continue
 		}
-		tasks = append(tasks, summarizeTask(row))
+		summary := summarizeTask(row)
+		if suppressTaskStatusResultContent(row) {
+			summary.ErrorMessage = ""
+		}
+		tasks = append(tasks, summary)
 	}
 	return A2AToolResponse{OK: true, Message: "A2A recent tasks listed", Tasks: tasks}, nil
 }
@@ -647,6 +655,7 @@ func authorizeTaskStatus(row a2a.TaskRow, req A2AToolRequest) error {
 }
 
 func (s *A2AService) PolicyPlan(ctx context.Context, req A2AToolRequest) (A2AToolResponse, error) {
+	req = s.normalizeBoundContext(req)
 	if err := s.validateContext(req, true); err != nil {
 		return responseError(err), nil
 	}
@@ -655,6 +664,9 @@ func (s *A2AService) PolicyPlan(ctx context.Context, req A2AToolRequest) (A2AToo
 		return responseError(err), nil
 	}
 	planned := s.applyPolicyDiff(policy, req)
+	if err := a2a.ValidateChannelA2APolicy(planned); err != nil {
+		return responseError(fmt.Errorf("%w: %v", errorCode(a2a.ErrorPolicyDenied), err)), nil
+	}
 	changeID := policyChangeID(planned)
 	summary := policySummary(policy, planned)
 	token := s.confirmationToken("policy_apply", changeID, req, planned)
@@ -667,6 +679,7 @@ func (s *A2AService) PolicyPlan(ctx context.Context, req A2AToolRequest) (A2AToo
 }
 
 func (s *A2AService) PolicyApply(ctx context.Context, req A2AToolRequest) (A2AToolResponse, error) {
+	req = s.normalizeBoundContext(req)
 	if err := s.validateContext(req, true); err != nil {
 		return responseError(err), nil
 	}
@@ -688,6 +701,9 @@ func (s *A2AService) PolicyApply(ctx context.Context, req A2AToolRequest) (A2ATo
 	if strings.TrimSpace(req.ChangeID) != "" && strings.TrimSpace(req.ChangeID) != changeID {
 		return responseError(fmt.Errorf("%w: change_id does not match policy diff", errorCode(a2a.ErrorPolicyDenied))), nil
 	}
+	if err := a2a.ValidateChannelA2APolicy(planned); err != nil {
+		return responseError(fmt.Errorf("%w: %v", errorCode(a2a.ErrorPolicyDenied), err)), nil
+	}
 	if err := s.verifyConfirmation("policy_apply", changeID, req, planned); err != nil {
 		_ = s.recordAudit(ctx, a2a.AuditPolicyChangeDenied, req, "denied", err.Error(), map[string]any{"change_id": changeID})
 		return responseError(err), nil
@@ -701,6 +717,7 @@ func (s *A2AService) PolicyApply(ctx context.Context, req A2AToolRequest) (A2ATo
 }
 
 func (s *A2AService) TrustPeer(ctx context.Context, req A2AToolRequest) (A2AToolResponse, error) {
+	req = s.normalizeBoundContext(req)
 	if err := s.validateContext(req, true); err != nil {
 		return responseError(err), nil
 	}
@@ -764,6 +781,7 @@ func simpleInboundTrustRequest(req A2AToolRequest, policy a2a.ChannelA2APolicy) 
 }
 
 func (s *A2AService) RevokePeer(ctx context.Context, req A2AToolRequest) (A2AToolResponse, error) {
+	req = s.normalizeBoundContext(req)
 	if err := s.validateContext(req, true); err != nil {
 		return responseError(err), nil
 	}
@@ -793,6 +811,7 @@ func (s *A2AService) RevokePeer(ctx context.Context, req A2AToolRequest) (A2AToo
 }
 
 func (s *A2AService) Delegate(ctx context.Context, req A2AToolRequest) (A2AToolResponse, error) {
+	req = s.normalizeBoundContext(req)
 	if err := s.validateContext(req, false); err != nil {
 		return responseError(err), nil
 	}
@@ -836,7 +855,7 @@ func (s *A2AService) Delegate(ctx context.Context, req A2AToolRequest) (A2AToolR
 	if err := s.checkOutboundQuota(ctx, req); err != nil {
 		return responseError(err), nil
 	}
-	defaults := collaborationDefaultsForPeer(policy.ChannelRef, targetChannelRef, req, peer)
+	defaults := s.collaborationDefaultsForPeer(policy.ChannelRef, targetChannelRef, req, peer)
 	resultVisibility := defaults.ResultVisibility
 	transcriptMode := defaults.TranscriptMode
 	deliveryReason := defaults.Reason
@@ -847,7 +866,7 @@ func (s *A2AService) Delegate(ctx context.Context, req A2AToolRequest) (A2AToolR
 	}
 	switch normalizeExplicitSetupMode(req.SetupMode) {
 	case "co_present":
-		if !coPresentContextAllowed(policy.ChannelRef, targetChannelRef, req, peer) {
+		if !s.coPresentContextAllowed(policy.ChannelRef, targetChannelRef, req, peer) {
 			return responseError(fmt.Errorf("%w: co_present delegation requires the peer to be in the same Discord channel/thread or the same shared runtime channel_ref", errorCode(a2a.ErrorPolicyDenied))), nil
 		}
 		resultVisibility, transcriptMode = "transparent", "co_present"
@@ -862,9 +881,12 @@ func (s *A2AService) Delegate(ctx context.Context, req A2AToolRequest) (A2AToolR
 	needsConfirmation := req.RequiresConfirmation || s.cfg.Config.RequireConfirmationForRemote
 	if needsConfirmation && strings.TrimSpace(req.ConfirmationToken) == "" {
 		exp := s.cfg.Now().UTC().Add(10 * time.Minute)
-		meta := deliveryResponseMetadata(resultVisibility, transcriptMode, deliveryReason, deliveryChannelID(req.ChannelID))
+		meta := deliveryResponseMetadata(resultVisibility, transcriptMode, deliveryReason, s.deliveryChannelID(req.ChannelID))
 		meta["authorization_mode"] = authorizationMode
 		meta["persistent_delegate_target"] = persistentDelegateTarget
+		meta["target_agent"] = string(target)
+		meta["target_channel_ref"] = targetChannelRef
+		meta["skill_id"] = req.SkillID
 		return A2AToolResponse{OK: true, Message: "A2A delegation requires confirmation", RequiresConfirmation: true, ConfirmationSummary: fmt.Sprintf("Delegate %q to %s@%s/%s via %s/%s (%s)", truncateForSummary(message), target, targetChannelRef, req.SkillID, resultVisibility, transcriptMode, deliveryReason), RiskLabels: []string{"remote_task", "data_egress"}, ExpiresAt: exp.Format(time.RFC3339), ChangeID: changeID, ConfirmationToken: s.confirmationToken("delegate", changeID, req, message), Metadata: meta}, nil
 	}
 	if needsConfirmation {
@@ -880,7 +902,7 @@ func (s *A2AService) Delegate(ctx context.Context, req A2AToolRequest) (A2AToolR
 	msgID := a2a.MessageID("msg_" + randomToken(12))
 	source := sourceAgentForRuntimeMode(s.cfg.Config, policy)
 	originRef := s.originRuntimeRef(req, policy, source, msgID)
-	delivery := deliveryOptionsForDelegate(req, resultVisibility, transcriptMode, source, s.cfg.Config.TaskTimeoutSec, delegationDepth)
+	delivery := s.deliveryOptionsForDelegate(req, resultVisibility, transcriptMode, source, s.cfg.Config.TaskTimeoutSec, delegationDepth)
 	taskReq := a2a.TaskExecutionRequest{
 		MessageID:             msgID,
 		ClientTaskRef:         req.RequestedByID,
@@ -1001,7 +1023,7 @@ func (s *A2AService) originRuntimeRef(req A2AToolRequest, policy a2a.ChannelA2AP
 		DisplayName:      displayName,
 		DiscordGuildID:   strings.TrimSpace(req.GuildID),
 		DiscordChannelID: strings.TrimSpace(req.ChannelID),
-		DiscordThreadID:  strings.TrimSpace(deliveryChannelID(req.ChannelID)),
+		DiscordThreadID:  strings.TrimSpace(s.deliveryChannelID(req.ChannelID)),
 		MessageID:        string(msgID),
 	}
 }
@@ -1023,6 +1045,7 @@ func (s *A2AService) AuthReply(ctx context.Context, req A2AToolRequest) (A2ATool
 }
 
 func (s *A2AService) publishTaskControl(ctx context.Context, req A2AToolRequest, kind string, expected a2a.TaskState, payload map[string]any) (A2AToolResponse, error) {
+	req = s.normalizeBoundContext(req)
 	if err := s.validateContext(req, false); err != nil {
 		return responseError(err), nil
 	}
@@ -1030,8 +1053,11 @@ func (s *A2AService) publishTaskControl(ctx context.Context, req A2AToolRequest,
 	if err != nil {
 		return responseError(err), nil
 	}
-	if !req.ManageChannels && row.ClientTaskRef != req.RequestedByID {
-		return responseError(fmt.Errorf("%w: requester does not own this task", errorCode(a2a.ErrorCancelNotAllowed))), nil
+	if strings.TrimSpace(row.Direction) != "outbound" {
+		return responseError(fmt.Errorf("%w: task is not controllable from this side", errorCode(a2a.ErrorPolicyDenied))), nil
+	}
+	if err := authorizeTaskStatus(row, req); err != nil {
+		return responseError(err), nil
 	}
 	if row.Terminal {
 		return responseError(fmt.Errorf("%w: task is terminal", errorCode(a2a.ErrorTaskTerminal))), nil
@@ -1236,9 +1262,11 @@ func (s *A2AService) applyPolicyDiff(policy a2a.ChannelA2APolicy, req A2AToolReq
 	}
 	if len(req.DelegateMediaTypes) > 0 {
 		policy.DelegateMedia.AllowedMIMETypes = appendUnique(policy.DelegateMedia.AllowedMIMETypes, req.DelegateMediaTypes...)
+		policy.DelegateMedia.AllowObjectRefs = true
 	}
 	if req.DelegateMaxBytes > 0 {
 		policy.DelegateMedia.MaxBytes = req.DelegateMaxBytes
+		policy.DelegateMedia.AllowObjectRefs = true
 	}
 	if req.MaxConcurrent != nil {
 		policy.MaxConcurrent = *req.MaxConcurrent
@@ -1355,7 +1383,7 @@ func (s *A2AService) applyTrustPeerDiff(ctx context.Context, policy a2a.ChannelA
 	if mode == "auto" {
 		defaults := collaborationDefaultsForRefs(policy.ChannelRef, targetChannelRef)
 		if peerKnown {
-			defaults = collaborationDefaultsForPeer(policy.ChannelRef, targetChannelRef, req, peerRow)
+			defaults = s.collaborationDefaultsForPeer(policy.ChannelRef, targetChannelRef, req, peerRow)
 		}
 		if defaults.TranscriptMode == "co_present" {
 			mode = "co_present"
@@ -1365,7 +1393,7 @@ func (s *A2AService) applyTrustPeerDiff(ctx context.Context, policy a2a.ChannelA
 	}
 	if mode == "co_present" {
 		if peerKnown {
-			if !coPresentContextAllowed(policy.ChannelRef, targetChannelRef, req, peerRow) {
+			if !s.coPresentContextAllowed(policy.ChannelRef, targetChannelRef, req, peerRow) {
 				return a2a.ChannelA2APolicy{}, fmt.Errorf("%w: co_present trust requires the peer to be in the same Discord channel/thread or the same shared runtime channel_ref", errorCode(a2a.ErrorPolicyDenied))
 			}
 		} else if strings.TrimSpace(targetChannelRef) == "" || strings.TrimSpace(targetChannelRef) != strings.TrimSpace(policy.ChannelRef) {
@@ -1638,15 +1666,15 @@ func collaborationDefaultsForRefs(sourceChannelRef, targetChannelRef string) col
 	return collaborationDefaults{ResultVisibility: "transparent", TranscriptMode: "mirror", ShareDiscordContext: false, Reason: "different runtime channel_ref or missing peer Discord metadata"}
 }
 
-func collaborationDefaultsForPeer(sourceChannelRef, targetChannelRef string, req A2AToolRequest, peer a2a.PeerRow) collaborationDefaults {
-	if sameDiscordConversation(req, peer) {
+func (s *A2AService) collaborationDefaultsForPeer(sourceChannelRef, targetChannelRef string, req A2AToolRequest, peer a2a.PeerRow) collaborationDefaults {
+	if s.sameDiscordConversation(req, peer) {
 		return collaborationDefaults{ResultVisibility: "transparent", TranscriptMode: "co_present", ShareDiscordContext: true, Reason: "same Discord channel verified from peer runtime card"}
 	}
 	return collaborationDefaults{ResultVisibility: "transparent", TranscriptMode: "mirror", ShareDiscordContext: false, Reason: "different Discord channel or missing peer metadata"}
 }
 
-func coPresentContextAllowed(sourceChannelRef, targetChannelRef string, req A2AToolRequest, peer a2a.PeerRow) bool {
-	return sameDiscordConversation(req, peer) || (strings.TrimSpace(targetChannelRef) != "" && strings.TrimSpace(targetChannelRef) == strings.TrimSpace(sourceChannelRef))
+func (s *A2AService) coPresentContextAllowed(sourceChannelRef, targetChannelRef string, req A2AToolRequest, peer a2a.PeerRow) bool {
+	return s.sameDiscordConversation(req, peer) || (strings.TrimSpace(targetChannelRef) != "" && strings.TrimSpace(targetChannelRef) == strings.TrimSpace(sourceChannelRef))
 }
 
 func runtimeDeliveryDefaults(sourceChannelRef, targetChannelRef string) (string, string) {
@@ -1676,12 +1704,12 @@ func auditDiscordFields(req A2AToolRequest, delivery a2a.DeliveryOptions) (strin
 	}
 	return strings.TrimSpace(targetID), strings.TrimSpace(parentChannelID), strings.TrimSpace(threadID)
 }
-func runtimeDeliveryDefaultsForPeer(sourceChannelRef, targetChannelRef string, req A2AToolRequest, peer a2a.PeerRow) (string, string, string) {
-	defaults := collaborationDefaultsForPeer(sourceChannelRef, targetChannelRef, req, peer)
+func (s *A2AService) runtimeDeliveryDefaultsForPeer(sourceChannelRef, targetChannelRef string, req A2AToolRequest, peer a2a.PeerRow) (string, string, string) {
+	defaults := s.collaborationDefaultsForPeer(sourceChannelRef, targetChannelRef, req, peer)
 	return defaults.ResultVisibility, defaults.TranscriptMode, defaults.Reason
 }
 
-func sameDiscordConversation(req A2AToolRequest, peer a2a.PeerRow) bool {
+func (s *A2AService) sameDiscordConversation(req A2AToolRequest, peer a2a.PeerRow) bool {
 	card := peer.ExtendedCard
 	guildID := strings.TrimSpace(req.GuildID)
 	channelID := strings.TrimSpace(req.ChannelID)
@@ -1696,18 +1724,19 @@ func sameDiscordConversation(req A2AToolRequest, peer a2a.PeerRow) bool {
 	if peerChannelID != channelID {
 		return false
 	}
-	localThreadID := strings.TrimSpace(deliveryChannelID(req.ChannelID))
+	localThreadID := strings.TrimSpace(s.deliveryChannelID(req.ChannelID))
 	if peerThreadID == "" || localThreadID == "" || localThreadID == channelID {
 		return true
 	}
 	return peerThreadID == localThreadID
 }
 
-func deliveryOptionsForDelegate(req A2AToolRequest, resultVisibility, transcriptMode string, source a2a.AgentID, timeoutSec, delegationDepth int) a2a.DeliveryOptions {
+func (s *A2AService) deliveryOptionsForDelegate(req A2AToolRequest, resultVisibility, transcriptMode string, source a2a.AgentID, timeoutSec, delegationDepth int) a2a.DeliveryOptions {
+	threadID := s.deliveryChannelID(req.ChannelID)
 	delivery := a2a.DeliveryOptions{
 		TimeoutSec:            timeoutSec,
 		DiscordReplyChannelID: req.ChannelID,
-		DiscordReplyThreadID:  deliveryChannelID(req.ChannelID),
+		DiscordReplyThreadID:  threadID,
 		MaxDelegationDepth:    delegationDepth,
 	}
 	if resultVisibility == "transparent" && transcriptMode == "co_present" && strings.TrimSpace(req.GuildID) != "" && strings.TrimSpace(req.ChannelID) != "" {
@@ -1716,7 +1745,7 @@ func deliveryOptionsForDelegate(req A2AToolRequest, resultVisibility, transcript
 		ctx := a2a.DiscordContext{
 			GuildID:   strings.TrimSpace(req.GuildID),
 			ChannelID: strings.TrimSpace(req.ChannelID),
-			ThreadID:  delivery.DiscordReplyThreadID,
+			ThreadID:  threadID,
 		}
 		delivery.DiscordContext = &ctx
 		if raw, err := json.Marshal(ctx); err == nil {
@@ -1942,6 +1971,9 @@ func (s *A2AService) lookupOutboundTask(ctx context.Context, req A2AToolRequest)
 		if err != nil {
 			return a2a.TaskRow{}, taskLookupError(err)
 		}
+		if strings.TrimSpace(row.Direction) != "outbound" {
+			return a2a.TaskRow{}, fmt.Errorf("%w: task is not outbound", errorCode(a2a.ErrorTaskNotFound))
+		}
 		return row, nil
 	}
 	if id := strings.TrimSpace(req.TaskID); id != "" {
@@ -2152,6 +2184,9 @@ func suppressTaskStatusResultContent(row a2a.TaskRow) bool {
 
 func (s *A2AService) summarizeTaskWithEvents(ctx context.Context, row a2a.TaskRow) A2ATaskSummary {
 	sum := summarizeTask(row)
+	if suppressTaskStatusResultContent(row) {
+		sum.ErrorMessage = ""
+	}
 	if row.TaskID == "" {
 		return sum
 	}
@@ -2160,11 +2195,12 @@ func (s *A2AService) summarizeTaskWithEvents(ctx context.Context, row a2a.TaskRo
 		return sum
 	}
 	sum.Events = make([]A2ATaskEventSummary, 0, len(events))
-	suppressResultContent := suppressTaskStatusResultContent(row)
+	suppressEventContent := suppressTaskStatusResultContent(row)
 	for _, event := range events {
 		eventSum := summarizeTaskEvent(event)
-		if suppressResultContent && event.EventType == a2a.EventKindResult {
+		if suppressEventContent {
 			eventSum.Content = ""
+			eventSum.ErrorMessage = ""
 		}
 		sum.Events = append(sum.Events, eventSum)
 	}
@@ -2530,11 +2566,33 @@ func a2aToolResult(resp A2AToolResponse) (*mcp.CallToolResult, error) {
 }
 func (s *A2AService) normalizeBoundContext(req A2AToolRequest) A2AToolRequest {
 	bound := strings.TrimSpace(s.cfg.BoundChannelID)
-	target := strings.TrimSpace(s.cfg.BoundTargetID)
-	if bound != "" && target != "" && target != bound && strings.TrimSpace(req.ChannelID) == target {
-		req.ChannelID = bound
+	targets := []string{
+		strings.TrimSpace(s.cfg.BoundTargetID),
+		currentTargetStateChannelID(),
+	}
+	for _, target := range targets {
+		if bound != "" && target != "" && target != bound && strings.TrimSpace(req.ChannelID) == target {
+			req.ChannelID = bound
+			break
+		}
 	}
 	return req
+}
+
+func (s *A2AService) deliveryChannelID(requested string) string {
+	requested = strings.TrimSpace(requested)
+	if target := currentTargetStateChannelID(); target != "" {
+		return target
+	}
+	if target := strings.TrimSpace(os.Getenv("BOT_TOOLS_TARGET_CHANNEL_ID")); target != "" {
+		return target
+	}
+	bound := strings.TrimSpace(s.cfg.BoundChannelID)
+	target := strings.TrimSpace(s.cfg.BoundTargetID)
+	if target != "" && (bound == "" || target != bound) {
+		return target
+	}
+	return requested
 }
 
 func a2aRequestFromMCP(req mcp.CallToolRequest) A2AToolRequest {

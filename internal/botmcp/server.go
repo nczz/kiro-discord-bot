@@ -17,7 +17,9 @@ import (
 	"github.com/robfig/cron/v3"
 	"io"
 	"log"
+	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -49,6 +51,10 @@ const (
 	ToolCreateReminder      = "bot_create_reminder"
 	ToolListCron            = "bot_list_cron"
 	ToolDeleteCron          = "bot_delete_cron"
+	ToolCreateMonitor       = "bot_create_monitor"
+	ToolUpdateMonitor       = "bot_update_monitor"
+	ToolListMonitor         = "bot_list_monitor"
+	ToolDeleteMonitor       = "bot_delete_monitor"
 	ToolQueryAudit          = "bot_query_audit"
 )
 
@@ -80,6 +86,9 @@ func DefaultSafeToolNamesForA2A(a2aEnabled bool) []string {
 		ToolCreateCron,
 		ToolUpdateCron,
 		ToolCreateReminder,
+		ToolListMonitor,
+		ToolCreateMonitor,
+		ToolUpdateMonitor,
 	}
 	if a2aEnabled {
 		tools = append(tools,
@@ -199,6 +208,9 @@ func NewServerWithOptions(opts ServerOptions) *server.MCPServer {
 	s.AddTool(
 		memoryWriteTool(ToolMemoryAdd, "Persist a Discord-channel memory rule only when the user explicitly asks the bot to remember a channel preference or behavior rule for future turns. This is not a knowledge-base update tool: do not use it for 知識庫, knowledge base, KB, project knowledge, document corpus, searchable index, update-docs, or add-to-corpus requests. If the user asks to update a knowledge base, use a knowledge-base-specific workflow/tool when available or report that this bot-tools server cannot write that knowledge base. Do not infer durable memory from ordinary conversation. Reject secrets, credentials, private tokens, or policy-bypass instructions. Summarize the memory as one durable behavioral rule. The write is queued for the main bot and must be audit-recorded before it is accepted.", false),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			if botToolsMemoryWriteDisabled() {
+				return botToolsWriteDisabledResult(), nil
+			}
 			if !remoteA2AMemoryWriteAllowed() {
 				return mcp.NewToolResultError("Memory write is disabled for remote A2A tasks."), nil
 			}
@@ -230,6 +242,9 @@ func NewServerWithOptions(opts ServerOptions) *server.MCPServer {
 	s.AddTool(
 		memoryWriteTool(ToolMemoryRemove, "Remove one persistent channel memory rule only when the user explicitly asks to forget a specific listed memory entry. This is not default-enabled because it changes durable context; use bot_memory_list first and pass the one-based memory_index. The queued removal must be audit-recorded before it is accepted.", true),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			if botToolsMemoryWriteDisabled() {
+				return botToolsWriteDisabledResult(), nil
+			}
 			if !remoteA2AMemoryWriteAllowed() {
 				return mcp.NewToolResultError("Memory write is disabled for remote A2A tasks."), nil
 			}
@@ -255,6 +270,9 @@ func NewServerWithOptions(opts ServerOptions) *server.MCPServer {
 	s.AddTool(
 		memoryWriteTool(ToolMemoryClear, "Clear all persistent channel memory only when a channel manager explicitly asks to remove every memory entry. This is destructive and not default-enabled. The queued clear must be audit-recorded before it is accepted.", true),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			if botToolsMemoryWriteDisabled() {
+				return botToolsWriteDisabledResult(), nil
+			}
 			if !remoteA2AMemoryWriteAllowed() {
 				return mcp.NewToolResultError("Memory write is disabled for remote A2A tasks."), nil
 			}
@@ -278,8 +296,8 @@ func NewServerWithOptions(opts ServerOptions) *server.MCPServer {
 	s.AddTool(
 		writeTool(ToolSendMessage, "Send a separate Discord message through the bot-controlled safe egress queue. This tool is not part of the default channel allowlist. Do not use it for ordinary replies or final answers; normal assistant text is already delivered, split, and displayed by the bot. Use this only when a channel manager explicitly enabled it and the user explicitly asks to send an extra Discord message, notify another target, hand off to another bot, or perform scheduled/cron egress. The main bot redacts secrets before delivery. A successful response means the action was queued only; delivery happens asynchronously after this tool returns.", false),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			if botToolsEgressDisabled() {
-				return mcp.NewToolResultError("Discord egress is disabled for this private audit job."), nil
+			if botToolsWriteDisabled() {
+				return botToolsWriteDisabledResult(), nil
 			}
 			channelID, _ := req.RequireString("channel_id")
 			if err := validateBoundChannel(channelID); err != nil {
@@ -302,8 +320,8 @@ func NewServerWithOptions(opts ServerOptions) *server.MCPServer {
 	s.AddTool(
 		writeTool(ToolSendFile, "Send a bot-local file through the bot-controlled safe egress queue. Resolve files to absolute host paths before calling this tool: use the absolute path returned by the file-writing/read tool or run realpath, and do not pass a bare filename or relative path when an absolute path is available. The tool normalizes readable relative paths to absolute paths before queueing so later safe-egress delivery does not reinterpret them from the bot deployment directory. The file_path must be readable on the kiro-discord-bot host/VM; do not pass paths from another MCP server, Docker container, browser profile namespace, remote host, or any tool-returned artifact namespace unless they are explicitly mounted into the bot filesystem. If another tool returns an HTTP(S) image URL, pass that URL directly to bot_send_image_url instead of saving, downloading, transcribing, base64-encoding, or converting it into a local artifact path. Text files are redacted and uploaded as sanitized copies. JPEG/PNG images are validated and uploaded as copied temp files without OCR redaction or metadata stripping. Documents with extractable readable text (PDF, DOCX, XLSX) are converted to text, redacted, and uploaded as sanitized .txt copies; original binary documents are never uploaded back. A successful response means the file was queued only; delivery/redaction/upload happens asynchronously after this tool returns.", false),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			if botToolsEgressDisabled() {
-				return mcp.NewToolResultError("File egress is disabled for this private audit job."), nil
+			if botToolsWriteDisabled() {
+				return botToolsWriteDisabledResult(), nil
 			}
 			channelID, _ := req.RequireString("channel_id")
 			if err := validateBoundChannel(channelID); err != nil {
@@ -331,8 +349,8 @@ func NewServerWithOptions(opts ServerOptions) *server.MCPServer {
 	s.AddTool(
 		writeTool(ToolSendImageURL, "Send a JPEG/PNG image from a non-secret HTTP(S) URL through the bot-controlled safe egress queue. Use this whenever another tool returns an image URL; do not download, transcribe, or base64-encode the image in the agent. The bot fetches the URL server-side, rejects URL credentials, validates the fetched bytes, and queues a bot-owned absolute temp file path for safe delivery. A successful response means the image was queued only; delivery/upload happens asynchronously after this tool returns.", false),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			if botToolsEgressDisabled() {
-				return mcp.NewToolResultError("Image URL egress is disabled for this private audit job."), nil
+			if botToolsWriteDisabled() {
+				return botToolsWriteDisabledResult(), nil
 			}
 			channelID, _ := req.RequireString("channel_id")
 			if err := validateBoundChannel(channelID); err != nil {
@@ -406,6 +424,9 @@ func NewServerWithOptions(opts ServerOptions) *server.MCPServer {
 	s.AddTool(
 		writeTool(ToolCreateCron, cronpolicy.CreateToolDescription(cronTZ), false),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			if botToolsWriteDisabled() {
+				return botToolsWriteDisabledResult(), nil
+			}
 			name, _ := req.RequireString("name")
 			schedule, _ := req.RequireString("schedule")
 			prompt, _ := req.RequireString("prompt")
@@ -441,6 +462,9 @@ func NewServerWithOptions(opts ServerOptions) *server.MCPServer {
 	s.AddTool(
 		writeTool(ToolCreateReminder, cronpolicy.ReminderToolDescription(cronTZ), false),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			if botToolsWriteDisabled() {
+				return botToolsWriteDisabledResult(), nil
+			}
 			name := strings.TrimSpace(req.GetString("name", ""))
 			timeInput, _ := req.RequireString("time")
 			content, _ := req.RequireString("content")
@@ -491,6 +515,9 @@ func NewServerWithOptions(opts ServerOptions) *server.MCPServer {
 	s.AddTool(
 		writeTool(ToolUpdateCron, cronpolicy.UpdateToolDescription(cronTZ), false),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			if botToolsWriteDisabled() {
+				return botToolsWriteDisabledResult(), nil
+			}
 			jobID, _ := req.RequireString("job_id")
 			channelID, _ := req.RequireString("channel_id")
 			ownerChannelID, err := cronOwnerChannelID(channelID)
@@ -560,8 +587,178 @@ func NewServerWithOptions(opts ServerOptions) *server.MCPServer {
 		},
 	)
 	s.AddTool(
+		writeTool(ToolCreateMonitor, cronpolicy.MonitorCreateToolDescription(cronTZ), false),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			if botToolsWriteDisabled() {
+				return botToolsWriteDisabledResult(), nil
+			}
+			if _, ok := req.GetArguments()["model"]; ok {
+				return mcp.NewToolResultError("monitor model overrides are not supported by bot-tools; monitors use the channel/default model"), nil
+			}
+			name, _ := req.RequireString("name")
+			schedule, _ := req.RequireString("schedule")
+			checkPrompt, _ := req.RequireString("check_prompt")
+			notifyWhen, _ := req.RequireString("notify_when")
+			channelID, _ := req.RequireString("channel_id")
+			ownerChannelID, err := cronOwnerChannelID(channelID)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			guildID, err := boundGuildID(req.GetString("guild_id", ""))
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			actor, err := authenticatedMonitorActor()
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			action := heartbeat.MonitorPendingAction{
+				Action: "create",
+				Job: &heartbeat.MonitorJob{
+					Name:        strings.TrimSpace(name),
+					Schedule:    strings.TrimSpace(schedule),
+					CheckPrompt: strings.TrimSpace(checkPrompt),
+					NotifyWhen:  strings.TrimSpace(notifyWhen),
+					ChannelID:   ownerChannelID,
+					GuildID:     guildID,
+					CreatedBy:   firstNonEmpty(actor.RequesterName, actor.RequesterID),
+					CreatedByID: actor.RequesterID,
+				},
+			}
+			if err := validateMonitorPendingAction(action); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			if err := writeMonitorPending(dataDir(), action); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			return mcp.NewToolResultText(fmt.Sprintf("Monitor %q queued for creation. It will activate within 60 seconds, check silently, and notify only when its condition matches.", strings.TrimSpace(name))), nil
+		},
+	)
+	s.AddTool(
+		writeTool(ToolUpdateMonitor, cronpolicy.MonitorUpdateToolDescription(cronTZ), false),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			if botToolsWriteDisabled() {
+				return botToolsWriteDisabledResult(), nil
+			}
+			jobID, _ := req.RequireString("job_id")
+			channelID, _ := req.RequireString("channel_id")
+			ownerChannelID, err := cronOwnerChannelID(channelID)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			update := &heartbeat.MonitorUpdate{}
+			if value, ok := req.GetArguments()["name"]; ok {
+				v, ok := value.(string)
+				if !ok {
+					return mcp.NewToolResultError("name must be a string"), nil
+				}
+				update.Name = &v
+			}
+			if value, ok := req.GetArguments()["schedule"]; ok {
+				v, ok := value.(string)
+				if !ok {
+					return mcp.NewToolResultError("schedule must be a string"), nil
+				}
+				update.Schedule = &v
+			}
+			if value, ok := req.GetArguments()["check_prompt"]; ok {
+				v, ok := value.(string)
+				if !ok {
+					return mcp.NewToolResultError("check_prompt must be a string"), nil
+				}
+				update.CheckPrompt = &v
+			}
+			if value, ok := req.GetArguments()["notify_when"]; ok {
+				v, ok := value.(string)
+				if !ok {
+					return mcp.NewToolResultError("notify_when must be a string"), nil
+				}
+				update.NotifyWhen = &v
+			}
+			if _, ok := req.GetArguments()["model"]; ok {
+				return mcp.NewToolResultError("monitor model overrides are not supported by bot-tools; monitors use the channel/default model"), nil
+			}
+			if value, ok := req.GetArguments()["enabled"]; ok {
+				v, ok := value.(bool)
+				if !ok {
+					return mcp.NewToolResultError("enabled must be a boolean"), nil
+				}
+				update.Enabled = &v
+			}
+			if _, err := authenticatedMonitorActor(); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			action := heartbeat.MonitorPendingAction{Action: "update", JobID: strings.TrimSpace(jobID), ChannelID: ownerChannelID, Update: update}
+			if err := validateMonitorPendingAction(action); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			if err := writeMonitorPending(dataDir(), action); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			return mcp.NewToolResultText(fmt.Sprintf("Monitor %q queued for update. The update will apply within 60 seconds.", strings.TrimSpace(jobID))), nil
+		},
+	)
+	s.AddTool(
+		mcp.NewTool(ToolListMonitor,
+			mcp.WithDescription("List background monitors for a channel. Monitors run on schedules but only notify Discord when their condition matches."),
+			mcp.WithString("channel_id", mcp.Required(), mcp.Description("Discord channel ID from context; thread IDs are normalized to the owning parent channel when bot-tools is bound to a channel")),
+			mcp.WithReadOnlyHintAnnotation(true),
+			mcp.WithDestructiveHintAnnotation(false),
+			mcp.WithIdempotentHintAnnotation(true),
+			mcp.WithOpenWorldHintAnnotation(false),
+		),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			channelID, _ := req.RequireString("channel_id")
+			ownerChannelID, err := cronOwnerChannelID(channelID)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			if _, err := authenticatedMonitorListActor(); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			jobs, err := listMonitorJobs(dataDir(), ownerChannelID)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			raw, _ := json.MarshalIndent(jobs, "", "  ")
+			return mcp.NewToolResultText(string(raw)), nil
+		},
+	)
+	s.AddTool(
+		writeTool(ToolDeleteMonitor, "Delete a background monitor by ID. Use bot_list_monitor first to obtain the exact job_id.", true),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			if botToolsWriteDisabled() {
+				return botToolsWriteDisabledResult(), nil
+			}
+			jobID, _ := req.RequireString("job_id")
+			channelID, _ := req.RequireString("channel_id")
+			ownerChannelID, err := cronOwnerChannelID(channelID)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			if _, err := authenticatedMonitorActor(); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			action := heartbeat.MonitorPendingAction{
+				Action:    "delete",
+				JobID:     strings.TrimSpace(jobID),
+				ChannelID: ownerChannelID,
+			}
+			if err := validateMonitorPendingAction(action); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			if err := writeMonitorPending(dataDir(), action); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			return mcp.NewToolResultText(fmt.Sprintf("Monitor %q scheduled for deletion. It will be removed within 60 seconds.", strings.TrimSpace(jobID))), nil
+		},
+	)
+	s.AddTool(
 		writeTool(ToolDeleteCron, "Delete a scheduled cron job by ID", true),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			if botToolsWriteDisabled() {
+				return botToolsWriteDisabledResult(), nil
+			}
 			jobID, _ := req.RequireString("job_id")
 			channelID, _ := req.RequireString("channel_id")
 			ownerChannelID, err := cronOwnerChannelID(channelID)
@@ -635,7 +832,7 @@ func writeTool(name, description string, destructive bool) mcp.Tool {
 		mcp.WithOpenWorldHintAnnotation(false),
 	)
 
-	if name == ToolUpdateCron {
+	if name == ToolUpdateCron || name == ToolUpdateMonitor {
 		mcp.WithIdempotentHintAnnotation(true)(&t)
 	}
 	switch name {
@@ -701,6 +898,40 @@ func writeTool(name, description string, destructive bool) mcp.Tool {
 			mcp.WithString("schedule", mcp.Description(cronpolicy.ScheduleFieldDescription(cronTZ)+" Omit to keep the current schedule.")),
 			mcp.WithString("prompt", mcp.Description("Optional non-empty replacement task prompt. Omit to keep the current prompt.")),
 			mcp.WithBoolean("enabled", mcp.Description("Set false to disable without deleting; set true to resume. Omit to keep the current state.")),
+		} {
+			opt(&t)
+		}
+	case ToolCreateMonitor:
+		cronTZ := cronpolicy.TimezoneName(os.Getenv("CRON_TIMEZONE"))
+		for _, opt := range []mcp.ToolOption{
+			mcp.WithString("name", mcp.Required(), mcp.Description("Short name for the background monitor")),
+			mcp.WithString("schedule", mcp.Required(), mcp.Description(cronpolicy.ScheduleFieldDescription(cronTZ))),
+			mcp.WithString("check_prompt", mcp.Required(), mcp.Description("What the agent should inspect on each silent monitor check")),
+			mcp.WithString("notify_when", mcp.Required(), mcp.Description("The condition that must be true before Discord receives a visible monitor notification")),
+			mcp.WithString("channel_id", mcp.Required(), mcp.Description("Discord channel ID from context; thread IDs are normalized to the owning parent channel when bot-tools is bound to a channel")),
+			mcp.WithString("guild_id", mcp.Required(), mcp.Description("Discord guild ID from context")),
+			mcp.WithString("created_by", mcp.Description("Username of the requester")),
+			mcp.WithString("created_by_id", mcp.Description("Optional Discord user ID of the requester when available in context")),
+		} {
+			opt(&t)
+		}
+	case ToolUpdateMonitor:
+		cronTZ := cronpolicy.TimezoneName(os.Getenv("CRON_TIMEZONE"))
+		for _, opt := range []mcp.ToolOption{
+			mcp.WithString("job_id", mcp.Required(), mcp.Description("Existing monitor job ID returned by bot_list_monitor")),
+			mcp.WithString("channel_id", mcp.Required(), mcp.Description("Owning Discord parent channel ID from context; the monitor must belong to this channel")),
+			mcp.WithString("name", mcp.Description("Optional non-empty replacement name. Omit to keep the current name.")),
+			mcp.WithString("schedule", mcp.Description(cronpolicy.ScheduleFieldDescription(cronTZ)+" Omit to keep the current schedule.")),
+			mcp.WithString("check_prompt", mcp.Description("Optional non-empty replacement check prompt. Omit to keep the current value.")),
+			mcp.WithString("notify_when", mcp.Description("Optional non-empty replacement notify condition. Omit to keep the current value.")),
+			mcp.WithBoolean("enabled", mcp.Description("Set false to pause without deleting; set true to resume. Omit to keep the current state.")),
+		} {
+			opt(&t)
+		}
+	case ToolDeleteMonitor:
+		for _, opt := range []mcp.ToolOption{
+			mcp.WithString("job_id", mcp.Required(), mcp.Description("The monitor job ID to delete")),
+			mcp.WithString("channel_id", mcp.Required(), mcp.Description("Discord channel ID from context; thread IDs are normalized to the owning parent channel when bot-tools is bound to a channel")),
 		} {
 			opt(&t)
 		}
@@ -816,6 +1047,7 @@ type summary struct {
 	SessionsFile           bool `json:"sessions_file"`
 	ChannelDirs            int  `json:"channel_dirs"`
 	CronStore              bool `json:"cron_store"`
+	MonitorStore           bool `json:"monitor_store"`
 	AuditDB                bool `json:"audit_db"`
 	MCPPolicyDB            bool `json:"mcp_policy_db"`
 	KiroAgentRuntimeDir    bool `json:"kiro_agent_runtime_dir"`
@@ -1174,6 +1406,20 @@ func cronOwnerChannelID(requested string) (string, error) {
 	return strings.TrimSpace(requested), nil
 }
 
+func boundGuildID(requested string) (string, error) {
+	requested = strings.TrimSpace(requested)
+	if bound := strings.TrimSpace(os.Getenv("BOT_TOOLS_GUILD_ID")); bound != "" {
+		if requested != "" && requested != bound {
+			return "", fmt.Errorf("guild_id %s is not allowed for this bot-tools session", requested)
+		}
+		return bound, nil
+	}
+	if requested == "" {
+		return "", fmt.Errorf("guild_id is required")
+	}
+	return requested, nil
+}
+
 func auditToolTargetID(requested string) (string, error) {
 	requested = strings.TrimSpace(requested)
 	if requested == "" {
@@ -1194,6 +1440,31 @@ func auditToolTargetID(requested string) (string, error) {
 	return requested, nil
 }
 
+func authenticatedMonitorActor() (targetState, error) {
+	return authenticatedMonitorActorFor("monitor mutation tools")
+}
+
+func authenticatedMonitorListActor() (targetState, error) {
+	return authenticatedMonitorActorFor("monitor listing tools")
+}
+
+func authenticatedMonitorActorFor(toolLabel string) (targetState, error) {
+	state, ok := currentTargetState()
+	if !ok || strings.TrimSpace(state.RequesterID) == "" {
+		return targetState{}, fmt.Errorf("%s require authenticated Discord request context", toolLabel)
+	}
+	if state.RemoteA2A {
+		return targetState{}, fmt.Errorf("%s require a local Discord request context", toolLabel)
+	}
+	if !state.CanManageChannel {
+		return targetState{}, fmt.Errorf("%s require Discord channel management permission for the current target", toolLabel)
+	}
+	if strings.TrimSpace(os.Getenv("BOT_TOOLS_CHANNEL_ID")) == "" {
+		return targetState{}, fmt.Errorf("%s require a bound Discord channel", toolLabel)
+	}
+	return state, nil
+}
+
 func currentTargetStateChannelID() string {
 	state, ok := currentTargetState()
 	if !ok {
@@ -1205,6 +1476,43 @@ func currentTargetStateChannelID() string {
 func botToolsEgressDisabled() bool {
 	state, ok := currentTargetState()
 	return ok && state.DisableEgress
+}
+
+func botToolsWriteDisabled() bool {
+	state, ok := currentTargetState()
+	if ok {
+		return state.DisableEgress || state.RemoteA2A
+	}
+	return strings.TrimSpace(os.Getenv("BOT_TOOLS_TARGET_STATE_PATH")) != ""
+}
+
+func botToolsMemoryWriteDisabled() bool {
+	state, ok := currentTargetState()
+	if ok && state.RemoteA2A && state.AllowMemoryWrite {
+		return false
+	}
+	if ok {
+		return state.DisableEgress
+	}
+	return strings.TrimSpace(os.Getenv("BOT_TOOLS_TARGET_STATE_PATH")) != ""
+}
+
+func botToolsWriteDisabledResult() *mcp.CallToolResult {
+	return mcp.NewToolResultError(botToolsWriteDisabledMessage())
+}
+
+func botToolsWriteDisabledMessage() string {
+	state, ok := currentTargetState()
+	if !ok && strings.TrimSpace(os.Getenv("BOT_TOOLS_TARGET_STATE_PATH")) != "" {
+		return "Bot-tools write actions are disabled until the bot-tools target state can be verified."
+	}
+	if ok && strings.TrimSpace(state.Source) == "monitor" {
+		return "Bot-tools write actions are disabled during monitor background checks."
+	}
+	if ok && state.RemoteA2A {
+		return "Bot-tools write actions are disabled for remote A2A tasks."
+	}
+	return "Bot-tools write actions are disabled for this private bot task."
 }
 
 func remoteA2AMemoryWriteAllowed() bool {
@@ -1247,13 +1555,28 @@ func imageURLHandoffHint() string {
 	return "; if another tool returned an HTTP(S) image URL, use bot_send_image_url with that URL instead of passing a local, container, remote, or tool-artifact path to bot_send_file."
 }
 
-func fetchValidatedImageURL(ctx context.Context, rawURL, filename string) (string, error) {
-	u, err := validateBotImageURL(rawURL)
-	if err != nil {
-		return "", err
+var (
+	botImageLookupIP    = net.DefaultResolver.LookupIP
+	botImageDialContext = (&net.Dialer{}).DialContext
+)
+
+func newBotImageHTTPClient() *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.Proxy = nil
+	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		host, port, err := net.SplitHostPort(address)
+		if err != nil {
+			return nil, err
+		}
+		ips, err := resolvePublicBotImageHost(ctx, host)
+		if err != nil {
+			return nil, err
+		}
+		return botImageDialContext(ctx, network, net.JoinHostPort(ips[0].String(), port))
 	}
-	client := &http.Client{
-		Timeout: 15 * time.Second,
+	return &http.Client{
+		Timeout:   15 * time.Second,
+		Transport: transport,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 3 {
 				return fmt.Errorf("too many image URL redirects")
@@ -1264,6 +1587,83 @@ func fetchValidatedImageURL(ctx context.Context, rawURL, filename string) (strin
 			return nil
 		},
 	}
+}
+
+func resolvePublicBotImageHost(ctx context.Context, host string) ([]net.IP, error) {
+	host = strings.TrimSpace(host)
+	if strings.EqualFold(host, "localhost") {
+		return nil, fmt.Errorf("image URL host resolves to a private address")
+	}
+	ips, err := botImageLookupIP(ctx, "ip", host)
+	if err != nil {
+		return nil, fmt.Errorf("resolve image URL host: %w", err)
+	}
+	if len(ips) == 0 {
+		return nil, fmt.Errorf("image URL host has no addresses")
+	}
+	for _, ip := range ips {
+		if !botImageIPAllowed(ip) {
+			return nil, fmt.Errorf("image URL host resolves to a private address")
+		}
+	}
+	return ips, nil
+}
+
+var blockedBotImageIPPrefixes = []netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"),
+	netip.MustParsePrefix("10.0.0.0/8"),
+	netip.MustParsePrefix("100.64.0.0/10"),
+	netip.MustParsePrefix("127.0.0.0/8"),
+	netip.MustParsePrefix("169.254.0.0/16"),
+	netip.MustParsePrefix("172.16.0.0/12"),
+	netip.MustParsePrefix("192.0.0.0/24"),
+	netip.MustParsePrefix("192.0.2.0/24"),
+	netip.MustParsePrefix("192.168.0.0/16"),
+	netip.MustParsePrefix("198.18.0.0/15"),
+	netip.MustParsePrefix("198.51.100.0/24"),
+	netip.MustParsePrefix("203.0.113.0/24"),
+	netip.MustParsePrefix("192.31.196.0/24"),
+	netip.MustParsePrefix("192.52.193.0/24"),
+	netip.MustParsePrefix("192.88.99.0/24"),
+	netip.MustParsePrefix("192.175.48.0/24"),
+	netip.MustParsePrefix("224.0.0.0/4"),
+	netip.MustParsePrefix("240.0.0.0/4"),
+	netip.MustParsePrefix("::/128"),
+	netip.MustParsePrefix("::1/128"),
+	netip.MustParsePrefix("64:ff9b::/96"),
+	netip.MustParsePrefix("64:ff9b:1::/48"),
+	netip.MustParsePrefix("100::/64"),
+	netip.MustParsePrefix("2001::/23"),
+	netip.MustParsePrefix("2001:db8::/32"),
+	netip.MustParsePrefix("2002::/16"),
+	netip.MustParsePrefix("fc00::/7"),
+	netip.MustParsePrefix("fe80::/10"),
+	netip.MustParsePrefix("ff00::/8"),
+}
+
+func botImageIPAllowed(ip net.IP) bool {
+	addr, ok := netip.AddrFromSlice(ip)
+	if !ok {
+		return false
+	}
+	addr = addr.Unmap()
+	if !addr.IsGlobalUnicast() {
+		return false
+	}
+	for _, prefix := range blockedBotImageIPPrefixes {
+		if prefix.Contains(addr) {
+			return false
+		}
+	}
+	return true
+}
+
+func fetchValidatedImageURL(ctx context.Context, rawURL, filename string) (string, error) {
+	u, err := validateBotImageURL(rawURL)
+	if err != nil {
+		return "", err
+	}
+	client := newBotImageHTTPClient()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		return "", fmt.Errorf("create image URL request: %w", err)
@@ -1364,6 +1764,7 @@ func dataSummary(root string) (summary, error) {
 		SessionsFile:           fileExists(filepath.Join(root, "sessions.json")),
 		ChannelDirs:            len(rows),
 		CronStore:              fileExists(filepath.Join(root, "cron", "cron.json")),
+		MonitorStore:           fileExists(filepath.Join(root, "monitor", "monitor.json")),
 		AuditDB:                fileExists(filepath.Join(root, "audit", "discord.sqlite")),
 		MCPPolicyDB:            fileExists(filepath.Join(root, "mcp", "policy.sqlite")),
 		KiroAgentRuntimeDir:    dirExists(agentRuntimeDir),
@@ -1465,6 +1866,97 @@ func writePending(root string, action pendingAction) error {
 		return err
 	}
 	return f.Close()
+}
+
+func writeMonitorPending(root string, action heartbeat.MonitorPendingAction) error {
+	if err := validateMonitorPendingAction(action); err != nil {
+		return err
+	}
+	if err := writeMonitorPendingFile(root, action); err != nil {
+		log.Printf("[bot-tools] write monitor pending failed: %v", err)
+		return fmt.Errorf("monitor change could not be queued; check bot logs")
+	}
+	return nil
+}
+
+func writeMonitorPendingFile(root string, action heartbeat.MonitorPendingAction) error {
+	dir := filepath.Join(root, "monitor", "pending")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("create monitor pending dir: %w", err)
+	}
+	raw, err := json.Marshal(action)
+	if err != nil {
+		return err
+	}
+	f, err := os.CreateTemp(dir, "*.tmp")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	if _, err := f.Write(raw); err != nil {
+		f.Close()
+		os.Remove(tmp)
+		return err
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	finalPath := strings.TrimSuffix(tmp, ".tmp") + ".json"
+	return os.Rename(tmp, finalPath)
+}
+
+func validateMonitorPendingAction(action heartbeat.MonitorPendingAction) error {
+	switch action.Action {
+	case "create":
+		if action.Job == nil {
+			return fmt.Errorf("create monitor action missing job")
+		}
+		action.Job.Name = strings.TrimSpace(action.Job.Name)
+		action.Job.Schedule = strings.TrimSpace(action.Job.Schedule)
+		action.Job.CheckPrompt = strings.TrimSpace(action.Job.CheckPrompt)
+		action.Job.NotifyWhen = strings.TrimSpace(action.Job.NotifyWhen)
+		action.Job.ChannelID = strings.TrimSpace(action.Job.ChannelID)
+		action.Job.GuildID = strings.TrimSpace(action.Job.GuildID)
+		action.Job.CreatedBy = strings.TrimSpace(action.Job.CreatedBy)
+		action.Job.CreatedByID = strings.TrimSpace(action.Job.CreatedByID)
+		action.Job.Model = strings.TrimSpace(action.Job.Model)
+		if action.Job.Model != "" {
+			return fmt.Errorf("monitor model overrides are not supported by bot-tools; monitors use the channel/default model")
+		}
+		createUpdate := heartbeat.MonitorUpdate{Name: &action.Job.Name, Schedule: &action.Job.Schedule, CheckPrompt: &action.Job.CheckPrompt, NotifyWhen: &action.Job.NotifyWhen}
+		if err := heartbeat.ValidateMonitorUpdate(createUpdate); err != nil {
+			return err
+		}
+		if action.Job.Name == "" || action.Job.Schedule == "" || action.Job.CheckPrompt == "" || action.Job.NotifyWhen == "" || action.Job.ChannelID == "" || action.Job.GuildID == "" {
+			return fmt.Errorf("create monitor action requires name, schedule, check_prompt, notify_when, channel_id, and guild_id")
+		}
+		cronExpr, scheduleHuman, err := heartbeat.ParseMonitorScheduleInput(action.Job.Schedule)
+		if err != nil {
+			return fmt.Errorf("invalid monitor schedule: %w", err)
+		}
+		action.Job.Schedule = cronExpr
+		if strings.TrimSpace(action.Job.ScheduleHuman) == "" {
+			action.Job.ScheduleHuman = scheduleHuman
+		}
+	case "delete":
+		if strings.TrimSpace(action.JobID) == "" || strings.TrimSpace(action.ChannelID) == "" {
+			return fmt.Errorf("delete monitor action requires job_id and channel_id")
+		}
+	case "update":
+		if strings.TrimSpace(action.JobID) == "" || strings.TrimSpace(action.ChannelID) == "" {
+			return fmt.Errorf("update monitor action requires job_id and channel_id")
+		}
+		if action.Update == nil {
+			return fmt.Errorf("update monitor action requires at least one update field")
+		}
+		if err := heartbeat.ValidateMonitorUpdate(*action.Update); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("unknown monitor action %q", action.Action)
+	}
+	return nil
 }
 
 func validatePendingAction(action pendingAction) error {
@@ -1590,6 +2082,53 @@ func listCronJobs(root, channelID string) ([]cronJobEntry, error) {
 			ID: j.ID, Name: j.Name, Schedule: j.Schedule,
 			Prompt: j.Prompt, Enabled: j.Enabled,
 			LastRun: j.LastRun, NextRun: j.NextRun,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+type monitorJobEntry struct {
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	Schedule     string `json:"schedule"`
+	CheckPrompt  string `json:"check_prompt"`
+	NotifyWhen   string `json:"notify_when"`
+	Enabled      bool   `json:"enabled"`
+	LastCheckAt  string `json:"last_check_at,omitempty"`
+	LastNotifyAt string `json:"last_notify_at,omitempty"`
+	NextRun      string `json:"next_run,omitempty"`
+}
+
+func listMonitorJobs(root, channelID string) ([]monitorJobEntry, error) {
+	path := filepath.Join(root, "monitor", "monitor.json")
+	data, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		log.Printf("[bot-tools] read monitor store failed: %v", err)
+		return nil, fmt.Errorf("monitor list could not be loaded; check bot logs")
+	}
+	var jobs map[string]heartbeat.MonitorJob
+	if err := json.Unmarshal(data, &jobs); err != nil {
+		return nil, err
+	}
+	var out []monitorJobEntry
+	for _, j := range jobs {
+		if j.ChannelID != channelID {
+			continue
+		}
+		out = append(out, monitorJobEntry{
+			ID:           j.ID,
+			Name:         secrets.RedactEnv(j.Name),
+			Schedule:     j.Schedule,
+			CheckPrompt:  secrets.RedactEnv(j.CheckPrompt),
+			NotifyWhen:   secrets.RedactEnv(j.NotifyWhen),
+			Enabled:      j.Enabled,
+			LastCheckAt:  j.LastCheckAt,
+			LastNotifyAt: j.LastNotifyAt,
+			NextRun:      j.NextRun,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })

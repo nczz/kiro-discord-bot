@@ -120,6 +120,13 @@ func taskStoreMigrations() []string {
 		created_at TEXT NOT NULL,
 		UNIQUE(task_id, revision, event_type)
 	)`,
+		`CREATE TABLE IF NOT EXISTS a2a_event_deliveries (
+		task_id TEXT NOT NULL,
+		revision INTEGER NOT NULL,
+		event_type TEXT NOT NULL,
+		delivered_at TEXT NOT NULL,
+		PRIMARY KEY(task_id, revision, event_type)
+	)`,
 	}
 }
 
@@ -304,6 +311,65 @@ func (s *SQLiteTaskStore) GetByDirectionMessage(ctx context.Context, direction s
 
 func (s *SQLiteTaskStore) GetByDirectionTaskID(ctx context.Context, direction string, taskID TaskID) (TaskRow, error) {
 	return getTaskByDirectionTaskIDTx(ctx, s.db, direction, taskID)
+}
+
+func (s *SQLiteTaskStore) EventExists(ctx context.Context, taskID TaskID, revision int64, eventType string) (bool, error) {
+	if s == nil || s.db == nil {
+		return false, fmt.Errorf("task store is not available")
+	}
+	if err := ValidateTaskID(taskID); err != nil {
+		return false, err
+	}
+	eventType = strings.TrimSpace(eventType)
+	if revision <= 0 || eventType == "" {
+		return false, fmt.Errorf("event identity is required")
+	}
+	var found int
+	err := s.db.QueryRowContext(ctx, `SELECT 1 FROM a2a_task_events WHERE task_id=? AND revision=? AND event_type=?`, taskID, revision, eventType).Scan(&found)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (s *SQLiteTaskStore) EventDeliveryExists(ctx context.Context, taskID TaskID, revision int64, eventType string) (bool, error) {
+	if s == nil || s.db == nil {
+		return false, fmt.Errorf("task store is not available")
+	}
+	if err := ValidateTaskID(taskID); err != nil {
+		return false, err
+	}
+	eventType = strings.TrimSpace(eventType)
+	if revision <= 0 || eventType == "" {
+		return false, fmt.Errorf("event delivery identity is required")
+	}
+	var found int
+	err := s.db.QueryRowContext(ctx, `SELECT 1 FROM a2a_event_deliveries WHERE task_id=? AND revision=? AND event_type=?`, taskID, revision, eventType).Scan(&found)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (s *SQLiteTaskStore) MarkEventDelivered(ctx context.Context, taskID TaskID, revision int64, eventType string) error {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("task store is not available")
+	}
+	if err := ValidateTaskID(taskID); err != nil {
+		return err
+	}
+	eventType = strings.TrimSpace(eventType)
+	if revision <= 0 || eventType == "" {
+		return fmt.Errorf("event delivery identity is required")
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO a2a_event_deliveries(task_id, revision, event_type, delivered_at) VALUES(?,?,?,?) ON CONFLICT(task_id, revision, event_type) DO NOTHING`, taskID, revision, eventType, time.Now().UTC().Format(sqliteTimeFormat))
+	return err
 }
 
 func (s *SQLiteTaskStore) CountOpenOutbound(ctx context.Context, channelID string) (int, error) {

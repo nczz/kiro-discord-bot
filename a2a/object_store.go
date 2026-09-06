@@ -54,6 +54,10 @@ func OpenObjectStore(dataDir string, opts ...ObjectStoreOption) (*SQLiteObjectSt
 	if err != nil {
 		return nil, err
 	}
+	if err := migrateObjectRefsCompositePrimaryKey(context.Background(), db); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
 	store := &SQLiteObjectStore{db: db}
 	for _, opt := range opts {
 		opt(store)
@@ -65,7 +69,7 @@ func (s *SQLiteObjectStore) Close() error { return closeSQL(s.db) }
 func objectStoreMigrations() []string {
 	return []string{
 		`CREATE TABLE IF NOT EXISTS a2a_object_refs (
-		artifact_id TEXT PRIMARY KEY,
+		artifact_id TEXT NOT NULL,
 		task_id TEXT NOT NULL,
 		bucket TEXT NOT NULL,
 		key TEXT NOT NULL,
@@ -73,11 +77,80 @@ func objectStoreMigrations() []string {
 		size INTEGER NOT NULL,
 		media_type TEXT NOT NULL,
 		expires_at TEXT,
-		created_at TEXT NOT NULL
+		created_at TEXT NOT NULL,
+		PRIMARY KEY(task_id, artifact_id)
 	)`,
 		`CREATE INDEX IF NOT EXISTS idx_a2a_object_refs_task ON a2a_object_refs(task_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_a2a_object_refs_expires ON a2a_object_refs(expires_at)`,
 	}
+}
+
+func migrateObjectRefsCompositePrimaryKey(ctx context.Context, db *sql.DB) error {
+	composite, err := objectRefsHaveCompositePrimaryKey(ctx, db)
+	if err != nil {
+		return err
+	}
+	if composite {
+		return nil
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `CREATE TABLE a2a_object_refs_migrated (
+		artifact_id TEXT NOT NULL,
+		task_id TEXT NOT NULL,
+		bucket TEXT NOT NULL,
+		key TEXT NOT NULL,
+		digest TEXT NOT NULL,
+		size INTEGER NOT NULL,
+		media_type TEXT NOT NULL,
+		expires_at TEXT,
+		created_at TEXT NOT NULL,
+		PRIMARY KEY(task_id, artifact_id)
+	)`); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT OR REPLACE INTO a2a_object_refs_migrated(artifact_id, task_id, bucket, key, digest, size, media_type, expires_at, created_at) SELECT artifact_id, task_id, bucket, key, digest, size, media_type, expires_at, created_at FROM a2a_object_refs`); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DROP TABLE a2a_object_refs`); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `ALTER TABLE a2a_object_refs_migrated RENAME TO a2a_object_refs`); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_a2a_object_refs_task ON a2a_object_refs(task_id)`); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_a2a_object_refs_expires ON a2a_object_refs(expires_at)`); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func objectRefsHaveCompositePrimaryKey(ctx context.Context, db *sql.DB) (bool, error) {
+	rows, err := db.QueryContext(ctx, `PRAGMA table_info(a2a_object_refs)`)
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+	pk := make(map[string]int, 2)
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notNull, pkOrder int
+		var defaultValue sql.NullString
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pkOrder); err != nil {
+			return false, err
+		}
+		pk[name] = pkOrder
+	}
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+	return pk["task_id"] == 1 && pk["artifact_id"] == 2, nil
 }
 
 func (s *SQLiteObjectStore) PutObject(ctx context.Context, taskID TaskID, artifactID, name, mediaType string, content []byte, retentionDays int) (ObjectRef, error) {
@@ -94,15 +167,39 @@ func (s *SQLiteObjectStore) PutObject(ctx context.Context, taskID TaskID, artifa
 	return s.PutRef(ctx, ref, content)
 }
 
-func (s *SQLiteObjectStore) FetchObject(ctx context.Context, artifactID string) ([]byte, ObjectRef, error) {
+func (s *SQLiteObjectStore) FetchObject(ctx context.Context, taskID TaskID, artifactID string) ([]byte, ObjectRef, error) {
 	if s == nil {
 		return nil, ObjectRef{}, fmt.Errorf("object store is nil")
 	}
 	if s.backend == nil {
 		return nil, ObjectRef{}, fmt.Errorf("object byte backend is unavailable")
 	}
-	ref, err := s.GetRef(ctx, artifactID)
+	ref, err := s.GetRef(ctx, taskID, artifactID)
 	if err != nil {
+		return nil, ObjectRef{}, err
+	}
+	if err := validateObjectRefMetadata(ref); err != nil {
+		return nil, ObjectRef{}, err
+	}
+	content, err := s.backend.GetObject(ctx, ref.Bucket, ref.Key)
+	if err != nil {
+		return nil, ObjectRef{}, err
+	}
+	if err := validateObjectRef(ref, content); err != nil {
+		return nil, ObjectRef{}, err
+	}
+	return content, ref, nil
+}
+
+func (s *SQLiteObjectStore) FetchObjectRef(ctx context.Context, ref ObjectRef) ([]byte, ObjectRef, error) {
+	if s == nil {
+		return nil, ObjectRef{}, fmt.Errorf("object store is nil")
+	}
+	if s.backend == nil {
+		return nil, ObjectRef{}, fmt.Errorf("object byte backend is unavailable")
+	}
+	ref.normalize()
+	if err := validateObjectRefMetadata(ref); err != nil {
 		return nil, ObjectRef{}, err
 	}
 	content, err := s.backend.GetObject(ctx, ref.Bucket, ref.Key)
@@ -126,18 +223,18 @@ func (s *SQLiteObjectStore) PutRef(ctx context.Context, ref ObjectRef, content [
 	if ref.CreatedAt.IsZero() {
 		ref.CreatedAt = time.Now().UTC()
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO a2a_object_refs(artifact_id, task_id, bucket, key, digest, size, media_type, expires_at, created_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(artifact_id) DO UPDATE SET task_id=excluded.task_id, bucket=excluded.bucket, key=excluded.key, digest=excluded.digest, size=excluded.size, media_type=excluded.media_type, expires_at=excluded.expires_at`, ref.ArtifactID, ref.TaskID, ref.Bucket, ref.Key, ref.Digest, ref.Size, ref.MediaType, nullTime(ref.ExpiresAt), ref.CreatedAt.UTC().Format(sqliteTimeFormat))
+	_, err := s.db.ExecContext(ctx, `INSERT INTO a2a_object_refs(artifact_id, task_id, bucket, key, digest, size, media_type, expires_at, created_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(task_id, artifact_id) DO UPDATE SET bucket=excluded.bucket, key=excluded.key, digest=excluded.digest, size=excluded.size, media_type=excluded.media_type, expires_at=excluded.expires_at`, ref.ArtifactID, ref.TaskID, ref.Bucket, ref.Key, ref.Digest, ref.Size, ref.MediaType, nullTime(ref.ExpiresAt), ref.CreatedAt.UTC().Format(sqliteTimeFormat))
 	if err != nil {
 		return ObjectRef{}, err
 	}
 	return ref, nil
 }
 
-func (s *SQLiteObjectStore) GetRef(ctx context.Context, artifactID string) (ObjectRef, error) {
+func (s *SQLiteObjectStore) GetRef(ctx context.Context, taskID TaskID, artifactID string) (ObjectRef, error) {
 	var r ObjectRef
 	var created string
 	var expires sql.NullString
-	err := s.db.QueryRowContext(ctx, `SELECT artifact_id, task_id, bucket, key, digest, size, media_type, expires_at, created_at FROM a2a_object_refs WHERE artifact_id=?`, strings.TrimSpace(artifactID)).Scan(&r.ArtifactID, &r.TaskID, &r.Bucket, &r.Key, &r.Digest, &r.Size, &r.MediaType, &expires, &created)
+	err := s.db.QueryRowContext(ctx, `SELECT artifact_id, task_id, bucket, key, digest, size, media_type, expires_at, created_at FROM a2a_object_refs WHERE task_id=? AND artifact_id=?`, taskID, strings.TrimSpace(artifactID)).Scan(&r.ArtifactID, &r.TaskID, &r.Bucket, &r.Key, &r.Digest, &r.Size, &r.MediaType, &expires, &created)
 	if err != nil {
 		return ObjectRef{}, err
 	}
@@ -220,6 +317,21 @@ func (r *ObjectRef) normalize() {
 
 func validateObjectRef(ref ObjectRef, content []byte) error {
 	ref.normalize()
+	if err := validateObjectRefMetadata(ref); err != nil {
+		return err
+	}
+	if int64(len(content)) != ref.Size {
+		return fmt.Errorf("object size mismatch")
+	}
+	digest := "sha256:" + sha256Hex(content)
+	if digest != ref.Digest {
+		return fmt.Errorf("object digest mismatch")
+	}
+	return nil
+}
+
+func validateObjectRefMetadata(ref ObjectRef) error {
+	ref.normalize()
 	if strings.TrimSpace(ref.ArtifactID) == "" {
 		return fmt.Errorf("artifact_id is required")
 	}
@@ -243,15 +355,6 @@ func validateObjectRef(ref ObjectRef, content []byte) error {
 	}
 	if _, _, err := mime.ParseMediaType(ref.MediaType); err != nil {
 		return fmt.Errorf("invalid media_type %q", ref.MediaType)
-	}
-	if len(content) > 0 {
-		if int64(len(content)) != ref.Size {
-			return fmt.Errorf("object size mismatch")
-		}
-		digest := "sha256:" + sha256Hex(content)
-		if digest != ref.Digest {
-			return fmt.Errorf("object digest mismatch")
-		}
 	}
 	if !strings.HasPrefix(ref.Digest, "sha256:") || len(ref.Digest) != len("sha256:")+64 {
 		return fmt.Errorf("object digest must be sha256 hex")

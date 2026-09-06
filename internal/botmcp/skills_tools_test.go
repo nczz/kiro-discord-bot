@@ -93,6 +93,83 @@ func TestSkillMCPCreateInventoryEnableSearchAndGet(t *testing.T) {
 	}
 }
 
+func TestSkillCreateUsesBoundProjectCWD(t *testing.T) {
+	ctx := context.Background()
+	dataDir := t.TempDir()
+	project := t.TempDir()
+	t.Setenv("BOT_TOOLS_GUILD_ID", "guild-1")
+	t.Setenv("BOT_TOOLS_CHANNEL_ID", "channel-1")
+	t.Setenv("BOT_TOOLS_PROJECT_CWD", project)
+	setSkillCreateTargetState(t, `{"target_channel_id":"channel-1","requester_id":"user-1","requester_name":"alice","can_manage_channel":true}`)
+
+	result, err := skillCreate(ctx, dataDir, skillReq(map[string]any{
+		"name":             "Bound Project",
+		"scope_type":       skills.ScopeChannelProject,
+		"content_markdown": "# When to use\nUse for bound project work.",
+		"requested_by":     "alice",
+	}))
+	if err != nil {
+		t.Fatalf("skillCreate with bound project cwd: %v", err)
+	}
+	if result["scope_type"] != skills.ScopeChannelProject || result["channel_id"] != "channel-1" {
+		t.Fatalf("create result = %+v", result)
+	}
+	if _, err := os.Stat(filepath.Join(project, ".kiro-bot", "skills", "bound-project", "SKILL.md")); err != nil {
+		t.Fatalf("materialized bound project skill missing: %v", err)
+	}
+}
+
+func TestSkillCreateRejectsProjectCWDOutsideBotToolsBinding(t *testing.T) {
+	ctx := context.Background()
+	dataDir := t.TempDir()
+	projectA := t.TempDir()
+	projectB := t.TempDir()
+	t.Setenv("BOT_TOOLS_GUILD_ID", "guild-1")
+	t.Setenv("BOT_TOOLS_CHANNEL_ID", "channel-1")
+	t.Setenv("BOT_TOOLS_PROJECT_CWD", projectA)
+	setSkillCreateTargetState(t, `{"target_channel_id":"channel-1","requester_id":"user-1","requester_name":"alice","can_manage_channel":true}`)
+
+	_, err := skillCreate(ctx, dataDir, skillReq(map[string]any{
+		"name":             "Escaped Project",
+		"scope_type":       skills.ScopeChannelProject,
+		"project_cwd":      projectB,
+		"content_markdown": "# When to use\nUse for escaped project work.",
+		"requested_by":     "alice",
+	}))
+	if err == nil || !strings.Contains(err.Error(), "project_cwd is not allowed") {
+		t.Fatalf("skillCreate error = %v, want project_cwd binding denial", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(projectB, ".kiro-bot")); !os.IsNotExist(statErr) {
+		t.Fatalf("rejected create materialized outside bound project: %v", statErr)
+	}
+}
+
+func TestSkillChannelLifecycleRejectsProjectCWDOutsideBotToolsBinding(t *testing.T) {
+	req := skillReq(map[string]any{"skill_id": "channel-sop", "project_cwd": t.TempDir()})
+	t.Setenv("BOT_TOOLS_PROJECT_CWD", t.TempDir())
+	if _, err := skillChannelInventory(context.Background(), t.TempDir(), req); err == nil || !strings.Contains(err.Error(), "project_cwd is not allowed") {
+		t.Fatalf("inventory error = %v, want project_cwd binding denial", err)
+	}
+	if _, err := skillChannelSetEnabled(context.Background(), t.TempDir(), req, true, "enable"); err == nil || !strings.Contains(err.Error(), "project_cwd is not allowed") {
+		t.Fatalf("enable error = %v, want project_cwd binding denial", err)
+	}
+	if _, err := skillChannelRollback(context.Background(), t.TempDir(), req); err == nil || !strings.Contains(err.Error(), "project_cwd is not allowed") {
+		t.Fatalf("rollback error = %v, want project_cwd binding denial", err)
+	}
+}
+
+func TestSkillCreateRequiresAuthenticatedManager(t *testing.T) {
+	req := skillReq(map[string]any{"name": "Channel Skill", "scope_type": skills.ScopeChannel, "guild_id": "guild-1", "channel_id": "channel-1", "content_markdown": "# When to use\nUse for channel work.", "requested_by": "alice"})
+	if _, err := skillCreate(context.Background(), t.TempDir(), req); err == nil || !strings.Contains(err.Error(), "authenticated Discord request context") {
+		t.Fatalf("unauthenticated skillCreate error = %v, want authenticated-context denial", err)
+	}
+
+	setSkillCreateTargetState(t, `{"target_channel_id":"channel-1","requester_id":"user-1","requester_name":"alice"}`)
+	if _, err := skillCreate(context.Background(), t.TempDir(), req); err == nil || !strings.Contains(err.Error(), "channel management permission") {
+		t.Fatalf("unprivileged skillCreate error = %v, want channel-management denial", err)
+	}
+}
+
 func TestSkillReadToolsBindToBotToolsChannel(t *testing.T) {
 	ctx := context.Background()
 	dataDir := t.TempDir()
@@ -218,6 +295,7 @@ func TestSkillServerReadAndManageUsesGuildScope(t *testing.T) {
 func TestSkillCreateUsesCuratedMarkdownOnly(t *testing.T) {
 	content := "---\nrequired_tools:\n  - python\n---\n# When to use\nUse fetched markdown."
 	dataDir := t.TempDir()
+	setSkillCreateTargetState(t, `{"target_channel_id":"channel-1","requester_id":"user-1","requester_name":"alice","can_manage_guild":true}`)
 	result, err := skillCreate(context.Background(), dataDir, skillReq(map[string]any{"name": "Fetched Skill", "scope_type": skills.ScopeGuild, "guild_id": "guild-1", "content_markdown": content, "source_type": "url", "source_ref": "https://gist.github.com/example", "requested_by": "alice"}))
 	if err != nil {
 		t.Fatalf("create from curated content: %v", err)
@@ -270,6 +348,7 @@ func TestSkillCreateFailureDoesNotLeaveActiveStagingRow(t *testing.T) {
 	}
 	store.Close()
 
+	setSkillCreateTargetState(t, `{"target_channel_id":"channel-1","requester_id":"user-1","requester_name":"bob","can_manage_channel":true}`)
 	_, err = skillCreate(ctx, dataDir, skillReq(map[string]any{"name": "Duplicate SOP", "scope_type": skills.ScopeChannelProject, "guild_id": "guild-1", "channel_id": "channel-1", "project_cwd": project, "content_markdown": "# When to use\nUse duplicate.", "source_type": "conversation", "requested_by": "bob"}))
 	if err == nil {
 		t.Fatal("duplicate skill create unexpectedly succeeded")
@@ -300,6 +379,7 @@ func TestSkillCreateRejectsRawHTML(t *testing.T) {
 
 func TestSkillCreateAllowsMarkdownHTMLExamples(t *testing.T) {
 	content := "# Procedure\nAdd this snippet when needed:\n\n```html\n<script src=\"/assets/app.js\"></script>\n<body>example</body>\n```"
+	setSkillCreateTargetState(t, `{"target_channel_id":"channel-1","requester_id":"user-1","requester_name":"alice","can_manage_guild":true}`)
 	if _, err := skillCreate(context.Background(), t.TempDir(), skillReq(map[string]any{"name": "HTML Example Skill", "scope_type": skills.ScopeGuild, "guild_id": "guild-1", "content_markdown": content, "source_type": "conversation", "requested_by": "alice"})); err != nil {
 		t.Fatalf("curated markdown with HTML example rejected: %v", err)
 	}
@@ -307,4 +387,13 @@ func TestSkillCreateAllowsMarkdownHTMLExamples(t *testing.T) {
 
 func skillReq(args map[string]any) mcp.CallToolRequest {
 	return mcp.CallToolRequest{Params: mcp.CallToolParams{Arguments: args}}
+}
+
+func setSkillCreateTargetState(t *testing.T, raw string) {
+	t.Helper()
+	statePath := filepath.Join(t.TempDir(), "target.json")
+	t.Setenv("BOT_TOOLS_TARGET_STATE_PATH", statePath)
+	if err := os.WriteFile(statePath, []byte(raw), 0644); err != nil {
+		t.Fatalf("write target state: %v", err)
+	}
 }

@@ -198,6 +198,108 @@ func TestA2AIntegrationTargetedDelegation(t *testing.T) {
 	}
 }
 
+func TestA2AIntegrationSendTaskPersistsDiscordContext(t *testing.T) {
+	p := newIntegrationPair(t, 0)
+	req := integrationRequest("msg_discord_context")
+	req.GuildID = "guild-1"
+	req.ChannelID = "channel-1"
+	req.Delivery.DiscordReplyChannelID = "channel-1"
+	req.Delivery.DiscordReplyThreadID = "thread-1"
+	if _, err := p.alice.SendTask(context.Background(), req); err != nil {
+		t.Fatalf("SendTask: %v", err)
+	}
+	accepted := waitForOutboundAccepted(t, p.aliceDB, "msg_discord_context")
+	releaseExecutor(p.bobExec)
+
+	var dc DiscordContext
+	if err := json.Unmarshal([]byte(accepted.DiscordContextJSON), &dc); err != nil {
+		t.Fatalf("stored discord context json: %v", err)
+	}
+	if dc.GuildID != "guild-1" || dc.ChannelID != "channel-1" || dc.ThreadID != "thread-1" {
+		t.Fatalf("stored discord context = %+v from %q", dc, accepted.DiscordContextJSON)
+	}
+}
+
+func TestTaskRequestFromEnvelopePopulatesDiscordContextScope(t *testing.T) {
+	dc := &DiscordContext{GuildID: "guild-1", ChannelID: "channel-1", ThreadID: "thread-1"}
+	payload := SendMessagePayload{
+		A2A:        json.RawMessage(`{"message":{"parts":[{"kind":"text","text":"review"}]}}`),
+		ChannelRef: "discord-thread-1",
+		SkillID:    "backend/review",
+		Delivery:   TransportDelivery{DiscordContext: dc, ShareDiscordContext: true, ResultVisibility: "transparent", DiscordTranscriptMode: "co_present"},
+	}
+	raw, _ := json.Marshal(payload)
+	env := newEnvelope("eve-local", "adam-n200", EnvelopeTypeTask, "msg_context_scope", "", 0, raw)
+	subject, err := ParseSubject(TaskSubject("eve-local", "adam-n200", "msg_context_scope"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := taskRequestFromEnvelope(env, subject)
+	if err != nil {
+		t.Fatalf("taskRequestFromEnvelope: %v", err)
+	}
+	if req.GuildID != "guild-1" || req.ChannelID != "channel-1" {
+		t.Fatalf("request scope = guild %q channel %q", req.GuildID, req.ChannelID)
+	}
+}
+
+func TestA2AIntegrationArtifactResultCompletesWithGeneratedID(t *testing.T) {
+	p := newIntegrationPair(t, 0)
+	req := integrationRequest("msg_artifact_generated")
+	p.bobExec.result = TaskExecutionResult{
+		State:   TaskStateCompleted,
+		Content: "done",
+		Artifacts: []TaskExecutionArtifact{{
+			Name:      "report.txt",
+			MediaType: "text/plain",
+		}, {
+			ID:        "report.1",
+			Name:      "report.1.txt",
+			MediaType: "text/plain",
+		}},
+	}
+	if _, err := p.alice.SendTask(context.Background(), req); err != nil {
+		t.Fatalf("SendTask: %v", err)
+	}
+	accepted := waitForOutboundAccepted(t, p.aliceDB, "msg_artifact_generated")
+	releaseExecutor(p.bobExec)
+	row := waitForTaskState(t, p.aliceDB, "outbound", accepted.TaskID, TaskStateCompleted)
+	if !row.Terminal {
+		t.Fatalf("artifact result row is not terminal: %#v", row)
+	}
+	events, err := p.aliceDB.ReplayEvents(context.Background(), accepted.TaskID, 0)
+	if err != nil {
+		t.Fatalf("ReplayEvents: %v", err)
+	}
+	artifactIDs := map[string]bool{}
+	var sawResult bool
+	for _, event := range events {
+		switch event.EventType {
+		case EventKindArtifact:
+			var payload TaskEventPayload
+			if err := json.Unmarshal([]byte(event.PayloadJSON), &payload); err != nil {
+				t.Fatalf("artifact payload: %v", err)
+			}
+			if payload.Artifact == nil || payload.Artifact.ID == "" {
+				t.Fatalf("artifact event missing ID: %+v", payload.Artifact)
+			}
+			artifactIDs[payload.Artifact.ID] = true
+		case EventKindResult:
+			var payload TaskEventPayload
+			if err := json.Unmarshal([]byte(event.PayloadJSON), &payload); err != nil {
+				t.Fatalf("result payload: %v", err)
+			}
+			if payload.Result == nil || len(payload.Result.Artifacts) != 0 {
+				t.Fatalf("result event duplicated standalone artifacts: %+v", payload.Result)
+			}
+			sawResult = true
+		}
+	}
+	if !artifactIDs["artifact-1"] || !artifactIDs["report.1"] || !sawResult {
+		t.Fatalf("events missing artifact/result: artifactIDs=%+v sawResult=%v events=%+v", artifactIDs, sawResult, events)
+	}
+}
+
 func TestA2AIntegrationDuplicateDelivery(t *testing.T) {
 	p := newIntegrationPair(t, 0)
 	req := integrationRequest("msg_dupe")

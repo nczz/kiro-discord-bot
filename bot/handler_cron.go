@@ -2,7 +2,6 @@ package bot
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -276,8 +275,9 @@ func (b *Bot) handleCronButton(ds *discordgo.Session, i *discordgo.InteractionCr
 		if err := ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseUpdateMessage,
 			Data: &discordgo.InteractionResponseData{
-				Content:    L.Getf("cron.deleted", job.Name),
-				Components: []discordgo.MessageComponent{},
+				Content:         secrets.RedactEnv(L.Getf("cron.deleted", job.Name)),
+				Components:      []discordgo.MessageComponent{},
+				AllowedMentions: &discordgo.MessageAllowedMentions{},
 			},
 		}); err != nil {
 			log.Printf("[interaction] cron delete respond failed: %v", err)
@@ -413,8 +413,9 @@ func (b *Bot) updateCronCard(ds *discordgo.Session, i *discordgo.InteractionCrea
 	if err := ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionResponseUpdateMessage,
 		Data: &discordgo.InteractionResponseData{
-			Content:    content,
-			Components: components,
+			Content:         content,
+			Components:      components,
+			AllowedMentions: &discordgo.MessageAllowedMentions{},
 		},
 	}); err != nil {
 		log.Printf("[interaction] cron card update failed: %v (content_len=%d)", err, len(content))
@@ -682,17 +683,8 @@ func (b *Bot) handleCronPrompt(ds *discordgo.Session, i *discordgo.InteractionCr
 	desc := heartbeat.DescribeSchedule(result.Schedule)
 	msg := secrets.RedactEnv(L.Getf("cron.prompt.confirm", result.Name, result.Schedule, desc, result.Prompt))
 
-	// Store parsed data in button custom ID (JSON-encoded, compact)
-	payload, _ := json.Marshal(result)
-	confirmID := "cronp_confirm_" + string(payload)
+	confirmID := b.cronPromptConfirmCustomID(result)
 	cancelID := "cronp_cancel"
-
-	// Discord custom_id max is 100 chars. If too long, store in memory and use a short key.
-	if len(confirmID) > 100 {
-		key := fmt.Sprintf("%x", time.Now().UnixNano())
-		b.cronPromptCache.Store(key, result)
-		confirmID = "cronp_confirm_" + key
-	}
 
 	sent, err := ds.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{
 		Content:         msg,
@@ -714,6 +706,11 @@ func (b *Bot) handleCronPrompt(ds *discordgo.Session, i *discordgo.InteractionCr
 		},
 	})
 	b.recordCommandResponseDelivery(auditCtx, command, "slash", "sent", msg, mergeMetadata(map[string]any{"has_components": true, "parse_status": "ok"}, visibilityMetadata), sent, err)
+}
+func (b *Bot) cronPromptConfirmCustomID(result *ParsedCronJob) string {
+	key := randomA2AConfirmationID()
+	b.cronPromptCache.Store(key, result)
+	return "cronp_confirm_" + key
 }
 
 // handleCronPromptButton handles confirm/cancel buttons from /cron-prompt.
@@ -742,19 +739,13 @@ func (b *Bot) handleCronPromptButton(ds *discordgo.Session, i *discordgo.Interac
 		return
 	}
 
-	data := strings.TrimPrefix(customID, "cronp_confirm_")
-	var result ParsedCronJob
-
-	// Try JSON parse first (short payloads fit in custom_id)
-	if err := json.Unmarshal([]byte(data), &result); err != nil {
-		// Lookup from cache
-		if cached, ok := b.cronPromptCache.LoadAndDelete(data); ok {
-			result = *cached
-		} else {
-			respondInteraction(ds, i, "❌ "+L.Get("error.expired"))
-			return
-		}
+	key := strings.TrimPrefix(customID, "cronp_confirm_")
+	cached, ok := b.cronPromptCache.LoadAndDelete(key)
+	if !ok {
+		respondInteraction(ds, i, "❌ "+L.Get("error.expired"))
+		return
 	}
+	result := *cached
 
 	username := ""
 	userID := ""

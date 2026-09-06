@@ -131,7 +131,7 @@ func (b *Bot) a2aPeerCardRecords(now time.Time) ([]a2a.PeerCardRecord, error) {
 		if err != nil {
 			return nil, err
 		}
-		records = append(records, a2a.PeerCardRecord{AgentID: b.a2aConfig.AgentID, InstanceID: b.a2aInstanceID, Card: card, ExtendedCard: a2a.ExtendedAgentCard{Runtime: "kiro-discord-bot", TriggerGuidance: "/a2a setup, then /a2a ask", ResultVisibilitySupport: []string{"proxy", "transparent"}, MaxTaskDurationClass: "interactive"}, PublishedAt: now, ExpiresAt: now.Add(a2aPeerCardTTL)})
+		records = append(records, a2a.PeerCardRecord{AgentID: b.a2aConfig.AgentID, InstanceID: b.a2aInstanceID, Card: card, ExtendedCard: a2a.ExtendedAgentCard{Runtime: "kiro-discord-bot", TriggerGuidance: "/a2a peers, receiver-side /a2a allow peer_agent:<runtime>, then /a2a ask", ResultVisibilitySupport: []string{"proxy", "transparent"}, MaxTaskDurationClass: "interactive"}, PublishedAt: now, ExpiresAt: now.Add(a2aPeerCardTTL)})
 	}
 	if b.manager == nil {
 		return records, nil
@@ -142,15 +142,16 @@ func (b *Bot) a2aPeerCardRecords(now time.Time) ([]a2a.PeerCardRecord, error) {
 			return nil, err
 		}
 		for _, policy := range policies {
+			if !policy.Enabled || !policy.Discoverable {
+				continue
+			}
 			runtimeID := a2a.AgentID(policy.RuntimeAgentID)
-			if policy.Enabled {
-				if err := b.manager.EnsureA2ATransportRuntime(context.Background(), runtimeID); err != nil {
-					log.Printf("[a2a] start runtime transport %s failed: %v", runtimeID, err)
-					continue
-				}
-				if !b.manager.A2ATransportAccepts(runtimeID) {
-					continue
-				}
+			if err := b.manager.EnsureA2ATransportRuntime(context.Background(), runtimeID); err != nil {
+				log.Printf("[a2a] start runtime transport %s failed: %v", runtimeID, err)
+				continue
+			}
+			if !b.manager.A2ATransportAccepts(runtimeID) {
+				continue
 			}
 			record, err := b.a2aRuntimePeerCardRecord(now, policy)
 			if err != nil {

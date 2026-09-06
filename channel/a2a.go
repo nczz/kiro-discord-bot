@@ -144,7 +144,7 @@ func (m *Manager) a2aPolicyForRequest(ctx context.Context, req a2a.TaskExecution
 	if err == nil {
 		return policy, nil
 	}
-	if !errors.Is(err, sql.ErrNoRows) || !a2aRequestCanInheritChannelPolicy(req) {
+	if !errors.Is(err, sql.ErrNoRows) || !m.a2aRequestCanInheritChannelPolicy(req) {
 		return a2a.ChannelA2APolicy{}, err
 	}
 	parent, parentErr := m.a2aPolicies.Get(ctx, strings.TrimSpace(req.GuildID), strings.TrimSpace(req.ChannelID))
@@ -157,7 +157,7 @@ func (m *Manager) a2aPolicyForRequest(ctx context.Context, req a2a.TaskExecution
 	return parent, nil
 }
 
-func a2aRequestCanInheritChannelPolicy(req a2a.TaskExecutionRequest) bool {
+func (m *Manager) a2aRequestCanInheritChannelPolicy(req a2a.TaskExecutionRequest) bool {
 	guildID := strings.TrimSpace(req.GuildID)
 	channelID := strings.TrimSpace(req.ChannelID)
 	ref := strings.TrimSpace(req.ChannelRef)
@@ -168,7 +168,8 @@ func a2aRequestCanInheritChannelPolicy(req a2a.TaskExecutionRequest) bool {
 	if discordID == "" {
 		return false
 	}
-	matches := channelID == discordID
+	directChannelRef := channelID == discordID
+	threadMatches := false
 	if dc := req.Delivery.DiscordContext; dc != nil {
 		if strings.TrimSpace(dc.GuildID) != "" && strings.TrimSpace(dc.GuildID) != guildID {
 			return false
@@ -176,7 +177,7 @@ func a2aRequestCanInheritChannelPolicy(req a2a.TaskExecutionRequest) bool {
 		if strings.TrimSpace(dc.ChannelID) != "" && strings.TrimSpace(dc.ChannelID) != channelID {
 			return false
 		}
-		matches = matches || strings.TrimSpace(dc.ThreadID) == discordID || strings.TrimSpace(dc.ChannelID) == discordID
+		threadMatches = threadMatches || strings.TrimSpace(dc.ThreadID) == discordID
 	}
 	origin := req.OriginRuntimeRef
 	if strings.TrimSpace(origin.DiscordGuildID) != "" && strings.TrimSpace(origin.DiscordGuildID) != guildID {
@@ -185,7 +186,33 @@ func a2aRequestCanInheritChannelPolicy(req a2a.TaskExecutionRequest) bool {
 	if strings.TrimSpace(origin.DiscordChannelID) != "" && strings.TrimSpace(origin.DiscordChannelID) != channelID {
 		return false
 	}
-	return matches || strings.TrimSpace(origin.DiscordThreadID) == discordID
+	if directChannelRef {
+		return true
+	}
+	threadMatches = threadMatches || strings.TrimSpace(origin.DiscordThreadID) == discordID
+	if !threadMatches {
+		return false
+	}
+	return m.verifiedDiscordThreadParent(guildID, channelID, discordID)
+}
+
+func (m *Manager) verifiedDiscordThreadParent(guildID, parentID, threadID string) bool {
+	if m == nil {
+		return false
+	}
+	entries, err := channelmeta.Read(m.dataDir)
+	if err != nil {
+		return false
+	}
+	thread, threadOK := entries[strings.TrimSpace(threadID)]
+	parent, parentOK := entries[strings.TrimSpace(parentID)]
+	return threadOK &&
+		parentOK &&
+		strings.TrimSpace(thread.Type) == "thread" &&
+		strings.TrimSpace(thread.GuildID) == strings.TrimSpace(guildID) &&
+		strings.TrimSpace(thread.ParentChannelID) == strings.TrimSpace(parentID) &&
+		strings.TrimSpace(parent.Type) == "channel" &&
+		strings.TrimSpace(parent.GuildID) == strings.TrimSpace(guildID)
 }
 
 func admissionFromRow(req a2a.TaskExecutionRequest, row a2a.TaskRow) a2a.A2AAdmission {
@@ -541,11 +568,19 @@ func (m *Manager) validateA2ADeliveryAgainstPolicy(req a2a.TaskExecutionRequest,
 				return err
 			}
 		}
-		if !coPresentDiscordTargetAllowed(req, policy, channelID, threadID) {
+		if !m.coPresentDiscordTargetAllowed(req, policy, channelID, threadID) {
 			return fmt.Errorf("Discord context channel %s is not allowed by channel policy", dc.ChannelID)
 		}
 	}
-	if req.Delivery.CoPresentFrom != "" &&
+	if req.Delivery.ShareDiscordContext && req.DiscordTranscriptMode == "co_present" {
+		sender := req.Delivery.CoPresentFrom
+		if sender == "" {
+			sender = req.From
+		}
+		if !agentAllowed(policy.CoPresentFrom, sender) && !agentAllowed(policy.CoPresentFromRuntimes, sender) {
+			return fmt.Errorf("co-present sender %s is not allowed", sender)
+		}
+	} else if req.Delivery.CoPresentFrom != "" &&
 		!agentAllowed(policy.CoPresentFrom, req.Delivery.CoPresentFrom) &&
 		!agentAllowed(policy.CoPresentFromRuntimes, req.Delivery.CoPresentFrom) {
 		return fmt.Errorf("co-present sender %s is not allowed", req.Delivery.CoPresentFrom)
@@ -578,20 +613,46 @@ func (m *Manager) validateCoPresentDiscordTargetGuild(policy a2a.ChannelA2APolic
 func coPresentDiscordTargetMatchesPolicy(policy a2a.ChannelA2APolicy, channelID, threadID string) bool {
 	channelID = strings.TrimSpace(channelID)
 	threadID = strings.TrimSpace(threadID)
-	return (channelID == "" && threadID == "") ||
-		(channelID != "" && channelID == policy.ChannelID) ||
-		(threadID != "" && threadID == policy.ChannelID)
+	if threadID != "" {
+		return threadID == policy.ChannelID
+	}
+	return channelID == "" || channelID == policy.ChannelID
 }
 
-func coPresentDiscordTargetAllowed(req a2a.TaskExecutionRequest, policy a2a.ChannelA2APolicy, channelID, threadID string) bool {
+func (m *Manager) coPresentDiscordTargetAllowed(req a2a.TaskExecutionRequest, policy a2a.ChannelA2APolicy, channelID, threadID string) bool {
 	if coPresentDiscordTargetMatchesPolicy(policy, channelID, threadID) {
+		return true
+	}
+	if strings.TrimSpace(channelID) == strings.TrimSpace(policy.ChannelID) && strings.TrimSpace(threadID) != "" && m.verifiedDiscordThreadParent(policy.GuildID, policy.ChannelID, threadID) {
 		return true
 	}
 	channelID = strings.TrimSpace(channelID)
 	threadID = strings.TrimSpace(threadID)
-	return req.DiscordTranscriptMode == "co_present" &&
-		req.Delivery.ShareDiscordContext &&
-		(stringAllowed(policy.CoPresentTargetChannels, channelID) || stringAllowed(policy.CoPresentTargetChannels, threadID))
+	if req.DiscordTranscriptMode != "co_present" || !req.Delivery.ShareDiscordContext {
+		return false
+	}
+	if threadID != "" {
+		if stringAllowed(policy.CoPresentTargetChannels, threadID) {
+			return true
+		}
+		if channelID != "" && stringAllowed(policy.CoPresentTargetChannels, channelID) {
+			entries, err := channelmeta.Read(m.dataDir)
+			if err != nil {
+				return false
+			}
+			thread, threadOK := entries[threadID]
+			parent, parentOK := entries[channelID]
+			return threadOK &&
+				parentOK &&
+				strings.TrimSpace(thread.Type) == "thread" &&
+				strings.TrimSpace(thread.GuildID) == policy.GuildID &&
+				strings.TrimSpace(thread.ParentChannelID) == channelID &&
+				strings.TrimSpace(parent.Type) == "channel" &&
+				strings.TrimSpace(parent.GuildID) == policy.GuildID
+		}
+		return false
+	}
+	return stringAllowed(policy.CoPresentTargetChannels, channelID)
 }
 
 func agentAllowed(list []string, id a2a.AgentID) bool {
@@ -630,19 +691,11 @@ func a2aTaskID(req a2a.TaskExecutionRequest) a2a.TaskID {
 	return a2a.TaskID("task_" + hex.EncodeToString(sum[:12]))
 }
 func a2aRequesterIdentity(req a2a.TaskExecutionRequest) (string, string) {
-	requesterID := ""
-	requesterName := ""
-	if strings.TrimSpace(req.OriginRequester.DiscordGuildID) == strings.TrimSpace(req.GuildID) {
-		requesterID = strings.TrimSpace(req.OriginRequester.DiscordUserID)
-		requesterName = strings.TrimSpace(req.OriginRequester.DiscordUsername)
-	}
+	requesterID := strings.TrimSpace(string(req.From))
 	if requesterID == "" {
-		requesterID = string(req.From)
+		requesterID = "remote-a2a"
 	}
-	if requesterName == "" {
-		requesterName = "A2A " + string(req.From)
-	}
-	return requesterID, requesterName
+	return requesterID, "A2A " + requesterID
 }
 
 func normalizeA2AOriginRuntimeRef(req a2a.TaskExecutionRequest) (a2a.OriginRuntimeRef, error) {
@@ -765,31 +818,46 @@ func (m *Manager) deliverA2AEvent(ctx context.Context, row a2a.TaskRow, kind str
 	if targetID == "" {
 		targetID = row.ChannelID
 	}
-	delivered := false
 	mode := row.DiscordTranscriptMode
 	if mode == "" {
 		mode = "delegator"
 	}
-	deliverText := mode == "mirror" || (kind == a2a.EventKindResult && mode != "co_present" && strings.TrimSpace(row.ResultVisibility) != "" && row.ResultVisibility != "proxy")
-	if deliverText {
-		content := a2aDeliveryContent(row, kind, payload)
-		if strings.TrimSpace(content) != "" {
-			if _, err := botegress.WritePending(m.dataDir, botegress.Action{Action: botegress.ActionSendMessage, ChannelID: targetID, Content: content}); err != nil {
-				return err
-			}
-			delivered = true
-			m.recordA2ADeliveryAudit(row, kind, targetID, payload, 0, "")
-		}
-	}
+	visibility := strings.TrimSpace(row.ResultVisibility)
+	suppressDiscordDelivery := (mode == "co_present" && visibility == "transparent") || (mode == "delegator" && (visibility == "" || visibility == "proxy"))
+	deliverText := !suppressDiscordDelivery && (mode == "mirror" || (kind == a2a.EventKindResult && mode != "co_present" && visibility != "" && visibility != "proxy"))
 	artifacts := a2aArtifactsForDelivery(kind, payload)
+	if suppressDiscordDelivery {
+		return nil
+	}
+	preparedArtifacts := make([]preparedA2AArtifactDelivery, 0, len(artifacts))
 	for _, artifact := range artifacts {
-		if err := m.deliverA2AArtifact(ctx, row, targetID, kind, payload, artifact); err != nil {
+		prepared, err := m.prepareA2AArtifactDelivery(ctx, row, artifact)
+		if err != nil {
 			m.recordA2ADeliveryAudit(row, kind, targetID, payload, 0, err.Error())
 			return err
 		}
-		delivered = true
+		preparedArtifacts = append(preparedArtifacts, prepared)
 	}
-	if delivered && m.safeEgressDrain != nil {
+	queued := false
+	for _, prepared := range preparedArtifacts {
+		if err := m.deliverPreparedA2AArtifact(row, targetID, prepared); err != nil {
+			m.recordA2ADeliveryAudit(row, kind, targetID, payload, 0, err.Error())
+			return err
+		}
+		queued = true
+		m.recordA2ADeliveryAudit(row, kind, targetID, payload, 1, "")
+	}
+	if deliverText {
+		content := a2aDeliveryContent(row, kind, payload)
+		if strings.TrimSpace(content) != "" {
+			if _, err := botegress.WritePending(m.dataDir, botegress.Action{ID: a2aDeliveryActionID(row, kind, payload, "text"), Action: botegress.ActionSendMessage, ChannelID: targetID, Content: content}); err != nil {
+				return err
+			}
+			queued = true
+			m.recordA2ADeliveryAudit(row, kind, targetID, payload, 0, "")
+		}
+	}
+	if queued && m.safeEgressDrain != nil {
 		m.safeEgressDrain(targetID)
 	}
 	return nil
@@ -859,67 +927,147 @@ func a2aArtifactsForDelivery(kind string, payload a2a.TaskEventPayload) []a2a.Ta
 	return nil
 }
 
-func (m *Manager) deliverA2AArtifact(ctx context.Context, row a2a.TaskRow, targetID, kind string, payload a2a.TaskEventPayload, artifact a2a.TaskExecutionArtifact) error {
+func a2aDeliveryActionID(row a2a.TaskRow, kind string, payload a2a.TaskEventPayload, suffix string) string {
+	revision := payload.Revision
+	if revision <= 0 {
+		revision = row.Revision
+	}
+	id := safeA2AArtifactName(fmt.Sprintf("a2a-%s-%s-%d-%s", row.TaskID, kind, revision, suffix))
+	if id == "" || id == "artifact.bin" {
+		return "a2a-delivery"
+	}
+	return id
+}
+
+func a2aArtifactDeliveryActionID(row a2a.TaskRow, targetID string, artifact a2a.TaskExecutionArtifact) string {
+	id := safeA2AArtifactName(fmt.Sprintf("a2a-%s-%s-artifact-%s", row.TaskID, targetID, artifact.ID))
+	if id == "" || id == "artifact.bin" {
+		return "a2a-artifact-delivery"
+	}
+	return id
+}
+
+func a2aObjectRefFromArtifact(taskID a2a.TaskID, artifact a2a.TaskExecutionArtifact) (a2a.ObjectRef, bool) {
+	bucket := strings.TrimSpace(artifact.Bucket)
+	key := strings.TrimSpace(artifact.Key)
+	if bucket == "" && key == "" {
+		uri := strings.TrimSpace(artifact.URI)
+		if rest, ok := strings.CutPrefix(uri, "nats-object://"); ok {
+			if gotBucket, gotKey, ok := strings.Cut(rest, "/"); ok {
+				bucket = strings.TrimSpace(gotBucket)
+				key = strings.TrimSpace(gotKey)
+			}
+		}
+	}
+	if bucket == "" || key == "" {
+		return a2a.ObjectRef{}, false
+	}
+	return a2a.ObjectRef{
+		ArtifactID: strings.TrimSpace(artifact.ID),
+		TaskID:     taskID,
+		Bucket:     bucket,
+		Key:        key,
+		Digest:     strings.TrimSpace(artifact.Digest),
+		Size:       artifact.SizeBytes,
+		MediaType:  strings.TrimSpace(artifact.MediaType),
+		ExpiresAt:  artifact.ExpiresAt,
+	}, true
+}
+
+func (m *Manager) fetchA2AArtifactObject(ctx context.Context, row a2a.TaskRow, artifact a2a.TaskExecutionArtifact) ([]byte, a2a.ObjectRef, error) {
+	if ref, ok := a2aObjectRefFromArtifact(row.TaskID, artifact); ok {
+		return m.a2aObjects.FetchObjectRef(ctx, ref)
+	}
+	return m.a2aObjects.FetchObject(ctx, row.TaskID, artifact.ID)
+}
+
+type preparedA2AArtifactDelivery struct {
+	artifact a2a.TaskExecutionArtifact
+	content  []byte
+	name     string
+}
+
+func (m *Manager) prepareA2AArtifactDelivery(ctx context.Context, row a2a.TaskRow, artifact a2a.TaskExecutionArtifact) (preparedA2AArtifactDelivery, error) {
 	if m.a2aObjects == nil {
-		return fmt.Errorf("%s: A2A object store is unavailable", a2a.ErrorStoreError)
+		return preparedA2AArtifactDelivery{}, fmt.Errorf("%s: A2A object store is unavailable", a2a.ErrorStoreError)
 	}
 	if strings.TrimSpace(artifact.ID) == "" {
-		return fmt.Errorf("%s: artifact id is required", a2a.ErrorArtifactFetchFailed)
+		return preparedA2AArtifactDelivery{}, fmt.Errorf("%s: artifact id is required", a2a.ErrorArtifactFetchFailed)
 	}
-	content, ref, err := m.a2aObjects.FetchObject(ctx, artifact.ID)
-	if err != nil {
-		return fmt.Errorf("%s: %v", a2a.ErrorArtifactFetchFailed, err)
-	}
-	if artifact.Digest != "" && artifact.Digest != ref.Digest {
-		return fmt.Errorf("%s: artifact digest mismatch", a2a.ErrorArtifactFetchFailed)
-	}
-	if artifact.SizeBytes > 0 && artifact.SizeBytes != ref.Size {
-		return fmt.Errorf("%s: artifact size mismatch", a2a.ErrorArtifactFetchFailed)
+	ref, ok := a2aObjectRefFromArtifact(row.TaskID, artifact)
+	if !ok {
+		var err error
+		ref, err = m.a2aObjects.GetRef(ctx, row.TaskID, artifact.ID)
+		if err != nil {
+			return preparedA2AArtifactDelivery{}, fmt.Errorf("%s: %v", a2a.ErrorArtifactFetchFailed, err)
+		}
 	}
 	if err := m.validateA2AArtifactPolicy(ctx, row, artifact, ref); err != nil {
-		return err
+		return preparedA2AArtifactDelivery{}, err
+	}
+	content, ref, err := m.a2aObjects.FetchObjectRef(ctx, ref)
+	if err != nil {
+		return preparedA2AArtifactDelivery{}, fmt.Errorf("%s: %v", a2a.ErrorArtifactFetchFailed, err)
+	}
+	if ref.TaskID != row.TaskID {
+		return preparedA2AArtifactDelivery{}, fmt.Errorf("%s: artifact task mismatch", a2a.ErrorArtifactFetchFailed)
+	}
+	if artifact.Digest != "" && artifact.Digest != ref.Digest {
+		return preparedA2AArtifactDelivery{}, fmt.Errorf("%s: artifact digest mismatch", a2a.ErrorArtifactFetchFailed)
+	}
+	if artifact.SizeBytes > 0 && artifact.SizeBytes != ref.Size {
+		return preparedA2AArtifactDelivery{}, fmt.Errorf("%s: artifact size mismatch", a2a.ErrorArtifactFetchFailed)
 	}
 	name := strings.TrimSpace(artifact.Name)
 	if name == "" {
 		name = artifact.ID
 	}
-	dir := filepath.Join(m.dataDir, "egress", "incoming", "a2a-"+string(row.TaskID)+"-"+artifact.ID)
+	return preparedA2AArtifactDelivery{artifact: artifact, content: content, name: name}, nil
+}
+
+func (m *Manager) deliverPreparedA2AArtifact(row a2a.TaskRow, targetID string, prepared preparedA2AArtifactDelivery) error {
+	artifactID := safeA2AArtifactName(prepared.artifact.ID)
+	dir := filepath.Join(m.dataDir, "egress", "incoming", safeA2AArtifactName("a2a-"+string(row.TaskID)+"-"+artifactID))
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return err
 	}
-	filePath := filepath.Join(dir, safeA2AArtifactName(name))
-	if err := os.WriteFile(filePath, content, 0600); err != nil {
+	filePath := filepath.Join(dir, safeA2AArtifactName(prepared.name))
+	if err := os.WriteFile(filePath, prepared.content, 0600); err != nil {
 		return err
 	}
-	caption := fmt.Sprintf("A2A artifact from %s: %s", row.ToAgent, safeA2AArtifactName(name))
-	if _, err := botegress.WritePending(m.dataDir, botegress.Action{Action: botegress.ActionSendFile, ChannelID: targetID, FilePath: filePath, Content: caption, RemoveFileAfterSend: true}); err != nil {
+	caption := fmt.Sprintf("A2A artifact from %s: %s", row.ToAgent, safeA2AArtifactName(prepared.name))
+	if _, err := botegress.WritePending(m.dataDir, botegress.Action{ID: a2aArtifactDeliveryActionID(row, targetID, prepared.artifact), Action: botegress.ActionSendFile, ChannelID: targetID, FilePath: filePath, Content: caption, RemoveFileAfterSend: true}); err != nil {
 		_ = os.Remove(filePath)
 		return err
 	}
-	m.recordA2ADeliveryAudit(row, kind, targetID, payload, 1, "")
 	return nil
 }
 func (m *Manager) validateA2AArtifactPolicy(ctx context.Context, row a2a.TaskRow, artifact a2a.TaskExecutionArtifact, ref a2a.ObjectRef) error {
 	if m == nil || m.a2aPolicies == nil {
-		return nil
+		return fmt.Errorf("%s: A2A artifact policy is unavailable", a2a.ErrorPolicyDenied)
 	}
 	policy, err := m.a2aPolicies.Get(ctx, row.GuildID, row.ChannelID)
 	if err != nil {
-		return nil
+		return fmt.Errorf("%s: A2A artifact policy could not be loaded", a2a.ErrorPolicyDenied)
 	}
 	if !policy.DelegateMedia.AllowObjectRefs {
 		return fmt.Errorf("%s: object artifact refs are not allowed", a2a.ErrorUnsupportedMediaType)
 	}
-	size := ref.Size
-	if artifact.SizeBytes > 0 {
-		size = artifact.SizeBytes
+	if artifact.SizeBytes > 0 && artifact.SizeBytes != ref.Size {
+		return fmt.Errorf("%s: artifact size does not match object ref", a2a.ErrorPayloadTooLarge)
 	}
+	size := ref.Size
 	if policy.DelegateMedia.MaxBytes > 0 && size > policy.DelegateMedia.MaxBytes {
 		return fmt.Errorf("%s: artifact exceeds media policy", a2a.ErrorPayloadTooLarge)
 	}
-	mediaType := strings.TrimSpace(artifact.MediaType)
+	refMediaType := strings.TrimSpace(ref.MediaType)
+	artifactMediaType := strings.TrimSpace(artifact.MediaType)
+	if artifactMediaType != "" && refMediaType != "" && !strings.EqualFold(artifactMediaType, refMediaType) {
+		return fmt.Errorf("%s: artifact media type does not match object ref", a2a.ErrorUnsupportedMediaType)
+	}
+	mediaType := refMediaType
 	if mediaType == "" {
-		mediaType = ref.MediaType
+		mediaType = artifactMediaType
 	}
 	if len(policy.DelegateMedia.AllowedMIMETypes) == 0 {
 		return nil

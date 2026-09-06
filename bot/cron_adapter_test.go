@@ -221,6 +221,12 @@ func TestCronAdapterPrepareCronThreadDoesNotReaddCreatorForExistingThread(t *tes
 		t.Fatalf("new discord session: %v", err)
 	}
 	ds.Client = &http.Client{Transport: rt}
+	if err := ds.State.GuildAdd(&discordgo.Guild{ID: "guild-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ds.State.ChannelAdd(&discordgo.Channel{ID: "thread-1", GuildID: "guild-1", ParentID: "channel-1", Type: discordgo.ChannelTypeGuildPublicThread}); err != nil {
+		t.Fatal(err)
+	}
 	manager := channel.NewManager(channel.ManagerConfig{DataDir: t.TempDir()})
 	defer manager.StopAll()
 	adapter := &cronAdapter{botNotifier{bot: &Bot{discord: ds, manager: manager}}}
@@ -316,6 +322,70 @@ func TestBuildCronCardRendersOneShotReminderWithoutCronControls(t *testing.T) {
 			t.Fatalf("one-shot reminder should not expose recurring cron control %q", button.CustomID)
 		}
 	}
+}
+
+func TestCronComponentUpdatesSuppressMentionsAndRedactNames(t *testing.T) {
+	L.Load("en")
+	t.Setenv("CRON_CARD_SECRET", "cron-secret-value")
+	store, err := heartbeat.NewCronStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, job := range []*heartbeat.CronJob{
+		{ID: "job-pause", Name: "API_TOKEN=cron-secret-value <@123> @everyone", ChannelID: "channel-1", GuildID: "guild-1", Schedule: "0 8 * * *", Prompt: "API_TOKEN=cron-secret-value prompt", Enabled: true},
+		{ID: "job-delete", Name: "API_TOKEN=cron-secret-value <@123> @everyone", ChannelID: "channel-1", GuildID: "guild-1", Schedule: "0 8 * * *", Prompt: "API_TOKEN=cron-secret-value prompt", Enabled: true},
+	} {
+		if err := store.Add(job); err != nil {
+			t.Fatalf("Add cron %s: %v", job.ID, err)
+		}
+	}
+	rt := &recordingDiscordTransport{}
+	ds := testPeerPermissionSession(t, nil)
+	ds.Client = &http.Client{Transport: rt}
+	b := &Bot{cronStore: store}
+
+	b.handleCronButton(ds, cronButtonInteraction("cron_pause_job-pause"))
+	b.handleCronButton(ds, cronButtonInteraction("cron_delete_job-delete"))
+
+	_, bodies := waitDiscordRequests(t, rt, 2)
+	for _, body := range bodies {
+		if !strings.Contains(body, `"allowed_mentions":{`) {
+			t.Fatalf("cron component update missing allowed_mentions object: %s", body)
+		}
+		if strings.Contains(body, "cron-secret-value") {
+			t.Fatalf("cron component update leaked env secret: %s", body)
+		}
+	}
+}
+
+func TestCronPromptConfirmCustomIDIsOpaque(t *testing.T) {
+	result := &ParsedCronJob{Name: "API_TOKEN=cron-secret-value", Schedule: "0 8 * * *", Prompt: "API_TOKEN=cron-secret-value"}
+	b := &Bot{}
+	customID := b.cronPromptConfirmCustomID(result)
+	if !strings.HasPrefix(customID, "cronp_confirm_") {
+		t.Fatalf("customID = %q, want cronp_confirm prefix", customID)
+	}
+	for _, leaked := range []string{"API_TOKEN", "cron-secret-value", result.Schedule} {
+		if strings.Contains(customID, leaked) {
+			t.Fatalf("cron prompt confirm custom_id leaked %q: %s", leaked, customID)
+		}
+	}
+	cached, ok := b.cronPromptCache.LoadAndDelete(strings.TrimPrefix(customID, "cronp_confirm_"))
+	if !ok || cached != result {
+		t.Fatalf("cached result = %+v ok=%v, want original parsed result", cached, ok)
+	}
+}
+
+func cronButtonInteraction(customID string) *discordgo.InteractionCreate {
+	return &discordgo.InteractionCreate{Interaction: &discordgo.Interaction{
+		ID:        "interaction-" + customID,
+		Token:     "token-" + customID,
+		Type:      discordgo.InteractionMessageComponent,
+		GuildID:   "guild-1",
+		ChannelID: "channel-1",
+		Member:    &discordgo.Member{User: &discordgo.User{ID: "viewer", Username: "Viewer"}},
+		Data:      discordgo.MessageComponentInteractionData{CustomID: customID, ComponentType: discordgo.ButtonComponent},
+	}}
 }
 
 func TestOneShotCronActionUnsupportedBlocksStaleRunEditButtons(t *testing.T) {

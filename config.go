@@ -83,7 +83,7 @@ func loadConfig() *Config {
 		KiroModel:            envOr("KIRO_MODEL", ""),
 		HeartbeatSec:         envInt("HEARTBEAT_SEC", 60),
 		AttRetainDays:        envInt("ATTACHMENT_RETAIN_DAYS", 7),
-		AttachmentMaxBytes:   int64(envInt("ATTACHMENT_MAX_MB", 25)) * 1024 * 1024,
+		AttachmentMaxBytes:   int64(envPositiveInt("ATTACHMENT_MAX_MB", 25)) * 1024 * 1024,
 		CronTimeoutMin:       envInt("CRON_TIMEOUT_MIN", 5),
 		CronTimezone:         envOr("CRON_TIMEZONE", ""),
 		UsageTimezone:        envOr("USAGE_TIMEZONE", envOr("CRON_TIMEZONE", "")),
@@ -180,6 +180,14 @@ func envInt(key string, def int) int {
 	}
 	n, err := strconv.Atoi(v)
 	if err != nil {
+		return def
+	}
+	return n
+}
+
+func envPositiveInt(key string, def int) int {
+	n := envInt(key, def)
+	if n <= 0 {
 		return def
 	}
 	return n

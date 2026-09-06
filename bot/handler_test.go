@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	"image/color"
@@ -24,6 +25,7 @@ import (
 	"github.com/nczz/kiro-discord-bot/acp"
 	"github.com/nczz/kiro-discord-bot/audit"
 	"github.com/nczz/kiro-discord-bot/channel"
+	"github.com/nczz/kiro-discord-bot/heartbeat"
 	"github.com/nczz/kiro-discord-bot/internal/botegress"
 	"github.com/nczz/kiro-discord-bot/internal/botmcp"
 	"github.com/nczz/kiro-discord-bot/internal/discordmention"
@@ -1597,6 +1599,139 @@ func TestUserCanManageAuditTargetUsesDiscordChannelPermissions(t *testing.T) {
 	}
 }
 
+func TestMonitorActorCanManageRequiresStrictChannelManagement(t *testing.T) {
+	b := &Bot{}
+	ds := testPeerPermissionSession(t, []*discordgo.PermissionOverwrite{
+		userMemberManageOverwrite("manager", discordgo.PermissionManageChannels),
+		userMemberManageOverwrite("message-mod", discordgo.PermissionManageMessages|discordgo.PermissionManageThreads),
+	})
+	for _, id := range []string{"manager", "message-mod", "viewer"} {
+		if err := ds.State.MemberAdd(&discordgo.Member{GuildID: "guild-1", User: &discordgo.User{ID: id}}); err != nil {
+			t.Fatalf("MemberAdd %s: %v", id, err)
+		}
+	}
+	managerInteraction := &discordgo.InteractionCreate{Interaction: &discordgo.Interaction{Member: &discordgo.Member{User: &discordgo.User{ID: "manager"}}}}
+	messageModInteraction := &discordgo.InteractionCreate{Interaction: &discordgo.Interaction{Member: &discordgo.Member{User: &discordgo.User{ID: "message-mod"}}}}
+	viewerInteraction := &discordgo.InteractionCreate{Interaction: &discordgo.Interaction{Member: &discordgo.Member{User: &discordgo.User{ID: "viewer"}}}}
+
+	if !b.monitorActorCanManage(ds, managerInteraction, "channel-1") {
+		t.Fatal("manager should be authorized for monitor mutation")
+	}
+	if b.monitorActorCanManage(ds, messageModInteraction, "channel-1") {
+		t.Fatal("message/thread moderator should not be authorized for monitor mutation")
+	}
+	if b.monitorActorCanManage(ds, viewerInteraction, "channel-1") {
+		t.Fatal("viewer should not be authorized for monitor mutation")
+	}
+	if !b.monitorActorCanManage(ds, managerInteraction, "thread-1") {
+		t.Fatal("manager of parent channel should be authorized for thread-target monitor mutation")
+	}
+}
+
+func TestMonitorListRequiresManagerPermission(t *testing.T) {
+	L.Load("en")
+	store, err := heartbeat.NewMonitorStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Add(&heartbeat.MonitorJob{ID: "monitor-1", Name: "secret monitor", ChannelID: "channel-1", Schedule: "*/5 * * * *", CheckPrompt: "check private path", NotifyWhen: "private failure", Enabled: true}); err != nil {
+		t.Fatalf("add monitor: %v", err)
+	}
+	rt := &recordingDiscordTransport{}
+	ds := testPeerPermissionSession(t, nil)
+	ds.Client = &http.Client{Transport: rt}
+	if err := ds.State.MemberAdd(&discordgo.Member{GuildID: "guild-1", User: &discordgo.User{ID: "viewer", Username: "Viewer"}}); err != nil {
+		t.Fatalf("MemberAdd viewer: %v", err)
+	}
+	b := &Bot{monitorStore: store}
+	b.handleMonitorList(ds, &discordgo.InteractionCreate{Interaction: &discordgo.Interaction{ID: "interaction-monitor-list", Token: "token-monitor-list", GuildID: "guild-1", ChannelID: "channel-1", Member: &discordgo.Member{User: &discordgo.User{ID: "viewer", Username: "Viewer"}}}}, cmdCtx{guildID: "guild-1", channelID: "channel-1", userID: "viewer"})
+	_, bodies := waitDiscordRequests(t, rt, 1)
+	joined := strings.Join(bodies, "\n")
+	if strings.Contains(joined, "secret monitor") || strings.Contains(joined, "check private path") || strings.Contains(joined, "private failure") {
+		t.Fatalf("monitor-list leaked manager-authored monitor text to viewer: %s", joined)
+	}
+	if !strings.Contains(joined, "channel management permissions") {
+		t.Fatalf("monitor-list denial = %s, want permission message", joined)
+	}
+}
+
+func TestMonitorRunRequiresManagerBeforeNameLookup(t *testing.T) {
+	L.Load("en")
+	store, err := heartbeat.NewMonitorStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Add(&heartbeat.MonitorJob{ID: "monitor-1", Name: "secret monitor", ChannelID: "channel-1", Schedule: "*/5 * * * *", CheckPrompt: "check private path", NotifyWhen: "private failure", Enabled: true}); err != nil {
+		t.Fatalf("add monitor: %v", err)
+	}
+	rt := &recordingDiscordTransport{}
+	ds := testPeerPermissionSession(t, nil)
+	ds.Client = &http.Client{Transport: rt}
+	b := &Bot{monitorStore: store}
+	b.handleMonitorRun(ds, &discordgo.InteractionCreate{Interaction: &discordgo.Interaction{ID: "interaction-monitor-run", Token: "token-monitor-run", GuildID: "guild-1", ChannelID: "channel-1", Member: &discordgo.Member{User: &discordgo.User{ID: "viewer", Username: "Viewer"}}}}, cmdCtx{guildID: "guild-1", channelID: "channel-1", userID: "viewer"}, "missing-secret-monitor")
+	_, bodies := waitDiscordRequests(t, rt, 1)
+	joined := strings.Join(bodies, "\n")
+	if strings.Contains(joined, "missing-secret-monitor") || strings.Contains(joined, "not found") {
+		t.Fatalf("monitor-run leaked name lookup result to viewer: %s", joined)
+	}
+	if !strings.Contains(joined, "channel management permissions") {
+		t.Fatalf("monitor-run denial = %s, want permission message", joined)
+	}
+}
+
+func TestMonitorRunAutocompleteRequiresManager(t *testing.T) {
+	L.Load("en")
+	store, err := heartbeat.NewMonitorStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Add(&heartbeat.MonitorJob{ID: "monitor-1", Name: "secret monitor", ChannelID: "channel-1", Schedule: "*/5 * * * *", CheckPrompt: "check private path", NotifyWhen: "private failure", Enabled: true}); err != nil {
+		t.Fatalf("add monitor: %v", err)
+	}
+	rt := &recordingDiscordTransport{}
+	ds := testPeerPermissionSession(t, nil)
+	ds.Client = &http.Client{Transport: rt}
+	b := &Bot{monitorStore: store}
+	b.handleAutocomplete(ds, &discordgo.InteractionCreate{Interaction: &discordgo.Interaction{
+		ID:        "interaction-monitor-run-autocomplete",
+		Token:     "token-monitor-run-autocomplete",
+		GuildID:   "guild-1",
+		ChannelID: "channel-1",
+		Type:      discordgo.InteractionApplicationCommandAutocomplete,
+		Member:    &discordgo.Member{User: &discordgo.User{ID: "viewer", Username: "Viewer"}},
+		Data: discordgo.ApplicationCommandInteractionData{
+			Name: "monitor-run",
+			Options: []*discordgo.ApplicationCommandInteractionDataOption{{
+				Name:    "name",
+				Type:    discordgo.ApplicationCommandOptionString,
+				Value:   "secret",
+				Focused: true,
+			}},
+		},
+	}})
+	_, bodies := waitDiscordRequests(t, rt, 1)
+	joined := strings.Join(bodies, "\n")
+	if strings.Contains(joined, "secret monitor") {
+		t.Fatalf("monitor-run autocomplete leaked monitor name to viewer: %s", joined)
+	}
+	if !strings.Contains(joined, `"type":8`) {
+		t.Fatalf("monitor-run autocomplete denial = %s, want autocomplete response", joined)
+	}
+}
+
+func TestMonitorPromptConfirmationIsOneShot(t *testing.T) {
+	var store monitorPromptStore
+	job := &ParsedMonitorJob{Name: "CI", Schedule: "*/10 * * * *", CheckPrompt: "check CI", NotifyWhen: "CI fails"}
+	store.Store("confirm-1", job)
+
+	if got, ok := store.LoadAndDelete("confirm-1"); !ok || got != job {
+		t.Fatalf("first confirmation load = %+v/%v, want stored job", got, ok)
+	}
+	if got, ok := store.LoadAndDelete("confirm-1"); ok || got != nil {
+		t.Fatalf("second confirmation load = %+v/%v, want expired one-shot", got, ok)
+	}
+}
+
 func TestUsageReportArgsForRequesterScopesNonManagersToSelf(t *testing.T) {
 	b := &Bot{}
 	ds := testPeerPermissionSession(t, []*discordgo.PermissionOverwrite{
@@ -1827,12 +1962,82 @@ func TestA2ALocaleConfirmationResponse(t *testing.T) {
 	if !strings.Contains(got, "A2A could not continue") || !strings.Contains(got, "Manage Channels") {
 		t.Fatalf("formatA2AResponse error = %q, want localized actionable A2A error", got)
 	}
+	if strings.Contains(got, "policy_denied") || strings.Contains(got, "manager required") {
+		t.Fatalf("formatA2AResponse exposed raw service error: %q", got)
+	}
+}
+
+func TestA2AConfirmationLocalizesDelegationSummaryAndRisks(t *testing.T) {
+	L.Load("zh-TW")
+	got := formatA2AResponse(botmcp.A2AToolResponse{
+		OK:                   true,
+		RequiresConfirmation: true,
+		Message:              "A2A delegation requires confirmation",
+		ConfirmationSummary:  "Delegate raw service text",
+		ChangeID:             "change-1",
+		ConfirmationToken:    "token-1",
+		RiskLabels:           []string{"remote_task", "data_egress"},
+		Metadata: map[string]interface{}{
+			"target_agent":            "remote-bot",
+			"target_channel_ref":      "support",
+			"skill_id":                "review",
+			"result_visibility":       "transparent",
+			"discord_transcript_mode": "co_present",
+		},
+	})
+	for _, want := range []string{"將 A2A 任務排給", "remote-bot", "support", "review", "遠端任務", "資料外送"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("formatA2AResponse confirmation = %q, missing %q", got, want)
+		}
+	}
+	for _, raw := range []string{"Delegate raw service text", "remote_task", "data_egress", "token-1"} {
+		if strings.Contains(got, raw) {
+			t.Fatalf("formatA2AResponse confirmation exposed raw backend value %q in %q", raw, got)
+		}
+	}
+}
+
+func TestA2AConfirmationLocalizesPolicyPlanSummary(t *testing.T) {
+	L.Load("en")
+	got := formatA2AResponse(botmcp.A2AToolResponse{
+		OK:                   true,
+		RequiresConfirmation: true,
+		Message:              "A2A policy change planned",
+		ConfirmationSummary:  "A2A policy for channel 123: enabled false→true, ref \"\"→\"case\"",
+		ChangeID:             "change-1",
+		RiskLabels:           []string{"policy_change", "enable_a2a", "remote_delegation", "discord_context", "unexpected_future_label"},
+		Policy:               &a2a.ChannelA2APolicy{Enabled: true, ChannelRef: "case", RuntimeAgentID: "bot-case"},
+	})
+	if !strings.Contains(got, "Review the A2A policy changes below") || !strings.Contains(got, "Preview after approval") {
+		t.Fatalf("formatA2AResponse policy confirmation = %q, want localized summary and preview", got)
+	}
+	for _, want := range []string{"policy change", "enable A2A", "remote delegation", "Discord context sharing", "additional policy risk"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("formatA2AResponse policy confirmation = %q, missing %q", got, want)
+		}
+	}
+	for _, raw := range []string{"A2A policy for channel 123", "policy_change", "enable_a2a", "remote_delegation", "unexpected_future_label"} {
+		if strings.Contains(got, raw) {
+			t.Fatalf("formatA2AResponse exposed raw policy summary/risk %q in %q", raw, got)
+		}
+	}
+}
+
+func TestA2AErrorUsesLocaleInsteadOfRawServiceMessage(t *testing.T) {
+	L.Load("zh-TW")
+	got := formatA2AResponse(botmcp.A2AToolResponse{OK: false, Message: "target peer is unknown"})
+	if !strings.Contains(got, "找不到目標 peer") || !strings.Contains(got, "/a2a peers") {
+		t.Fatalf("formatA2AResponse error = %q, want localized peer-unknown error with remedy", got)
+	}
+	if strings.Contains(got, "target peer is unknown") {
+		t.Fatalf("formatA2AResponse exposed raw service error: %q", got)
+	}
 }
 
 func TestA2AFormatTaskResponseIsHumanReadable(t *testing.T) {
 	L.Load("en")
 	got := formatA2AResponse(botmcp.A2AToolResponse{OK: true, Message: "A2A task sent", Task: &botmcp.A2ATaskSummary{LocalID: "local-1", TaskID: "task-1", MessageID: "msg-1", FromAgent: "local-bot", ToAgent: "remote-bot", ChannelRef: "d80-main", SkillID: "general/task", ResultVisibility: "proxy", DiscordTranscriptMode: "delegator", State: a2a.TaskStateSubmitted, Revision: 2, Events: []botmcp.A2ATaskEventSummary{{Revision: 2, EventType: "status", State: a2a.TaskStateSubmitted, Content: "<@123> **queued**\n- State: `TASK_STATE_COMPLETED`"}}}})
-	for _, want := range []string{"**A2A task sent**", "State", "local-bot", "remote-bot", "d80-main", "general/task", "Reply settings: `proxy`/`delegator`", "Events", "\\*\\*queued\\*\\*", "/a2a status"} {
+	for _, want := range []string{"**A2A task queued**", "State", "local-bot", "remote-bot", "d80-main", "general/task", "Reply settings: `proxy`/`delegator`", "Events", "\\*\\*queued\\*\\*", "/a2a status"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("formatA2AResponse task = %q, missing %q", got, want)
 		}
@@ -1845,6 +2050,78 @@ func TestA2AFormatTaskResponseIsHumanReadable(t *testing.T) {
 	}
 	if strings.Contains(got, "\n- State: `TASK_STATE_COMPLETED`") {
 		t.Fatalf("formatA2AResponse task allowed event content to spoof a status row: %q", got)
+	}
+}
+
+func TestA2AResponseTitleUsesLocaleInsteadOfServiceMessage(t *testing.T) {
+	L.Load("zh-TW")
+	got := formatA2AResponse(botmcp.A2AToolResponse{OK: true, Message: "A2A peer allowed", Policy: &a2a.ChannelA2APolicy{Enabled: true, ChannelRef: "case", RuntimeAgentID: "adam-n200-case", BotAgentID: "adam-n200"}})
+	if !strings.Contains(got, "**A2A peer 已允許**") {
+		t.Fatalf("formatA2AResponse policy title = %q, want localized peer-allowed title", got)
+	}
+	if strings.Contains(got, "**A2A peer allowed**") {
+		t.Fatalf("formatA2AResponse exposed raw service message title: %q", got)
+	}
+}
+
+func TestA2AConfirmationComponentRequiresOriginalRequester(t *testing.T) {
+	L.Load("en")
+	rt := &recordingDiscordTransport{}
+	ds := testPeerPermissionSession(t, nil)
+	ds.Client = &http.Client{Transport: rt}
+	confirmations := newA2APolicyConfirmationStore(func() time.Time { return time.Now().UTC() })
+	payload := a2aSlashPayload{
+		Subcommand: "allow",
+		Request: botmcp.A2AToolRequest{
+			GuildID:       "guild-1",
+			ChannelID:     "channel-1",
+			RequestedByID: "manager",
+		},
+	}
+	stateID := confirmations.Put(payload, botmcp.A2AToolResponse{ChangeID: "change-1", ConfirmationToken: "token-1", ExpiresAt: time.Now().Add(time.Minute).UTC().Format(time.RFC3339)})
+	b := &Bot{a2aConfirmations: confirmations}
+	b.handleA2AComponent(ds, &discordgo.InteractionCreate{Interaction: &discordgo.Interaction{
+		ID:        "interaction-a2a-confirm",
+		Token:     "token-a2a-confirm",
+		Type:      discordgo.InteractionMessageComponent,
+		GuildID:   "guild-1",
+		ChannelID: "channel-1",
+		Member:    &discordgo.Member{User: &discordgo.User{ID: "viewer", Username: "Viewer"}},
+		Data:      discordgo.MessageComponentInteractionData{CustomID: a2aPolicyConfirmationButtonCustomID("apply", stateID, "channel-1", "change-1"), ComponentType: discordgo.ButtonComponent},
+	}})
+	_, bodies := waitDiscordRequests(t, rt, 1)
+	joined := strings.Join(bodies, "\n")
+	if !strings.Contains(joined, "Only the manager who created this A2A confirmation can approve it.") {
+		t.Fatalf("A2A confirmation response = %s, want original requester denial", joined)
+	}
+	if _, ok := confirmations.Get(stateID); !ok {
+		t.Fatal("A2A confirmation was consumed by unauthorized user")
+	}
+}
+
+func TestA2APeersResponseIncludesPolicyReadiness(t *testing.T) {
+	L.Load("en")
+	got := formatA2AResponse(botmcp.A2AToolResponse{
+		OK:      true,
+		Message: "A2A peers listed",
+		Peers:   []botmcp.A2APeerSummary{{AgentID: "remote-bot-main", Name: "remote", Online: true, Skills: []string{"review"}}},
+		PeerPolicy: &botmcp.A2APeerPolicySummary{
+			Enabled:                true,
+			CurrentRuntimeAgentID:  "local-bot-main",
+			CurrentChannelRef:      "main",
+			InboundAllowedRuntimes: []string{"remote-bot-main"},
+			OutboundDelegateTargets: []botmcp.A2ADelegateTargetSummary{{
+				RuntimeAgentID: "remote-bot-main",
+				ChannelRef:     "support",
+				SkillID:        "review",
+			}},
+		},
+		DeliveryReadiness: &botmcp.A2APolicyDeliveryReadiness{ResultVisibility: "transparent", DiscordTranscriptMode: "co_present", CoPresentReady: true},
+	})
+	for _, want := range []string{"Current channel A2A policy", "local-bot-main", "`remote-bot-main`@`support`/`review`", "Delivery readiness"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("formatA2AResponse peers = %q, missing %q", got, want)
+		}
 	}
 }
 
@@ -2017,11 +2294,26 @@ func TestA2APeersFormatterShowsRuntimeContext(t *testing.T) {
 		DelegationAllowed: true,
 		DelegationReason:  "allowed",
 		Skills:            []string{"backend-support/task"},
-	}}, nil)
+	}}, nil, nil)
 	for _, want := range []string{"Bots/channels this Discord channel can work with", "Backend Support", "m5bot-backend-support", "bot `m5bot`", "label `backend-support`", "allowed"} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("formatA2APeers = %q, missing %q", got, want)
 		}
+	}
+}
+
+func TestA2APeersFormatterLocalizesServiceReasons(t *testing.T) {
+	L.Load("zh-TW")
+	got := formatA2APeers([]botmcp.A2APeerSummary{{
+		AgentID:          "m5bot-backend-support",
+		Name:             "m5bot-backend-support",
+		DelegationReason: "missing runtime delegate target",
+	}}, nil, nil)
+	if strings.Contains(got, "missing runtime delegate target") {
+		t.Fatalf("formatA2APeers exposed raw service reason: %q", got)
+	}
+	if !strings.Contains(got, "尚未設定 runtime delegate target") {
+		t.Fatalf("formatA2APeers = %q, want localized reason", got)
 	}
 }
 
@@ -2158,6 +2450,7 @@ func TestSlashCommandsApplyVisibilityAndPermissionPolicy(t *testing.T) {
 		"audit": true, "mcp": true, "cwd": true, "start": true, "agent": true,
 		"webhook": true, "webshare": true, "steering": true,
 		"cron": true, "cron-list": true, "cron-run": true, "cron-prompt": true,
+		"monitor-list": true, "monitor-run": true, "monitor-prompt": true,
 		"memory": true, "flashmemory": true, "clear": true,
 	}
 	for _, cmd := range buildSlashCommands() {
@@ -2190,6 +2483,8 @@ func TestCommandRequiresInitializedChannelPolicy(t *testing.T) {
 		{name: "cron", want: true},
 		{name: "cron-run", want: true},
 		{name: "cron-prompt", want: true},
+		{name: "monitor-prompt", want: true},
+		{name: "monitor-run", want: true},
 		{name: "model", want: false},
 		{name: "model", args: "claude-sonnet", want: true},
 		{name: "agent", want: false},
@@ -2739,11 +3034,11 @@ func TestBuildPromptDocumentsCronOwnerChannelScope(t *testing.T) {
 	if !strings.Contains(got, "For cron management tools, use channel_id as the owning parent channel ID") {
 		t.Fatalf("prompt missing cron owner scope guidance:\n%s", got)
 	}
-	if !strings.Contains(got, "For one-time reminders, use bot_create_reminder; for recurring schedules, use bot_create_cron.") || !strings.Contains(got, "do not degrade it to tomorrow") {
-		t.Fatalf("prompt missing reminder tool guidance:\n%s", got)
+	if !strings.Contains(got, "For one-time reminders, use bot_create_reminder") || !strings.Contains(got, "For visible recurring schedules, use bot_create_cron") || !strings.Contains(got, "do not degrade it to tomorrow") {
+		t.Fatalf("prompt missing reminder/cron tool guidance:\n%s", got)
 	}
-	if !strings.Contains(got, "first use bot_list_cron, then bot_update_cron") || !strings.Contains(got, "enabled=false") || !strings.Contains(got, "deletion requires bot_delete_cron") {
-		t.Fatalf("prompt missing safe cron update guidance:\n%s", got)
+	if !strings.Contains(got, "inspection-only requests") || !strings.Contains(got, "stop without calling update tools") || !strings.Contains(got, "then use bot_update_cron or bot_update_monitor") || !strings.Contains(got, "enabled=false") || !strings.Contains(got, "deletion requires bot_delete_cron or bot_delete_monitor") {
+		t.Fatalf("prompt missing safe recurring update guidance:\n%s", got)
 	}
 	if !strings.Contains(got, "channel_id=channel-1 thread_id=thread-1") {
 		t.Fatalf("prompt missing channel/thread context:\n%s", got)
@@ -2893,6 +3188,15 @@ func TestBuildPromptDoesNotNameRawBotStateFiles(t *testing.T) {
 	}
 }
 
+func TestBuildPromptRoutesSilentConditionalSchedulesToMonitor(t *testing.T) {
+	got := buildPromptThread("check CI every 10 minutes and notify only when it fails", nil, "channel-1", "thread-1", "guild-1", "alice", "")
+	for _, want := range []string{"bot_create_monitor", "bot_list_monitor", "bot_update_monitor"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("prompt missing monitor scheduling guidance %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestBuildPromptDocumentsStructuredMentionReferences(t *testing.T) {
 	got := buildPromptThreadWithMentions("please notify Chun", nil, "channel-1", "thread-1", "guild-1", "alice", "", "", []discordmention.Ref{
 		discordmention.UserRef("123", "Chun"),
@@ -2987,6 +3291,15 @@ func TestSessionSlashResponseIsPrivate(t *testing.T) {
 	}
 	if got := commandInteractionFlags(commandResponseVisibility("session", "list")); got != discordgo.MessageFlagsEphemeral {
 		t.Fatalf("/session flags = %v, want ephemeral", got)
+	}
+}
+
+func TestA2ASlashResponseIsPrivate(t *testing.T) {
+	if got := commandResponseVisibility("a2a", "peers"); got != commandVisibilityPrivate {
+		t.Fatalf("/a2a visibility = %v, want private", got)
+	}
+	if got := commandInteractionFlags(commandResponseVisibility("a2a", "status")); got != discordgo.MessageFlagsEphemeral {
+		t.Fatalf("/a2a flags = %v, want ephemeral", got)
 	}
 }
 
@@ -3577,5 +3890,112 @@ func TestAgentCommandMetadataIncludesStatus(t *testing.T) {
 	}
 	if metadata["agent_executed"] != true {
 		t.Fatalf("agent_executed = %#v, want true", metadata["agent_executed"])
+	}
+}
+
+func TestValidateMonitorJSONCountsNameRunes(t *testing.T) {
+	name := strings.Repeat("監", 40)
+	result, err := validateMonitorJSON(fmt.Sprintf(`{"name":%q,"schedule":"*/10 * * * *","check_prompt":"check CI","notify_when":"CI fails"}`, name))
+	if err != nil {
+		t.Fatalf("validateMonitorJSON rejected CJK name under character limit: %v", err)
+	}
+	if result.Name != name {
+		t.Fatalf("name = %q, want %q", result.Name, name)
+	}
+}
+
+func TestValidateMonitorJSONRejectsOversizedFields(t *testing.T) {
+	raw := fmt.Sprintf(`{"name":"CI","schedule":"*/10 * * * *","check_prompt":%q,"notify_when":"CI fails"}`, strings.Repeat("a", heartbeat.MonitorCheckPromptMaxRunes+1))
+	if _, err := validateMonitorJSON(raw); !errors.Is(err, ErrMonitorFieldTooLong) {
+		t.Fatalf("validateMonitorJSON error = %v, want ErrMonitorFieldTooLong", err)
+	}
+}
+
+func TestMonitorPromptConfirmMessageFitsDiscordLimit(t *testing.T) {
+	L.Load("en")
+	msg := monitorPromptConfirmMessage(&ParsedMonitorJob{
+		Name:        strings.Repeat("n", 100),
+		Schedule:    "*/10 * * * *",
+		CheckPrompt: strings.Repeat("檢", 2000),
+		NotifyWhen:  strings.Repeat("通", 1000),
+	})
+	if utf8.RuneCountInString(msg) > 2000 {
+		t.Fatalf("confirm message length = %d, want <= 2000", utf8.RuneCountInString(msg))
+	}
+	if !strings.Contains(msg, "...") {
+		t.Fatalf("confirm message was not truncated: length=%d", utf8.RuneCountInString(msg))
+	}
+}
+
+func TestBuildMonitorCardHidesRawErrorHistory(t *testing.T) {
+	L.Load("en")
+	dir := t.TempDir()
+	historyDir := filepath.Join(dir, "monitor", "job-1")
+	if err := os.MkdirAll(historyDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	row, err := json.Marshal(heartbeat.MonitorHistory{
+		Timestamp: time.Now().Format(time.RFC3339),
+		Status:    heartbeat.MonitorStatusError,
+		Reason:    "working directory not found: /Users/chun/Projects/private",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(historyDir, "history.jsonl"), append(row, '\n'), 0644); err != nil {
+		t.Fatal(err)
+	}
+	b := &Bot{monitorTask: heartbeat.NewMonitorTask(nil, nil, dir, "Asia/Taipei", "guild-1", 1)}
+	content, _ := b.buildMonitorCard(&heartbeat.MonitorJob{
+		ID:          "job-1",
+		Name:        "CI",
+		Schedule:    "*/10 * * * *",
+		CheckPrompt: "check CI",
+		NotifyWhen:  "CI fails",
+		Enabled:     true,
+	})
+
+	if strings.Contains(content, "/Users/chun") || strings.Contains(content, "working directory not found") {
+		t.Fatalf("monitor card leaked raw error history: %q", content)
+	}
+	if !strings.Contains(content, L.Get("monitor.list.result.error_detail")) {
+		t.Fatalf("monitor card missing generic error detail: %q", content)
+	}
+}
+
+func TestBuildMonitorCardHidesRawSuppressedHistory(t *testing.T) {
+	L.Load("en")
+	dir := t.TempDir()
+	historyDir := filepath.Join(dir, "monitor", "job-1")
+	if err := os.MkdirAll(historyDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	row, err := json.Marshal(heartbeat.MonitorHistory{
+		Timestamp:       time.Now().Format(time.RFC3339),
+		Status:          heartbeat.MonitorStatusSuppressed,
+		Reason:          "checked /Users/chun/Projects/private and found nothing",
+		InternalSummary: "checked /Users/chun/Projects/private and found nothing",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(historyDir, "history.jsonl"), append(row, '\n'), 0644); err != nil {
+		t.Fatal(err)
+	}
+	b := &Bot{monitorTask: heartbeat.NewMonitorTask(nil, nil, dir, "Asia/Taipei", "guild-1", 1)}
+	content, _ := b.buildMonitorCard(&heartbeat.MonitorJob{
+		ID:          "job-1",
+		Name:        "CI",
+		Schedule:    "*/10 * * * *",
+		CheckPrompt: "check CI",
+		NotifyWhen:  "CI fails",
+		Enabled:     true,
+	})
+
+	if strings.Contains(content, "/Users/chun") || strings.Contains(content, "checked /Users") {
+		t.Fatalf("monitor card leaked raw suppressed history: %q", content)
+	}
+	if !strings.Contains(content, L.Get("monitor.list.result.no_detail")) {
+		t.Fatalf("monitor card missing generic empty detail: %q", content)
 	}
 }

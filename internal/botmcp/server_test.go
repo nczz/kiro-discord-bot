@@ -7,6 +7,7 @@ import (
 	"image"
 	"image/color"
 	"image/jpeg"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -150,6 +151,12 @@ func TestDefaultSafeToolNamesExcludeDestructiveTools(t *testing.T) {
 	if !seen[ToolUpdateCron] {
 		t.Fatalf("safe non-destructive update tool should be default-enabled: %+v", tools)
 	}
+	if !seen[ToolListMonitor] || !seen[ToolCreateMonitor] || !seen[ToolUpdateMonitor] {
+		t.Fatalf("monitor list/create/update tools should be default-enabled: %+v", tools)
+	}
+	if seen[ToolDeleteMonitor] {
+		t.Fatalf("destructive monitor delete tool must not be default-enabled: %+v", tools)
+	}
 	if !seen[ToolCurrentTime] || !seen[ToolResolveDateRange] {
 		t.Fatalf("time helper tools should be default-enabled for safe date answers: %+v", tools)
 	}
@@ -238,6 +245,342 @@ func listToolNames(t *testing.T, srv *server.MCPServer) map[string]bool {
 		out[tool.Name] = true
 	}
 	return out
+}
+
+func initializedTestClient(t *testing.T, srv *server.MCPServer) *mcpclient.Client {
+	t.Helper()
+	client, err := mcpclient.NewInProcessClient(srv)
+	if err != nil {
+		t.Fatalf("new in-process client: %v", err)
+	}
+	if err := client.Start(context.Background()); err != nil {
+		t.Fatalf("start client: %v", err)
+	}
+	initReq := mcp.InitializeRequest{}
+	initReq.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
+	initReq.Params.ClientInfo = mcp.Implementation{Name: "botmcp-test", Version: "1"}
+	if _, err := client.Initialize(context.Background(), initReq); err != nil {
+		_ = client.Close()
+		t.Fatalf("initialize client: %v", err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	return client
+}
+
+func callTestTool(t *testing.T, client *mcpclient.Client, name string, args map[string]any) *mcp.CallToolResult {
+	t.Helper()
+	req := mcp.CallToolRequest{}
+	req.Params.Name = name
+	req.Params.Arguments = args
+	result, err := client.CallTool(context.Background(), req)
+	if err != nil {
+		t.Fatalf("call %s: %v", name, err)
+	}
+	return result
+}
+
+func callToolText(t *testing.T, result *mcp.CallToolResult) string {
+	t.Helper()
+	var b strings.Builder
+	for _, content := range result.Content {
+		text, ok := content.(mcp.TextContent)
+		if !ok {
+			t.Fatalf("unsupported content type: %T", content)
+		}
+		b.WriteString(text.Text)
+	}
+	return b.String()
+}
+
+func TestBotToolsWriteToolsRejectMonitorDisabledState(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "target.json")
+	if err := os.WriteFile(statePath, []byte(`{"target_channel_id":"channel-1","disable_egress":true,"source":"monitor"}`), 0644); err != nil {
+		t.Fatalf("write target state: %v", err)
+	}
+	t.Setenv("DATA_DIR", dir)
+	t.Setenv("BOT_TOOLS_CHANNEL_ID", "channel-1")
+	t.Setenv("BOT_TOOLS_GUILD_ID", "guild-1")
+	t.Setenv("BOT_TOOLS_TARGET_STATE_PATH", statePath)
+
+	client := initializedTestClient(t, NewServerWithOptions(ServerOptions{A2AEnabled: true}))
+	cases := []struct {
+		name string
+		args map[string]any
+	}{
+		{ToolMemoryAdd, map[string]any{"channel_id": "channel-1", "entry": "Always reply in Traditional Chinese.", "reason": "user asked to remember"}},
+		{ToolMemoryRemove, map[string]any{"channel_id": "channel-1", "memory_index": 1, "reason": "user asked to forget"}},
+		{ToolMemoryClear, map[string]any{"channel_id": "channel-1", "reason": "user asked to clear memory"}},
+		{ToolSendMessage, map[string]any{"channel_id": "channel-1", "content": "hello"}},
+		{ToolSendFile, map[string]any{"channel_id": "channel-1", "file_path": "missing.txt"}},
+		{ToolSendImageURL, map[string]any{"channel_id": "channel-1", "url": "https://example.com/image.png", "filename": "image.png"}},
+		{ToolCreateCron, map[string]any{"name": "Daily", "schedule": "0 9 * * *", "prompt": "check", "channel_id": "channel-1", "guild_id": "guild-1", "created_by": "alice"}},
+		{ToolCreateReminder, map[string]any{"time": "tomorrow 09:00", "content": "ping", "channel_id": "channel-1", "guild_id": "guild-1", "created_by": "alice"}},
+		{ToolUpdateCron, map[string]any{"job_id": "cron-1", "channel_id": "channel-1", "enabled": false}},
+		{ToolA2ATrustPeer, map[string]any{"guild_id": "guild-1", "channel_id": "channel-1", "requested_by": "alice", "requested_by_id": "user-1", "target_agent": "peer-1"}},
+		{ToolSkillUsageRecord, map[string]any{"skill_id": "skill-1", "version": "1"}},
+		{ToolSkillCreate, map[string]any{"name": "Skill", "content": "# Skill"}},
+		{ToolSkillsChannelEnable, map[string]any{"skill_id": "skill-1", "guild_id": "guild-1", "channel_id": "channel-1"}},
+		{ToolSkillsChannelDisable, map[string]any{"skill_id": "skill-1", "guild_id": "guild-1", "channel_id": "channel-1"}},
+		{ToolSkillsChannelRemove, map[string]any{"skill_id": "skill-1", "guild_id": "guild-1", "channel_id": "channel-1"}},
+		{ToolSkillsChannelRestore, map[string]any{"skill_id": "skill-1", "guild_id": "guild-1", "channel_id": "channel-1"}},
+		{ToolSkillsChannelRollback, map[string]any{"skill_id": "skill-1", "version": "1", "guild_id": "guild-1", "channel_id": "channel-1"}},
+		{ToolSkillsServerDisable, map[string]any{"skill_id": "skill-1", "guild_id": "guild-1"}},
+		{ToolSkillsServerRemove, map[string]any{"skill_id": "skill-1", "guild_id": "guild-1"}},
+		{ToolSkillsServerRestore, map[string]any{"skill_id": "skill-1", "guild_id": "guild-1"}},
+		{ToolSkillsServerRollback, map[string]any{"skill_id": "skill-1", "version": "1", "guild_id": "guild-1"}},
+		{ToolDeleteCron, map[string]any{"job_id": "cron-1", "channel_id": "channel-1"}},
+		{ToolCreateMonitor, map[string]any{"name": "CI", "schedule": "*/10 * * * *", "check_prompt": "check CI", "notify_when": "CI fails", "channel_id": "channel-1", "guild_id": "guild-1", "created_by": "alice"}},
+		{ToolUpdateMonitor, map[string]any{"job_id": "monitor-1", "channel_id": "channel-1", "enabled": false}},
+		{ToolDeleteMonitor, map[string]any{"job_id": "monitor-1", "channel_id": "channel-1"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := callTestTool(t, client, tc.name, tc.args)
+			if !result.IsError {
+				t.Fatalf("%s succeeded during monitor-disabled write state: %s", tc.name, callToolText(t, result))
+			}
+			if text := callToolText(t, result); !strings.Contains(text, "monitor background checks") {
+				t.Fatalf("%s error = %q, want monitor-specific write block", tc.name, text)
+			}
+		})
+	}
+	for _, pendingDir := range []string{filepath.Join(dir, "cron", "pending"), filepath.Join(dir, "monitor", "pending")} {
+		entries, err := os.ReadDir(pendingDir)
+		if err == nil && len(entries) != 0 {
+			t.Fatalf("pending actions written under disabled monitor state: %s has %+v", pendingDir, entries)
+		}
+		if err != nil && !os.IsNotExist(err) {
+			t.Fatalf("read pending dir %s: %v", pendingDir, err)
+		}
+	}
+}
+
+func TestA2ADelegateControlToolsBypassDiscordEgressGate(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "target.json")
+	t.Setenv("BOT_TOOLS_TARGET_STATE_PATH", statePath)
+	if err := os.WriteFile(statePath, []byte(`{"target_channel_id":"thread-1","disable_egress":true,"remote_a2a":true}`+"\n"), 0600); err != nil {
+		t.Fatalf("write remote A2A target state: %v", err)
+	}
+	for _, name := range []string{ToolA2ADelegate, ToolA2ACancel, ToolA2AInputReply, ToolA2AAuthReply} {
+		if !a2aWriteAllowedWithBotEgressDisabled(name) {
+			t.Fatalf("%s should bypass bot-tools Discord egress gate for remote A2A", name)
+		}
+	}
+	for _, name := range []string{ToolA2ATrustPeer, ToolCreateMonitor, ToolCreateCron} {
+		if a2aWriteAllowedWithBotEgressDisabled(name) {
+			t.Fatalf("%s unexpectedly bypasses bot-tools Discord egress gate", name)
+		}
+	}
+	if err := os.WriteFile(statePath, []byte(`{"target_channel_id":"thread-1","remote_a2a":true}`+"\n"), 0600); err != nil {
+		t.Fatalf("write remote A2A target state: %v", err)
+	}
+	if !botToolsWriteDisabled() || !strings.Contains(botToolsWriteDisabledMessage(), "remote A2A") {
+		t.Fatalf("remote A2A target state did not disable generic writes: %q", botToolsWriteDisabledMessage())
+	}
+	if !a2aWriteAllowedWithBotEgressDisabled(ToolA2ADelegate) {
+		t.Fatal("remote A2A target state should still allow A2A delegate/control bypass")
+	}
+	if a2aWriteAllowedWithBotEgressDisabled(ToolCreateCron) {
+		t.Fatal("remote A2A target state allowed non-A2A persistent writes")
+	}
+	if err := os.WriteFile(statePath, []byte(`{"target_channel_id":"thread-1","disable_egress":true,"source":"monitor"}`+"\n"), 0600); err != nil {
+		t.Fatalf("write monitor target state: %v", err)
+	}
+	if a2aWriteAllowedWithBotEgressDisabled(ToolA2ADelegate) {
+		t.Fatal("monitor target state bypassed bot-tools write disabled gate")
+	}
+}
+
+func TestBotToolsWriteRejectsMissingTargetStateFile(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "missing-target.json")
+	t.Setenv("DATA_DIR", dir)
+	t.Setenv("BOT_TOOLS_CHANNEL_ID", "channel-1")
+	t.Setenv("BOT_TOOLS_TARGET_STATE_PATH", statePath)
+
+	client := initializedTestClient(t, NewServerWithOptions(ServerOptions{}))
+	result := callTestTool(t, client, ToolSendMessage, map[string]any{"channel_id": "channel-1", "content": "hello"})
+	if !result.IsError {
+		t.Fatalf("send message succeeded when target state could not be verified: %s", callToolText(t, result))
+	}
+	if text := callToolText(t, result); !strings.Contains(text, "target state can be verified") {
+		t.Fatalf("error = %q, want unverifiable target-state block", text)
+	}
+}
+
+func TestMonitorToolsRejectModelOverride(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "target.json")
+	if err := os.WriteFile(statePath, []byte(`{"target_channel_id":"channel-1","source":"message"}`), 0644); err != nil {
+		t.Fatalf("write target state: %v", err)
+	}
+	t.Setenv("DATA_DIR", dir)
+	t.Setenv("BOT_TOOLS_CHANNEL_ID", "channel-1")
+	t.Setenv("BOT_TOOLS_GUILD_ID", "guild-1")
+	t.Setenv("BOT_TOOLS_TARGET_STATE_PATH", statePath)
+
+	client := initializedTestClient(t, NewServerWithOptions(ServerOptions{}))
+	create := callTestTool(t, client, ToolCreateMonitor, map[string]any{
+		"name":         "CI",
+		"schedule":     "*/10 * * * *",
+		"check_prompt": "check CI",
+		"notify_when":  "CI fails",
+		"channel_id":   "channel-1",
+		"guild_id":     "guild-1",
+		"created_by":   "alice",
+		"model":        "unvalidated-model",
+	})
+	if !create.IsError || !strings.Contains(callToolText(t, create), "model overrides are not supported") {
+		t.Fatalf("create monitor model override result = error:%v text:%q", create.IsError, callToolText(t, create))
+	}
+	update := callTestTool(t, client, ToolUpdateMonitor, map[string]any{"job_id": "monitor-1", "channel_id": "channel-1", "model": "unvalidated-model"})
+	if !update.IsError || !strings.Contains(callToolText(t, update), "model overrides are not supported") {
+		t.Fatalf("update monitor model override result = error:%v text:%q", update.IsError, callToolText(t, update))
+	}
+	entries, err := os.ReadDir(filepath.Join(dir, "monitor", "pending"))
+	if err == nil && len(entries) != 0 {
+		t.Fatalf("monitor model override wrote pending action: %+v", entries)
+	}
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("read monitor pending dir: %v", err)
+	}
+}
+
+func TestMonitorToolsRejectOverlongName(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "target.json")
+	if err := os.WriteFile(statePath, []byte(`{"target_channel_id":"channel-1","source":"message","requester_id":"user-1","requester_name":"alice","can_manage_channel":true}`), 0644); err != nil {
+		t.Fatalf("write target state: %v", err)
+	}
+	t.Setenv("DATA_DIR", dir)
+	t.Setenv("BOT_TOOLS_CHANNEL_ID", "channel-1")
+	t.Setenv("BOT_TOOLS_GUILD_ID", "guild-1")
+	t.Setenv("BOT_TOOLS_TARGET_STATE_PATH", statePath)
+
+	client := initializedTestClient(t, NewServerWithOptions(ServerOptions{}))
+	tooLong := strings.Repeat("a", heartbeat.MonitorNameMaxRunes+1)
+	create := callTestTool(t, client, ToolCreateMonitor, map[string]any{
+		"name":         tooLong,
+		"schedule":     "*/10 * * * *",
+		"check_prompt": "check CI",
+		"notify_when":  "CI fails",
+		"channel_id":   "channel-1",
+		"guild_id":     "guild-1",
+		"created_by":   "alice",
+	})
+	if !create.IsError || !strings.Contains(callToolText(t, create), "name cannot exceed") {
+		t.Fatalf("create monitor overlong name result = error:%v text:%q", create.IsError, callToolText(t, create))
+	}
+	update := callTestTool(t, client, ToolUpdateMonitor, map[string]any{"job_id": "monitor-1", "channel_id": "channel-1", "name": tooLong})
+	if !update.IsError || !strings.Contains(callToolText(t, update), "name cannot exceed") {
+		t.Fatalf("update monitor overlong name result = error:%v text:%q", update.IsError, callToolText(t, update))
+	}
+}
+
+func TestMonitorCreateRejectsMismatchedBoundGuild(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "target.json")
+	if err := os.WriteFile(statePath, []byte(`{"target_channel_id":"channel-1","source":"message"}`), 0644); err != nil {
+		t.Fatalf("write target state: %v", err)
+	}
+	t.Setenv("DATA_DIR", dir)
+	t.Setenv("BOT_TOOLS_CHANNEL_ID", "channel-1")
+	t.Setenv("BOT_TOOLS_GUILD_ID", "guild-1")
+	t.Setenv("BOT_TOOLS_TARGET_STATE_PATH", statePath)
+
+	client := initializedTestClient(t, NewServerWithOptions(ServerOptions{}))
+	create := callTestTool(t, client, ToolCreateMonitor, map[string]any{
+		"name":         "CI",
+		"schedule":     "*/10 * * * *",
+		"check_prompt": "check CI",
+		"notify_when":  "CI fails",
+		"channel_id":   "channel-1",
+		"guild_id":     "guild-2",
+		"created_by":   "alice",
+	})
+	if !create.IsError || !strings.Contains(callToolText(t, create), "guild_id guild-2 is not allowed") {
+		t.Fatalf("create monitor mismatched guild result = error:%v text:%q", create.IsError, callToolText(t, create))
+	}
+	entries, err := os.ReadDir(filepath.Join(dir, "monitor", "pending"))
+	if err == nil && len(entries) != 0 {
+		t.Fatalf("mismatched guild wrote pending action: %+v", entries)
+	}
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("read monitor pending dir: %v", err)
+	}
+}
+
+func TestMonitorMutationToolsRequireAuthenticatedManager(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "target.json")
+	t.Setenv("DATA_DIR", dir)
+	t.Setenv("BOT_TOOLS_CHANNEL_ID", "channel-1")
+	t.Setenv("BOT_TOOLS_GUILD_ID", "guild-1")
+	t.Setenv("BOT_TOOLS_TARGET_STATE_PATH", statePath)
+	client := initializedTestClient(t, NewServerWithOptions(ServerOptions{}))
+
+	if err := os.WriteFile(statePath, []byte(`{"target_channel_id":"channel-1","source":"message","requester_id":"user-1","requester_name":"alice"}`), 0644); err != nil {
+		t.Fatalf("write target state: %v", err)
+	}
+	createArgs := map[string]any{
+		"name":         "CI",
+		"schedule":     "*/10 * * * *",
+		"check_prompt": "check CI",
+		"notify_when":  "CI fails",
+		"channel_id":   "channel-1",
+		"guild_id":     "guild-1",
+	}
+	if result := callTestTool(t, client, ToolCreateMonitor, createArgs); !result.IsError || !strings.Contains(callToolText(t, result), "channel management permission") {
+		t.Fatalf("unprivileged create result = error:%v text:%q", result.IsError, callToolText(t, result))
+	}
+	if result := callTestTool(t, client, ToolListMonitor, map[string]any{"channel_id": "channel-1"}); !result.IsError || !strings.Contains(callToolText(t, result), "channel management permission") {
+		t.Fatalf("unprivileged list result = error:%v text:%q", result.IsError, callToolText(t, result))
+	}
+
+	if err := os.WriteFile(statePath, []byte(`{"target_channel_id":"channel-1","source":"message","can_manage_channel":true}`), 0644); err != nil {
+		t.Fatalf("write target state: %v", err)
+	}
+	if result := callTestTool(t, client, ToolUpdateMonitor, map[string]any{"job_id": "monitor-1", "channel_id": "channel-1", "enabled": false}); !result.IsError || !strings.Contains(callToolText(t, result), "authenticated Discord request context") {
+		t.Fatalf("anonymous update result = error:%v text:%q", result.IsError, callToolText(t, result))
+	}
+
+	if err := os.WriteFile(statePath, []byte(`{"target_channel_id":"channel-1","source":"a2a","remote_a2a":true,"requester_id":"manager","requester_name":"mallory","can_manage_channel":true}`), 0644); err != nil {
+		t.Fatalf("write target state: %v", err)
+	}
+	if result := callTestTool(t, client, ToolCreateMonitor, createArgs); !result.IsError || !strings.Contains(callToolText(t, result), "remote A2A") {
+		t.Fatalf("remote A2A create result = error:%v text:%q", result.IsError, callToolText(t, result))
+	}
+
+	if err := os.WriteFile(statePath, []byte(`{"target_channel_id":"channel-1","source":"message","requester_id":"user-1","requester_name":"alice","can_manage_channel":true}`), 0644); err != nil {
+		t.Fatalf("write target state: %v", err)
+	}
+	result := callTestTool(t, client, ToolCreateMonitor, createArgs)
+	if result.IsError {
+		t.Fatalf("manager create denied: %q", callToolText(t, result))
+	}
+	if text := callToolText(t, result); !strings.Contains(text, "queued for creation") || !strings.Contains(text, "within 60 seconds") || strings.Contains(text, " created ") {
+		t.Fatalf("manager create text = %q, want queued activation wording", text)
+	}
+	entries, err := os.ReadDir(filepath.Join(dir, "monitor", "pending"))
+	if err != nil {
+		t.Fatalf("read monitor pending: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("pending monitor entries = %d, want 1", len(entries))
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "monitor", "pending", entries[0].Name()))
+	if err != nil {
+		t.Fatalf("read pending entry: %v", err)
+	}
+	var queued heartbeat.MonitorPendingAction
+	if err := json.Unmarshal(raw, &queued); err != nil {
+		t.Fatalf("parse pending monitor: %v", err)
+	}
+	if queued.Job == nil || queued.Job.CreatedBy != "alice" || queued.Job.CreatedByID != "user-1" {
+		t.Fatalf("queued monitor did not use authenticated actor: %+v", queued.Job)
+	}
 }
 
 func TestMemoryOwnerChannelIDUsesBoundParentForThreadTarget(t *testing.T) {
@@ -497,6 +840,136 @@ func TestCreateCronToolDocumentsBotTimezone(t *testing.T) {
 	}
 }
 
+func TestMonitorToolsDocumentSilentNotificationContract(t *testing.T) {
+	t.Setenv("CRON_TIMEZONE", "Asia/Taipei")
+
+	tool := writeTool(ToolCreateMonitor, cronpolicy.MonitorCreateToolDescription(cronpolicy.TimezoneName("Asia/Taipei")), false)
+
+	for _, want := range []string{"background monitor", "stay silent", "notify condition", "Asia/Taipei"} {
+		if !strings.Contains(tool.Description, want) {
+			t.Fatalf("monitor create description missing %q: %q", want, tool.Description)
+		}
+	}
+	for _, field := range []string{"schedule", "check_prompt", "notify_when", "channel_id", "guild_id"} {
+		if _, ok := tool.InputSchema.Properties[field]; !ok {
+			t.Fatalf("monitor create schema missing %s: %+v", field, tool.InputSchema.Properties)
+		}
+	}
+}
+
+func TestWriteMonitorPendingValidatesAndWritesMonitorQueue(t *testing.T) {
+	dir := t.TempDir()
+	action := heartbeat.MonitorPendingAction{
+		Action: "create",
+		Job: &heartbeat.MonitorJob{
+			Name:        "CI",
+			Schedule:    "*/5 * * * *",
+			CheckPrompt: "check CI",
+			NotifyWhen:  "main fails",
+			ChannelID:   "channel-1",
+			GuildID:     "guild-1",
+		},
+	}
+
+	if err := writeMonitorPending(dir, action); err != nil {
+		t.Fatalf("writeMonitorPending: %v", err)
+	}
+	entries, err := os.ReadDir(filepath.Join(dir, "monitor", "pending"))
+	if err != nil {
+		t.Fatalf("read monitor pending: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("pending entries = %d, want 1", len(entries))
+	}
+	if filepath.Ext(entries[0].Name()) != ".json" {
+		t.Fatalf("pending entry name = %q, want published .json file", entries[0].Name())
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "monitor", "pending", entries[0].Name()))
+	if err != nil {
+		t.Fatalf("read monitor pending entry: %v", err)
+	}
+	var queued heartbeat.MonitorPendingAction
+	if err := json.Unmarshal(raw, &queued); err != nil {
+		t.Fatalf("pending entry is not complete JSON: %v\n%s", err, raw)
+	}
+
+	bad := action
+	bad.Job = &heartbeat.MonitorJob{Name: "CI", Schedule: "*/5 * * * *", CheckPrompt: "check CI", ChannelID: "channel-1", GuildID: "guild-1"}
+	if err := writeMonitorPending(dir, bad); err == nil {
+		t.Fatal("writeMonitorPending accepted monitor without notify_when")
+	}
+}
+
+func TestWriteMonitorPendingStorageErrorIsSanitized(t *testing.T) {
+	rootFile := filepath.Join(t.TempDir(), "data-file")
+	if err := os.WriteFile(rootFile, []byte("not a directory"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	action := heartbeat.MonitorPendingAction{
+		Action: "create",
+		Job: &heartbeat.MonitorJob{
+			Name:        "CI",
+			Schedule:    "*/5 * * * *",
+			CheckPrompt: "check CI",
+			NotifyWhen:  "main fails",
+			ChannelID:   "channel-1",
+			GuildID:     "guild-1",
+		},
+	}
+
+	err := writeMonitorPending(rootFile, action)
+	if err == nil {
+		t.Fatal("writeMonitorPending unexpectedly succeeded with file root")
+	}
+	if strings.Contains(err.Error(), rootFile) || !strings.Contains(err.Error(), "monitor change could not be queued") {
+		t.Fatalf("writeMonitorPending error = %q, want sanitized queue failure", err)
+	}
+}
+func TestListMonitorJobsStorageErrorIsSanitized(t *testing.T) {
+	rootFile := filepath.Join(t.TempDir(), "data-file")
+	if err := os.WriteFile(rootFile, []byte("not a directory"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	jobs, err := listMonitorJobs(rootFile, "channel-1")
+	if err == nil {
+		t.Fatalf("listMonitorJobs unexpectedly succeeded with jobs %+v", jobs)
+	}
+	if strings.Contains(err.Error(), rootFile) || !strings.Contains(err.Error(), "monitor list could not be loaded") {
+		t.Fatalf("listMonitorJobs error = %q, want sanitized load failure", err)
+	}
+}
+
+func TestListMonitorJobsDoesNotExposePrivateHistoryText(t *testing.T) {
+	dir := t.TempDir()
+	monitorDir := filepath.Join(dir, "monitor", "job-1")
+	if err := os.MkdirAll(monitorDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	storeRaw := `{"job-1":{"id":"job-1","name":"CI DISCORD_TOKEN=supersecretvalue","channel_id":"channel-1","schedule":"*/5 * * * *","check_prompt":"check private CI API_TOKEN=supersecretvalue","notify_when":"fails with bearer abcdefghijklmnop","enabled":true,"last_check_at":"2026-05-28T12:00:00Z"}}`
+	if err := os.WriteFile(filepath.Join(dir, "monitor", "monitor.json"), []byte(storeRaw), 0644); err != nil {
+		t.Fatal(err)
+	}
+	historyRaw := `{"ts":"2026-05-28T12:00:00Z","status":"suppressed","internal_summary":"private suppressed details","reason":"secret reason"}` + "\n"
+	if err := os.WriteFile(filepath.Join(monitorDir, "history.jsonl"), []byte(historyRaw), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	jobs, err := listMonitorJobs(dir, "channel-1")
+	if err != nil {
+		t.Fatalf("listMonitorJobs: %v", err)
+	}
+	raw, err := json.Marshal(jobs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "private suppressed details") || strings.Contains(string(raw), "secret reason") || strings.Contains(string(raw), "last_summary") || strings.Contains(string(raw), "last_reason") {
+		t.Fatalf("monitor list exposed private history text: %s", raw)
+	}
+	if strings.Contains(string(raw), "supersecretvalue") || strings.Contains(string(raw), "abcdefghijklmnop") {
+		t.Fatalf("monitor list exposed unredacted monitor prompt text: %s", raw)
+	}
+}
+
 func TestTimeToolsDocumentTimezoneAndStructuredRangeUse(t *testing.T) {
 	tool := currentTimeTool("Asia/Taipei")
 	if tool.Annotations.ReadOnlyHint == nil || !*tool.Annotations.ReadOnlyHint {
@@ -721,8 +1194,6 @@ func TestValidateBotImageURLAllowsHTTPAndHTTPSSources(t *testing.T) {
 	for _, raw := range []string{
 		"https://images.example.com/screenshot.jpg",
 		"http://cdn.example.com/path/result?size=large",
-		"http://127.0.0.1:19280/api/sessions/session-1/screenshot",
-		"http://localhost:19280/api/sessions/session-1/screenshot",
 	} {
 		if _, err := validateBotImageURL(raw); err != nil {
 			t.Fatalf("validateBotImageURL(%q): %v", raw, err)
@@ -742,6 +1213,29 @@ func TestValidateBotImageURLRejectsNonHTTPAndCredentials(t *testing.T) {
 	}
 }
 
+func TestBotImageIPAllowedRejectsPrivateAddresses(t *testing.T) {
+	for _, raw := range []string{"127.0.0.1", "10.0.0.1", "172.16.0.1", "192.168.1.1", "169.254.169.254", "198.18.0.1", "192.0.2.1", "198.51.100.1", "203.0.113.1", "192.0.0.1", "192.31.196.1", "192.52.193.1", "192.88.99.1", "192.175.48.1", "::1", "fc00::1", "fe80::1", "2001:db8::1", "2002:0a00:0001::", "64:ff9b:1::a9fe:a9fe", "100.64.0.1"} {
+		if botImageIPAllowed(net.ParseIP(raw)) {
+			t.Fatalf("botImageIPAllowed(%s) = true, want blocked", raw)
+		}
+	}
+	if !botImageIPAllowed(net.ParseIP("93.184.216.34")) {
+		t.Fatal("public IPv4 address was blocked")
+	}
+}
+
+func TestNewBotImageHTTPClientDisablesEnvironmentProxy(t *testing.T) {
+	t.Setenv("HTTP_PROXY", "http://127.0.0.1:9")
+	client := newBotImageHTTPClient()
+	transport, ok := client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("bot image transport = %T", client.Transport)
+	}
+	if transport.Proxy != nil {
+		t.Fatal("bot image client retained environment proxy")
+	}
+}
+
 func TestFetchValidatedImageURLStagesAllowedJPEG(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("DATA_DIR", dir)
@@ -757,7 +1251,31 @@ func TestFetchValidatedImageURLStagesAllowedJPEG(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	path, err := fetchValidatedImageURL(context.Background(), srv.URL+"/screenshot", "screen.txt")
+	oldLookupIP, oldDialContext := botImageLookupIP, botImageDialContext
+	_, port, err := net.SplitHostPort(srv.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	botImageLookupIP = func(ctx context.Context, network, host string) ([]net.IP, error) {
+		if host == "images.example.test" {
+			return []net.IP{net.ParseIP("93.184.216.34")}, nil
+		}
+		return oldLookupIP(ctx, network, host)
+	}
+	botImageDialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		_, dialPort, err := net.SplitHostPort(address)
+		if err == nil && dialPort == port {
+			var d net.Dialer
+			return d.DialContext(ctx, network, srv.Listener.Addr().String())
+		}
+		return oldDialContext(ctx, network, address)
+	}
+	defer func() {
+		botImageLookupIP = oldLookupIP
+		botImageDialContext = oldDialContext
+	}()
+
+	path, err := fetchValidatedImageURL(context.Background(), "http://images.example.test:"+port+"/screenshot", "screen.txt")
 	if err != nil {
 		t.Fatalf("fetchValidatedImageURL: %v", err)
 	}
@@ -989,8 +1507,22 @@ func TestAuthenticatedA2AMCPManageChannelsUsesTargetState(t *testing.T) {
 	}
 	t.Setenv("BOT_TOOLS_TARGET_STATE_PATH", statePath)
 
+	if authenticatedA2AMCPManageChannels() {
+		t.Fatal("manage_channels accepted target state without authenticated requester")
+	}
+
+	if err := os.WriteFile(statePath, []byte(`{"target_channel_id":"channel-1","requester_id":"user-1","requester_name":"alice","can_manage_channel":true}`), 0644); err != nil {
+		t.Fatalf("write requester target state: %v", err)
+	}
 	if !authenticatedA2AMCPManageChannels() {
-		t.Fatal("manage_channels not derived from authenticated target state")
+		t.Fatal("manage_channels not derived from authenticated requester target state")
+	}
+
+	if err := os.WriteFile(statePath, []byte(`{"target_channel_id":"channel-1","remote_a2a":true,"can_manage_channel":true}`), 0644); err != nil {
+		t.Fatalf("write remote target state: %v", err)
+	}
+	if authenticatedA2AMCPManageChannels() {
+		t.Fatal("manage_channels accepted remote A2A target state")
 	}
 }
 
@@ -1017,6 +1549,9 @@ func TestA2ARemoteMemoryWriteTargetStateAllowsPolicyOptIn(t *testing.T) {
 
 	if !remoteA2AMemoryWriteAllowed() {
 		t.Fatal("remote A2A memory write was denied despite explicit policy")
+	}
+	if botToolsMemoryWriteDisabled() {
+		t.Fatal("remote A2A memory write guard ignored explicit policy opt-in")
 	}
 }
 

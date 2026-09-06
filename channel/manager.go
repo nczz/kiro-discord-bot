@@ -410,6 +410,15 @@ const (
 	mcpDiscordResolveMentionsTool = "discord_resolve_mentions"
 )
 
+func mcpBindingSensitiveServer(name string) bool {
+	switch strings.TrimSpace(name) {
+	case "bot-tools", mcpDiscordServerName:
+		return true
+	default:
+		return false
+	}
+}
+
 func (m *Manager) applyLegacyMCPMigration() error {
 	if m.mcpPolicies == nil || m.store == nil {
 		return nil
@@ -793,6 +802,7 @@ func (m *Manager) mcpServersForTarget(channelID, targetChannelID string) []acp.M
 		log.Printf("[mcp-policy] load channel=%s: %v", channelID, err)
 		return nil
 	}
+	policies = m.filterChannelBoundMCPPolicies(policies)
 	channelTools, channelAllowAll := m.channelEffectiveMCPTools(policies)
 	projectCWD := m.TargetCWDPath(targetChannelID, channelID)
 	var servers []acp.MCPServerConfig
@@ -800,6 +810,10 @@ func (m *Manager) mcpServersForTarget(channelID, targetChannelID string) []acp.M
 		entry, ok := m.mcpPolicies.CatalogEntry(policy.ServerName)
 		if !ok {
 			log.Printf("[mcp-policy] server %s enabled for channel=%s but not found in catalog", policy.ServerName, channelID)
+			continue
+		}
+		if entry.URL != "" && mcpBindingSensitiveServer(entry.Name) {
+			log.Printf("[mcp-policy] URL mcp server %s is not allowed for channel-bound bot tools; skipping channel=%s", entry.Name, channelID)
 			continue
 		}
 		entry = m.withRuntimeMCPEnv(entry)
@@ -815,6 +829,21 @@ func (m *Manager) mcpServersForTarget(channelID, targetChannelID string) []acp.M
 		servers = append(servers, server)
 	}
 	return servers
+}
+
+func (m *Manager) filterChannelBoundMCPPolicies(policies []MCPChannelPolicy) []MCPChannelPolicy {
+	if m == nil || m.mcpPolicies == nil || len(policies) == 0 {
+		return policies
+	}
+	out := make([]MCPChannelPolicy, 0, len(policies))
+	for _, policy := range policies {
+		entry, ok := m.mcpPolicies.CatalogEntry(policy.ServerName)
+		if ok && entry.URL != "" && mcpBindingSensitiveServer(entry.Name) {
+			continue
+		}
+		out = append(out, policy)
+	}
+	return out
 }
 
 func (m *Manager) channelEffectiveMCPTools(policies []MCPChannelPolicy) ([]string, bool) {
@@ -877,6 +906,9 @@ func (m *Manager) auditPromptMCPServers(channelID, targetChannelID string) ([]ac
 	entry, ok := m.mcpPolicies.CatalogEntry("bot-tools")
 	if !ok {
 		return nil, fmt.Errorf("mcp server %q was not found in catalog", "bot-tools")
+	}
+	if entry.URL != "" && mcpBindingSensitiveServer(entry.Name) {
+		return nil, fmt.Errorf("mcp server %q must be a local command for channel-bound bot tools", entry.Name)
 	}
 	policy := defaultMCPPolicy(m.guildID, channelID, "bot-tools")
 	policy.Enabled = true
@@ -2358,6 +2390,7 @@ func (m *Manager) BuildSkillPromptPrefix(parentChannelID, targetID string) strin
 	if err != nil {
 		return ""
 	}
+	policies = m.filterChannelBoundMCPPolicies(policies)
 	if !botToolsExposeTool(policies, botmcp.ToolSkillGet) {
 		return ""
 	}
@@ -3004,6 +3037,24 @@ func (m *Manager) doctorEngineDiagnostics(ctx context.Context) string {
 
 func resolveEngineBinary(dialect acp.Dialect, binary string) (string, error) {
 	return acp.ResolveAgentBinary(binary, dialect)
+}
+
+// ResolveTempAgentModel returns the model a channel-scoped temporary agent
+// should use. A non-empty override is validated before use; an empty override
+// inherits the channel session model, then the configured global default, then
+// the engine default.
+func (m *Manager) ResolveTempAgentModel(channelID, override string) (string, error) {
+	override = strings.TrimSpace(override)
+	if override != "" {
+		if err := m.validateModelForChannel(channelID, override); err != nil {
+			return "", err
+		}
+		return override, nil
+	}
+	if sess, ok := m.getChannelSession(channelID); ok && strings.TrimSpace(sess.Model) != "" {
+		return strings.TrimSpace(sess.Model), nil
+	}
+	return strings.TrimSpace(m.defaultModel), nil
 }
 
 // StartTempAgent starts a temporary agent (for cron jobs).

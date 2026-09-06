@@ -20,6 +20,7 @@ import (
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/nczz/kiro-discord-bot/channel"
+	"github.com/nczz/kiro-discord-bot/heartbeat"
 	"github.com/nczz/kiro-discord-bot/internal/discordmention"
 	"github.com/nczz/kiro-discord-bot/internal/secrets"
 	"github.com/nczz/kiro-discord-bot/internal/textutil"
@@ -504,8 +505,8 @@ func buildPromptThreadWithMentions(text string, attachments []string, channelID,
 	sb.WriteString("Do not write raw Discord angle-bracket mention strings or guess Discord IDs. To mention a user, use one of the exact Discord mention reference placeholders listed below; unlisted users cannot be mentioned. If the user asks to tag, mention, notify, or ping a named person who is not listed and discord_resolve_mentions is available, call it once with the extracted names first, then use only the returned placeholders. Do not use discord_list_members or message history to infer mention IDs.\n")
 	sb.WriteString("For cron management tools, use channel_id as the owning parent channel ID; use thread_id only for thread-targeted Discord messages.\n")
 	sb.WriteString("When users say 本頻道, 這個頻道, 目前頻道, this channel, here, or current session, interpret that as the current Discord target from this context. In a thread, 本討論串/this thread means thread_id; parent channel or whole-channel history means channel_id and includes child threads. If users ask about prior discussion, use bot_query_channel_history when available instead of claiming Discord history is inaccessible. For broad or exhaustive history requests, keep paginating bot_query_channel_history with offset=next_offset until has_more=false before synthesizing the answer.\n")
-	sb.WriteString("For one-time reminders, use bot_create_reminder; for recurring schedules, use bot_create_cron. If the user gives a specific date, convert it to explicit reminder time in the bot cron timezone and do not degrade it to tomorrow.\n")
-	sb.WriteString("To change, disable, or resume an existing recurring schedule, first use bot_list_cron, then bot_update_cron with only the requested fields. Use enabled=false to disable without deleting; deletion requires bot_delete_cron.\n")
+	sb.WriteString("For one-time reminders, use bot_create_reminder. For visible recurring schedules, use bot_create_cron. For silent recurring checks that notify only when a separate condition matches, use bot_create_monitor instead of cron. If the user gives a specific date, convert it to explicit reminder time in the bot cron timezone and do not degrade it to tomorrow.\n")
+	sb.WriteString("For inspection-only requests about existing recurring schedules, use bot_list_cron for cron jobs or bot_list_monitor for monitors, then stop without calling update tools. To change, disable, or resume an existing recurring schedule, first list the matching cron job or monitor, then use bot_update_cron or bot_update_monitor with only the requested fields. Use enabled=false to disable without deleting; deletion requires bot_delete_cron or bot_delete_monitor.\n")
 	sb.WriteString("For A2A, use high-level tools with minimal fields. Receiver consent: if the user says 允許 X 委派, allow X to delegate/send work here, or similar, call bot_a2a_trust_peer with target_agent only. It applies normal inbound allowlist consent immediately; do not ask the user for confirmation_token. Do not fill relationship, skill, channel label, or reply-mode fields; bot_a2a_trust_peer rejects expert policy changes. Default trust is receive-only, not two-way.\n")
 	sb.WriteString("For A2A sending/status: if the user says 委派給 X, ask/delegate to X, or asks another bot to work, call bot_a2a_peers if needed, then bot_a2a_delegate with target_agent and message only. After a queued result, call bot_a2a_task_status with local_id before saying the other bot accepted or finished. If shared-thread result text is omitted, do not repost or summarize it unless the user asks.\n")
 	sb.WriteString("For persistent channel memory, use bot_memory_list to inspect existing rules. Use bot_memory_add only when the user explicitly asks the bot to remember a Discord-channel preference or behavior rule for future turns; summarize it as one durable behavior rule, reject secrets or policy-bypass instructions, and include requester/reason audit fields. bot_memory_add is not a knowledge base, project knowledge store, document corpus, or searchable index: do not use it for requests phrased as 知識庫, knowledge base, KB, 文件索引, project knowledge, update docs, or add to corpus. If the user asks to update a knowledge base and no knowledge-base-specific write tool is available, say that this bot cannot write that knowledge base from Discord and ask for the target KB/source/update workflow. Do not store ordinary conversation as memory. Use bot_memory_remove or bot_memory_clear only when explicitly requested and available.\n")
@@ -1198,7 +1199,7 @@ func buildSlashCommandsWithA2A(a2aEnabled bool) []*discordgo.ApplicationCommand 
 			{Type: discordgo.ApplicationCommandOptionUser, Name: "user", Description: L.Get("cmd.usage_history.opt.user"), Required: false},
 			{Type: discordgo.ApplicationCommandOptionString, Name: "period", Description: L.Get("cmd.usage_history.opt.period"), Required: false, Choices: []*discordgo.ApplicationCommandOptionChoice{{Name: "7d", Value: "7d"}, {Name: "30d", Value: "30d"}, {Name: "this-month", Value: "this-month"}, {Name: "last-month", Value: "last-month"}}},
 			{Type: discordgo.ApplicationCommandOptionString, Name: "status", Description: L.Get("cmd.usage_history.opt.status"), Required: false, Choices: []*discordgo.ApplicationCommandOptionChoice{{Name: "all", Value: "all"}, {Name: "success", Value: "success"}, {Name: "failed", Value: "error"}}},
-			{Type: discordgo.ApplicationCommandOptionString, Name: "source", Description: L.Get("cmd.usage_history.opt.source"), Required: false, Choices: []*discordgo.ApplicationCommandOptionChoice{{Name: "all", Value: "all"}, {Name: "message", Value: "message"}, {Name: "webhook", Value: "webhook"}, {Name: "command", Value: "command"}, {Name: "cron", Value: "cron"}}},
+			{Type: discordgo.ApplicationCommandOptionString, Name: "source", Description: L.Get("cmd.usage_history.opt.source"), Required: false, Choices: []*discordgo.ApplicationCommandOptionChoice{{Name: "all", Value: "all"}, {Name: "message", Value: "message"}, {Name: "webhook", Value: "webhook"}, {Name: "webshare", Value: "webshare"}, {Name: "command", Value: "command"}, {Name: "cron", Value: "cron"}, {Name: "monitor", Value: "monitor"}}},
 		}},
 		{Name: "doctor", Description: L.Get("cmd.doctor.desc")},
 		{Name: "audit", Description: L.Get("cmd.audit.desc"), Options: []*discordgo.ApplicationCommandOption{
@@ -1269,6 +1270,13 @@ func buildSlashCommandsWithA2A(a2aEnabled bool) []*discordgo.ApplicationCommand 
 		}},
 		{Name: "cron-prompt", Description: L.Get("cmd.cron_prompt.desc"), Options: []*discordgo.ApplicationCommandOption{
 			{Type: discordgo.ApplicationCommandOptionString, Name: "description", Description: L.Get("cmd.cron_prompt.opt"), Required: true},
+		}},
+		{Name: "monitor-list", Description: L.Get("cmd.monitor_list.desc")},
+		{Name: "monitor-run", Description: L.Get("cmd.monitor_run.desc"), Options: []*discordgo.ApplicationCommandOption{
+			{Type: discordgo.ApplicationCommandOptionString, Name: "name", Description: L.Get("cmd.monitor_run.opt.name"), Required: true, Autocomplete: true, MaxLength: heartbeat.MonitorNameMaxRunes},
+		}},
+		{Name: "monitor-prompt", Description: L.Get("cmd.monitor_prompt.desc"), Options: []*discordgo.ApplicationCommandOption{
+			{Type: discordgo.ApplicationCommandOptionString, Name: "description", Description: L.Get("cmd.monitor_prompt.opt"), Required: true},
 		}},
 		{Name: "remind", Description: L.Get("cmd.remind.desc"), Options: []*discordgo.ApplicationCommandOption{
 			{Type: discordgo.ApplicationCommandOptionString, Name: "time", Description: L.Get("cmd.remind.opt.time"), Required: true},
@@ -1368,7 +1376,7 @@ func (b *Bot) handleAutocomplete(ds *discordgo.Session, i *discordgo.Interaction
 		return
 	}
 	data := i.ApplicationCommandData()
-	if data.Name != "cron-run" {
+	if data.Name != "cron-run" && data.Name != "monitor-run" {
 		return
 	}
 	// Get typed value
@@ -1378,18 +1386,38 @@ func (b *Bot) handleAutocomplete(ds *discordgo.Session, i *discordgo.Interaction
 			typed = strings.ToLower(opt.StringValue())
 		}
 	}
-	// List jobs for this channel, filter by typed prefix
-	jobs := b.cronStore.ListByChannel(i.ChannelID)
+	if data.Name == "monitor-run" && !b.monitorActorCanManage(ds, i, i.ChannelID) {
+		_ = ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionApplicationCommandAutocompleteResult,
+			Data: &discordgo.InteractionResponseData{Choices: []*discordgo.ApplicationCommandOptionChoice{}},
+		})
+		return
+	}
 	var choices []*discordgo.ApplicationCommandOptionChoice
-	for _, job := range jobs {
-		if typed == "" || strings.Contains(strings.ToLower(job.Name), typed) {
-			choices = append(choices, &discordgo.ApplicationCommandOptionChoice{
-				Name:  secrets.RedactEnv(job.Name),
-				Value: job.Name,
-			})
+	if data.Name == "monitor-run" {
+		for _, job := range b.monitorStore.ListByChannel(i.ChannelID) {
+			name := strings.TrimSpace(job.Name)
+			if len([]rune(name)) > heartbeat.MonitorNameMaxRunes {
+				continue
+			}
+			if typed == "" || strings.Contains(strings.ToLower(name), typed) {
+				choices = append(choices, &discordgo.ApplicationCommandOptionChoice{Name: secrets.RedactEnv(name), Value: name})
+			}
+			if len(choices) >= 25 {
+				break
+			}
 		}
-		if len(choices) >= 25 { // Discord max
-			break
+	} else {
+		for _, job := range b.cronStore.ListByChannel(i.ChannelID) {
+			if typed == "" || strings.Contains(strings.ToLower(job.Name), typed) {
+				choices = append(choices, &discordgo.ApplicationCommandOptionChoice{
+					Name:  secrets.RedactEnv(job.Name),
+					Value: job.Name,
+				})
+			}
+			if len(choices) >= 25 {
+				break
+			}
 		}
 	}
 	_ = ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
@@ -1414,6 +1442,8 @@ func (b *Bot) handleInteraction(ds *discordgo.Session, i *discordgo.InteractionC
 			b.handleCronModalSubmit(ds, i)
 		} else if strings.HasPrefix(customID, "cron_edit_modal_") {
 			b.handleCronEditSubmit(ds, i, strings.TrimPrefix(customID, "cron_edit_modal_"))
+		} else if strings.HasPrefix(customID, "monitor_edit_modal_") {
+			b.handleMonitorEditSubmit(ds, i, strings.TrimPrefix(customID, "monitor_edit_modal_"))
 		} else if strings.HasPrefix(customID, cwdCustomPrefix+":newmodal:") {
 			b.handleCWDModalSubmit(ds, i, strings.TrimPrefix(customID, cwdCustomPrefix+":newmodal:"))
 		} else if strings.HasPrefix(customID, steeringCustomPrefix+":create_modal:") {
@@ -1437,8 +1467,12 @@ func (b *Bot) handleInteraction(ds *discordgo.Session, i *discordgo.InteractionC
 			b.handleSkillComponent(ds, i)
 		} else if strings.HasPrefix(customID, "cronp_") {
 			b.handleCronPromptButton(ds, i)
+		} else if strings.HasPrefix(customID, "monp_") {
+			b.handleMonitorPromptButton(ds, i)
 		} else if strings.HasPrefix(customID, "cron_") {
 			b.handleCronButton(ds, i)
+		} else if strings.HasPrefix(customID, "monitor_") {
+			b.handleMonitorButton(ds, i)
 		}
 	}
 }
@@ -1548,6 +1582,28 @@ func (b *Bot) handleSlashCommand(ds *discordgo.Session, i *discordgo.Interaction
 		}
 		desc := data.Options[0].StringValue()
 		b.handleCronPrompt(ds, i, auditCtx, desc)
+		b.recordCommandCompleted(auditCtx, data.Name, "slash", "completed", "")
+		return
+	case "monitor-list":
+		b.handleMonitorList(ds, i, auditCtx)
+		b.recordCommandCompleted(auditCtx, data.Name, "slash", "completed", "")
+		return
+	case "monitor-run":
+		if !b.requireInitializedInteraction(ds, i, auditCtx, data.Name) {
+			b.recordCommandCompleted(auditCtx, data.Name, "slash", "rejected", "channel_uninitialized")
+			return
+		}
+		name := data.Options[0].StringValue()
+		b.handleMonitorRun(ds, i, auditCtx, name)
+		b.recordCommandCompleted(auditCtx, data.Name, "slash", "completed", "")
+		return
+	case "monitor-prompt":
+		if !b.requireInitializedInteraction(ds, i, auditCtx, data.Name) {
+			b.recordCommandCompleted(auditCtx, data.Name, "slash", "rejected", "channel_uninitialized")
+			return
+		}
+		desc := data.Options[0].StringValue()
+		b.handleMonitorPrompt(ds, i, auditCtx, desc)
 		b.recordCommandCompleted(auditCtx, data.Name, "slash", "completed", "")
 		return
 	case "remind":
@@ -1686,7 +1742,7 @@ func (b *Bot) handleSlashCommand(ds *discordgo.Session, i *discordgo.Interaction
 				ctx.reply(L.Get("a2a.disabled"))
 				return
 			}
-			ctx.args = a2aArgsFromSlashOptions(data.Options, i.GuildID, rawChannelID, userID, username, b.userCanManageAuditTarget(ds, userID, rawChannelID))
+			ctx.args = a2aArgsFromSlashOptions(data.Options, i.GuildID, rawChannelID, userID, username, b.userCanManageChannelTarget(ds, userID, rawChannelID))
 			b.cmdA2A(ctx)
 		case "steering":
 			ctx.args = steeringArgsFromSlashOptions(data.Options)

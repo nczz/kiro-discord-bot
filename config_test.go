@@ -34,6 +34,21 @@ func TestLoadConfigNormalizesDataDir(t *testing.T) {
 	}
 }
 
+func TestLoadConfigKeepsDefaultAttachmentLimitForNonPositiveValues(t *testing.T) {
+	for _, value := range []string{"0", "-1", "invalid"} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("DISCORD_TOKEN", "token")
+			t.Setenv("DATA_DIR", t.TempDir())
+			t.Setenv("ATTACHMENT_MAX_MB", value)
+
+			cfg := loadConfig()
+			if cfg.AttachmentMaxBytes != 25*1024*1024 {
+				t.Fatalf("AttachmentMaxBytes = %d, want default 25MB", cfg.AttachmentMaxBytes)
+			}
+		})
+	}
+}
+
 func TestConfigParsesA2ADisabledByDefault(t *testing.T) {
 	t.Setenv("DISCORD_TOKEN", "token")
 	t.Setenv("DATA_DIR", t.TempDir())

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -452,6 +453,7 @@ func (s *MCPPolicyStore) upsertCatalog(ctx context.Context, catalog map[string]M
 
 func redactedCatalogEntry(entry MCPCatalogEntry) MCPCatalogEntry {
 	cp := entry
+	cp.URL = redactedCatalogURL(cp.URL)
 	if len(cp.Env) > 0 {
 		cp.Env = make(map[string]string, len(entry.Env))
 		for k := range entry.Env {
@@ -465,6 +467,21 @@ func redactedCatalogEntry(entry MCPCatalogEntry) MCPCatalogEntry {
 		}
 	}
 	return cp
+}
+
+func redactedCatalogURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "<redacted>"
+	}
+	u.User = nil
+	u.RawQuery = ""
+	u.Fragment = ""
+	return u.String()
 }
 
 func (s *MCPPolicyStore) Catalog() []MCPCatalogEntry {
@@ -705,6 +722,10 @@ func normalizeLegacyDefaultBotToolsPolicy(p MCPChannelPolicy) MCPChannelPolicy {
 			"bot_send_message",
 		},
 	}
+	legacyDefaults = append(legacyDefaults,
+		removeStringSet(append([]string(nil), botmcp.DefaultSafeToolNamesForA2A(false)...), monitorBotToolNames()),
+		removeStringSet(append([]string(nil), botmcp.DefaultSafeToolNamesForA2A(true)...), monitorBotToolNames()),
+	)
 	// Previous safe defaults gained one-time reminders, update_cron, and the
 	// short-lived base64 image egress tool over time. Treat only actual
 	// historical default sets as managed defaults, so custom partial allowlists
@@ -715,6 +736,7 @@ func normalizeLegacyDefaultBotToolsPolicy(p MCPChannelPolicy) MCPChannelPolicy {
 			{"bot_create_reminder", "bot_update_cron"},
 			{"bot_create_reminder", "bot_update_cron", "bot_send_image_base64"},
 			{"bot_create_reminder", "bot_update_cron", "bot_send_image_base64", "bot_query_channel_history"},
+			{"bot_create_reminder", "bot_update_cron", "bot_send_image_url", "bot_query_channel_history"},
 		} {
 			legacy := append([]string(nil), legacyDefaults[i]...)
 			legacy = append(legacy, extras...)
@@ -723,7 +745,7 @@ func normalizeLegacyDefaultBotToolsPolicy(p MCPChannelPolicy) MCPChannelPolicy {
 	}
 	for _, legacy := range legacyDefaults {
 		if sameStringSet(tools, legacy) {
-			p.AllowedTools = botmcp.DefaultSafeToolNames()
+			p.AllowedTools = botmcp.DefaultSafeToolNamesForA2A(containsAnyString(legacy, a2aBotToolNames()))
 			return p
 		}
 	}
@@ -731,8 +753,18 @@ func normalizeLegacyDefaultBotToolsPolicy(p MCPChannelPolicy) MCPChannelPolicy {
 }
 
 func normalizeLegacyA2ABotToolsPolicy(p MCPChannelPolicy) MCPChannelPolicy {
-	tools := removeRetiredA2ABotTools(normalizeStrings(p.AllowedTools))
-	if len(tools) == 0 || !containsAnyString(tools, a2aBotToolNames()) {
+	rawTools := normalizeStrings(p.AllowedTools)
+	tools := removeRetiredA2ABotTools(rawTools)
+	writeSignal := containsAnyString(rawTools, legacyA2AWriteSignalToolNames())
+	if len(tools) == 0 && !writeSignal {
+		p.AllowedTools = tools
+		return p
+	}
+	if !containsAnyString(tools, a2aBotToolNames()) && !writeSignal {
+		p.AllowedTools = tools
+		return p
+	}
+	if !writeSignal {
 		p.AllowedTools = tools
 		return p
 	}
@@ -775,6 +807,26 @@ func a2aBotToolNames() []string {
 		botmcp.ToolA2ACancel,
 		botmcp.ToolA2AInputReply,
 		botmcp.ToolA2AAuthReply,
+	}
+}
+
+func legacyA2AWriteSignalToolNames() []string {
+	return []string{
+		botmcp.ToolA2ATrustPeer,
+		botmcp.ToolA2ADelegate,
+		botmcp.ToolA2ACancel,
+		botmcp.ToolA2AInputReply,
+		botmcp.ToolA2AAuthReply,
+		botmcp.ToolA2APolicyPlan,
+		botmcp.ToolA2APolicyApply,
+	}
+}
+
+func monitorBotToolNames() []string {
+	return []string{
+		botmcp.ToolListMonitor,
+		botmcp.ToolCreateMonitor,
+		botmcp.ToolUpdateMonitor,
 	}
 }
 
@@ -859,6 +911,12 @@ func (p MCPChannelPolicy) ToACPServer(entry MCPCatalogEntry, proxyCommand string
 				env["BOT_TOOLS_TARGET_STATE_PATH"] = statePath
 			}
 		} else if entry.Name == "mcp-discord" {
+			env["BOT_TOOLS_CHANNEL_ID"] = channelID
+			env["BOT_TOOLS_TARGET_CHANNEL_ID"] = strings.TrimSpace(targetChannelID)
+			env["BOT_TOOLS_GUILD_ID"] = guildID
+			env["MCP_DISCORD_READ_ONLY"] = fmt.Sprintf("%t", p.ReadOnly)
+			env["MCP_DISCORD_ALLOWED_WRITE_TOOLS"] = strings.Join(allowedTools, ",")
+			env["MCP_DISCORD_ALLOW_DESTRUCTIVE"] = fmt.Sprintf("%t", p.AllowDestructive)
 			if statePath := botToolsTargetStatePath(env["DATA_DIR"], botToolsTargetStateID(channelID, targetChannelID)); statePath != "" {
 				env["BOT_TOOLS_TARGET_STATE_PATH"] = statePath
 			}

@@ -26,6 +26,12 @@ type botToolsTargetState struct {
 	MentionRefs           []discordmention.Ref `json:"mention_refs,omitempty"`
 }
 
+// BotToolsTargetOptions controls dynamic bot-tools delivery state for a live job.
+type BotToolsTargetOptions struct {
+	DisableEgress bool
+	Source        string
+}
+
 func botToolsTargetStatePath(dataDir, channelID string) string {
 	dataDir = strings.TrimSpace(dataDir)
 	channelID = strings.TrimSpace(channelID)
@@ -70,6 +76,10 @@ func writeBotToolsTargetStateWithRequesterSource(path, targetChannelID string, d
 	targetChannelID = strings.TrimSpace(targetChannelID)
 	if path == "" || targetChannelID == "" {
 		return nil
+	}
+	if remoteA2A {
+		canManageChannel = false
+		canManageGuild = false
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return err
@@ -136,7 +146,7 @@ func botToolsPermissionsForTarget(ds *discordgo.Session, userID, targetID string
 	if err != nil {
 		return false, false, false
 	}
-	canManageChannel := perms&int64(discordgo.PermissionAdministrator|discordgo.PermissionManageChannels|discordgo.PermissionManageMessages|discordgo.PermissionManageThreads) != 0
+	canManageChannel := perms&int64(discordgo.PermissionAdministrator|discordgo.PermissionManageChannels) != 0
 	canManageGuild := perms&int64(discordgo.PermissionAdministrator|discordgo.PermissionManageGuild) != 0
 	return canManageChannel, canManageGuild, true
 }
@@ -210,6 +220,25 @@ func clearBotToolsTargetState(path string) {
 // such as an auto-created task thread.
 func (m *Manager) SetBotToolsTargetState(channelID, targetChannelID string) error {
 	return writeBotToolsTargetState(botToolsTargetStatePath(m.dataDir, channelID), targetChannelID)
+}
+
+// SetBotToolsTargetStateOptions binds bot-tools to a live target with explicit
+// egress/source controls.
+func (m *Manager) SetBotToolsTargetStateOptions(channelID, targetChannelID string, opts BotToolsTargetOptions) error {
+	return writeBotToolsTargetStateWithRequesterSource(
+		botToolsTargetStatePath(m.dataDir, channelID),
+		targetChannelID,
+		opts.DisableEgress,
+		nil,
+		false,
+		false,
+		"",
+		"",
+		0,
+		false,
+		false,
+		opts.Source,
+	)
 }
 
 // ClearBotToolsTargetState removes a channel's dynamic bot-tools egress target.

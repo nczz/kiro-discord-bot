@@ -183,6 +183,28 @@ func (b *Bot) userCanManageTarget(ds *discordgo.Session, userID, targetID string
 	return perms&allowed != 0
 }
 
+func (b *Bot) userCanManageChannelTarget(ds *discordgo.Session, userID, targetID string) bool {
+	if ds == nil || userID == "" || targetID == "" {
+		return false
+	}
+	if userHasChannelManagementPermission(ds, userID, targetID) {
+		return true
+	}
+	if parent := stateThreadParent(ds, targetID); parent != "" {
+		return userHasChannelManagementPermission(ds, userID, parent)
+	}
+	return false
+}
+
+func userHasChannelManagementPermission(ds *discordgo.Session, userID, targetID string) bool {
+	perms, err := ds.UserChannelPermissions(userID, targetID)
+	if err != nil {
+		return false
+	}
+	allowed := int64(discordgo.PermissionAdministrator | discordgo.PermissionManageChannels)
+	return perms&allowed != 0
+}
+
 func stateThreadParent(ds *discordgo.Session, targetID string) string {
 	if ds == nil || ds.State == nil || targetID == "" {
 		return ""

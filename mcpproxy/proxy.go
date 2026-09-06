@@ -15,6 +15,8 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+
+	"github.com/nczz/kiro-discord-bot/internal/secrets"
 )
 
 const (
@@ -183,11 +185,11 @@ func runHTTP(ctx context.Context, cfg Config, stdin io.Reader, stdout, stderr io
 		if err != nil {
 			// Network error: return JSON-RPC error to keep session alive.
 			reqID := extractJSONRPCID(line)
-			if err2 := writeLine(stdout, httpErrorResponse(reqID, fmt.Sprintf("http: %v", err))); err2 != nil {
+			if err2 := writeLine(stdout, httpErrorResponse(reqID, "http request failed")); err2 != nil {
 				return err2
 			}
 			if stderr != nil {
-				_, _ = fmt.Fprintf(stderr, "[mcp-proxy-http] request to %s failed: %v\n", cfg.URL, err)
+				_, _ = fmt.Fprintf(stderr, "[mcp-proxy-http] request to %s failed: %s\n", sanitizedDiagnosticURL(cfg.URL), sanitizedDiagnosticText(err.Error()))
 			}
 			continue
 		}
@@ -202,7 +204,7 @@ func runHTTP(ctx context.Context, cfg Config, stdin io.Reader, stdout, stderr io
 		}
 		if resp.StatusCode >= 400 {
 			if stderr != nil {
-				_, _ = fmt.Fprintf(stderr, "[mcp-proxy-http] %s returned %d: %s\n", cfg.URL, resp.StatusCode, body)
+				_, _ = fmt.Fprintf(stderr, "[mcp-proxy-http] %s returned %d\n", sanitizedDiagnosticURL(cfg.URL), resp.StatusCode)
 			}
 			reqID := extractJSONRPCID(line)
 			if err := writeLine(stdout, httpErrorResponse(reqID, fmt.Sprintf("upstream returned status %d", resp.StatusCode))); err != nil {
@@ -263,18 +265,17 @@ func runSSE(ctx context.Context, cfg Config, stdin io.Reader, stdout, stderr io.
 	errCh := make(chan error, 1)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, cfg.URL, nil)
 	if err != nil {
-		return err
+		return fmt.Errorf("create SSE request: invalid MCP proxy URL")
 	}
 	applyCustomHeaders(req, cfg.Headers)
 	req.Header.Set("Accept", "text/event-stream")
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		return fmt.Errorf("sse endpoint %s request failed", sanitizedDiagnosticURL(cfg.URL))
 	}
 	if resp.StatusCode >= 400 {
-		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		return fmt.Errorf("sse endpoint returned status %d: %s", resp.StatusCode, body)
+		return fmt.Errorf("sse endpoint returned status %d", resp.StatusCode)
 	}
 	defer resp.Body.Close()
 
@@ -323,15 +324,15 @@ func runSSE(ctx context.Context, cfg Config, stdin io.Reader, stdout, stderr io.
 		resp, err := client.Do(req)
 		if err != nil {
 			reqID := extractJSONRPCID(line)
-			if err2 := writeLine(stdout, httpErrorResponse(reqID, fmt.Sprintf("sse post: %v", err))); err2 != nil {
+			if err2 := writeLine(stdout, httpErrorResponse(reqID, "sse post failed")); err2 != nil {
 				return err2
 			}
 			if stderr != nil {
-				_, _ = fmt.Fprintf(stderr, "[mcp-proxy-sse] request to %s failed: %v\n", postURL, err)
+				_, _ = fmt.Fprintf(stderr, "[mcp-proxy-sse] request to %s failed\n", sanitizedDiagnosticURL(postURL))
 			}
 			continue
 		}
-		body, readErr := io.ReadAll(resp.Body)
+		_, readErr := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		if readErr != nil {
 			reqID := extractJSONRPCID(line)
@@ -342,7 +343,7 @@ func runSSE(ctx context.Context, cfg Config, stdin io.Reader, stdout, stderr io.
 		}
 		if resp.StatusCode >= 400 {
 			if stderr != nil {
-				_, _ = fmt.Fprintf(stderr, "[mcp-proxy-sse] %s returned %d: %s\n", postURL, resp.StatusCode, body)
+				_, _ = fmt.Fprintf(stderr, "[mcp-proxy-sse] %s returned %d\n", sanitizedDiagnosticURL(postURL), resp.StatusCode)
 			}
 			reqID := extractJSONRPCID(line)
 			if err := writeLine(stdout, httpErrorResponse(reqID, fmt.Sprintf("upstream returned status %d", resp.StatusCode))); err != nil {
@@ -374,7 +375,17 @@ func resolveSSEEndpoint(baseURL, endpoint string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return base.ResolveReference(ref).String(), nil
+	resolved := base.ResolveReference(ref)
+	if resolved.Scheme != "http" && resolved.Scheme != "https" {
+		return "", fmt.Errorf("SSE endpoint must resolve to http(s)")
+	}
+	if !strings.EqualFold(resolved.Scheme, base.Scheme) || !strings.EqualFold(resolved.Host, base.Host) {
+		return "", fmt.Errorf("SSE endpoint must stay on configured origin")
+	}
+	if resolved.User != nil {
+		return "", fmt.Errorf("SSE endpoint must not contain credentials")
+	}
+	return resolved.String(), nil
 }
 
 func readSSEEvents(ctx context.Context, cfg Config, r io.Reader, stdout, stderr io.Writer, writeLine func(io.Writer, []byte) error, endpointCh chan<- string) error {
@@ -511,6 +522,25 @@ func httpErrorResponse(id any, msg string) []byte {
 		},
 	})
 	return raw
+}
+
+func sanitizedDiagnosticURL(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return secrets.RedactEnv(raw)
+	}
+	u.User = nil
+	u.RawQuery = ""
+	u.Fragment = ""
+	return secrets.RedactEnv(u.String())
+}
+
+func sanitizedDiagnosticText(raw string) string {
+	return secrets.RedactEnv(strings.TrimSpace(raw))
 }
 
 func runStdio(ctx context.Context, cfg Config, stdin io.Reader, stdout, stderr io.Writer) error {

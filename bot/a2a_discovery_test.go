@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/nczz/kiro-discord-bot/a2a"
+	"github.com/nczz/kiro-discord-bot/channel"
 	"github.com/nczz/kiro-discord-bot/internal/channelmeta"
 )
 
@@ -85,6 +86,35 @@ func TestRuntimePeerCardForInactiveMetadataChannelHasNoSkills(t *testing.T) {
 	}
 	if len(record.Card.Skills) != 0 || record.ExtendedCard.DisplayName != "大廳" {
 		t.Fatalf("inactive runtime card = %+v", record)
+	}
+}
+
+func TestPeerCardRecordsDoNotPublishInactiveRuntimeMetadata(t *testing.T) {
+	dir := t.TempDir()
+	policyStore, err := a2a.OpenPolicyStore(dir, "local-bot")
+	if err != nil {
+		t.Fatalf("OpenPolicyStore: %v", err)
+	}
+	defer policyStore.Close()
+	if err := channelmeta.Upsert(dir, channelmeta.Entry{ID: "channel-2", GuildID: "guild-1", Name: "Private Room", Type: "channel"}); err != nil {
+		t.Fatalf("channel metadata: %v", err)
+	}
+	manager := channel.NewManager(channel.ManagerConfig{DataDir: dir, GuildID: "guild-1", A2A: a2a.Config{AgentID: "local-bot", RuntimeIDMode: a2a.RuntimeIDModeRuntime}, A2APolicyStore: policyStore})
+	defer manager.StopAll()
+	b := &Bot{
+		a2aConfig: a2a.Config{NATSURL: "nats://nats.example.internal:4222", AgentID: "local-bot", RuntimeIDMode: a2a.RuntimeIDModeRuntime},
+		version:   "2.29.1-test",
+		startedAt: nowForA2ATest(),
+		dataDir:   dir,
+		guildID:   "guild-1",
+		manager:   manager,
+	}
+	records, err := b.a2aPeerCardRecords(nowForA2ATest())
+	if err != nil {
+		t.Fatalf("a2aPeerCardRecords: %v", err)
+	}
+	if len(records) != 0 {
+		t.Fatalf("inactive metadata runtime records were published: %+v", records)
 	}
 }
 
