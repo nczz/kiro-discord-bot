@@ -60,6 +60,8 @@ MCP_DISCORD_READ_ONLY=false
 MCP_DISCORD_ALLOWED_WRITE_TOOLS=discord_send_message,discord_reply_message,discord_resolve_mentions
 MCP_DISCORD_ALLOW_DESTRUCTIVE=false
 MCP_DISCORD_MEMBER_SCAN_LIMIT=5000
+MCP_DISCORD_UPLOAD_DENY_PATHS=/srv/kiro-private/**
+MCP_DISCORD_UPLOAD_DENY_CASE_INSENSITIVE=
 ```
 
 空 allowlist 會保留舊版 unrestricted 行為。正式環境若 bot 有廣泛 Discord 權限，建議明確設定 guild/channel allowlist。
@@ -91,6 +93,10 @@ Standalone `mcp-discord` process 不會走 bot 的 channel-policy injection path
 
 建議先開 read-only，再只對工作流程需要的地方加入 non-destructive write tools。
 
-只有在目標是原檔傳輸時才使用 `discord_send_file`。它會在 Discord size limit 與 MCP write policy 下，上傳 `file_path` 指定的檔案；不會把 PDF/DOCX/XLSX 轉文字、不會因有效 binary 無法 redaction 就拒絕，也不會 redaction 文字檔內容。需要 sanitized bot-owned delivery 時，請使用 `bot_send_file`。
+只有在目標是原檔傳輸時才使用 `discord_send_file`。它會在 Discord size limit、MCP write policy 與 upload source denylist 下，上傳 `file_path` 指定的檔案；不會把 PDF/DOCX/XLSX 轉文字、不會因有效 binary 無法 redaction 就拒絕，也不會 redaction 文字檔內容。需要 sanitized bot-owned delivery 時，請使用 `bot_send_file`。
+
+`discord_send_file` 會在開檔前執行 source-path denylist。預設會封鎖 bot data directory、Kiro runtime/config roots、OMP session/config roots、mcp-discord executable directory，以及偵測到的 bot deployment directories。`MCP_DISCORD_UPLOAD_DENY_PATHS` 會追加 comma 或 newline 分隔的 wildcard patterns；環境變數與 `~` 展開後支援 `*`、`?`、`**`。檢查會同時比對 requested absolute path 與 symlink-resolved real path；拒絕時不回傳本機路徑。只有在 case-sensitive 部署檔案系統需要精準大小寫比對時，才設定 `MCP_DISCORD_UPLOAD_DENY_CASE_INSENSITIVE=false`。
+
+請讓 `DEFAULT_CWD`、user-content workspaces 與 `MCP_DISCORD_DOWNLOAD_DIR` 位於 bot data directory 之外。把使用者可傳輸檔案混進 bot-owned runtime state 不是最佳實踐：它會提高後續 file-transfer workflow 指到敏感 bot state、或被迫替 upload guard 開例外的風險。預設 denylist 會把 bot data directory 底下的檔案視為最後防線而阻擋，因此後續用 `discord_send_file` direct re-upload 會失敗；需要 sanitized bot-owned delivery 時請使用 `bot_send_file`。
 
 當使用者要求 tag 或通知某個名字，但該人沒有出現在目前 prompt 的 mention references 時，優先使用 `discord_resolve_mentions`，不要用 `discord_list_members` 後自行猜 ID。它會先做 fresh REST member search，再做 bounded scan / cache fallback，並把解析出的 refs 寫入目前 bot target state，回傳 agent 可在 final answer 使用的 placeholders。Ambiguous 或 missing names 必須請使用者確認，不可猜。只有在 guild 很大且 exact name 常被預設 scan limit 漏掉時，才調高 `MCP_DISCORD_MEMBER_SCAN_LIMIT`。

@@ -171,6 +171,23 @@ Regression expectation:
 - Direct Discord MCP tests should prove payload preservation plus policy, split, and `AllowedMentions` guards.
 - Bot MCP and safe-egress tests should continue proving redaction, sanitizer behavior, queue semantics, audit, and transient-file cleanup.
 
+### Discord MCP File Upload Has Source Denylist
+
+Decision:
+
+- `discord_send_file` preserves original file bytes only for paths that pass the upload source denylist. Defaults block bot runtime/deployment roots, Kiro config/runtime roots, and OMP config/session roots. `MCP_DISCORD_UPLOAD_DENY_PATHS` appends operator wildcard patterns.
+
+Context:
+
+- Direct Discord MCP upload is intentionally not bot safe egress and should not silently rewrite files. A denylist hit therefore refuses upload instead of producing a redacted copy.
+- The denylist is a source-path exfiltration guard, not a content scanner. Users who need sanitized delivery of sensitive bot files should use `bot_send_file`.
+- `DATA_DIR` must stay bot-owned. Placing `DEFAULT_CWD`, download directories, or other user-content workspaces inside it is not a best practice because later transfer workflows may point at sensitive bot state or pressure operators to weaken denylist coverage.
+
+Regression expectation:
+
+- Tests should cover default `DATA_DIR` blocking, custom wildcard matching, symlink-resolved blocking, ordinary binary pass-through, and deny errors that do not reveal local paths.
+
+
 
 ## Current ACP Protocol Decisions
 

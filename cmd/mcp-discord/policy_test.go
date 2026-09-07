@@ -228,6 +228,7 @@ func TestDiscordUserGuildScopeRequiresAllowedGuild(t *testing.T) {
 func TestOpenDiscordUploadFilePreservesOriginalBytesAndName(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("KIRO_API_KEY", "secret-token")
+	t.Setenv("DATA_DIR", t.TempDir())
 	source := filepath.Join(dir, ".env")
 	want := []byte("KIRO_API_KEY=secret-token\nplain=ok\n")
 	if err := os.WriteFile(source, want, 0644); err != nil {

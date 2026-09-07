@@ -95,6 +95,7 @@ WEBSHARE_HOST_TOKEN_FILE=/etc/kdb-webshare/host-token
 
 - `DATA_DIR` 擁有 bot 的持久狀態：channel metadata、audit DB、usage SQLite DB 與遷移封存檔、MCP policy、下載 attachments 與 bot-managed engine runtime directories。
 - `DEFAULT_CWD` 是設定時顯示的預設專案根目錄。`ALLOWED_CWD_ROOTS` 會限制可選的 channel working directories。
+- 請讓 `DEFAULT_CWD` 與 user-content workspaces 位於 `DATA_DIR` 之外；把使用者可傳輸檔案混進 bot-owned runtime state 不是最佳實踐，因為後續 file-transfer workflow 可能指到敏感 state，或被迫替 upload guard 開例外。預設 `discord_send_file` upload denylist 會把 `DATA_DIR` 底下的檔案視為最後防線而阻擋。
 - `AGENT_ENGINE` 決定新 scope 的預設 engine。`AGENT_ENGINES_ENABLED` 決定 `/engine` 可以切換到哪些 engine。
 - `OMP_SESSION_DIR` 決定 bot 啟動的 OMP ACP session files 放在哪裡。`OMP_PROFILE` 決定 OMP auth/settings/cache 身份。兩者處理的是不同層次的隔離。
 - `KIRO_MCP_CONFIG` 會被視為 MCP catalog source。Runtime agents 會收到 `DATA_DIR` 內依照 bot policy 產生的 MCP settings，而不是直接繼承使用者自己的 Kiro settings。
@@ -273,6 +274,8 @@ WEBSHARE_HOST_TOKEN_FILE=/etc/kdb-webshare/host-token
 | `MCP_DISCORD_READ_ONLY` | `false` | `true` 時阻擋所有 write tools。 |
 | `MCP_DISCORD_ALLOWED_WRITE_TOOLS` | 空 | 可選的逗號分隔 write-tool allowlist。 |
 | `MCP_DISCORD_ALLOW_DESTRUCTIVE` | `true` | `false` 時阻擋 delete 等 destructive tools。 |
+| `MCP_DISCORD_UPLOAD_DENY_PATHS` | 空 | `discord_send_file` 追加封鎖的 comma 或 newline 分隔 wildcard patterns；預設仍封鎖 bot/Kiro/OMP runtime roots。 |
+| `MCP_DISCORD_UPLOAD_DENY_CASE_INSENSITIVE` | 平台預設 | 覆寫 upload denylist 大小寫比對；macOS/Windows 預設不分大小寫，其他平台預設分大小寫。 |
 
 ## Media MCP Server
 

@@ -415,7 +415,18 @@ func openDiscordUploadFile(filePath string) (*os.File, string, func(), error) {
 	if filePath == "" {
 		return nil, "", nil, fmt.Errorf("file_path is required")
 	}
-	f, err := os.Open(filePath)
+	absPath, err := filepath.Abs(filePath)
+	if err != nil {
+		absPath = filePath
+	}
+	openPath := absPath
+	if realPath, err := filepath.EvalSymlinks(absPath); err == nil {
+		openPath = realPath
+	}
+	if discordUploadDenied(absPath) || discordUploadDenied(openPath) {
+		return nil, "", nil, errDiscordUploadDenied
+	}
+	f, err := os.Open(openPath)
 	if err != nil {
 		return nil, "", nil, fmt.Errorf("open file: %w", err)
 	}
@@ -451,6 +462,7 @@ func safeDiscordUploadError(err error) string {
 		"file_path is required",
 		"directories cannot be sent as files",
 		"file exceeds upload size limit",
+		errDiscordUploadDenied.Error(),
 	} {
 		if strings.Contains(msg, allowed) {
 			return allowed

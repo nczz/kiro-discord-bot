@@ -95,6 +95,7 @@ Use the matching relay-side `RELAY_HOST_TOKEN_FILE` or `RELAY_HOST_TOKEN`. The p
 
 - `DATA_DIR` owns persistent bot state: channel metadata, audit DB, usage SQLite DB and migration archives, MCP policy, downloaded attachments, and bot-managed engine runtime directories.
 - `DEFAULT_CWD` is the default project root shown during setup. `ALLOWED_CWD_ROOTS` restricts what channel working directories may be selected.
+- Keep `DEFAULT_CWD` and user-content workspaces outside `DATA_DIR`; mixing user-transferable files with bot-owned runtime state is not a best practice because later file-transfer workflows may point at sensitive state or require upload-guard exceptions. The default `discord_send_file` upload denylist blocks files under `DATA_DIR` as a last-resort guard.
 - `AGENT_ENGINE` selects the default engine for new scopes. `AGENT_ENGINES_ENABLED` controls what `/engine` may switch to.
 - `OMP_SESSION_DIR` controls where bot-started OMP ACP session files live. `OMP_PROFILE` controls OMP auth/settings/cache identity. They solve different isolation problems.
 - `KIRO_MCP_CONFIG` is treated as an MCP catalog source. Runtime agents receive bot-managed, per-policy MCP settings under `DATA_DIR`, rather than inheriting the user's Kiro settings directly.
@@ -273,6 +274,8 @@ These variables configure `mcp-discord-server`, not the main bot process unless 
 | `MCP_DISCORD_READ_ONLY` | `false` | Blocks all write tools when `true`. |
 | `MCP_DISCORD_ALLOWED_WRITE_TOOLS` | empty | Optional comma-separated write-tool allowlist. |
 | `MCP_DISCORD_ALLOW_DESTRUCTIVE` | `true` | Blocks destructive tools, such as delete, when `false`. |
+| `MCP_DISCORD_UPLOAD_DENY_PATHS` | empty | Additional comma- or newline-separated wildcard patterns denied by `discord_send_file`; defaults still block bot/Kiro/OMP runtime roots. |
+| `MCP_DISCORD_UPLOAD_DENY_CASE_INSENSITIVE` | platform default | Override upload denylist matching case sensitivity; default is case-insensitive on macOS/Windows and case-sensitive elsewhere. |
 
 ## Media MCP Server
 

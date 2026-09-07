@@ -60,6 +60,8 @@ MCP_DISCORD_READ_ONLY=false
 MCP_DISCORD_ALLOWED_WRITE_TOOLS=discord_send_message,discord_reply_message,discord_resolve_mentions
 MCP_DISCORD_ALLOW_DESTRUCTIVE=false
 MCP_DISCORD_MEMBER_SCAN_LIMIT=5000
+MCP_DISCORD_UPLOAD_DENY_PATHS=/srv/kiro-private/**
+MCP_DISCORD_UPLOAD_DENY_CASE_INSENSITIVE=
 ```
 
 Empty allowlists preserve legacy unrestricted behavior. Production deployments should prefer explicit guild/channel allowlists when the bot has broad Discord access.
@@ -91,6 +93,10 @@ For additional tools in Discord:
 
 Prefer read-only access first, then add non-destructive write tools only where they are part of the workflow.
 
-Use `discord_send_file` only when the intended result is original-file transfer. It uploads the file selected by `file_path` subject to Discord size limits and MCP write policy. It does not convert PDF/DOCX/XLSX to text, reject otherwise valid binary files because they are not redactable, or redact text file contents. For sanitized bot-owned delivery, use `bot_send_file`.
+Use `discord_send_file` only when the intended result is original-file transfer. It uploads the file selected by `file_path` subject to Discord size limits, MCP write policy, and the upload source denylist. It does not convert PDF/DOCX/XLSX to text, reject otherwise valid binary files because they are not redactable, or redact text file contents. For sanitized bot-owned delivery, use `bot_send_file`.
+
+`discord_send_file` also enforces a source-path denylist before opening the file. Defaults block direct uploads from the bot data directory, Kiro runtime/config roots, OMP session/config roots, the mcp-discord executable directory, and detected bot deployment directories. `MCP_DISCORD_UPLOAD_DENY_PATHS` appends comma- or newline-separated wildcard patterns; `*`, `?`, and `**` are supported after environment-variable and `~` expansion. The check evaluates both the requested absolute path and the symlink-resolved real path, and denial errors do not echo local paths. Set `MCP_DISCORD_UPLOAD_DENY_CASE_INSENSITIVE=false` only when a case-sensitive deployment filesystem needs exact-case matching.
+
+Keep `DEFAULT_CWD`, user-content workspaces, and `MCP_DISCORD_DOWNLOAD_DIR` outside the bot data directory. Mixing user-transferable files with bot-owned runtime state is not a best practice: it increases the chance that later file-transfer workflows point at sensitive bot state or require exceptions to the upload guard. The default denylist blocks files under the bot data directory as a last-resort guard, so direct re-upload with `discord_send_file` will fail; use `bot_send_file` for sanitized bot-owned delivery.
 
 When a user asks to tag or notify a named person who was not already mentioned in the current prompt, prefer `discord_resolve_mentions` over `discord_list_members`. It performs fresh REST member search before bounded scan/cache fallback, writes resolved refs into the current bot target state, and returns placeholders the agent can use in the final answer. Ambiguous or missing names must be clarified instead of guessed. Increase `MCP_DISCORD_MEMBER_SCAN_LIMIT` only when exact names routinely miss because the guild is larger than the default bounded scan.

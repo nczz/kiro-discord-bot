@@ -58,6 +58,7 @@ MCP / safe egress 的 UX 修正不得降低安全邊界。不同 MCP server 的�
 - `bot_send_message`、`bot_send_file`、`bot_send_image_url` 是 bot-controlled safe egress：必須經過 queue、secret redaction、sanitized copy / size / binary guard、delivery error handling、audit / semantic event 記錄與 mention 防護。
 - `discord_send_message`、`discord_reply_message`、`discord_edit_message`、`discord_send_embed`、`discord_send_file` 是 direct Discord REST side effects：必須先套用 guild/channel allowlist 與 read-only/write/destructive guard，並維持 Discord length handling、`AllowedMentions` 防護與錯誤處理；不得套用 bot safe-egress redaction、不得把檔案轉成 sanitized/redacted copy，除非新增明確命名的 safe variant。
 - `discord_send_file` 的 direct 語意是上傳呼叫者指定的本機檔案 bytes；若工作需要 redacted/sanitized 檔案投遞，使用 `bot_send_file`。
+- `discord_send_file` direct upload 仍必須經過 source-path denylist；預設封鎖 bot deployment/runtime、Kiro、OMP 相關目錄。`MCP_DISCORD_UPLOAD_DENY_PATHS` 可追加 wildcard patterns，命中時拒絕原檔傳輸而不是自動改成 redacted copy。不要把 `DEFAULT_CWD`、download dir 或其他 user-content workspace 放進 bot data directory；混用 user-transferable files 與 bot-owned runtime state 不是最佳實踐，會增加後續傳輸敏感 state 或要求 upload-guard 例外的風險。
 - 不能為了繞過工具限制而改用裸 Discord REST call、直接修改 policy DB、改寫 `.env`、臨時開 allow-all，或把 MCP proxy / safe egress pending queue 拿掉。
 
 若需要新增工具或送出模式，先明確判定它是 read-only、write 或 destructive，補上 policy、audit、redaction/direct-payload 語意測試，再交付。
