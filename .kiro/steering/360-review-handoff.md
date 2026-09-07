@@ -43,8 +43,8 @@ Then classify the change:
 | Discord routing / commands | `bot/handler.go`, `bot/commands.go`, `bot/peers.go` | Slash registration, bang dispatch, i18n, audit delivery |
 | Agent lifecycle / worker | `channel/manager.go`, `channel/worker.go`, `acp/` | Session continuity, timeout/cancel paths, stderr/log evidence |
 | Cron / reminders | `heartbeat/cron.go`, `bot/handler_cron.go`, `internal/cronpolicy/` | Timezone, owner channel, thread target, run history |
-| MCP policy / tools | `channel/mcp_policy.go`, `mcpproxy/`, `internal/botmcp/`, `cmd/mcp-discord/` | Allowlist, read-only/write/destructive guards, audit, redaction |
-| Discord egress / formatting | `bot/safe_egress.go`, `internal/discordfmt/`, `internal/botegress/` | 2000-char split, code fence handling, AllowedMentions, redaction |
+| MCP policy / tools | `channel/mcp_policy.go`, `mcpproxy/`, `internal/botmcp/`, `cmd/mcp-discord/` | Allowlist, read-only/write/destructive guards, audit, redaction or direct-payload contract |
+| Discord egress / formatting | `bot/safe_egress.go`, `internal/discordfmt/`, `internal/botegress/` | 2000-char split, code fence handling, AllowedMentions, bot safe-egress redaction |
 | Runtime config / env | `config.go`, `main.go`, `channel/doctor_env.go` | README, `.env.example`, locale descriptions, `/doctor` |
 | Documentation-only | `README.md`, `docs/`, `.kiro/steering/` | Must match current code names and command behavior |
 | Release/deploy | `docs/release.md`, `.github/workflows/`, scripts | Preflight, tag/release state, host-specific service metadata |
@@ -55,7 +55,7 @@ Ask these before accepting any change:
 
 1. What user problem or operational failure is this change trying to solve?
 2. Which runtime path actually exercises the modified code?
-3. Does the change preserve existing security boundaries, audit records, redaction, and Discord delivery wrappers?
+3. Does the change preserve existing security boundaries, audit records, the correct redaction/direct-payload contract, and Discord delivery wrappers?
 4. Are all user-facing strings localized in both `locale/lang/en.json` and `locale/lang/zh-TW.json`?
 5. Does the documentation use the exact command names and log reasons that code emits today?
 6. Are edge cases covered: empty input, long output, Unicode, Discord 2000-char limit, missing config, denied policy, timeout, canceled context, and repeated execution?
@@ -83,11 +83,11 @@ If there are no findings, say so plainly and still list residual test or runtime
 - Handler code routes and validates; business state belongs in `channel.Manager` or the relevant service package.
 - Agent process management stays inside `acp/` and manager/worker boundaries.
 - CWD validation must flow through Manager policy. Do not build ad hoc cwd acceptance in handlers or cron.
-- Discord writes must reuse existing helpers and policy layers. Do not call raw Discord APIs to bypass MCP policy, safe egress, redaction, or AllowedMentions suppression.
+- Discord writes must reuse existing helpers and policy layers. Do not call raw Discord APIs to bypass MCP policy, `AllowedMentions` suppression, delivery handling, or the owning egress semantics (`bot_*` safe egress redacts/sanitizes; `discord_*` direct REST preserves caller payload).
 - Long Discord text must use existing formatting helpers built on `internal/discordfmt.Split` and `internal/discordfmt.WithPartPrefix`.
 - New environment variables require the complete path: config load, runtime config struct, `/doctor`, i18n descriptions, README, and `.env.example`.
 - New commands require slash registration, interaction dispatch, bang dispatch when applicable, permissions, i18n, docs, and tests.
-- New MCP tools require read-only/write/destructive classification, policy exposure, audit/redaction behavior, and tests.
+- New MCP tools require read-only/write/destructive classification, policy exposure, audit plus either redaction or direct-payload behavior, and tests.
 
 ## Reuse Map
 
@@ -96,9 +96,9 @@ Before writing new code, look for the established module that already owns the c
 | Concern | Reuse / owner | Do not duplicate |
 |---------|---------------|------------------|
 | Discord text splitting and Markdown repair | `internal/discordfmt` plus existing `bot` / `channel` send helpers | Manual 2000-char slicing, code fence repair, part prefixes |
-| Secret and path redaction | `internal/secrets`, `internal/botegress`, safe egress wrappers | Local regex redactors in handlers or MCP tools |
+| Secret and path redaction | `internal/secrets`, `internal/botegress`, safe egress wrappers | Local regex redactors in handlers or MCP tools; applying bot safe-egress redaction to `discord_*` direct tools |
 | Discord write policy and allowlists | `cmd/mcp-discord`, `mcpproxy`, `channel/mcp_policy.go` | Raw REST calls that skip read-only/write/destructive guards |
-| Safe Discord egress from agents | `internal/botmcp`, `internal/botegress`, `bot/safe_egress.go` | Direct message/file sending from agent-facing tool handlers |
+| Safe Discord egress from agents | `internal/botmcp`, `internal/botegress`, `bot/safe_egress.go` | Direct message/file sending from bot-owned egress paths |
 | CWD and project steering paths | `channel.Manager.ValidateCWD`, manager steering helpers, `internal/paths` | Handler-side path joins or trusting user-provided cwd |
 | Kiro CLI settings isolation | `internal/kirosettings`, manager `agentOptsForTarget` | Writing `.kiro/settings` or `mcp.json` ad hoc |
 | Cron ownership and permission | `heartbeat/cron.go`, `internal/cronpolicy`, `bot/cron_adapter.go` | Treating Discord thread IDs as owning channel IDs |
@@ -130,7 +130,7 @@ Treat avoidable duplication in security, formatting, path, cron, MCP, or audit l
 Stop and fix before calling work ready when any of these are true:
 
 - A current-state claim is based only on memory or prior rollout notes.
-- A Discord write path bypasses policy, redaction, AllowedMentions suppression, safe egress, or audit.
+- A Discord write path bypasses its owning policy: policy guard, AllowedMentions suppression, delivery handling, bot safe-egress redaction/sanitization where required, or discord MCP direct-payload preservation where required.
 - A cwd, project steering, cron owner, or thread target is accepted without the established manager/policy path.
 - A user-facing command, log reason, env var, or MCP tool behavior changed without docs and i18n review.
 - Tests pass only because they exercise a private helper while the real runtime path remains untested.

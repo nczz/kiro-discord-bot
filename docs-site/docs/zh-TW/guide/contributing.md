@@ -69,7 +69,7 @@ Repo root 的 `AGENTS.md` 是 agent 第一個應讀的文件。它摘要跨 Kiro
 實作需要 subagents 時，parent agent 必須先定義共享契約，再開始平行工作。契約要明確列出所有 slice 必須遵守的穩定 interfaces、permission boundaries、data ownership 與 verification commands。
 
 - `docs-site/docs/` 是 GitHub Pages 與 user-facing behavior 的 source of truth。只要改 command、MCP tool、audit row、lifecycle state 或 permission check，就要在同一個 change 更新它。
-- Discord output 必須走共用 helpers：先 redaction、oversized replies 要 split、用 empty `AllowedMentions` suppress mentions，且 user-facing text 要用 locale keys。
+- Discord output 必須走共用 helpers：bot-owned delivery 先 redaction，direct `mcp-discord` tools 不套用 bot safe-egress redaction/sanitization，oversized replies 要 split，用 `AllowedMentions` suppress 未授權 mentions，且 user-facing text 要用 locale keys。
 - 一般 feature work 不檢查或暴露 raw bot `DATA_DIR/ch-*` paths。請改用 scoped MCP tools、audit queries 與已文件化的 state APIs。
 - Lifecycle/admin actions 必須使用 authenticated Discord actor context。Agent 或 MCP client 不能自行宣稱有 management permission。
 - 回報 mutation success 前必須先記錄 durable audit。Install、restore、rollback 或 policy changes 若有 partial failure，要修 transaction，不要只遮住症狀。

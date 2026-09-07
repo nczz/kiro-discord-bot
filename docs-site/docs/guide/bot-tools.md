@@ -98,6 +98,8 @@ For calculated ranges, agents should translate the user's date phrase into struc
 
 `bot_send_message` and `bot_send_file` do not directly write to Discord from the MCP call. They enqueue safe egress actions and the bot performs delivery through its normal Discord path.
 
+This is intentionally different from `mcp-discord` direct write tools. `discord_send_message`, `discord_reply_message`, `discord_send_embed`, `discord_edit_message`, and `discord_send_file` avoid bot safe-egress redaction/sanitization while still enforcing MCP write policy, Discord length handling, and mention controls. Use those only when the workflow explicitly requires direct Discord REST side effects.
+
 File egress is intentionally conservative:
 
 - Plain text is redacted before upload.

@@ -26,19 +26,19 @@ Bad implementation:
 
 - Adds a local `splitEvery2000Chars` near `bot_send_message`.
 - Sends chunks with raw `ChannelMessageSend` calls.
-- Fixes only the reported long message but skips `AllowedMentions`, secret redaction, delivery audit, code fence repair, and MCP policy.
+- Fixes only the reported long message but skips the owning egress semantics, `AllowedMentions`, delivery audit, code fence repair, and MCP policy.
 - Tests the helper directly without proving the real tool path uses it.
 
 High-quality implementation:
 
 - Reuses `internal/discordfmt.Split`, `internal/discordfmt.WithPartPrefix`, or an existing helper already built on them.
-- Keeps the established safe egress path, redaction, mention suppression, policy checks, and audit events.
+- Keeps the established safe egress path/redaction for `bot_*` tools, direct payload preservation for `discord_*` tools, mention suppression, policy checks, and audit events.
 - Tests long text, UTF-8, code fences, denied policy, Discord delivery errors, and the runtime tool path.
 - Updates `discord-mcp.md` or `project.md` if the rule or supported behavior changed.
 
 Review finding to write:
 
-> High: this new Discord send path bypasses `internal/discordfmt` and safe egress, so long tool output can fail at Discord's 2000-character limit and skip redaction/audit. Route it through the existing helper and add a runtime-path test for a long MCP response.
+> High: this new bot-owned send path bypasses `internal/discordfmt` and safe egress, so long tool output can fail at Discord's 2000-character limit and skip required redaction/audit. Route it through the existing helper and add a runtime-path test for a long MCP response.
 
 ## Example: Cron Thread Target
 
@@ -178,7 +178,7 @@ For a strict review, keep the final answer evidence-led:
 
 ```text
 Findings:
-- High: [file:line] direct Discord send bypasses safe egress and can skip redaction/audit.
+- High: [file:line] bot-owned Discord send bypasses safe egress and can skip required redaction/audit.
 - Medium: [file:line] docs still describe old cron target behavior.
 
 Verification:
@@ -187,7 +187,7 @@ Verification:
 - git diff --check
 
 Go/no-go:
-- No-go until the safe egress path is restored and docs are aligned.
+- No-go until the owning egress semantics are restored and docs are aligned.
 ```
 
 For a fix, keep it outcome-led:

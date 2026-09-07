@@ -4,6 +4,8 @@
 
 It is not required for normal bot replies. Ordinary agent final answers should be returned to the bot, which handles redaction, splitting, and delivery.
 
+Unlike `bot-tools`, `mcp-discord` direct write tools avoid bot safe-egress redaction and sanitization. `discord_send_message`, `discord_reply_message`, `discord_edit_message`, `discord_send_embed`, and `discord_send_file` still enforce MCP guild/channel/write/destructive policy, Discord length handling, and mention controls, but they do not redact secret-looking text, extract documents, or rewrite files to sanitized copies. Use `bot_send_file` or `bot_send_message` when the workflow needs bot-owned safe egress instead.
+
 ## Build or Locate the Binary
 
 Release archives include `mcp-discord`. Source builds can create it with:
@@ -82,11 +84,13 @@ For additional tools in Discord:
 | --- | --- | --- |
 | Read | `discord_read_messages`, `discord_search_messages`, `discord_channel_info` | Can expose channel content to the agent |
 | Mention resolver | `discord_resolve_mentions` | Resolves requested names with fresh Discord member lookup, grants only exact/unique matches for the active bot task, and returns safe `[[discord:user:...]]` placeholders |
-| Write | `discord_send_message`, `discord_reply_message`, `discord_send_embed` | Sends visible Discord messages |
+| Write | `discord_send_message`, `discord_reply_message`, `discord_send_embed` | Sends visible Discord messages without bot safe-egress redaction |
 | Thread | `discord_create_thread`, `discord_list_threads` | Creates or inspects conversation surfaces |
 | Management | `discord_edit_message`, `discord_pin_message`, `discord_edit_channel_topic` | Higher operational risk |
-| Attachment | `discord_download_attachment` | Needs download directory controls |
+| Attachment | `discord_send_file`, `discord_download_attachment` | `discord_send_file` uploads the selected local file bytes directly; downloads need download directory controls |
 
 Prefer read-only access first, then add non-destructive write tools only where they are part of the workflow.
+
+Use `discord_send_file` only when the intended result is original-file transfer. It uploads the file selected by `file_path` subject to Discord size limits and MCP write policy. It does not convert PDF/DOCX/XLSX to text, reject otherwise valid binary files because they are not redactable, or redact text file contents. For sanitized bot-owned delivery, use `bot_send_file`.
 
 When a user asks to tag or notify a named person who was not already mentioned in the current prompt, prefer `discord_resolve_mentions` over `discord_list_members`. It performs fresh REST member search before bounded scan/cache fallback, writes resolved refs into the current bot target state, and returns placeholders the agent can use in the final answer. Ambiguous or missing names must be clarified instead of guessed. Increase `MCP_DISCORD_MEMBER_SCAN_LIMIT` only when exact names routinely miss because the guild is larger than the default bounded scan.

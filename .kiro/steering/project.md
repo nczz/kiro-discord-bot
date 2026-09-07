@@ -78,7 +78,7 @@ docs/release.md  → release and deployment safety checklist
 - **部署 identity invariant**：每個 Discord bot token / bot identity 在同一時間只能有一個 gateway runtime 上線。dual-engine 是同一個 bot process 內由 `Session.Engine` 選擇 kiro 或 omp ACP dialect；不得用兩個 bot processes（一個 kiro、一個 omp）共用同一 token 來達成切換。部署與 rollback 必須先停止舊 runtime、替換 binary、啟動唯一 runtime，並在 post-deploy 以 process/service metadata、token hash 比對（不可輸出 token 明文）、`/doctor`、`/status`、簡單 reply 驗證「一個 bot identity → 一個 gateway process → 目標 scope 一個 selected ACP child」。
 - **Discord MCP 安全邊界**：MCP guild/channel allowlist 與 write guard 在 `cmd/mcp-discord` 內執行。新增 Discord REST tool 時必須先判斷它是 guild-scoped、channel-scoped、global、read-only、write 或 destructive，並套用對應 policy。
 - **Discord 回覆格式化必須復用既有工具**：任何會送到 Discord 的長文字、MCP tool output、safe egress、thread/final response、reply、embed description，都不得自行實作分段、Markdown 降級、code fence 修補或分段 prefix。必須復用 `internal/discordfmt.Split` 與 `internal/discordfmt.WithPartPrefix`，或復用已建立在它們之上的專案封裝（例如 `bot` / `channel` 既有長訊息送出 helper）。若現有 helper 不足，先擴充共用 helper 並補測試，不要在 feature code 中複製一份 split 邏輯。
-- **MCP / egress security 與 audit 不可繞過**：任何 Discord 寫入路徑都必須保留對應的 allowlist、read-only/write/destructive guard、secret redaction、AllowedMentions 防護、delivery error handling 與 audit/語意事件紀錄。新增或修改 MCP tool 時，不得為了修復 UX 而直接改用裸 Discord API 繞過 policy proxy、safe egress pending queue、redactor 或既有 delivery wrapper。若需要分批送出，分批前仍先套用同一套 policy；每批送出也必須沿用同一套 redaction、mention suppression、錯誤處理與測試。
+- **MCP / egress security 與 audit 不可繞過**：Discord 寫入路徑必須保留對應的 allowlist、read-only/write/destructive guard、AllowedMentions 防護、delivery error handling 與 audit/語意事件紀錄。`bot_*` safe egress、一般 bot delivery、A2A proxy delivery 必須保留 secret redaction、sanitized file handling 與 bot-owned queue；`discord_*` direct REST tools 則不得套用 bot safe-egress redaction 或 sanitizer，除既有 mention-control escaping 與分段 prefix 外應保留呼叫者提供的 message/embed/file 內容。若需要 safe direct variant，新增明確命名工具與測試，不得暗中改寫既有 direct tool 語意。
 - **Release preflight 不碰 runtime state**：preflight script 只能 build/test/check artifacts，不得停止/啟動 bot、修改 `DATA_DIR`、刪除 Docker volumes、改寫 `.env` 或觸發 Discord side effects。
 - **使用者可見的時間輸出必須顯式指定時區**：任何 `time.Format()` 呼叫若其結果會出現在 Discord 訊息、thread 標題、embed 或 slash command 回覆中，必須先 `.In(loc)` 明確轉換到 `CRON_TIMEZONE`（或對應的使用者時區），不允許依賴 `time.Now()` 的隱式本地時區或 RFC3339 parse 後的隱式 offset 保留。
 - **i18n format string 的動態內容不得裸接內部字串**：當 locale format string 含 `%s` 且其值來自 Go error、技術名詞或程式內部狀態時，必須經過 reason map 或等效翻譯機制，將已知的內部字串映射為對應 locale key；未知值才 fallback 顯示 redacted 原始內容。不允許直接把英文 error message 嵌入中文 i18n 模板造成語言混搭。
@@ -99,7 +99,7 @@ docs/release.md  → release and deployment safety checklist
 - 在 Manager `ValidateCWD` 以外接受使用者提供的 agent cwd
 - 新增 Discord MCP channel/guild 操作但未檢查 allowlist
 - 自行手寫 Discord 訊息分段、Markdown 包裝或 prefix 格式，而不是復用 `internal/discordfmt` 或既有長訊息 helper
-- 新增 Discord/MCP 寫入路徑但繞過 policy guard、secret redaction、AllowedMentions、防嵌入設定、delivery audit 或既有 safe egress pipeline
+- 新增 Discord/MCP 寫入路徑但繞過 policy guard、AllowedMentions、防嵌入設定、delivery audit，或混淆 `bot_*` safe egress 與 `discord_*` direct payload 語意
 - 忽略 Go error return（`err` 必須處理或顯式 `_ =` 標註理由）
 - 在 handler 層放業務邏輯（應透過 manager 操作）
 
@@ -110,7 +110,7 @@ docs/release.md  → release and deployment safety checklist
 - 新增 Discord command 時同步更新 `buildSlashCommands()` 和 handler dispatch
 - 修改 struct 欄位時檢查所有 caller 是否同步更新
 - 修改 Docker runtime 或 deployment env 時同步檢查 README、`.env.example`、`docker-compose.yml`
-- 修改 Discord 發訊息、檔案、embed、MCP egress 或 agent final response 時，檢查是否復用 `internal/discordfmt` / 既有 helper，並補長訊息、code block、UTF-8、reply/thread target、redaction / policy guard 測試
+- 修改 Discord 發訊息、檔案、embed、MCP egress 或 agent final response 時，檢查是否復用 `internal/discordfmt` / 既有 helper，並補長訊息、code block、UTF-8、reply/thread target、redaction 或 direct-payload / policy guard 測試
 - 發布或部署前跑 `scripts/release-preflight.sh`；需要真實 ACP 才加 `RUN_ACP_SMOKE=1 KIRO_CLI=...`
 - CI workflow 只跑不需要 secrets 的檢查；ACP smoke 必須留在本機或部署主機執行
 

@@ -17,10 +17,8 @@ import (
 	"github.com/bwmarrin/discordgo"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
-	"github.com/nczz/kiro-discord-bot/internal/botegress"
 	"github.com/nczz/kiro-discord-bot/internal/discordfmt"
 	"github.com/nczz/kiro-discord-bot/internal/discordmention"
-	"github.com/nczz/kiro-discord-bot/internal/secrets"
 	L "github.com/nczz/kiro-discord-bot/locale"
 )
 
@@ -412,59 +410,53 @@ func ensureWriteAllowed(tool string, destructive bool) error {
 	return nil
 }
 
-func discordSanitizedTempRoot() string {
-	if dataDir := strings.TrimSpace(os.Getenv("DATA_DIR")); dataDir != "" {
-		return filepath.Join(dataDir, "egress", "sanitized")
+func openDiscordUploadFile(filePath string) (*os.File, string, func(), error) {
+	filePath = strings.TrimSpace(filePath)
+	if filePath == "" {
+		return nil, "", nil, fmt.Errorf("file_path is required")
 	}
-	return filepath.Join(os.TempDir(), "kiro-discord-bot-mcp-discord-sanitized")
-}
-
-func prepareDiscordUploadFile(filePath string) (botegress.SanitizedFile, *os.File, func(), error) {
-	prepared, err := botegress.PrepareSanitizedFile(filePath, secrets.FromEnv(), discordSanitizedTempRoot())
+	f, err := os.Open(filePath)
 	if err != nil {
-		return botegress.SanitizedFile{}, nil, nil, err
-	}
-	if prepared.SensitivePath {
-		ext := strings.ToLower(filepath.Ext(prepared.DisplayName))
-		switch ext {
-		case ".jpg", ".jpeg", ".png":
-		default:
-			ext = ".txt"
-		}
-		prepared.DisplayName = "sanitized-upload" + ext
-	}
-	f, err := os.Open(prepared.Path)
-	if err != nil {
-		_ = os.Remove(prepared.Path)
-		return botegress.SanitizedFile{}, nil, nil, err
+		return nil, "", nil, fmt.Errorf("open file: %w", err)
 	}
 	cleanup := func() {
 		_ = f.Close()
-		_ = os.Remove(prepared.Path)
 	}
-	return prepared, f, cleanup, nil
+	info, err := f.Stat()
+	if err != nil {
+		cleanup()
+		return nil, "", nil, fmt.Errorf("stat file: %w", err)
+	}
+	if info.IsDir() {
+		cleanup()
+		return nil, "", nil, fmt.Errorf("directories cannot be sent as files")
+	}
+	if maxBytes := discordAttachmentMaxBytes(); maxBytes > 0 && info.Size() > maxBytes {
+		cleanup()
+		return nil, "", nil, fmt.Errorf("file exceeds upload size limit (%d bytes)", maxBytes)
+	}
+	displayName := filepath.Base(filePath)
+	if displayName == "" || displayName == "." || displayName == string(filepath.Separator) {
+		displayName = "attachment"
+	}
+	return f, displayName, cleanup, nil
 }
 
 func safeDiscordUploadError(err error) string {
 	if err == nil {
-		return "file is unavailable or unsafe to upload"
+		return "file is unavailable for upload"
 	}
 	msg := err.Error()
 	for _, allowed := range []string{
 		"file_path is required",
 		"directories cannot be sent as files",
-		"file exceeds sanitizable size limit",
-		"redacted file exceeds sanitizable size limit",
-		"file type is not safely redactable as text",
-		"image exceeds upload size limit",
-		"image dimensions exceed upload limit",
-		"invalid image file",
+		"file exceeds upload size limit",
 	} {
 		if strings.Contains(msg, allowed) {
 			return allowed
 		}
 	}
-	return "file is unavailable or unsafe to upload"
+	return "file is unavailable for upload"
 }
 
 func authorizeWriteChannel(tool string, destructive bool, requestedChannelID string) (string, error) {
@@ -658,19 +650,9 @@ func safeAttachmentFilename(raw string) string {
 	return name
 }
 
-func discordUploadCaption(raw string, sensitivePath bool) string {
-	if !sensitivePath {
-		return raw
-	}
-	if raw != "" {
-		raw += "\n"
-	}
-	return raw + L.Get("egress.sensitive_path_notice")
-}
-
 func sendDiscordMessageParts(channelID, content string) ([]*discordgo.Message, error) {
-	rendered, mentionRefs := renderDiscordTextMentions(secrets.RedactEnv(content))
-	parts := discordfmt.Split(rendered, discordMessageLimit)
+	rendered, mentionRefs := renderDiscordTextMentions(content)
+	parts := discordfmt.SplitPreserveMarkdown(rendered, discordMessageLimit)
 	if len(parts) == 0 {
 		return nil, fmt.Errorf("content is empty")
 	}
@@ -693,8 +675,8 @@ func sendDiscordMessageParts(channelID, content string) ([]*discordgo.Message, e
 }
 
 func replyDiscordMessageParts(channelID, messageID, content string) ([]*discordgo.Message, error) {
-	rendered, mentionRefs := renderDiscordTextMentions(secrets.RedactEnv(content))
-	parts := discordfmt.Split(rendered, discordMessageLimit)
+	rendered, mentionRefs := renderDiscordTextMentions(content)
+	parts := discordfmt.SplitPreserveMarkdown(rendered, discordMessageLimit)
 	if len(parts) == 0 {
 		return nil, fmt.Errorf("content is empty")
 	}
@@ -748,8 +730,7 @@ func sendDiscordEmbedParts(channelID string, embed *discordgo.MessageEmbed) ([]*
 	if embed == nil {
 		return nil, fmt.Errorf("embed is nil")
 	}
-	embed = redactEmbed(embed)
-	parts := discordfmt.Split(embed.Description, discordEmbedDescriptionLimit)
+	parts := discordfmt.SplitPreserveMarkdown(embed.Description, discordEmbedDescriptionLimit)
 	if len(parts) == 0 {
 		parts = []string{""}
 	}
@@ -778,35 +759,6 @@ func sendDiscordEmbedParts(channelID string, embed *discordgo.MessageEmbed) ([]*
 		sent = append(sent, msg)
 	}
 	return sent, firstErr
-}
-
-func redactEmbed(embed *discordgo.MessageEmbed) *discordgo.MessageEmbed {
-	if embed == nil {
-		return nil
-	}
-	next := *embed
-	next.Title = secrets.RedactEnv(next.Title)
-	next.Description = secrets.RedactEnv(next.Description)
-	next.URL = secrets.RedactEnv(next.URL)
-	if next.Footer != nil {
-		footer := *next.Footer
-		footer.Text = secrets.RedactEnv(footer.Text)
-		next.Footer = &footer
-	}
-	if len(next.Fields) > 0 {
-		fields := make([]*discordgo.MessageEmbedField, 0, len(next.Fields))
-		for _, field := range next.Fields {
-			if field == nil {
-				continue
-			}
-			f := *field
-			f.Name = secrets.RedactEnv(f.Name)
-			f.Value = secrets.RedactEnv(f.Value)
-			fields = append(fields, &f)
-		}
-		next.Fields = fields
-	}
-	return &next
 }
 
 func ensureDiscord() error {
@@ -1093,15 +1045,14 @@ func main() {
 			filePath, _ := req.RequireString("file_path")
 			rawContent := req.GetString("content", "")
 
-			prepared, f, cleanup, err := prepareDiscordUploadFile(filePath)
+			f, displayName, cleanup, err := openDiscordUploadFile(filePath)
 			if err != nil {
-				return mcp.NewToolResultError("file could not be prepared for safe upload: " + safeDiscordUploadError(err)), nil
+				return mcp.NewToolResultError("file could not be opened for upload: " + safeDiscordUploadError(err)), nil
 			}
 			defer cleanup()
-			rawCaption := discordUploadCaption(rawContent, prepared.SensitivePath)
-			content, mentionRefs := renderDiscordTextMentions(secrets.RedactEnv(rawCaption))
-			if len(discordfmt.Split(content, discordMessageLimit)) > 1 {
-				if _, err := sendDiscordMessageParts(chID, rawCaption); err != nil {
+			content, mentionRefs := renderDiscordTextMentions(rawContent)
+			if len(discordfmt.SplitPreserveMarkdown(content, discordMessageLimit)) > 1 {
+				if _, err := sendDiscordMessageParts(chID, rawContent); err != nil {
 					return mcp.NewToolResultError(err.Error()), nil
 				}
 				content = ""
@@ -1112,7 +1063,7 @@ func main() {
 				AllowedMentions: discordmention.AllowedMentionsForRendered(content, mentionRefs),
 				Flags:           discordgo.MessageFlagsSuppressEmbeds,
 				Files: []*discordgo.File{{
-					Name:   prepared.DisplayName,
+					Name:   displayName,
 					Reader: f,
 				}},
 			})
@@ -1246,8 +1197,7 @@ func main() {
 			}
 			msgID, _ := req.RequireString("message_id")
 			content, _ := req.RequireString("content")
-			content = secrets.RedactEnv(content)
-			if len(discordfmt.Split(content, discordMessageLimit)) > 1 {
+			if len(discordfmt.SplitPreserveMarkdown(content, discordMessageLimit)) > 1 {
 				return mcp.NewToolResultError("content exceeds Discord edit limit; send a new split message instead"), nil
 			}
 			_, err := dg.ChannelMessageEditComplex(&discordgo.MessageEdit{

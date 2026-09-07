@@ -98,6 +98,8 @@ Agent prompt 會包含由 `CRON_TIMEZONE` 產生的 `[Current datetime]` 區塊�
 
 `bot_send_message` 與 `bot_send_file` 不會在 MCP call 裡直接寫 Discord。它們會建立 safe egress action，再由 bot 透過正常 Discord path 投遞。
 
+這與 `mcp-discord` direct write tools 刻意不同。`discord_send_message`、`discord_reply_message`、`discord_send_embed`、`discord_edit_message`、`discord_send_file` 不套用 bot safe-egress redaction/sanitization，同時仍執行 MCP write policy、Discord 長度處理與 mention controls。只有在工作流程明確需要 direct Discord REST side effects 時才使用那些 tools。
+
 File egress 採保守設計：
 
 - Plain text 會先 redaction 再上傳。

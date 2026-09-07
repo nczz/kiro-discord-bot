@@ -69,7 +69,7 @@ Keep `AGENTS.md` short enough to be a fast entrypoint. Link to deeper docs inste
 When an implementation uses subagents, the parent agent owns the shared contract before parallel work starts. The contract must name the stable interfaces, permission boundaries, data ownership, and verification commands that every slice must follow.
 
 - Treat `docs-site/docs/` as the GitHub Pages source of truth for user-facing behavior. Update it in the same change that modifies commands, MCP tools, audit rows, lifecycle state, or permission checks.
-- Keep Discord output on shared helpers: redaction first, split oversized replies, suppress mentions with empty `AllowedMentions`, and use locale keys for user-facing text.
+- Keep Discord output on shared helpers: bot-owned delivery redacts first, direct `mcp-discord` tools avoid bot safe-egress redaction/sanitization, oversized replies are split, uncontrolled mentions are suppressed with `AllowedMentions`, and user-facing text uses locale keys.
 - Do not inspect or expose raw bot `DATA_DIR/ch-*` paths for normal feature work. Use scoped MCP tools, audit queries, and documented state APIs instead.
 - Use authenticated Discord actor context for lifecycle/admin actions. An agent or MCP client cannot self-assert management permission.
 - Record durable audit before reporting mutation success. If install, restore, rollback, or policy changes fail after partial work, fix the transaction instead of papering over the symptom.

@@ -16,7 +16,6 @@ import (
 	"github.com/bwmarrin/discordgo"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/nczz/kiro-discord-bot/internal/discordmention"
-	L "github.com/nczz/kiro-discord-bot/locale"
 )
 
 func containsString(items []string, want string) bool {
@@ -226,32 +225,38 @@ func TestDiscordUserGuildScopeRequiresAllowedGuild(t *testing.T) {
 	}
 }
 
-func TestPrepareDiscordUploadFileSanitizesLocalFile(t *testing.T) {
+func TestOpenDiscordUploadFilePreservesOriginalBytesAndName(t *testing.T) {
 	dir := t.TempDir()
-	t.Setenv("DATA_DIR", dir)
 	t.Setenv("KIRO_API_KEY", "secret-token")
 	source := filepath.Join(dir, ".env")
-	if err := os.WriteFile(source, []byte("KIRO_API_KEY=secret-token\nplain=ok\n"), 0644); err != nil {
+	want := []byte("KIRO_API_KEY=secret-token\nplain=ok\n")
+	if err := os.WriteFile(source, want, 0644); err != nil {
 		t.Fatal(err)
 	}
 
-	prepared, f, cleanup, err := prepareDiscordUploadFile(source)
+	f, displayName, cleanup, err := openDiscordUploadFile(source)
 	if err != nil {
-		t.Fatalf("prepareDiscordUploadFile: %v", err)
+		t.Fatalf("openDiscordUploadFile: %v", err)
 	}
 	defer cleanup()
-	if prepared.Path == source || prepared.DisplayName == ".env" {
-		t.Fatalf("upload was not sanitized: %+v", prepared)
+	if displayName != ".env" {
+		t.Fatalf("display name = %q, want original basename", displayName)
 	}
 	raw, err := io.ReadAll(f)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(raw), "secret-token") {
-		t.Fatalf("sanitized upload still contains secret: %s", raw)
+	if string(raw) != string(want) {
+		t.Fatalf("direct upload changed file bytes: got %q want %q", raw, want)
 	}
-	if strings.Contains(safeDiscordUploadError(fmt.Errorf("stat file: stat %s: no such file or directory", source)), source) {
-		t.Fatal("safe upload error leaked source path")
+	if !strings.Contains(string(raw), "secret-token") {
+		t.Fatalf("direct upload unexpectedly redacted source bytes: %q", raw)
+	}
+	if strings.Contains(safeDiscordUploadError(fmt.Errorf("open file: open %s: permission denied", source)), source) {
+		t.Fatal("direct upload error leaked source path")
+	}
+	if got := safeDiscordUploadError(fmt.Errorf("file exceeds upload size limit (1 bytes)")); got != "file exceeds upload size limit" {
+		t.Fatalf("safe upload error = %q, want size reason", got)
 	}
 }
 
@@ -479,19 +484,6 @@ func TestCopyDiscordAttachmentToFileRejectsOversizedContentLength(t *testing.T) 
 	}
 	if _, statErr := os.Stat(dst); !os.IsNotExist(statErr) {
 		t.Fatalf("content-length rejected file exists: %v", statErr)
-	}
-}
-
-func TestDiscordUploadCaptionUsesLocalizedSensitiveNotice(t *testing.T) {
-	L.Load("zh-TW")
-	t.Cleanup(func() { L.Load("en") })
-
-	got := discordUploadCaption("說明", true)
-	if !strings.Contains(got, "偵測到敏感路徑") {
-		t.Fatalf("localized sensitive notice missing: %q", got)
-	}
-	if got := discordUploadCaption("說明", false); got != "說明" {
-		t.Fatalf("non-sensitive caption changed: %q", got)
 	}
 }
 
@@ -779,6 +771,7 @@ func TestSendDiscordMessagePartsSplitsLongContent(t *testing.T) {
 	if len(msgs) < 2 {
 		t.Fatalf("sent messages = %d, want split delivery", len(msgs))
 	}
+	seenSecret := false
 	for i, body := range rt.Bodies() {
 		var payload struct {
 			Content         string         `json:"content"`
@@ -791,11 +784,39 @@ func TestSendDiscordMessagePartsSplitsLongContent(t *testing.T) {
 			t.Fatalf("payload %d content len = %d, want <= 2000", i, utf8.RuneCountInString(payload.Content))
 		}
 		if strings.Contains(payload.Content, "super-secret-token-123") {
-			t.Fatalf("payload %d leaked secret: %q", i, payload.Content)
+			seenSecret = true
 		}
 		if payload.AllowedMentions == nil {
 			t.Fatalf("payload %d missing allowed_mentions suppression: %s", i, body)
 		}
+	}
+	if !seenSecret {
+		t.Fatal("discord_send_message path redacted direct message content")
+	}
+}
+
+func TestSendDiscordMessagePartsPreservesMarkdownHeading(t *testing.T) {
+	rt := &recordingDiscordTransport{}
+	ds, err := discordgo.New("Bot test")
+	if err != nil {
+		t.Fatalf("new discord session: %v", err)
+	}
+	ds.Client = &http.Client{Transport: rt}
+	oldDG := dg
+	dg = ds
+	defer func() { dg = oldDG }()
+
+	if _, err := sendDiscordMessageParts("channel-1", "# Incident\nbody"); err != nil {
+		t.Fatalf("send parts: %v", err)
+	}
+	var payload struct {
+		Content string `json:"content"`
+	}
+	if err := json.Unmarshal([]byte(rt.Bodies()[0]), &payload); err != nil {
+		t.Fatalf("payload json: %v", err)
+	}
+	if payload.Content != "# Incident\nbody" {
+		t.Fatalf("direct message markdown changed: %q", payload.Content)
 	}
 }
 
@@ -918,6 +939,7 @@ func TestSendDiscordEmbedPartsSplitsLongDescription(t *testing.T) {
 	if len(msgs) < 2 {
 		t.Fatalf("sent embeds = %d, want split delivery", len(msgs))
 	}
+	seenSecret := false
 	for i, body := range rt.Bodies() {
 		var payload struct {
 			AllowedMentions map[string]any `json:"allowed_mentions"`
@@ -935,11 +957,44 @@ func TestSendDiscordEmbedPartsSplitsLongDescription(t *testing.T) {
 			t.Fatalf("embed payload %d description len = %d, want <= 4096", i, utf8.RuneCountInString(payload.Embeds[0].Description))
 		}
 		if strings.Contains(payload.Embeds[0].Description, "super-secret-token-456") {
-			t.Fatalf("embed payload %d leaked secret: %q", i, payload.Embeds[0].Description)
+			seenSecret = true
 		}
 		if payload.AllowedMentions == nil {
 			t.Fatalf("embed payload %d missing allowed_mentions suppression: %s", i, body)
 		}
+	}
+	if !seenSecret {
+		t.Fatal("discord_send_embed path redacted direct embed content")
+	}
+}
+
+func TestSendDiscordEmbedPartsPreservesMarkdownHeading(t *testing.T) {
+	rt := &recordingDiscordTransport{}
+	ds, err := discordgo.New("Bot test")
+	if err != nil {
+		t.Fatalf("new discord session: %v", err)
+	}
+	ds.Client = &http.Client{Transport: rt}
+	oldDG := dg
+	dg = ds
+	defer func() { dg = oldDG }()
+
+	if _, err := sendDiscordEmbedParts("channel-1", &discordgo.MessageEmbed{
+		Title:       "Incident",
+		Description: "# Incident\nbody",
+	}); err != nil {
+		t.Fatalf("send embed parts: %v", err)
+	}
+	var payload struct {
+		Embeds []struct {
+			Description string `json:"description"`
+		} `json:"embeds"`
+	}
+	if err := json.Unmarshal([]byte(rt.Bodies()[0]), &payload); err != nil {
+		t.Fatalf("payload json: %v", err)
+	}
+	if got := payload.Embeds[0].Description; got != "# Incident\nbody" {
+		t.Fatalf("direct embed markdown changed: %q", got)
 	}
 }
 

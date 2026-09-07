@@ -155,6 +155,23 @@ Verification:
 
 - Regression tests should cover extracted document redaction, compressed PDF text extraction, safe display names, temp directory creation, unsupported binary refusal, extraction/output size limits, locale reasons, MCP tool wording, and README behavior alignment.
 
+### Discord MCP Direct Tools Preserve Caller Payloads
+
+Decision:
+
+- `discord_send_message`, `discord_reply_message`, `discord_edit_message`, `discord_send_embed`, and `discord_send_file` are direct Discord REST side-effect tools. They preserve caller-provided text/embed/file content except for established mention-control escaping and split prefixes. They do not apply bot safe-egress secret redaction, document extraction, or sanitized file rewriting.
+
+Context:
+
+- `discord_*` tools exist for operator-approved direct Discord workflows where the caller intentionally chooses the Discord REST surface under MCP guild/channel/write/destructive policy.
+- `bot_*` tools exist for bot-owned safe egress from ordinary agents and remote/A2A delivery. That path remains redacted, queued, audited, and file-sanitized.
+
+Regression expectation:
+
+- Direct Discord MCP tests should prove payload preservation plus policy, split, and `AllowedMentions` guards.
+- Bot MCP and safe-egress tests should continue proving redaction, sanitizer behavior, queue semantics, audit, and transient-file cleanup.
+
+
 ## Current ACP Protocol Decisions
 
 ### Prompt stopReason Is Surfaced, Not Used For Success/Error Reclassification
@@ -411,7 +428,7 @@ First checks:
 
 Regression expectation:
 
-- Normal replies should flow through the bot delivery path. Tool write paths remain available when the task needs Discord side effects, but they must reuse shared formatting, policy, redaction, mention suppression, error handling, and audit.
+- Normal replies should flow through the bot delivery path. Tool write paths remain available when the task needs Discord side effects, but they must preserve their owning semantics: `bot_*` safe egress uses redaction/sanitization/queue/audit; `discord_*` direct REST tools avoid redaction/sanitization while keeping policy, splitting, mention suppression, and error handling.
 
 ### Multi-Bot Mention Confusion
 

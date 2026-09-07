@@ -14,6 +14,17 @@ func TestNormalizeSafeMarkdownDemotesHeadingsOutsideCodeBlocks(t *testing.T) {
 	}
 }
 
+func TestSplitPreserveMarkdownKeepsHeadings(t *testing.T) {
+	input := "# Incident\nbody"
+	parts := SplitPreserveMarkdown(input, 1900)
+	if len(parts) != 1 {
+		t.Fatalf("parts = %d, want 1", len(parts))
+	}
+	if parts[0] != input {
+		t.Fatalf("SplitPreserveMarkdown() = %q, want %q", parts[0], input)
+	}
+}
+
 func TestSplitClosesAndReopensCodeBlocks(t *testing.T) {
 	input := "```go\n" + strings.Repeat("fmt.Println(\"hello\")\n", 30) + "```"
 	parts := Split(input, 120)

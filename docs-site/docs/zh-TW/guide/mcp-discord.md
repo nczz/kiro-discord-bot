@@ -4,6 +4,8 @@
 
 它不是一般 bot 回覆的必要路徑。一般 agent final answer 應直接回傳給 bot，由 bot 統一處理 redaction、分段與送出。
 
+不同於 `bot-tools`，`mcp-discord` direct write tools 不套用 bot safe-egress redaction 與 sanitization。`discord_send_message`、`discord_reply_message`、`discord_edit_message`、`discord_send_embed`、`discord_send_file` 仍會執行 MCP guild/channel/write/destructive policy、Discord 長度處理與 mention 控制，但不會 redaction 疑似 secret 的文字、不會抽取文件內容，也不會把檔案改寫成 sanitized copy。若工作流程需要 bot-owned safe egress，請使用 `bot_send_file` 或 `bot_send_message`。
+
 ## 建置或找到 Binary
 
 Release archive 會包含 `mcp-discord`。從原始碼可建置：
@@ -82,11 +84,13 @@ Standalone `mcp-discord` process 不會走 bot 的 channel-policy injection path
 | --- | --- | --- |
 | Read | `discord_read_messages`, `discord_search_messages`, `discord_channel_info` | 會讓 agent 看見 channel content |
 | Mention resolver | `discord_resolve_mentions` | 用 fresh Discord member lookup 解析使用者要求的名字，只把 exact/unique match 授權給目前 bot task，並回傳安全的 `[[discord:user:...]]` placeholder |
-| Write | `discord_send_message`, `discord_reply_message`, `discord_send_embed` | 會送出可見 Discord 訊息 |
+| Write | `discord_send_message`, `discord_reply_message`, `discord_send_embed` | 送出可見 Discord 訊息，不套用 bot safe-egress redaction |
 | Thread | `discord_create_thread`, `discord_list_threads` | 建立或檢視 conversation surfaces |
 | Management | `discord_edit_message`, `discord_pin_message`, `discord_edit_channel_topic` | 維運風險較高 |
-| Attachment | `discord_download_attachment` | 需要 download directory 控制 |
+| Attachment | `discord_send_file`, `discord_download_attachment` | `discord_send_file` 直接上傳指定本機檔案 bytes；下載附件需要 download directory 控制 |
 
 建議先開 read-only，再只對工作流程需要的地方加入 non-destructive write tools。
+
+只有在目標是原檔傳輸時才使用 `discord_send_file`。它會在 Discord size limit 與 MCP write policy 下，上傳 `file_path` 指定的檔案；不會把 PDF/DOCX/XLSX 轉文字、不會因有效 binary 無法 redaction 就拒絕，也不會 redaction 文字檔內容。需要 sanitized bot-owned delivery 時，請使用 `bot_send_file`。
 
 當使用者要求 tag 或通知某個名字，但該人沒有出現在目前 prompt 的 mention references 時，優先使用 `discord_resolve_mentions`，不要用 `discord_list_members` 後自行猜 ID。它會先做 fresh REST member search，再做 bounded scan / cache fallback，並把解析出的 refs 寫入目前 bot target state，回傳 agent 可在 final answer 使用的 placeholders。Ambiguous 或 missing names 必須請使用者確認，不可猜。只有在 guild 很大且 exact name 常被預設 scan limit 漏掉時，才調高 `MCP_DISCORD_MEMBER_SCAN_LIMIT`。

@@ -36,7 +36,16 @@ func NormalizeSafeMarkdown(s string) string {
 
 // Split formats and splits text into Discord-sized message parts.
 func Split(s string, limit int) []string {
-	s = NormalizeSafeMarkdown(s)
+	return split(NormalizeSafeMarkdown(s), limit)
+}
+
+// SplitPreserveMarkdown splits text into Discord-sized message parts without
+// applying Discord markdown normalization.
+func SplitPreserveMarkdown(s string, limit int) []string {
+	return split(s, limit)
+}
+
+func split(s string, limit int) []string {
 	if strings.TrimSpace(s) == "" {
 		return nil
 	}

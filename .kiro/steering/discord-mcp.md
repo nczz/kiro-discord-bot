@@ -31,7 +31,7 @@ description: Guidelines for operating as a Discord bot agent. The bot automatica
 
 ## Discord 輸出與分段規則
 
-一般最終答案請直接回覆文字，讓 bot 的既有 delivery path 統一做 secret redaction、Discord Markdown 正規化、長訊息分段、code block fence 修補與分段 prefix。不要為了回覆使用者而主動呼叫 `bot_send_message` 或 `discord_send_message`。
+一般最終答案請直接回覆文字，讓 bot 的既有 delivery path 統一做 secret redaction、Discord Markdown 正規化、長訊息分段、code block fence 修補與分段 prefix。不要為了回覆使用者而主動呼叫 `bot_send_message` 或 `discord_send_message`。`discord_*` tools 是 direct Discord REST side-effect tools；呼叫者提供的 message/embed/file 內容除既有 mention-control escaping 與分段 prefix 外應忠實送出，不套用 bot safe-egress redaction 或檔案 sanitizer。
 
 當功能本身確實需要呼叫 Discord MCP / bot-tools 寫入工具時，實作層必須復用專案既有的 Discord formatter 與長訊息 helper：
 
@@ -41,7 +41,7 @@ description: Guidelines for operating as a Discord bot agent. The bot automatica
 - 不得在 tool handler、adapter、worker 或 feature code 中自行手寫 split point、UTF-8 boundary、code fence reopen/close、heading 降級或分段 prefix。
 - 若既有 helper 不足，先擴充共用 helper 並補測試，再接到功能路徑。
 
-這條規則同時適用於 `bot_send_message`、`bot_send_file` 的附加文字、`discord_send_message`、`discord_reply_message`、`discord_send_file` 的附加文字、`discord_send_embed` description、cron/thread/final response，以及任何未來新增的 Discord 文字輸出。
+這條規則同時適用於 `bot_send_message`、`bot_send_file` 的附加文字、`discord_send_message`、`discord_reply_message`、`discord_send_file` 的附加文字、`discord_send_embed` description、cron/thread/final response，以及任何未來新增的 Discord 文字輸出。差異只在內容政策：`bot_*` safe egress 與一般 bot delivery 會 redaction；`discord_*` direct tools 不改寫呼叫者內容。
 
 ## MCP 安全邊界
 
@@ -53,13 +53,11 @@ Discord MCP server 可能透過 `.env` 設定 `MCP_DISCORD_ALLOWED_GUILDS`、`MC
 
 ## 資安稽核與不可繞過規則
 
-MCP / safe egress 的 UX 修正不得降低安全邊界。任何 Discord 寫入或檔案輸出都必須維持以下控制：
+MCP / safe egress 的 UX 修正不得降低安全邊界。不同 MCP server 的用途不同：
 
-- 先套用 guild/channel allowlist 與 read-only/write/destructive guard，再執行送出。
-- 經過 secret redaction 後才送到 Discord。
-- 禁止任意 mention 擴散：沿用既有 `AllowedMentions` suppression 或既有送出 helper。
-- 保留 delivery success/failure handling 與 audit / semantic event 記錄；不能因為分批送出而吞掉錯誤。
-- 檔案輸出只能走既有 sanitized copy / size / binary guard；不得直接上傳敏感原始檔。
+- `bot_send_message`、`bot_send_file`、`bot_send_image_url` 是 bot-controlled safe egress：必須經過 queue、secret redaction、sanitized copy / size / binary guard、delivery error handling、audit / semantic event 記錄與 mention 防護。
+- `discord_send_message`、`discord_reply_message`、`discord_edit_message`、`discord_send_embed`、`discord_send_file` 是 direct Discord REST side effects：必須先套用 guild/channel allowlist 與 read-only/write/destructive guard，並維持 Discord length handling、`AllowedMentions` 防護與錯誤處理；不得套用 bot safe-egress redaction、不得把檔案轉成 sanitized/redacted copy，除非新增明確命名的 safe variant。
+- `discord_send_file` 的 direct 語意是上傳呼叫者指定的本機檔案 bytes；若工作需要 redacted/sanitized 檔案投遞，使用 `bot_send_file`。
 - 不能為了繞過工具限制而改用裸 Discord REST call、直接修改 policy DB、改寫 `.env`、臨時開 allow-all，或把 MCP proxy / safe egress pending queue 拿掉。
 
-若需要新增工具或送出模式，先明確判定它是 read-only、write 或 destructive，補上 policy/audit/redaction 測試，再交付。
+若需要新增工具或送出模式，先明確判定它是 read-only、write 或 destructive，補上 policy、audit、redaction/direct-payload 語意測試，再交付。
