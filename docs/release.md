@@ -33,6 +33,7 @@ The canonical release and deployment runbooks now live on the static documentati
 6. Wait for the release workflow and GitHub release artifacts.
 7. Deploy binaries to target hosts.
 8. Verify with `/doctor`, a simple agent reply, and any feature-specific smoke checks. For engine changes, use the operation matrix linked from the release runbook.
+   Confirm each Discord bot token has exactly one gateway runtime online before reply smoke tests; dual-engine must be one bot process selecting Kiro or OMP per scope, not parallel Kiro and OMP bot processes sharing a token.
 9. For A2A NATS changes or first enablement, follow `docs/a2a-nats-rollout.md` and complete the local two-bot, same-channel co-present, cross-server proxy, NATS restart, credential revocation, and rollback smokes.
 
 Do not delete `DATA_DIR`, Docker volumes, `.kiro/`, or `.env` during release or rollback.

@@ -39,6 +39,7 @@ Tag 前確認：
 - 測試覆蓋改動的 contract。
 - 部署注意事項包含必要 migration。
 - 產物檔沒有被 staged。
+- 確認部署注意事項保留 gateway invariant：每個 Discord bot token / bot identity 只對應一個在線 gateway runtime，即使 Kiro 與 OMP 同時 enabled。
 
 若這次包含 agent-engine 架構變更，也要確認：
 
@@ -102,6 +103,7 @@ macOS launchd hosts：
 
 ## 6. Post-deploy Checks
 
+- 確認每個已部署 Discord bot token / bot identity 只有一個 gateway runtime 在線；跨主機檢查時只能比對 token hash，不得輸出 token 明文。
 - 在一般 parent channel 執行 `/doctor`。
 - 測試簡單 agent reply。
 - 測試 `/status`。

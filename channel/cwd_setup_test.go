@@ -55,6 +55,36 @@ func TestInitializeChannelCWDRequiresDefaultRoot(t *testing.T) {
 	}
 }
 
+func TestInitializeChannelCWDPreservesEngineOverride(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "projects")
+	if err := os.MkdirAll(root, 0755); err != nil {
+		t.Fatalf("mkdir root: %v", err)
+	}
+	project := filepath.Join(root, "app")
+	if err := os.MkdirAll(project, 0755); err != nil {
+		t.Fatalf("mkdir project: %v", err)
+	}
+	m := newCWDSetupTestManager(t, root)
+	if err := m.setChannelSession("channel-1", &Session{Engine: "omp", Model: "gpt-5"}); err != nil {
+		t.Fatalf("set existing session: %v", err)
+	}
+
+	if _, err := m.InitializeChannelCWD("channel-1", project); err != nil {
+		t.Fatalf("InitializeChannelCWD: %v", err)
+	}
+
+	got, ok := m.getChannelSession("channel-1")
+	if !ok {
+		t.Fatal("channel session should exist after initialization")
+	}
+	if got.Engine != "omp" {
+		t.Fatalf("engine override = %q, want omp", got.Engine)
+	}
+	if got.Model != "gpt-5" {
+		t.Fatalf("model = %q, want gpt-5", got.Model)
+	}
+}
+
 func TestCreateDefaultProjectSanitizesAndInitializes(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "projects")
 	if err := os.MkdirAll(root, 0755); err != nil {

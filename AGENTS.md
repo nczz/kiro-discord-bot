@@ -22,6 +22,7 @@ If these sources conflict, stop and report the conflict. Do not invent behavior 
 - Keep decisions out of chat-only memory. Update steering or design docs when architecture direction, non-goals, known limitations, or regression expectations change.
 - Never weaken security, audit, redaction, `AllowedMentions`, MCP policy, CWD validation, or safe egress to improve UX.
 - Never expose raw bot runtime state paths such as `DATA_DIR/ch-*`, `sessions.json`, `policy.sqlite`, or audit DB paths in normal user-facing output.
+- A Discord bot token/identity must have exactly one gateway runtime online. Dual-engine means one bot process selects Kiro or OMP per `Session.Engine`; never run separate Kiro and OMP bot processes with the same token.
 - Default user communication is Traditional Chinese unless the user asks otherwise. Commit messages use English conventional commits.
 
 ## Architecture boundaries

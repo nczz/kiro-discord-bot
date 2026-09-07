@@ -13,6 +13,12 @@ set +a
 
 Confirm the bot logs in, registers slash commands, and responds to `/doctor`. Review [Environment Reference](environment.md) before turning the foreground command into a service.
 
+## Gateway Runtime Invariant
+
+Each Discord bot token/identity may have exactly one gateway runtime online at a time. Dual-engine deployment is one `kiro-discord-bot` process using `Session.Engine` to select the Kiro or OMP ACP dialect per channel/thread; it is not two bot processes sharing the same token.
+
+During deploy or rollback, stop the old runtime before starting the replacement. Before reply smoke tests, confirm process/service metadata and, when comparing multiple hosts, compare only token hashes; never print token values. A healthy deployment has one bot identity, one gateway process, and one selected ACP child for the active scope.
+
 ## macOS launchd
 
 For macOS, run the bot as a LaunchAgent with an explicit shell command that sources `.env` and executes the release binary. If private LAN MCP servers fail from launchd but work from an interactive shell, check proxy variables, Local Network permission, and the service identity. See [macOS MCP Networking](macos-mcp-networking.html) for the full runbook.

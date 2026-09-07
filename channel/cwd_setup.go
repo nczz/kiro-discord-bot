@@ -101,6 +101,7 @@ func (m *Manager) InitializeChannelCWD(channelID, cwd string) (string, error) {
 	newSess := &Session{CWD: real}
 	if existing != nil {
 		newSess.Model = existing.Model
+		newSess.Engine = existing.Engine
 	}
 	if err := m.setChannelSession(channelID, newSess); err != nil {
 		return "", err

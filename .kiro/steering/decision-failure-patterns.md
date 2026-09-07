@@ -287,6 +287,26 @@ Verification:
 
 ## Known Failure Patterns
 
+### Duplicate Gateway Runtime For One Bot Identity
+
+Symptoms:
+
+- One Discord prompt receives two bot replies from the same bot identity.
+- Usage/audit records for the same channel show different engines, for example Kiro credits and OMP USD, at the same time.
+- Process inspection shows more than one `kiro-discord-bot`/local test bot gateway process using the same Discord token; one may have `kiro-cli acp` while another has `omp acp`.
+
+First checks:
+
+- Process/service metadata on every host and VM that may run the bot.
+- Token identity by hash only; never print or paste token values.
+- `Session.Engine` for the affected channel/thread and `/status` effective engine.
+- Whether deploy or rollback started a replacement runtime before stopping the old runtime.
+
+Regression expectation:
+
+- Deployment docs and release handoff must state the invariant: one Discord bot token/identity maps to one online gateway runtime. Dual-engine switching happens inside one bot process through `Session.Engine`, not through parallel Kiro and OMP bot processes.
+
+
 ### CWD Or Kiro Settings Pollution
 
 Symptoms:

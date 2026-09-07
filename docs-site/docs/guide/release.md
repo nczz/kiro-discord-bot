@@ -45,6 +45,7 @@ Before tagging:
 - Confirm tests cover changed contracts.
 - Confirm deployment notes mention any manual migration.
 - Confirm generated artifacts are not staged.
+- Confirm deploy notes preserve the gateway invariant: one Discord bot token/identity maps to one online gateway runtime, even when Kiro and OMP are both enabled.
 
 For agent-engine architecture changes, also confirm:
 
@@ -108,6 +109,7 @@ For macOS launchd hosts:
 
 ## 6. Post-deploy Checks
 
+- Confirm each deployed Discord bot token/identity has exactly one gateway runtime online; when checking multiple hosts, compare token hashes only and never print token values.
 - Run `/doctor` in a normal parent channel.
 - Test a simple agent reply.
 - Test `/status`.

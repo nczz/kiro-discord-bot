@@ -13,6 +13,12 @@ set +a
 
 確認 bot 登入、slash commands 註冊成功，並能回應 `/doctor`。把 foreground command 轉成服務前，先檢查 [環境變數參考](environment.md)。
 
+## Gateway Runtime invariant
+
+每個 Discord bot token / bot identity 同一時間只能有一個 gateway runtime 上線。Dual-engine 部署是單一 `kiro-discord-bot` process 依 channel/thread 的 `Session.Engine` 選擇 Kiro 或 OMP ACP dialect；不是兩個 bot processes 共用同一 token。
+
+部署或 rollback 時，必須先停止舊 runtime，再啟動替換後的 runtime。reply smoke test 前，先用 process/service metadata 確認唯一 gateway；若要跨主機比對 token，只能比對 token hash，不得輸出 token 明文。健康狀態是：一個 bot identity、一個 gateway process、active scope 只有一個 selected ACP child。
+
 ## macOS launchd
 
 macOS 建議用 LaunchAgent，明確透過 shell source `.env` 後執行 release binary。若 private LAN MCP server 在互動 shell 可連，但 launchd 下 `/mcp manage` scan 失敗，請檢查 proxy 變數、Local Network 權限與 service identity。完整 runbook 請看 [macOS MCP 網路](macos-mcp-networking.html)。
