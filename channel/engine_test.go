@@ -171,7 +171,19 @@ func main() {
 				"agentInfo": map[string]string{"name": "fake-acp", "version": "test"},
 			}
 		case "session/new", "session/load":
-			result = map[string]any{"sessionId": "sid-test"}
+			result = map[string]any{
+				"sessionId": "sid-test",
+				"configOptions": []map[string]any{
+					{
+						"category":     "model",
+						"currentValue": "openai-codex/gpt-5.5",
+						"options": []map[string]string{
+							{"value": "openai-codex/gpt-5", "name": "GPT-5", "description": "Fast model"},
+							{"value": "openai-codex/gpt-5.5", "name": "GPT-5.5", "description": "Smart model"},
+						},
+					},
+				},
+			}
 		}
 		_ = enc.Encode(map[string]any{"jsonrpc": "2.0", "id": req["id"], "result": result})
 	}

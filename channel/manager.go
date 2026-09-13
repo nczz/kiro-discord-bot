@@ -2007,9 +2007,13 @@ func (m *Manager) validateModelForChannel(channelID, model string) error {
 	if ok && agent.IsAlive() {
 		return validateAgentModel(agent, model)
 	}
-	dialect, _ := m.engineForChannel(channelID)
+	dialect, binary := m.engineForChannel(channelID)
 	if dialect != acp.DialectKiro {
-		return fmt.Errorf("model validation requires an active %s agent; start the agent first or use `/models` while it is running", dialect.String())
+		cwd, _, err := m.channelModelListContext(channelID)
+		if err != nil {
+			return err
+		}
+		return m.validateModelWithOneShotAgent(modelListAgentName("model-validate", channelID), dialect, binary, cwd, model)
 	}
 	return m.validateModelID(model)
 }
@@ -2024,9 +2028,13 @@ func (m *Manager) validateModelForThread(threadID, parentChannelID, model string
 	if ok && entry.agent != nil && entry.agent.IsAlive() {
 		return validateAgentModel(entry.agent, model)
 	}
-	dialect, _ := m.engineForThread(threadID, parentChannelID)
+	dialect, binary := m.engineForThread(threadID, parentChannelID)
 	if dialect != acp.DialectKiro {
-		return fmt.Errorf("model validation requires an active %s thread agent; start the thread agent first or use `/models` while it is running", dialect.String())
+		cwd, _, err := m.threadModelListContext(threadID, parentChannelID)
+		if err != nil {
+			return err
+		}
+		return m.validateModelWithOneShotAgent(modelListAgentName("thread-model-validate", threadID), dialect, binary, cwd, model)
 	}
 	return m.validateModelID(model)
 }
@@ -2183,8 +2191,10 @@ func (m *Manager) Model(channelID string) string {
 }
 
 // ListModels returns available models for a channel scope.
-// Kiro can fall back to kiro-cli when no agent is active; other engines require
-// an active ACP session because their model catalog is reported by session/new.
+// Kiro can fall back to kiro-cli when no agent is active. Other ACP dialects
+// expose their model catalog through session/new, so an inactive scope is
+// queried with a short-lived no-MCP agent instead of requiring the user to start
+// the long-running channel agent first.
 func (m *Manager) ListModels(channelID string) (string, error) {
 	// Try to get models from active agent's session response (no subprocess needed)
 	m.mu.Lock()
@@ -2196,9 +2206,13 @@ func (m *Manager) ListModels(channelID string) (string, error) {
 		}
 	}
 
-	dialect, _ := m.engineForChannel(channelID)
+	dialect, binary := m.engineForChannel(channelID)
 	if dialect != acp.DialectKiro {
-		return "", fmt.Errorf("model listing requires an active %s agent; start the agent first", dialect.String())
+		cwd, currentModel, err := m.channelModelListContext(channelID)
+		if err != nil {
+			return "", err
+		}
+		return m.listModelsFromOneShotAgent(modelListAgentName("model-list", channelID), dialect, binary, cwd, currentModel)
 	}
 
 	models, defaultModel, err := m.cliModels()
@@ -2229,9 +2243,13 @@ func (m *Manager) ListThreadModels(threadID, parentChannelID string) (string, er
 		}
 	}
 
-	dialect, _ := m.engineForThread(threadID, parentChannelID)
+	dialect, binary := m.engineForThread(threadID, parentChannelID)
 	if dialect != acp.DialectKiro {
-		return "", fmt.Errorf("model listing requires an active %s thread agent; start the thread agent first", dialect.String())
+		cwd, currentModel, err := m.threadModelListContext(threadID, parentChannelID)
+		if err != nil {
+			return "", err
+		}
+		return m.listModelsFromOneShotAgent(modelListAgentName("thread-model-list", threadID), dialect, binary, cwd, currentModel)
 	}
 
 	models, defaultModel, err := m.cliModels()
@@ -2247,6 +2265,90 @@ func (m *Manager) ListThreadModels(threadID, parentChannelID string) (string, er
 		currentModel = m.defaultModel
 	}
 	return m.formatModels(currentModel, models), nil
+}
+
+func (m *Manager) channelModelListContext(channelID string) (cwd, currentModel string, err error) {
+	cwd = m.defaultCWD
+	if sess, ok := m.getChannelSession(channelID); ok && sess != nil {
+		if strings.TrimSpace(sess.CWD) != "" {
+			cwd = sess.CWD
+		}
+		currentModel = strings.TrimSpace(sess.Model)
+	}
+	if currentModel == "" {
+		currentModel = strings.TrimSpace(m.defaultModel)
+	}
+	cwd, err = m.ValidateCWD(cwd)
+	return cwd, currentModel, err
+}
+
+func (m *Manager) threadModelListContext(threadID, parentChannelID string) (cwd, currentModel string, err error) {
+	cwd = m.defaultCWD
+	if sess, ok := m.getChannelSession(parentChannelID); ok && sess != nil {
+		if strings.TrimSpace(sess.CWD) != "" {
+			cwd = sess.CWD
+		}
+		currentModel = strings.TrimSpace(sess.Model)
+	}
+	if sess, ok := m.getThreadSession(threadID); ok && sess != nil {
+		if strings.TrimSpace(sess.CWD) != "" {
+			cwd = sess.CWD
+		}
+		if strings.TrimSpace(sess.Model) != "" {
+			currentModel = strings.TrimSpace(sess.Model)
+		}
+	}
+	if currentModel == "" {
+		currentModel = strings.TrimSpace(m.defaultModel)
+	}
+	cwd, err = m.ValidateCWD(cwd)
+	return cwd, currentModel, err
+}
+
+func (m *Manager) validateModelWithOneShotAgent(name string, dialect acp.Dialect, binary, cwd, modelID string) error {
+	models, _, err := m.modelsFromOneShotAgent(name, dialect, binary, cwd)
+	if err != nil {
+		return err
+	}
+	for _, model := range models {
+		if model.ModelID == modelID {
+			return nil
+		}
+	}
+	return fmt.Errorf("unknown model %q; available models: %s", modelID, modelIDs(models))
+}
+
+func (m *Manager) listModelsFromOneShotAgent(name string, dialect acp.Dialect, binary, cwd, currentModel string) (string, error) {
+	models, agentCurrentModel, err := m.modelsFromOneShotAgent(name, dialect, binary, cwd)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(currentModel) == "" {
+		currentModel = agentCurrentModel
+	}
+	return m.formatModels(currentModel, models), nil
+}
+
+func (m *Manager) modelsFromOneShotAgent(name string, dialect acp.Dialect, binary, cwd string) ([]acp.ModelEntry, string, error) {
+	agent, err := acp.StartAgent(name, binary, cwd, "", m.preflightAgentOptionsFor(dialect))
+	if err != nil {
+		return nil, "", fmt.Errorf("list %s models: %w", dialect.String(), err)
+	}
+	defer agent.Stop()
+
+	models := agent.AvailableModels()
+	if len(models) == 0 {
+		return nil, "", errors.New(L.Getf("model.error.list_unavailable", dialect.String()))
+	}
+	return models, agent.CurrentModelID(), nil
+}
+
+func modelListAgentName(prefix, targetID string) string {
+	targetID = strings.TrimSpace(targetID)
+	if targetID == "" {
+		return prefix
+	}
+	return prefix + "-" + targetID
 }
 
 func (m *Manager) formatModels(currentModel string, models []acp.ModelEntry) string {

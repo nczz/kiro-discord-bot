@@ -107,6 +107,7 @@
   "model.current": "目前 model：`%s`",
   "model.current_global": "目前 model：`%s`（全域預設）",
   "model.current_default": "目前 model：`default`（agent 預設）",
+  "model.error.list_unavailable": "`%s` 沒有回傳 model 清單。請更新引擎，或啟動 agent 後再試一次 `/models`。",
   "usage.report.title": "**Agent 用量**",
   "usage.report.through": "統計到 `%s`（%s）",
   "usage.report.range": "今天自 `%s`，本周自 `%s`，本月自 `%s`",

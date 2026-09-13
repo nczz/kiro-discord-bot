@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/nczz/kiro-discord-bot/acp"
+	L "github.com/nczz/kiro-discord-bot/locale"
 )
 
 func fakeKiroCLI(t *testing.T) string {
@@ -56,45 +57,87 @@ func TestListModelsMarksCLIDefault(t *testing.T) {
 	}
 }
 
-func TestListModelsOmpRequiresActiveAgent(t *testing.T) {
+func TestListModelsOmpStartsOneShotAgent(t *testing.T) {
+	L.Load("en")
 	m := newEngineTestManager(t, "omp")
+	m.ompPath = fakeACPBinary(t)
+	m.defaultCWD = t.TempDir()
 
-	_, err := m.ListModels("ch1")
-	if err == nil {
-		t.Fatal("expected inactive omp model listing to fail")
+	got, err := m.ListModels("ch1")
+	if err != nil {
+		t.Fatalf("ListModels: %v", err)
 	}
-	if !strings.Contains(err.Error(), "active omp agent") {
-		t.Fatalf("error = %v, want active omp agent guidance", err)
+	if !strings.Contains(got, "▸ `openai-codex/gpt-5.5`") || !strings.Contains(got, "`openai-codex/gpt-5`") {
+		t.Fatalf("model list = %s", got)
 	}
 }
 
-func TestValidateModelForOmpChannelDoesNotCallKiroCLI(t *testing.T) {
+func TestValidateModelForOmpChannelUsesOneShotAgent(t *testing.T) {
+	L.Load("en")
 	m := newEngineTestManager(t, "omp")
 	m.kiroCLI = filepath.Join(t.TempDir(), "missing-kiro-cli")
+	m.ompPath = fakeACPBinary(t)
+	m.defaultCWD = t.TempDir()
 
-	err := m.validateModelForChannel("ch1", "gpt-5")
-	if err == nil {
-		t.Fatal("expected inactive omp model validation to fail")
+	if err := m.validateModelForChannel("ch1", "openai-codex/gpt-5"); err != nil {
+		t.Fatalf("validate omp model: %v", err)
 	}
-	if !strings.Contains(err.Error(), "active omp agent") {
-		t.Fatalf("error = %v, want active omp agent guidance", err)
+	err := m.validateModelForChannel("ch1", "missing-model")
+	if err == nil {
+		t.Fatal("expected missing omp model to fail")
 	}
 	if strings.Contains(err.Error(), "list models") {
 		t.Fatalf("error shows kiro-cli fallback was used: %v", err)
 	}
+	if !strings.Contains(err.Error(), "openai-codex/gpt-5") {
+		t.Fatalf("error = %v, want omp model catalog", err)
+	}
 }
 
-func TestListThreadModelsOmpRequiresActiveThreadAgent(t *testing.T) {
+func TestSwitchModelOmpInactiveUsesOneShotValidation(t *testing.T) {
+	L.Load("en")
+	m := newEngineTestManager(t, "omp")
+	m.ompPath = fakeACPBinary(t)
+	m.defaultCWD = t.TempDir()
+
+	restarted, err := m.SwitchModel("ch1", "openai-codex/gpt-5")
+	if err != nil {
+		t.Fatalf("SwitchModel: %v", err)
+	}
+	t.Cleanup(func() { m.StopAll() })
+	if !restarted {
+		t.Fatal("inactive omp switch should start the agent")
+	}
+	sess, ok := m.getChannelSession("ch1")
+	if !ok || sess.Model != "openai-codex/gpt-5" {
+		t.Fatalf("session = %+v, ok=%v", sess, ok)
+	}
+	m.mu.Lock()
+	agent := m.agents["ch1"]
+	m.mu.Unlock()
+	if agent == nil {
+		t.Fatal("agent was not started")
+	}
+	if got := agent.CurrentModelID(); got != "openai-codex/gpt-5" {
+		t.Fatalf("agent current model = %q", got)
+	}
+}
+
+func TestListThreadModelsOmpStartsOneShotAgent(t *testing.T) {
+	L.Load("en")
 	m := newEngineTestManager(t, "kiro")
-	if err := m.setChannelSession("parent", &Session{Engine: acp.DialectOmp.String()}); err != nil {
+	m.ompPath = fakeACPBinary(t)
+	cwd := t.TempDir()
+	m.defaultCWD = cwd
+	if err := m.setChannelSession("parent", &Session{CWD: cwd, Engine: acp.DialectOmp.String()}); err != nil {
 		t.Fatalf("set channel session: %v", err)
 	}
 
-	_, err := m.ListThreadModels("thread", "parent")
-	if err == nil {
-		t.Fatal("expected inactive omp thread model listing to fail")
+	got, err := m.ListThreadModels("thread", "parent")
+	if err != nil {
+		t.Fatalf("ListThreadModels: %v", err)
 	}
-	if !strings.Contains(err.Error(), "active omp thread agent") {
-		t.Fatalf("error = %v, want active omp thread agent guidance", err)
+	if !strings.Contains(got, "▸ `openai-codex/gpt-5.5`") || !strings.Contains(got, "`openai-codex/gpt-5`") {
+		t.Fatalf("thread model list = %s", got)
 	}
 }

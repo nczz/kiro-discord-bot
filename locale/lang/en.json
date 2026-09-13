@@ -110,6 +110,7 @@
   "model.current": "Current model: `%s`",
   "model.current_global": "Current model: `%s` (global default)",
   "model.current_default": "Current model: `default` (agent default)",
+  "model.error.list_unavailable": "`%s` did not return a model catalog. Update the engine, or start an agent and try `/models` again.",
   "usage.report.title": "**Agent usage**",
   "usage.report.through": "Through `%s` (%s)",
   "usage.report.range": "Day from `%s`, week from `%s`, month from `%s`",
