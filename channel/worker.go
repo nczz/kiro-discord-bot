@@ -56,6 +56,7 @@ type Job struct {
 	ThreadID               string // non-empty = follow-up in existing thread, skip thread creation
 	Transcript             string // STT transcription result, shown in thread if non-empty
 	Handoff                bool   // true when this job is an accepted cross-bot handoff
+	SkipDiscordContext     bool   // true when the prompt already includes bot-built Discord discussion context
 	Source                 string // message, thread, cron, etc.
 	DeliveryMode           DeliveryMode
 	ThreadMentionOnly      bool // listen snapshot for newly created agent threads

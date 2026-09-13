@@ -361,7 +361,11 @@ func (b *Bot) downloadAttachments(projectCWD, messageID string, attachments []*d
 			log.Printf("[attach] skip %s: size %d > max %d", att.Filename, att.Size, b.attachmentMaxBytes)
 			continue
 		}
-		resp, err := b.downloadClient.Get(att.URL)
+		client := b.downloadClient
+		if client == nil {
+			client = http.DefaultClient
+		}
+		resp, err := client.Get(att.URL)
 		if err != nil {
 			log.Printf("[attach] download %s: %v (url=%s)", att.Filename, err, att.URL)
 			continue
@@ -879,7 +883,18 @@ func (b *Bot) enqueueChannelPrompt(ds *discordgo.Session, m *discordgo.MessageCr
 		localPaths = rest
 	}
 
-	mentionRefs := appendMentionRefs(mentionRefsForMessage(m, selfID), b.peerMentionRefs(selfID)...)
+	discussion := b.buildDiscordDiscussionContext(ds, m, discordDiscussionContextOptions{
+		TargetID:       m.ChannelID,
+		ProjectCWD:     projectCWD,
+		CurrentContent: content,
+		SelfID:         selfID,
+		SessionKey:     b.manager.ContextSessionKey(m.ChannelID, ""),
+	})
+	if discussion.Block != "" {
+		content = discussion.Block + content
+	}
+	localPaths = append(localPaths, discussion.Attachments...)
+	mentionRefs := appendMentionRefs(mentionRefsForMessage(m, selfID), append(discussion.MentionRefs, b.peerMentionRefs(selfID)...)...)
 	prompt := buildPromptThreadWithMentions(content, localPaths, m.ChannelID, "", m.GuildID, m.Author.Username, m.Author.ID, b.peerPromptContext(selfID), mentionRefs)
 	deliveryMode := channel.DeliveryThread
 	if !b.manager.ThreadModeEnabled(m.ChannelID) {
@@ -903,7 +918,9 @@ func (b *Bot) enqueueChannelPrompt(ds *discordgo.Session, m *discordgo.MessageCr
 	if err := b.manager.Enqueue(ds, job); err != nil {
 		ds.MessageReactionRemove(m.ChannelID, m.ID, "⏳", "@me")
 		_, _ = sendDiscordText(ds, m.ChannelID, L.Getf("error.generic", err.Error()), nil)
+		return
 	}
+	b.markDiscordDiscussionContextDelivered(discussion)
 }
 
 func (b *Bot) enqueueThreadPrompt(ds *discordgo.Session, m *discordgo.MessageCreate, content, parentChannelID string, handoff bool, source string) {
@@ -916,7 +933,8 @@ func (b *Bot) enqueueThreadPrompt(ds *discordgo.Session, m *discordgo.MessageCre
 	// Immediate feedback
 	_ = ds.MessageReactionAdd(threadID, m.ID, "⏳")
 
-	localPaths := b.downloadAttachments(b.manager.TargetCWDPath(threadID, parentChannelID), m.ID, m.Attachments)
+	projectCWD := b.manager.TargetCWDPath(threadID, parentChannelID)
+	localPaths := b.downloadAttachments(projectCWD, m.ID, m.Attachments)
 	b.warnIfAttachmentsLarge(ds, threadID, localPaths)
 
 	// Transcribe audio files
@@ -931,28 +949,45 @@ func (b *Bot) enqueueThreadPrompt(ds *discordgo.Session, m *discordgo.MessageCre
 	if ds.State != nil && ds.State.User != nil {
 		threadSelfID = ds.State.User.ID
 	}
-	mentionRefs := appendMentionRefs(mentionRefsForMessage(m, threadSelfID), b.peerMentionRefs(threadSelfID)...)
+	discussion := b.buildDiscordDiscussionContext(ds, m, discordDiscussionContextOptions{
+		TargetID:        threadID,
+		ParentChannelID: parentChannelID,
+		ThreadID:        threadID,
+		ProjectCWD:      projectCWD,
+		CurrentContent:  content,
+		SelfID:          threadSelfID,
+		SessionKey:      b.manager.ContextSessionKey(threadID, parentChannelID),
+		Handoff:         handoff,
+	})
+	if discussion.Block != "" {
+		content = discussion.Block + content
+	}
+	localPaths = append(localPaths, discussion.Attachments...)
+	mentionRefs := appendMentionRefs(mentionRefsForMessage(m, threadSelfID), append(discussion.MentionRefs, b.peerMentionRefs(threadSelfID)...)...)
 	prompt := buildPromptThreadWithMentions(content, localPaths, parentChannelID, threadID, m.GuildID, m.Author.Username, m.Author.ID, b.peerPromptContext(threadSelfID), mentionRefs)
 
 	job := &channel.Job{
-		ChannelID:       threadID,
-		ParentChannelID: parentChannelID,
-		GuildID:         m.GuildID,
-		MessageID:       m.ID,
-		Prompt:          prompt,
-		UserID:          m.Author.ID,
-		Username:        m.Author.Username,
-		Attachments:     localPaths,
-		ThreadID:        threadID,
-		Transcript:      transcript,
-		Handoff:         handoff,
-		Source:          source,
-		MentionRefs:     mentionRefs,
+		ChannelID:          threadID,
+		ParentChannelID:    parentChannelID,
+		GuildID:            m.GuildID,
+		MessageID:          m.ID,
+		Prompt:             prompt,
+		UserID:             m.Author.ID,
+		Username:           m.Author.Username,
+		Attachments:        localPaths,
+		ThreadID:           threadID,
+		Transcript:         transcript,
+		Handoff:            handoff,
+		Source:             source,
+		MentionRefs:        mentionRefs,
+		SkipDiscordContext: true,
 	}
 	if err := b.manager.EnqueueThread(ds, job, parentChannelID); err != nil {
 		ds.MessageReactionRemove(threadID, m.ID, "⏳", "@me")
 		_, _ = sendDiscordText(ds, threadID, commandError(err), nil)
+		return
 	}
+	b.markDiscordDiscussionContextDelivered(discussion)
 }
 
 func (b *Bot) handleThreadCreate(ds *discordgo.Session, t *discordgo.ThreadCreate) {

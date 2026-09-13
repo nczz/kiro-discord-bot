@@ -47,6 +47,7 @@ type Bot struct {
 	attachmentMaxBytes       int64
 	seen                     *seenMessages
 	sttClient                *stt.Client
+	discussionContext        *discordDiscussionContextCache
 	sttMaxDuration           int
 	peerMu                   sync.RWMutex
 	peers                    []BotPeer
@@ -200,6 +201,7 @@ func NewFromConfig(cfg BotConfig) (*Bot, error) {
 		webshareUploads:          make(map[string]*webshareUploadSession),
 		webshareWebhookByChannel: make(map[string]webshareWebhookCredential),
 		webshareWebhookIDs:       make(map[string]bool),
+		discussionContext:        newDiscordDiscussionContextCache(),
 	}
 	if cfg.STTEnabled && cfg.STTAPIKey != "" {
 		b.sttClient = stt.New(cfg.STTProvider, cfg.STTAPIKey, cfg.STTModel, cfg.STTLanguage)

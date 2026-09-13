@@ -590,6 +590,46 @@ func (m *Manager) getThreadSession(threadID string) (*Session, bool) {
 	return m.store.Get(m.sessionKey(sessionTargetThread, threadID))
 }
 
+// ContextSessionKey returns a stable fingerprint for the current agent session
+// backing a channel or thread target. Bot-side Discord context injection uses it
+// to avoid replaying discussion messages the same live/restored agent session
+// has already received, while resetting the watermark after session changes.
+func (m *Manager) ContextSessionKey(targetID, parentChannelID string) string {
+	targetID = strings.TrimSpace(targetID)
+	parentChannelID = strings.TrimSpace(parentChannelID)
+	if targetID == "" {
+		return ""
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if parentChannelID != "" {
+		if entry, ok := m.threadAgents[targetID]; ok && entry != nil && entry.agent != nil && entry.agent.IsAlive() {
+			return contextSessionKey("thread", targetID, entry.agent.Dialect().String(), entry.agent.Name, entry.agent.SessionID)
+		}
+		if sess, ok := m.getThreadSession(targetID); ok && sess != nil {
+			return contextSessionKey("thread", targetID, sess.Engine, sess.AgentName, sess.SessionID)
+		}
+		return contextSessionKey("thread", targetID, "", "", "")
+	}
+	if agent, ok := m.agents[targetID]; ok && agent != nil && agent.IsAlive() {
+		return contextSessionKey("channel", targetID, agent.Dialect().String(), agent.Name, agent.SessionID)
+	}
+	if sess, ok := m.getChannelSession(targetID); ok && sess != nil {
+		return contextSessionKey("channel", targetID, sess.Engine, sess.AgentName, sess.SessionID)
+	}
+	return contextSessionKey("channel", targetID, "", "", "")
+}
+
+func contextSessionKey(scope, targetID, engine, agentName, sessionID string) string {
+	return strings.Join([]string{
+		strings.TrimSpace(scope),
+		strings.TrimSpace(targetID),
+		strings.TrimSpace(engine),
+		strings.TrimSpace(agentName),
+		strings.TrimSpace(sessionID),
+	}, "|")
+}
+
 func (m *Manager) setThreadSession(threadID, parentChannelID string, sess *Session) error {
 	if m.store == nil {
 		return fmt.Errorf("session store unavailable")
@@ -3637,10 +3677,12 @@ func (m *Manager) IsSilent(channelID string) bool {
 // EnqueueThread routes a job to the thread's dedicated agent, spawning one if needed.
 func (m *Manager) EnqueueThread(ds *discordgo.Session, job *Job, parentChannelID string) error {
 	var discordCtx string
-	if job.Handoff {
-		discordCtx = m.buildDiscordThreadHandoffContext(ds, job.ThreadID, job.MessageID)
-	} else {
-		discordCtx = m.buildDiscordThreadContext(ds, job.ThreadID, job.MessageID)
+	if !job.SkipDiscordContext {
+		if job.Handoff {
+			discordCtx = m.buildDiscordThreadHandoffContext(ds, job.ThreadID, job.MessageID)
+		} else {
+			discordCtx = m.buildDiscordThreadContext(ds, job.ThreadID, job.MessageID)
+		}
 	}
 	if discordCtx != "" {
 		job.Prompt = discordCtx + job.Prompt
