@@ -315,6 +315,59 @@ func TestWebShareLockoutParentAndManagedChild(t *testing.T) {
 	}
 }
 
+func newWebShareLockedHandlerTestBot(t *testing.T, rt *recordingDiscordTransport) (*Bot, *discordgo.Session) {
+	t.Helper()
+	store, _ := newTestWebShareStoreAndShare(t)
+	ds := testPeerPermissionSession(t, []*discordgo.PermissionOverwrite{userMemberManageOverwrite("viewer", discordgo.PermissionManageChannels)})
+	ds.Client = &http.Client{Transport: rt}
+	manager := channel.NewManager(channel.ManagerConfig{})
+	manager.Pause("channel-1")
+	b := &Bot{manager: manager, discord: ds, guildID: "guild-1", webshareStore: store, seen: newSeenMessages(), setupPromptCooldown: newSetupPromptCooldown(nil)}
+	t.Cleanup(b.seen.Stop)
+	return b, ds
+}
+
+func TestWebShareLockoutDoesNotWarnForOrdinaryDiscordMessage(t *testing.T) {
+	L.Load("en")
+	rt := &recordingDiscordTransport{}
+	b, ds := newWebShareLockedHandlerTestBot(t, rt)
+
+	b.handleMessage(ds, &discordgo.MessageCreate{Message: &discordgo.Message{ID: "message-ordinary-1", ChannelID: "channel-1", GuildID: "guild-1", Content: "hello everyone", Author: &discordgo.User{ID: "viewer", Username: "Viewer"}}})
+
+	_, bodies := rt.Snapshot()
+	if len(bodies) != 0 {
+		t.Fatalf("discord replies = %d, want none: %s", len(bodies), strings.Join(bodies, "\n"))
+	}
+}
+
+func TestWebShareLockoutWarnsForDirectMention(t *testing.T) {
+	L.Load("en")
+	rt := &recordingDiscordTransport{}
+	b, ds := newWebShareLockedHandlerTestBot(t, rt)
+
+	b.handleMessage(ds, &discordgo.MessageCreate{Message: &discordgo.Message{ID: "message-mention-1", ChannelID: "channel-1", GuildID: "guild-1", Content: "<@bot-1> please help", Author: &discordgo.User{ID: "viewer", Username: "Viewer"}, Mentions: []*discordgo.User{{ID: "bot-1", Username: "bot", Bot: true}}}})
+
+	_, bodies := rt.Snapshot()
+	joined := strings.Join(bodies, "\n")
+	if !strings.Contains(joined, L.Get("webshare.locked")) {
+		t.Fatalf("discord replies = %s, want webshare lockout warning", joined)
+	}
+}
+
+func TestWebShareLockoutWarnsForBangCommand(t *testing.T) {
+	L.Load("en")
+	rt := &recordingDiscordTransport{}
+	b, ds := newWebShareLockedHandlerTestBot(t, rt)
+
+	b.handleMessage(ds, &discordgo.MessageCreate{Message: &discordgo.Message{ID: "message-command-1", ChannelID: "channel-1", GuildID: "guild-1", Content: "!status", Author: &discordgo.User{ID: "viewer", Username: "Viewer"}}})
+
+	_, bodies := rt.Snapshot()
+	joined := strings.Join(bodies, "\n")
+	if !strings.Contains(joined, L.Get("webshare.locked")) {
+		t.Fatalf("discord replies = %s, want webshare lockout warning", joined)
+	}
+}
+
 func TestWebSharePostMessageSelectedMentionAllowedRawMentionInert(t *testing.T) {
 	L.Load("en")
 	rt := &recordingDiscordTransport{}

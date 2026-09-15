@@ -615,6 +615,11 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 
 	isMentioned := b.messageMentionsSelf(m, content, selfID)
 	isCommand := strings.HasPrefix(content, "!")
+	isHuman := !m.Author.Bot
+	addressesSelf := false
+	if isHuman && isMentioned {
+		addressesSelf = b.humanMessageAddressesSelf(m, content, selfID)
+	}
 
 	parentChannelID := resolveThreadParent(ds, m.ChannelID)
 	if m.WebhookID != "" && b.isWebShareWebhookMessage(m) {
@@ -636,7 +641,7 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 		b.enqueueChannelPrompt(ds, m, content, selfID, "webhook")
 		return
 	}
-	if !m.Author.Bot && b.rejectWebShareLockedDiscordUse(m.Author.ID, m.ChannelID, parentChannelID, commandNameFromBang(content)) {
+	if isHuman && (isCommand || addressesSelf) && b.rejectWebShareLockedDiscordUse(m.Author.ID, m.ChannelID, parentChannelID, commandNameFromBang(content)) {
 		_, _ = sendDiscordText(ds, m.ChannelID, b.webshareLockoutMessage(), nil)
 		return
 	}
@@ -653,7 +658,7 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 		log.Printf("[handler] ignored human msg reason=other_peer_mentioned channel=%s thread=%t msg=%s", m.ChannelID, parentChannelID != "", m.ID)
 		return
 	}
-	if !m.Author.Bot && isMentioned && !b.humanMessageAddressesSelf(m, content, selfID) {
+	if isHuman && isMentioned && !addressesSelf {
 		log.Printf("[handler] ignored human msg reason=self_mentioned_as_task_target channel=%s thread=%t msg=%s", m.ChannelID, parentChannelID != "", m.ID)
 		return
 	}
