@@ -1224,6 +1224,10 @@ func buildSlashCommands() []*discordgo.ApplicationCommand {
 }
 
 func buildSlashCommandsWithA2A(a2aEnabled bool) []*discordgo.ApplicationCommand {
+	return buildSlashCommandsWithA2APolicy(a2aEnabled, true)
+}
+
+func buildSlashCommandsWithA2APolicy(a2aEnabled bool, useDefaultMemberPermissions bool) []*discordgo.ApplicationCommand {
 	commands := []*discordgo.ApplicationCommand{
 		{Name: "start", Description: L.Get("cmd.start.desc"), Options: []*discordgo.ApplicationCommandOption{
 			{Type: discordgo.ApplicationCommandOptionString, Name: "cwd", Description: L.Get("cmd.start.opt.cwd"), Required: true},
@@ -1348,7 +1352,7 @@ func buildSlashCommandsWithA2A(a2aEnabled bool) []*discordgo.ApplicationCommand 
 		commands = append(commands, &discordgo.ApplicationCommand{Name: "a2a", Description: L.Get("cmd.a2a.desc"), Options: a2aSlashOptions()})
 	}
 	for _, cmd := range commands {
-		applySlashCommandPolicy(cmd)
+		applySlashCommandPolicy(cmd, useDefaultMemberPermissions)
 	}
 	return commands
 }
@@ -1397,7 +1401,7 @@ func (b *Bot) registerSlashCommands() {
 	if _, err := b.discord.ApplicationCommandBulkOverwrite(b.discord.State.User.ID, "", []*discordgo.ApplicationCommand{}); err != nil {
 		log.Printf("[slash] clear global commands: %v", err)
 	}
-	created, err := b.discord.ApplicationCommandBulkOverwrite(b.discord.State.User.ID, guildID, buildSlashCommandsWithA2A(b.a2aConfig.Enabled()))
+	created, err := b.discord.ApplicationCommandBulkOverwrite(b.discord.State.User.ID, guildID, buildSlashCommandsWithA2APolicy(b.a2aConfig.Enabled(), len(b.gmUserIDs) == 0))
 	if err != nil {
 		log.Printf("[slash] bulk overwrite error: %v", err)
 		return
@@ -1419,6 +1423,14 @@ func (b *Bot) handleAutocomplete(ds *discordgo.Session, i *discordgo.Interaction
 	if data.Name != "cron-run" && data.Name != "monitor-run" {
 		return
 	}
+	userID, _ := interactionUser(i)
+	if !b.slashCommandManagerAllowed(ds, userID, i.ChannelID, data.Name) {
+		_ = ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionApplicationCommandAutocompleteResult,
+			Data: &discordgo.InteractionResponseData{Choices: []*discordgo.ApplicationCommandOptionChoice{}},
+		})
+		return
+	}
 	// Get typed value
 	var typed string
 	for _, opt := range data.Options {
@@ -1426,13 +1438,7 @@ func (b *Bot) handleAutocomplete(ds *discordgo.Session, i *discordgo.Interaction
 			typed = strings.ToLower(opt.StringValue())
 		}
 	}
-	if data.Name == "monitor-run" && !b.monitorActorCanManage(ds, i, i.ChannelID) {
-		_ = ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Type: discordgo.InteractionApplicationCommandAutocompleteResult,
-			Data: &discordgo.InteractionResponseData{Choices: []*discordgo.ApplicationCommandOptionChoice{}},
-		})
-		return
-	}
+
 	var choices []*discordgo.ApplicationCommandOptionChoice
 	if data.Name == "monitor-run" {
 		for _, job := range b.monitorStore.ListByChannel(i.ChannelID) {
@@ -1574,6 +1580,20 @@ func (b *Bot) handleSlashCommand(ds *discordgo.Session, i *discordgo.Interaction
 		})
 		b.recordInteractionResponseDelivery(auditCtx, data.Name, "rejected", msg, discordgo.InteractionResponseChannelMessageWithSource, map[string]any{"ephemeral": true, "webshare_lockout": true}, err)
 		b.recordCommandCompleted(auditCtx, data.Name, "slash", "rejected", "webshare_lockout")
+		return
+	}
+	if !b.slashCommandManagerAllowed(ds, userID, rawChannelID, data.Name) {
+		msg := L.Get("permission.manager_required")
+		err := ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{
+				Content:         msg,
+				AllowedMentions: &discordgo.MessageAllowedMentions{},
+				Flags:           discordgo.MessageFlagsEphemeral,
+			},
+		})
+		b.recordInteractionResponseDelivery(auditCtx, data.Name, "rejected", msg, discordgo.InteractionResponseChannelMessageWithSource, map[string]any{"ephemeral": true}, err)
+		b.recordCommandCompleted(auditCtx, data.Name, "slash", "rejected", "manager_required")
 		return
 	}
 

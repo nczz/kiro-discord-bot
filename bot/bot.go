@@ -54,6 +54,7 @@ type Bot struct {
 	manualPeers              []BotPeer
 	peerPermMu               sync.Mutex
 	peerPermCache            map[string]peerPermissionCacheEntry
+	gmUserIDs                map[string]bool
 	cronPromptCache          cronPromptStore    // parsed cron jobs awaiting button confirmation
 	monitorPromptCache       monitorPromptStore // parsed monitor jobs awaiting button confirmation
 	a2aConfirmations         *a2aPolicyConfirmationStore
@@ -97,6 +98,7 @@ type BotConfig struct {
 	STTLanguage        string
 	STTMaxDurationSec  int
 	BotPeers           string
+	GMUserIDs          string
 	Audit              audit.Config
 	A2ANode            *a2a.Node
 	WebShare           WebShareConfig
@@ -107,6 +109,7 @@ func NewFromConfig(cfg BotConfig) (*Bot, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve data dir: %w", err)
 	}
+	cfg.ManagerConfig.GMUserIDs = cfg.GMUserIDs
 	cfg.DataDir = dataDir
 	cfg.ManagerConfig.DataDir = dataDir
 
@@ -189,6 +192,7 @@ func NewFromConfig(cfg BotConfig) (*Bot, error) {
 		peers:                    activeBotPeers(manualPeers),
 		manualPeers:              manualPeers,
 		peerPermCache:            make(map[string]peerPermissionCacheEntry),
+		gmUserIDs:                parseDiscordUserIDSet(cfg.GMUserIDs),
 		auditRecorder:            auditRecorder,
 		skillsStore:              skillsStore,
 		a2aNode:                  cfg.A2ANode,

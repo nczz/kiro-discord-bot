@@ -68,6 +68,7 @@ See [Daily Workflows](daily-workflows.md) for the operational difference between
 | `/usage-history [user] [period] [status] [source]` | Privately inspect guild-wide detailed usage records. Period choices: `7d`, `30d`, `this-month`, `last-month`; status choices: `all`, `success`, `failed`; source choices: `all`, `message`, `webhook`, `webshare`, `command`, `cron`, `monitor`. Members can inspect their own history; inspecting another member requires Manage Guild or Administrator permission. |
 
 Use slash `/audit` for audit data and slash `/usage` or `/usage-history` for usage data. Text `!audit` does not return audit rows, and text `!usage` only returns a slash-only notice, because Discord cannot make those replies private.
+Bot managers are members with the relevant Discord management permission or user IDs listed in `BOT_GM_USER_IDS`. When a GM allowlist is configured, non-manager users may still see manager-only slash commands, but the bot rejects them before executing the command.
 
 See [Audit, Usage, and Privacy](audit-usage-privacy.md) for how audit rows, audit prompt investigations, and usage attribution work.
 

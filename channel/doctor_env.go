@@ -33,6 +33,7 @@ var envSpecs = []envEntry{
 		return m.defaultEngine.String()
 	}},
 	{Name: "KIRO_API_KEY", Sensitive: true, Group: "core"},
+	{Name: "BOT_GM_USER_IDS", Group: "core"},
 
 	// Agent
 	{Name: "DEFAULT_CWD", Group: "agent", Effective: func(m *Manager) string { return m.defaultCWD }},

@@ -45,3 +45,26 @@ func TestNewFromConfigNormalizesDataDir(t *testing.T) {
 		t.Fatalf("bot dataDir = %q, want %q", b.dataDir, want)
 	}
 }
+
+func TestNewFromConfigParsesGMUserIDs(t *testing.T) {
+	b, err := NewFromConfig(BotConfig{
+		DiscordToken:       "token",
+		HeartbeatSec:       60,
+		DownloadTimeoutSec: 30,
+		GMUserIDs:          "gm-1, gm-2",
+		ManagerConfig: channel.ManagerConfig{
+			DataDir: t.TempDir(),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		b.seen.Stop()
+		b.manager.StopAll()
+	})
+
+	if !b.userIsGM("gm-1") || !b.userIsGM("gm-2") || b.userIsGM("viewer") {
+		t.Fatalf("gmUserIDs = %#v, want gm-1/gm-2 only", b.gmUserIDs)
+	}
+}

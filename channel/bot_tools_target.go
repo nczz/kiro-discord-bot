@@ -108,10 +108,31 @@ func writeBotToolsTargetStateWithRequesterSource(path, targetChannelID string, d
 	return os.Rename(tmp, path)
 }
 
-func botToolsRequesterPermissions(ds *discordgo.Session, userID, targetID, fallbackParentID string) (bool, bool) {
+func parseDiscordUserIDSet(raw string) map[string]bool {
+	out := map[string]bool{}
+	for _, item := range strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == '\n' || r == '\t' || r == ' '
+	}) {
+		item = strings.TrimSpace(item)
+		if item != "" {
+			out[item] = true
+		}
+	}
+	return out
+}
+
+func discordUserIDSetContains(set map[string]bool, userID string) bool {
+	userID = strings.TrimSpace(userID)
+	return userID != "" && set[userID]
+}
+
+func botToolsRequesterPermissions(ds *discordgo.Session, userID, targetID, fallbackParentID string, gmUserIDs map[string]bool) (bool, bool) {
 	userID = strings.TrimSpace(userID)
 	targetID = strings.TrimSpace(targetID)
 	fallbackParentID = strings.TrimSpace(fallbackParentID)
+	if discordUserIDSetContains(gmUserIDs, userID) {
+		return true, true
+	}
 	if ds == nil || userID == "" || targetID == "" {
 		return false, false
 	}

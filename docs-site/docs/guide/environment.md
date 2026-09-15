@@ -100,6 +100,7 @@ Use the matching relay-side `RELAY_HOST_TOKEN_FILE` or `RELAY_HOST_TOKEN`. The p
 - `OMP_SESSION_DIR` controls where bot-started OMP ACP session files live. `OMP_PROFILE` controls OMP auth/settings/cache identity. They solve different isolation problems.
 - `KIRO_MCP_CONFIG` is treated as an MCP catalog source. Runtime agents receive bot-managed, per-policy MCP settings under `DATA_DIR`, rather than inheriting the user's Kiro settings directly.
 - `TRUST_ALL_TOOLS` and `TRUST_TOOLS` approve ACP server permission requests. They do not replace Discord command ACLs or MCP channel policy.
+- `BOT_GM_USER_IDS` grants full bot-manager access to specific Discord user IDs. When it is set, manager-only slash commands are registered without Discord's default Manage Channels gate so the bot can enforce the GM allowlist itself; non-managers still receive an in-bot permission denial.
 - `PREFLIGHT_MODE=skip` is the explicit way to disable ACP preflight. `SKIP_PREFLIGHT` exists for compatibility and skips preflight when non-empty.
 - WebShare uses two processes: the bot keeps durable share state under `DATA_DIR/webshare`, while the relay only serves static assets and routes encrypted WebSocket frames.
 - `WEBSHARE_PUBLIC_BASE_URL` must match the browser-facing HTTPS origin. `WEBSHARE_RELAY_URL` should point at the relay origin, usually the same origin with `wss://`; the bot appends `/r/<room>` for each host WebSocket.
@@ -135,6 +136,7 @@ Use the matching relay-side `RELAY_HOST_TOKEN_FILE` or `RELAY_HOST_TOKEN`. The p
 | `ALLOWED_CWD_ROOTS` | empty | Optional comma-separated root allowlist for channel working directories. |
 | `DATA_DIR` | `./data` | Persistent bot data, channel metadata, sessions, audit DB, usage SQLite DB and migration archives, MCP policy, and bot-managed engine runtime directories. |
 | `BOT_LOCALE` | `en` | Bot response locale. Supported project locales are English and Traditional Chinese. |
+| `BOT_GM_USER_IDS` | empty | Optional comma-separated Discord user IDs with full bot-manager access across channels, A2A management, and usage-limit bypasses. |
 
 ## Agent Execution
 

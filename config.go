@@ -48,6 +48,7 @@ type Config struct {
 	TrustTools           string
 	PreflightMode        string
 	BotPeers             string
+	BotGMUserIDs         string
 	AuditEnabled         bool
 	AuditDBPath          string
 	AuditRetentionDays   int
@@ -100,6 +101,7 @@ func loadConfig() *Config {
 		TrustTools:           envOr("TRUST_TOOLS", ""),
 		PreflightMode:        envOr("PREFLIGHT_MODE", "warn"),
 		BotPeers:             envOr("BOT_PEERS", ""),
+		BotGMUserIDs:         envOr("BOT_GM_USER_IDS", ""),
 		AuditEnabled:         envBool("AUDIT_LOG_ENABLED", true),
 		AuditDBPath:          envOr("AUDIT_LOG_DB", ""),
 		AuditRetentionDays:   envInt("AUDIT_LOG_RETENTION_DAYS", 0),

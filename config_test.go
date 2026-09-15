@@ -34,6 +34,17 @@ func TestLoadConfigNormalizesDataDir(t *testing.T) {
 	}
 }
 
+func TestLoadConfigReadsBotGMUserIDs(t *testing.T) {
+	t.Setenv("DISCORD_TOKEN", "token")
+	t.Setenv("DATA_DIR", t.TempDir())
+	t.Setenv("BOT_GM_USER_IDS", "gm-1,gm-2")
+
+	cfg := loadConfig()
+	if cfg.BotGMUserIDs != "gm-1,gm-2" {
+		t.Fatalf("BotGMUserIDs = %q, want env value", cfg.BotGMUserIDs)
+	}
+}
+
 func TestLoadConfigKeepsDefaultAttachmentLimitForNonPositiveValues(t *testing.T) {
 	for _, value := range []string{"0", "-1", "invalid"} {
 		t.Run(value, func(t *testing.T) {

@@ -21,13 +21,26 @@ func commandDefaultMemberPermissions(name string) *int64 {
 	}
 }
 
-func applySlashCommandPolicy(cmd *discordgo.ApplicationCommand) *discordgo.ApplicationCommand {
+func applySlashCommandPolicy(cmd *discordgo.ApplicationCommand, useDefaultMemberPermissions bool) *discordgo.ApplicationCommand {
 	if cmd == nil {
 		return nil
 	}
 	cmd.Contexts = &guildInteractionContexts
-	cmd.DefaultMemberPermissions = commandDefaultMemberPermissions(cmd.Name)
+	if useDefaultMemberPermissions {
+		cmd.DefaultMemberPermissions = commandDefaultMemberPermissions(cmd.Name)
+	}
 	return cmd
+}
+
+func slashCommandRequiresBotManager(name string) bool {
+	return commandDefaultMemberPermissions(name) != nil
+}
+
+func (b *Bot) slashCommandManagerAllowed(ds *discordgo.Session, userID, targetID, name string) bool {
+	if !slashCommandRequiresBotManager(name) {
+		return true
+	}
+	return b.userCanManageChannelTarget(ds, userID, targetID)
 }
 
 func commandResponseVisibility(name string, args string) commandVisibility {

@@ -146,8 +146,32 @@ func commandNameFromBang(content string) string {
 	return strings.TrimPrefix(name[0], "!")
 }
 
+func parseDiscordUserIDSet(raw string) map[string]bool {
+	out := map[string]bool{}
+	for _, item := range strings.FieldsFunc(raw, func(r rune) bool {
+		return r == ',' || r == '\n' || r == '\t' || r == ' '
+	}) {
+		item = strings.TrimSpace(item)
+		if item != "" {
+			out[item] = true
+		}
+	}
+	return out
+}
+
+func (b *Bot) userIsGM(userID string) bool {
+	userID = strings.TrimSpace(userID)
+	return userID != "" && b != nil && b.gmUserIDs[userID]
+}
+
 func (b *Bot) userCanManageAuditTarget(ds *discordgo.Session, userID, targetID string) bool {
-	if ds == nil || userID == "" || targetID == "" {
+	if userID == "" || targetID == "" {
+		return false
+	}
+	if b.userIsGM(userID) {
+		return true
+	}
+	if ds == nil {
 		return false
 	}
 	if b.userCanManageTarget(ds, userID, targetID) {
@@ -160,7 +184,13 @@ func (b *Bot) userCanManageAuditTarget(ds *discordgo.Session, userID, targetID s
 }
 
 func (b *Bot) userCanManageUsageGuild(ds *discordgo.Session, userID, targetID string) bool {
-	if ds == nil || userID == "" || targetID == "" {
+	if userID == "" || targetID == "" {
+		return false
+	}
+	if b.userIsGM(userID) {
+		return true
+	}
+	if ds == nil {
 		return false
 	}
 	perms, err := ds.UserChannelPermissions(userID, targetID)
@@ -172,6 +202,15 @@ func (b *Bot) userCanManageUsageGuild(ds *discordgo.Session, userID, targetID st
 }
 
 func (b *Bot) userCanManageTarget(ds *discordgo.Session, userID, targetID string) bool {
+	if userID == "" || targetID == "" {
+		return false
+	}
+	if b.userIsGM(userID) {
+		return true
+	}
+	if ds == nil {
+		return false
+	}
 	perms, err := ds.UserChannelPermissions(userID, targetID)
 	if err != nil {
 		return false
@@ -184,7 +223,13 @@ func (b *Bot) userCanManageTarget(ds *discordgo.Session, userID, targetID string
 }
 
 func (b *Bot) userCanManageChannelTarget(ds *discordgo.Session, userID, targetID string) bool {
-	if ds == nil || userID == "" || targetID == "" {
+	if userID == "" || targetID == "" {
+		return false
+	}
+	if b.userIsGM(userID) {
+		return true
+	}
+	if ds == nil {
 		return false
 	}
 	if userHasChannelManagementPermission(ds, userID, targetID) {

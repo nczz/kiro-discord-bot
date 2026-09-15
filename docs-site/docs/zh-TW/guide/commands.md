@@ -68,6 +68,7 @@ Memory、flash memory、steering 與 session cleanup 的操作差異見 [日常�
 | `/usage-history [user] [period] [status] [source]` | 私密查詢全伺服器詳細用量紀錄。`period` 可選 `7d`、`30d`、`this-month`、`last-month`；`status` 可選 `all`、`success`、`failed`；`source` 可選 `all`、`message`、`webhook`、`webshare`、`command`、`cron`、`monitor`。一般成員可查詢自己；查詢其他成員需要管理伺服器或系統管理員權限。 |
 
 Audit data 請使用 slash `/audit`；usage data 請使用 slash `/usage` 或 `/usage-history`。文字 `!audit` 不回傳 audit rows，文字 `!usage` 只會提示改用 slash，因為 Discord 無法讓這類文字回覆變成 private。
+Bot 管理者包含具備對應 Discord 管理權限的成員，或列在 `BOT_GM_USER_IDS` 的 user ID。設定 GM 白名單後，非管理者仍可能看得到管理型 slash commands，但 bot 會在執行前拒絕。
 
 Audit rows、audit prompt investigations 與 usage attribution 的行為見 [Audit、用量與隱私](audit-usage-privacy.md)。
 

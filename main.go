@@ -95,6 +95,7 @@ func main() {
 			AgentProfile:         cfg.AgentProfile,
 			TrustAllTools:        cfg.TrustAllTools,
 			TrustTools:           cfg.TrustTools,
+			GMUserIDs:            cfg.BotGMUserIDs,
 			UsageTimezone:        cfg.UsageTimezone,
 			UsageRetentionMonths: cfg.UsageRetentionMonths,
 			A2A:                  cfg.A2A,
@@ -108,6 +109,7 @@ func main() {
 		CronTimeoutMin:     cfg.CronTimeoutMin,
 		DownloadTimeoutSec: cfg.DownloadTimeoutSec,
 		BotPeers:           cfg.BotPeers,
+		GMUserIDs:          cfg.BotGMUserIDs,
 		Audit: audit.Config{
 			Enabled:       cfg.AuditEnabled,
 			DBPath:        cfg.AuditDBPath,

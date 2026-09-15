@@ -154,6 +154,7 @@ type Worker struct {
 	historyPrefix string // prepended to first job's prompt, then cleared
 
 	botToolsTargetStatePath string
+	gmUserIDs               map[string]bool
 
 	mentionMu   sync.Mutex
 	mentionRefs []discordmention.Ref
@@ -237,6 +238,9 @@ func (w *Worker) OnMentionRefsUpdatedFunc(fn func([]discordmention.Ref)) { w.onM
 
 // SetBotToolsTargetStatePath sets the dynamic target state used by bot-tools safe egress.
 func (w *Worker) SetBotToolsTargetStatePath(path string) { w.botToolsTargetStatePath = path }
+
+// SetGMUserIDs sets exact Discord user IDs that receive bot-manager target-state authority.
+func (w *Worker) SetGMUserIDs(ids map[string]bool) { w.gmUserIDs = ids }
 
 // OnMemoryPrefixFunc sets a callback that returns memory rules to prepend to prompts.
 func (w *Worker) OnMemoryPrefixFunc(fn func() string) { w.memoryPrefix = fn }
@@ -700,7 +704,7 @@ func (w *Worker) execute(job *Job) {
 	if job.OnThreadReady != nil {
 		job.OnThreadReady(threadID)
 	}
-	canManageChannel, canManageGuild := botToolsRequesterPermissions(job.Session, job.UserID, threadID, w.channelID)
+	canManageChannel, canManageGuild := botToolsRequesterPermissions(job.Session, job.UserID, threadID, w.channelID, w.gmUserIDs)
 	if err := writeBotToolsTargetStateWithRequesterSource(w.botToolsTargetStatePath, threadID, job.DisableBotEgress, job.MentionRefs, job.RemoteA2A, job.AllowRemoteMemoryWrite, job.UserID, job.Username, job.A2ADelegationDepth, canManageChannel, canManageGuild, job.botToolsRequestSource()); err != nil {
 		log.Printf("[worker %s] write bot-tools target state: %v", w.channelID, err)
 	}
@@ -1410,7 +1414,7 @@ func (w *Worker) executeInline(job *Job) {
 		})
 	}
 	targetID := job.inlineBotToolsTargetID()
-	canManageChannel, canManageGuild := botToolsRequesterPermissions(job.Session, job.UserID, targetID, job.ChannelID)
+	canManageChannel, canManageGuild := botToolsRequesterPermissions(job.Session, job.UserID, targetID, job.ChannelID, w.gmUserIDs)
 	if err := writeBotToolsTargetStateWithRequesterSource(w.botToolsTargetStatePath, targetID, job.DisableBotEgress, job.MentionRefs, job.RemoteA2A, job.AllowRemoteMemoryWrite, job.UserID, job.Username, job.A2ADelegationDepth, canManageChannel, canManageGuild, job.botToolsRequestSource()); err != nil {
 		log.Printf("[worker %s] write inline bot-tools target state: %v", w.channelID, err)
 	}
@@ -2077,7 +2081,7 @@ func (w *Worker) executeFallback(job *Job) {
 		w.cancelMu.Unlock()
 		w.signalIdle()
 	}()
-	canManageChannel, canManageGuild := botToolsRequesterPermissions(job.Session, job.UserID, job.ChannelID, "")
+	canManageChannel, canManageGuild := botToolsRequesterPermissions(job.Session, job.UserID, job.ChannelID, "", w.gmUserIDs)
 	if err := writeBotToolsTargetStateWithRequester(w.botToolsTargetStatePath, job.ChannelID, false, job.MentionRefs, false, false, job.UserID, job.Username, 0, canManageChannel, canManageGuild); err != nil {
 		log.Printf("[worker %s] write fallback bot-tools target state: %v", w.channelID, err)
 	}

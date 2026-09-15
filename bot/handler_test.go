@@ -1599,6 +1599,39 @@ func TestUserCanManageAuditTargetUsesDiscordChannelPermissions(t *testing.T) {
 	}
 }
 
+func TestGMUserIDsGrantManagerPermissions(t *testing.T) {
+	b := &Bot{gmUserIDs: parseDiscordUserIDSet("gm-1, gm-2\n")}
+	ds := testPeerPermissionSession(t, nil)
+
+	if !b.userCanManageAuditTarget(ds, "gm-1", "channel-1") {
+		t.Fatal("GM should manage audit target without Discord channel permissions")
+	}
+	if !b.userCanManageChannelTarget(ds, "gm-2", "thread-1") {
+		t.Fatal("GM should manage channel target without Discord channel permissions")
+	}
+	if !b.userCanManageUsageGuild(ds, "gm-1", "channel-1") {
+		t.Fatal("GM should inspect guild usage without Discord guild permissions")
+	}
+	if b.userCanManageChannelTarget(ds, "viewer", "channel-1") {
+		t.Fatal("viewer should not gain manager permissions")
+	}
+}
+
+func TestSlashManagerCommandAllowsGMWithoutDiscordPermission(t *testing.T) {
+	b := &Bot{gmUserIDs: parseDiscordUserIDSet("gm-1")}
+	ds := testPeerPermissionSession(t, nil)
+
+	if !b.slashCommandManagerAllowed(ds, "gm-1", "channel-1", "start") {
+		t.Fatal("GM should pass manager-only slash command gate")
+	}
+	if b.slashCommandManagerAllowed(ds, "viewer", "channel-1", "start") {
+		t.Fatal("viewer without Manage Channels should fail manager-only slash command gate")
+	}
+	if !b.slashCommandManagerAllowed(ds, "viewer", "channel-1", "status") {
+		t.Fatal("non-manager slash command should remain available")
+	}
+}
+
 func TestMonitorActorCanManageRequiresStrictChannelManagement(t *testing.T) {
 	b := &Bot{}
 	ds := testPeerPermissionSession(t, []*discordgo.PermissionOverwrite{
@@ -1719,6 +1752,45 @@ func TestMonitorRunAutocompleteRequiresManager(t *testing.T) {
 	}
 }
 
+func TestCronRunAutocompleteRequiresManager(t *testing.T) {
+	L.Load("en")
+	store, err := heartbeat.NewCronStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Add(&heartbeat.CronJob{ID: "cron-1", Name: "secret cron", ChannelID: "channel-1", Schedule: "*/5 * * * *", Prompt: "check private path", Enabled: true}); err != nil {
+		t.Fatalf("add cron: %v", err)
+	}
+	rt := &recordingDiscordTransport{}
+	ds := testPeerPermissionSession(t, nil)
+	ds.Client = &http.Client{Transport: rt}
+	b := &Bot{cronStore: store}
+	b.handleAutocomplete(ds, &discordgo.InteractionCreate{Interaction: &discordgo.Interaction{
+		ID:        "interaction-cron-run-autocomplete",
+		Token:     "token-cron-run-autocomplete",
+		GuildID:   "guild-1",
+		ChannelID: "channel-1",
+		Type:      discordgo.InteractionApplicationCommandAutocomplete,
+		Member:    &discordgo.Member{User: &discordgo.User{ID: "viewer", Username: "Viewer"}},
+		Data: discordgo.ApplicationCommandInteractionData{
+			Name: "cron-run",
+			Options: []*discordgo.ApplicationCommandInteractionDataOption{{
+				Name:    "name",
+				Type:    discordgo.ApplicationCommandOptionString,
+				Value:   "secret",
+				Focused: true,
+			}},
+		},
+	}})
+	_, bodies := waitDiscordRequests(t, rt, 1)
+	joined := strings.Join(bodies, "\n")
+	if strings.Contains(joined, "secret cron") {
+		t.Fatalf("cron-run autocomplete leaked cron name to viewer: %s", joined)
+	}
+	if !strings.Contains(joined, `"type":8`) {
+		t.Fatalf("cron-run autocomplete denial = %s, want autocomplete response", joined)
+	}
+}
 func TestMonitorPromptConfirmationIsOneShot(t *testing.T) {
 	var store monitorPromptStore
 	job := &ParsedMonitorJob{Name: "CI", Schedule: "*/10 * * * *", CheckPrompt: "check CI", NotifyWhen: "CI fails"}
@@ -1773,6 +1845,10 @@ func TestUsageReportArgsForRequesterScopesNonManagersToSelf(t *testing.T) {
 	if got, ok := b.usageReportArgsForRequester(ds, "administrator", "thread-1", "viewer"); !ok || got != "viewer" {
 		t.Fatalf("administrator target args = %q/%v, want viewer/true", got, ok)
 	}
+	if got, ok := (&Bot{gmUserIDs: parseDiscordUserIDSet("gm-1")}).usageReportArgsForRequester(ds, "gm-1", "channel-1", "viewer"); !ok || got != "viewer" {
+		t.Fatalf("GM usage args = %q/%v, want requested user/true", got, ok)
+	}
+
 }
 
 func TestUserCanManageAuditTargetFallsBackToThreadParent(t *testing.T) {
@@ -1940,6 +2016,30 @@ func TestSlashCommandsOmitA2AWhenDisabled(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("A2A command missing when enabled")
+	}
+}
+
+func TestSlashCommandPolicyOmitsDiscordDefaultsForGMAllowlist(t *testing.T) {
+	cmdsWithDefaults := buildSlashCommandsWithA2APolicy(false, true)
+	cmdsForGMAllowlist := buildSlashCommandsWithA2APolicy(false, false)
+	var defaultStart, gmStart *discordgo.ApplicationCommand
+	for _, cmd := range cmdsWithDefaults {
+		if cmd.Name == "start" {
+			defaultStart = cmd
+			break
+		}
+	}
+	for _, cmd := range cmdsForGMAllowlist {
+		if cmd.Name == "start" {
+			gmStart = cmd
+			break
+		}
+	}
+	if defaultStart == nil || defaultStart.DefaultMemberPermissions == nil || *defaultStart.DefaultMemberPermissions&discordgo.PermissionManageChannels == 0 {
+		t.Fatalf("default /start permissions = %#v, want Manage Channels", defaultStart)
+	}
+	if gmStart == nil || gmStart.DefaultMemberPermissions != nil {
+		t.Fatalf("GM allowlist /start permissions = %#v, want no Discord default gate", gmStart)
 	}
 }
 
@@ -3808,6 +3908,7 @@ func TestUsageHistoryClassifiesDenialAndDeliveryFailure(t *testing.T) {
 func TestHandleSlashCronModalRecordsDeliveryFailure(t *testing.T) {
 	L.Load("en")
 	b, dbPath, cleanup := newAuditTestBot(t)
+	b.gmUserIDs = parseDiscordUserIDSet("user-1")
 	defer cleanup()
 	if err := b.manager.SetCWD("channel-1", t.TempDir()); err != nil {
 		t.Fatalf("initialize channel cwd: %v", err)
@@ -3838,6 +3939,7 @@ func TestHandleSlashCronModalRecordsDeliveryFailure(t *testing.T) {
 func TestHandleSlashCronRequiresInitializedChannel(t *testing.T) {
 	L.Load("en")
 	b, dbPath, cleanup := newAuditTestBot(t)
+	b.gmUserIDs = parseDiscordUserIDSet("user-1")
 	defer cleanup()
 	ds := newFailingDiscordSession(t)
 

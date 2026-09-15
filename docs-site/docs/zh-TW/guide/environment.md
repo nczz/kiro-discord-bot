@@ -100,6 +100,7 @@ WEBSHARE_HOST_TOKEN_FILE=/etc/kdb-webshare/host-token
 - `OMP_SESSION_DIR` 決定 bot 啟動的 OMP ACP session files 放在哪裡。`OMP_PROFILE` 決定 OMP auth/settings/cache 身份。兩者處理的是不同層次的隔離。
 - `KIRO_MCP_CONFIG` 會被視為 MCP catalog source。Runtime agents 會收到 `DATA_DIR` 內依照 bot policy 產生的 MCP settings，而不是直接繼承使用者自己的 Kiro settings。
 - `TRUST_ALL_TOOLS` 與 `TRUST_TOOLS` 是 ACP server permission request 的核准設定，不會取代 Discord command ACL 或 MCP channel policy。
+- `BOT_GM_USER_IDS` 會授予指定 Discord user ID 完整 bot 管理權限。設定後，管理型 slash commands 會移除 Discord 預設的 Manage Channels gate，改由 bot 自行套用 GM 白名單；非管理者仍會收到 bot 內部權限拒絕。
 - `PREFLIGHT_MODE=skip` 是停用 ACP preflight 的明確方式。`SKIP_PREFLIGHT` 是相容性設定，只要非空就會跳過 preflight。
 
 - WebShare 使用兩個 processes：bot 會把 durable share state 放在 `DATA_DIR/webshare`，relay 只提供 static assets 並轉送 encrypted WebSocket frames。
@@ -136,6 +137,7 @@ WEBSHARE_HOST_TOKEN_FILE=/etc/kdb-webshare/host-token
 | `ALLOWED_CWD_ROOTS` | 空 | 可選的逗號分隔工作目錄根目錄 allowlist。 |
 | `DATA_DIR` | `./data` | Bot 持久資料、頻道 metadata、sessions、audit DB、usage SQLite DB 與遷移封存檔、MCP policy 與 bot-managed engine runtime directories。 |
 | `BOT_LOCALE` | `en` | Bot 回應語系。專案文件支援英文與繁體中文。 |
+| `BOT_GM_USER_IDS` | 空 | 可選的 Discord user ID 清單（逗號分隔），授予跨頻道、A2A 管理與 usage limit bypass 的完整 bot 管理權限。 |
 
 ## Agent 執行
 

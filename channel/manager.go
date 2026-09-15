@@ -58,6 +58,7 @@ type Manager struct {
 	guildID         string
 	botID           string
 	dataDir         string
+	gmUserIDs       map[string]bool
 	a2aConfig       a2a.Config
 	a2aNode         *a2a.Node
 	a2aPeers        *a2a.SQLitePeerStore
@@ -204,6 +205,7 @@ type ManagerConfig struct {
 	TrustAllTools        bool
 	TrustTools           string
 	BotID                string
+	GMUserIDs            string
 	UsageTimezone        string
 	UsageRetentionMonths int
 	Audit                AuditSink
@@ -246,6 +248,7 @@ func NewManager(cfg ManagerConfig) *Manager {
 		botVersion:          cfg.BotVersion,
 		guildID:             cfg.GuildID,
 		botID:               cfg.BotID,
+		gmUserIDs:           parseDiscordUserIDSet(cfg.GMUserIDs),
 		dataDir:             cfg.DataDir,
 		a2aConfig:           cfg.A2A,
 		a2aNode:             cfg.A2ANode,
@@ -2775,6 +2778,7 @@ func (m *Manager) startAgentAndWorkerWithModelFallback(channelID string, allowSt
 		m.updateChannelMentionRefs(channelID, refs)
 	})
 	w.SetBotToolsTargetStatePath(botToolsTargetStatePath(m.dataDir, channelID))
+	w.SetGMUserIDs(m.gmUserIDs)
 	w.OnBeforeFinalResponseFunc(m.safeEgressDrain)
 	w.SetUsageStore(m.usage)
 	w.SetAuditSink(m.audit)
@@ -3885,6 +3889,7 @@ func (m *Manager) spawnThreadAgent(threadID, parentChannelID string, modelOverri
 	w.SetUsageStore(m.usage)
 	w.SetAuditSink(m.audit)
 	w.SetBotToolsTargetStatePath(botToolsTargetStatePath(m.dataDir, threadID))
+	w.SetGMUserIDs(m.gmUserIDs)
 	w.SetHistoryPrefix(historyCtx)
 	w.OnSkillPrefixFunc(func(targetID string) string {
 		if strings.TrimSpace(targetID) == "" {

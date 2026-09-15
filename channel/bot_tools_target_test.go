@@ -27,17 +27,21 @@ func TestBotToolsRequesterPermissionsUsesThreadParentFallback(t *testing.T) {
 	if err := ds.State.ChannelAdd(&discordgo.Channel{ID: "thread-1", GuildID: "guild-1", ParentID: "channel-1", Type: discordgo.ChannelTypeGuildPublicThread}); err != nil {
 		t.Fatalf("ChannelAdd thread: %v", err)
 	}
-	canManageChannel, _ := botToolsRequesterPermissions(ds, "manager", "thread-1", "")
+	canManageChannel, _ := botToolsRequesterPermissions(ds, "manager", "thread-1", "", nil)
 	if !canManageChannel {
 		t.Fatal("thread manager permission did not fall back to parent channel")
 	}
-	canManageChannel, _ = botToolsRequesterPermissions(ds, "manager", "fresh-thread", "channel-1")
+	canManageChannel, _ = botToolsRequesterPermissions(ds, "manager", "fresh-thread", "channel-1", nil)
 	if !canManageChannel {
 		t.Fatal("fresh thread permission did not use explicit parent channel fallback")
 	}
-	canManageChannel, _ = botToolsRequesterPermissions(ds, "moderator", "thread-1", "")
+	canManageChannel, _ = botToolsRequesterPermissions(ds, "moderator", "thread-1", "", nil)
 	if canManageChannel {
 		t.Fatal("message/thread moderator should not receive channel-management bot-tools authority")
+	}
+	canManageChannel, canManageGuild := botToolsRequesterPermissions(ds, "gm-1", "thread-1", "", parseDiscordUserIDSet("gm-1"))
+	if !canManageChannel || !canManageGuild {
+		t.Fatal("GM should receive channel and guild bot-tools authority")
 	}
 }
 
