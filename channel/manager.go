@@ -1295,8 +1295,34 @@ func (m *Manager) doctorUsage() string {
 	return L.Getf("doctor.usage.ok", h.SchemaVersion, h.Records)
 }
 
+func (m *Manager) rejectQueuedJobForUsageLimit(ds *discordgo.Session, job *Job, content string) error {
+	if job == nil {
+		return nil
+	}
+	job.Session = ds
+	if job.A2AResult != nil {
+		job.emitA2AResult(a2a.TaskExecutionResult{
+			State:   a2a.TaskStateRejected,
+			Content: content,
+			Error:   a2a.TaskError{Code: a2a.ErrorPolicyDenied, Message: content},
+		})
+		return nil
+	}
+	if err := job.sendInlineFinalReply(ds, content); err != nil {
+		log.Printf("[usage-limit] reply failed channel=%s user=%s: %v", job.ChannelID, job.UserID, err)
+	}
+	if ds != nil && strings.TrimSpace(job.MessageID) != "" {
+		swapReaction(ds, job.ChannelID, job.MessageID, "⏳", "❌")
+	}
+	return nil
+}
+
 // Enqueue adds a job to the channel's queue, starting the agent/worker if needed.
 func (m *Manager) Enqueue(ds *discordgo.Session, job *Job) error {
+	if msg, rejected := m.UsageLimitRejection(job.GuildID, job.UserID); rejected {
+		return m.rejectQueuedJobForUsageLimit(ds, job, msg)
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -3116,6 +3142,30 @@ func (m *Manager) RecordUsage(record UsageRecord) error {
 	return m.usage.Append(record)
 }
 
+// UsageLimitRejection returns a localized rejection message when the user is at
+// or over a configured USD usage ceiling.
+func (m *Manager) UsageLimitRejection(guildID, userID string) (string, bool) {
+	if m == nil || m.usage == nil || !m.usageLimits.Enabled() {
+		return "", false
+	}
+	userID = strings.TrimSpace(userID)
+	if userID == "" {
+		return L.Get("usage.limit.owner_required"), true
+	}
+	if discordUserIDSetContains(m.gmUserIDs, userID) {
+		return "", false
+	}
+	decision, err := m.usage.LimitDecision(guildID, userID, m.usageLimits, time.Now())
+	if err != nil {
+		log.Printf("[usage-limit] decision failed guild=%s user=%s: %v", guildID, userID, err)
+		return "", false
+	}
+	if decision.Allowed {
+		return "", false
+	}
+	return formatUsageLimitExceeded(decision), true
+}
+
 // GetAgent returns the agent for a channel.
 func (m *Manager) GetAgent(channelID string) (*acp.Agent, bool) {
 	m.mu.Lock()
@@ -3562,6 +3612,13 @@ func (m *Manager) SendCommand(channelID, command string) (string, error) {
 	return result.Response, err
 }
 
+func (m *Manager) SendCommandResultForUser(channelID, command, guildID, userID string) (AgentCommandResult, error) {
+	if msg, rejected := m.UsageLimitRejection(guildID, userID); rejected {
+		return AgentCommandResult{Response: msg}, errors.New(msg)
+	}
+	return m.SendCommandResult(channelID, command)
+}
+
 // SendCommandResult sends a slash command (e.g. /compact, /clear) to the channel's agent.
 func (m *Manager) SendCommandResult(channelID, command string) (AgentCommandResult, error) {
 	m.mu.Lock()
@@ -3970,6 +4027,10 @@ func (m *Manager) IsSilent(channelID string) bool {
 
 // EnqueueThread routes a job to the thread's dedicated agent, spawning one if needed.
 func (m *Manager) EnqueueThread(ds *discordgo.Session, job *Job, parentChannelID string) error {
+	if msg, rejected := m.UsageLimitRejection(job.GuildID, job.UserID); rejected {
+		return m.rejectQueuedJobForUsageLimit(ds, job, msg)
+	}
+
 	var discordCtx string
 	if !job.SkipDiscordContext {
 		if job.Handoff {
@@ -4377,6 +4438,13 @@ func (m *Manager) IsThreadAgentActive(threadID string) bool {
 func (m *Manager) SendCommandThread(threadID, command string) (string, error) {
 	result, err := m.SendCommandThreadResult(threadID, command)
 	return result.Response, err
+}
+
+func (m *Manager) SendCommandThreadResultForUser(threadID, command, guildID, userID string) (AgentCommandResult, error) {
+	if msg, rejected := m.UsageLimitRejection(guildID, userID); rejected {
+		return AgentCommandResult{Response: msg}, errors.New(msg)
+	}
+	return m.SendCommandThreadResult(threadID, command)
 }
 
 // SendCommandThreadResult sends a slash command (e.g. "/compact", "/clear") to a thread agent.

@@ -39,6 +39,7 @@ type MonitorDeps interface {
 	StartTempAgent(name, cwd, model, channelID string) (*acp.Agent, error)
 	StopTempAgent(agent *acp.Agent)
 	ChannelInitialized(channelID string) bool
+	UsageLimitRejection(guildID, userID string) (message string, rejected bool)
 	ChannelCWD(channelID string) string
 	EvaluateMonitor(ctx context.Context, agent *acp.Agent, job *MonitorJob, prompt string) (MonitorResult, error)
 	DeliverMonitorNotification(agent *acp.Agent, job *MonitorJob, result MonitorResult, manual bool, startedAt time.Time) (threadID string, responseSent bool, err error)
@@ -171,6 +172,19 @@ func (m *MonitorTask) execute(job *MonitorJob, now time.Time) {
 		log.Printf("[monitor] blocked job %s (%s): channel %s is not initialized", job.ID, job.Name, job.ChannelID)
 		job.LastCheckAt = now.Format(time.RFC3339)
 		m.saveHistory(job.ID, job.HistoryLimit, MonitorHistory{Timestamp: now.Format(time.RFC3339), CheckPrompt: job.CheckPrompt, NotifyWhen: job.NotifyWhen, Status: MonitorStatusError, Reason: msg, DurationSec: int(time.Since(start).Seconds())})
+		m.finishJob(job, now, manual)
+		return
+	}
+	guildID := job.GuildID
+	if guildID == "" {
+		guildID = m.guildID
+	}
+	if msg, rejected := m.deps.UsageLimitRejection(guildID, job.CreatedByID); rejected {
+		log.Printf("[monitor] blocked job %s (%s): usage limit exceeded for user %s", job.ID, job.Name, job.CreatedByID)
+		result := MonitorResult{Reason: msg, InternalSummary: msg}
+		m.deps.RecordMonitorResult(nil, job, "", MonitorStatusError, result, false)
+		m.saveHistory(job.ID, job.HistoryLimit, MonitorHistory{Timestamp: now.Format(time.RFC3339), CheckPrompt: job.CheckPrompt, NotifyWhen: job.NotifyWhen, Status: MonitorStatusError, Reason: msg, InternalSummary: msg, DurationSec: int(time.Since(start).Seconds())})
+		job.LastCheckAt = now.Format(time.RFC3339)
 		m.finishJob(job, now, manual)
 		return
 	}

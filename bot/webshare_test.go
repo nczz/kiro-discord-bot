@@ -327,6 +327,62 @@ func newWebShareLockedHandlerTestBot(t *testing.T, rt *recordingDiscordTransport
 	return b, ds
 }
 
+func newWebShareLockedFullListenHandlerTestBot(t *testing.T, rt *recordingDiscordTransport) (*Bot, *discordgo.Session) {
+	t.Helper()
+	store, _ := newTestWebShareStoreAndShare(t)
+	ds := testPeerPermissionSession(t, []*discordgo.PermissionOverwrite{userMemberManageOverwrite("viewer", discordgo.PermissionManageChannels)})
+	ds.Client = &http.Client{Transport: rt}
+	dataDir := t.TempDir()
+	project := t.TempDir()
+	manager := channel.NewManager(channel.ManagerConfig{DataDir: dataDir, Store: mustSessionStore(t, dataDir), DefaultCWD: project})
+	if _, err := manager.InitializeChannelCWD("channel-1", project); err != nil {
+		t.Fatalf("initialize channel: %v", err)
+	}
+	b := &Bot{manager: manager, discord: ds, guildID: "guild-1", webshareStore: store, seen: newSeenMessages(), setupPromptCooldown: newSetupPromptCooldown(nil)}
+	t.Cleanup(b.seen.Stop)
+	return b, ds
+}
+
+func TestWebShareLockoutBlocksFullListenOrdinaryDiscordMessage(t *testing.T) {
+	L.Load("en")
+	rt := &recordingDiscordTransport{}
+	b, ds := newWebShareLockedFullListenHandlerTestBot(t, rt)
+
+	b.handleMessage(ds, &discordgo.MessageCreate{Message: &discordgo.Message{ID: "message-full-listen-1", ChannelID: "channel-1", GuildID: "guild-1", Content: "hello everyone", Author: &discordgo.User{ID: "viewer", Username: "Viewer"}}})
+
+	paths, bodies := rt.Snapshot()
+	for _, path := range paths {
+		if !strings.HasPrefix(path, "GET /api/") {
+			t.Fatalf("full-listen lockout should not enqueue or reply: paths=%v bodies=%s", paths, strings.Join(bodies, "\n"))
+		}
+	}
+	if _, ok := b.manager.GetAgent("channel-1"); ok {
+		t.Fatal("full-listen lockout started a channel agent")
+	}
+}
+
+func TestWebShareLockoutBlocksInteractionComponents(t *testing.T) {
+	L.Load("en")
+	rt := &recordingDiscordTransport{}
+	b, ds := newWebShareLockedFullListenHandlerTestBot(t, rt)
+
+	b.handleInteraction(ds, &discordgo.InteractionCreate{Interaction: &discordgo.Interaction{
+		ID:        "interaction-locked-component",
+		Token:     "token-locked-component",
+		Type:      discordgo.InteractionMessageComponent,
+		GuildID:   "guild-1",
+		ChannelID: "channel-1",
+		Member:    &discordgo.Member{User: &discordgo.User{ID: "viewer", Username: "Viewer"}},
+		Data:      discordgo.MessageComponentInteractionData{CustomID: "cron_pause_job-1", ComponentType: discordgo.ButtonComponent},
+	}})
+
+	_, bodies := rt.Snapshot()
+	joined := strings.Join(bodies, "\n")
+	if !strings.Contains(joined, L.Get("webshare.locked")) {
+		t.Fatalf("component lockout response = %s, want webshare warning", joined)
+	}
+}
+
 func TestWebShareLockoutDoesNotWarnForOrdinaryDiscordMessage(t *testing.T) {
 	L.Load("en")
 	rt := &recordingDiscordTransport{}

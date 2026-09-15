@@ -641,8 +641,10 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 		b.enqueueChannelPrompt(ds, m, content, selfID, "webhook")
 		return
 	}
-	if isHuman && (isCommand || addressesSelf) && b.rejectWebShareLockedDiscordUse(m.Author.ID, m.ChannelID, parentChannelID, commandNameFromBang(content)) {
-		_, _ = sendDiscordText(ds, m.ChannelID, b.webshareLockoutMessage(), nil)
+	if isHuman && b.rejectWebShareLockedDiscordUse(m.Author.ID, m.ChannelID, parentChannelID, commandNameFromBang(content)) {
+		if isCommand || addressesSelf {
+			_, _ = sendDiscordText(ds, m.ChannelID, b.webshareLockoutMessage(), nil)
+		}
 		return
 	}
 
@@ -1471,12 +1473,39 @@ func (b *Bot) handleAutocomplete(ds *discordgo.Session, i *discordgo.Interaction
 		Data: &discordgo.InteractionResponseData{Choices: choices},
 	})
 }
+
+func (b *Bot) rejectWebShareLockedInteraction(ds *discordgo.Session, i *discordgo.InteractionCreate) bool {
+	if b == nil || i == nil || i.Interaction == nil {
+		return false
+	}
+	userID, _ := interactionUser(i)
+	command := ""
+	if i.Type == discordgo.InteractionApplicationCommand {
+		command = i.ApplicationCommandData().Name
+	}
+	if !b.rejectWebShareLockedDiscordUse(userID, i.ChannelID, resolveThreadParent(ds, i.ChannelID), command) {
+		return false
+	}
+	if i.Type == discordgo.InteractionApplicationCommandAutocomplete {
+		_ = ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionApplicationCommandAutocompleteResult,
+			Data: &discordgo.InteractionResponseData{Choices: []*discordgo.ApplicationCommandOptionChoice{}},
+		})
+		return true
+	}
+	respondInteractionEphemeral(ds, i, b.webshareLockoutMessage())
+	return true
+}
+
 func (b *Bot) handleInteraction(ds *discordgo.Session, i *discordgo.InteractionCreate) {
 	// Ignore interactions from other guilds
 	if !b.isMyGuild(i.GuildID) {
 		return
 	}
 	b.recordChannelMetadata(ds, i.ChannelID, i.GuildID)
+	if b.rejectWebShareLockedInteraction(ds, i) {
+		return
+	}
 	switch i.Type {
 	case discordgo.InteractionApplicationCommand:
 		b.handleSlashCommand(ds, i)

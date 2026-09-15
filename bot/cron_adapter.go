@@ -39,6 +39,10 @@ func (a *cronAdapter) ChannelCWD(channelID string) string {
 	return a.bot.manager.CWDPath(channelID)
 }
 
+func (a *cronAdapter) UsageLimitRejection(guildID, userID string) (string, bool) {
+	return a.bot.manager.UsageLimitRejection(guildID, userID)
+}
+
 func (a *cronAdapter) RecordAgentUsage(agent *acp.Agent, job *heartbeat.CronJob, threadID, status string) {
 	if agent == nil || job == nil {
 		return

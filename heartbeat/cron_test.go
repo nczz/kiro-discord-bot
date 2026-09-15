@@ -37,6 +37,10 @@ type fakeCronDeps struct {
 	askSent              bool
 	askSentSet           bool
 	noThread             bool
+	usageLimitRejected   bool
+	usageLimitMessage    string
+	usageLimitUser       string
+	rejectEmptyOwner     bool
 }
 
 func (f *fakeCronDeps) StartTempAgent(_, cwd, _, _ string) (*acp.Agent, error) {
@@ -49,6 +53,14 @@ func (f *fakeCronDeps) StopTempAgent(*acp.Agent) {}
 
 func (f *fakeCronDeps) ChannelInitialized(string) bool {
 	return !f.uninitialized
+}
+
+func (f *fakeCronDeps) UsageLimitRejection(_ string, userID string) (string, bool) {
+	f.usageLimitUser = userID
+	if f.rejectEmptyOwner && strings.TrimSpace(userID) == "" {
+		return "Usage limit enforcement is enabled, but this scheduled agent job has no owner.", true
+	}
+	return f.usageLimitMessage, f.usageLimitRejected
 }
 
 func (f *fakeCronDeps) ChannelCWD(string) string {
@@ -328,6 +340,68 @@ func TestCronExecuteBlocksUninitializedChannel(t *testing.T) {
 	}
 }
 
+func TestCronExecuteBlocksUsageLimitBeforeStartingAgent(t *testing.T) {
+	L.Load("en")
+	store, err := NewCronStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	deps := &fakeCronDeps{usageLimitRejected: true, usageLimitMessage: "Usage limit reached for daily window."}
+	task := NewCronTask(store, deps, t.TempDir(), "Asia/Taipei", "guild-1", 5)
+	job := &CronJob{
+		ID:          "job-usage-limit",
+		Name:        "Daily",
+		ChannelID:   "channel-1",
+		GuildID:     "guild-1",
+		Schedule:    "0 0 * * *",
+		Prompt:      "Run",
+		Enabled:     true,
+		CreatedByID: "user-1",
+	}
+
+	task.execute(job, time.Date(2026, 5, 28, 12, 0, 0, 0, task.location))
+
+	if deps.startCalls != 0 || deps.recordCalls != 0 || deps.responseCalls != 0 {
+		t.Fatalf("usage-limit cron started/recorded agent: start=%d record=%d response=%d", deps.startCalls, deps.recordCalls, deps.responseCalls)
+	}
+	if !strings.Contains(deps.notifyMsg, "Usage limit reached") {
+		t.Fatalf("notify = %q, want usage-limit reason", deps.notifyMsg)
+	}
+	history := task.loadHistory(job.ID, 10)
+	if len(history) != 1 || history[0].Status != "error" || !strings.Contains(history[0].Response, "Usage limit reached") {
+		t.Fatalf("history = %+v, want usage-limit error row", history)
+	}
+}
+
+func TestCronExecuteBlocksMissingUsageOwnerBeforeStartingAgent(t *testing.T) {
+	store, err := NewCronStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	deps := &fakeCronDeps{rejectEmptyOwner: true}
+	task := NewCronTask(store, deps, t.TempDir(), "Asia/Taipei", "guild-1", 5)
+	job := &CronJob{
+		ID:        "job-missing-owner",
+		Name:      "Daily",
+		ChannelID: "channel-1",
+		GuildID:   "guild-1",
+		Schedule:  "0 0 * * *",
+		Prompt:    "Run",
+		Enabled:   true,
+	}
+
+	task.execute(job, time.Date(2026, 5, 28, 12, 0, 0, 0, task.location))
+
+	if deps.usageLimitUser != "" {
+		t.Fatalf("usage limit user = %q, want empty owner passed to policy", deps.usageLimitUser)
+	}
+	if deps.startCalls != 0 {
+		t.Fatalf("StartTempAgent calls = %d, want no agent start", deps.startCalls)
+	}
+	if !strings.Contains(deps.notifyMsg, "no owner") {
+		t.Fatalf("notify = %q, want owner-required rejection", deps.notifyMsg)
+	}
+}
 func TestCronExecuteMarksResponseNotSentWhenSetupFails(t *testing.T) {
 	store, err := NewCronStore(t.TempDir())
 	if err != nil {

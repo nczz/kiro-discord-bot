@@ -126,6 +126,7 @@
   "usage.report.count": "Total: %d user row(s), %d monthly turn(s).",
   "usage.report.forbidden": "You may only inspect another member's guild-wide usage report if you have Manage Guild or Administrator permission.",
   "usage.limit.exceeded": "❌ Usage limit reached for %s. Used $%.4f of $%.4f. Resets at `%s`.",
+  "usage.limit.owner_required": "❌ Usage limit enforcement is enabled, but this scheduled agent job has no owner. Recreate it so future usage can be attributed.",
   "usage.limit.window.daily": "today",
   "usage.limit.window.weekly": "this week",
   "usage.limit.window.monthly": "this month",

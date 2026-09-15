@@ -16,11 +16,15 @@ import (
 )
 
 type fakeMonitorDeps struct {
-	result      MonitorResult
-	err         error
-	startErr    error
-	initialized bool
-	channelCWD  string
+	result             MonitorResult
+	err                error
+	startErr           error
+	initialized        bool
+	channelCWD         string
+	usageLimitRejected bool
+	usageLimitMessage  string
+	usageLimitUser     string
+	rejectEmptyOwner   bool
 
 	startCalls    int
 	deliverCalls  int
@@ -42,6 +46,14 @@ func (f *fakeMonitorDeps) StartTempAgent(_, _, _, _ string) (*acp.Agent, error) 
 func (f *fakeMonitorDeps) StopTempAgent(*acp.Agent) {}
 
 func (f *fakeMonitorDeps) ChannelInitialized(string) bool { return f.initialized }
+
+func (f *fakeMonitorDeps) UsageLimitRejection(_ string, userID string) (string, bool) {
+	f.usageLimitUser = userID
+	if f.rejectEmptyOwner && strings.TrimSpace(userID) == "" {
+		return "Usage limit enforcement is enabled, but this scheduled agent job has no owner.", true
+	}
+	return f.usageLimitMessage, f.usageLimitRejected
+}
 
 func (f *fakeMonitorDeps) ChannelCWD(string) string { return f.channelCWD }
 
@@ -401,6 +413,59 @@ func TestMonitorExecuteUninitializedChannelCreatesNoNotification(t *testing.T) {
 	}
 }
 
+func TestMonitorExecuteBlocksUsageLimitBeforeStartingAgent(t *testing.T) {
+	L.Load("en")
+	dir := t.TempDir()
+	store, err := NewMonitorStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := &MonitorJob{ID: "job-usage-limit", Name: "CI", ChannelID: "channel-1", GuildID: "guild-1", Schedule: "*/5 * * * *", CheckPrompt: "check CI", NotifyWhen: "CI fails", Enabled: true, CreatedByID: "user-1", CreatedAt: time.Now().Add(-time.Hour).Format(time.RFC3339)}
+	if err := store.Add(job); err != nil {
+		t.Fatal(err)
+	}
+	deps := &fakeMonitorDeps{initialized: true, usageLimitRejected: true, usageLimitMessage: "Usage limit reached for daily window."}
+	task := NewMonitorTask(store, deps, dir, "Asia/Taipei", "guild-1", 1)
+
+	task.execute(job, time.Date(2026, 5, 28, 12, 0, 0, 0, task.location))
+
+	if deps.startCalls != 0 || deps.deliverCalls != 0 || deps.notifyCalls != 0 {
+		t.Fatalf("usage-limit monitor produced public artifact: start=%d deliver=%d notify=%d", deps.startCalls, deps.deliverCalls, deps.notifyCalls)
+	}
+	if deps.recordCalls != 1 || deps.recordedState != MonitorStatusError {
+		t.Fatalf("record calls/state = %d/%q, want usage-limit error result", deps.recordCalls, deps.recordedState)
+	}
+	history := task.loadHistory(job.ID, 10)
+	if len(history) != 1 || history[0].Status != MonitorStatusError || !strings.Contains(history[0].Reason, "Usage limit reached") {
+		t.Fatalf("history = %+v, want usage-limit error row", history)
+	}
+}
+
+func TestMonitorExecuteBlocksMissingUsageOwnerBeforeStartingAgent(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewMonitorStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := &MonitorJob{ID: "job-missing-owner", Name: "CI", ChannelID: "channel-1", GuildID: "guild-1", Schedule: "*/5 * * * *", CheckPrompt: "check CI", NotifyWhen: "CI fails", Enabled: true, CreatedAt: time.Now().Add(-time.Hour).Format(time.RFC3339)}
+	if err := store.Add(job); err != nil {
+		t.Fatal(err)
+	}
+	deps := &fakeMonitorDeps{initialized: true, rejectEmptyOwner: true}
+	task := NewMonitorTask(store, deps, dir, "Asia/Taipei", "guild-1", 1)
+
+	task.execute(job, time.Date(2026, 5, 28, 12, 0, 0, 0, task.location))
+
+	if deps.usageLimitUser != "" {
+		t.Fatalf("usage limit user = %q, want empty owner passed to policy", deps.usageLimitUser)
+	}
+	if deps.startCalls != 0 {
+		t.Fatalf("StartTempAgent calls = %d, want no agent start", deps.startCalls)
+	}
+	if deps.recordCalls != 1 || deps.recordedState != MonitorStatusError {
+		t.Fatalf("record calls/state = %d/%q, want owner-required error result", deps.recordCalls, deps.recordedState)
+	}
+}
 func TestMonitorStoreIngestPendingCreateNormalizesSchedule(t *testing.T) {
 	dir := t.TempDir()
 	store, err := NewMonitorStore(dir)

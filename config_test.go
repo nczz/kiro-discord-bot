@@ -60,6 +60,23 @@ func TestLoadConfigReadsUsageLimits(t *testing.T) {
 	}
 }
 
+func TestEnvFloatStrictRejectsMalformedUsageLimits(t *testing.T) {
+	t.Setenv("USAGE_LIMIT_DAILY_USD", "")
+	if got, err := envFloatStrict("USAGE_LIMIT_DAILY_USD", 1.25); err != nil || got != 1.25 {
+		t.Fatalf("unset envFloatStrict = %.2f/%v, want default", got, err)
+	}
+	t.Setenv("USAGE_LIMIT_DAILY_USD", "2.5")
+	if got, err := envFloatStrict("USAGE_LIMIT_DAILY_USD", 1.25); err != nil || got != 2.5 {
+		t.Fatalf("valid envFloatStrict = %.2f/%v, want parsed value", got, err)
+	}
+	for _, value := range []string{"oops", "NaN", "+Inf"} {
+		t.Setenv("USAGE_LIMIT_DAILY_USD", value)
+		if _, err := envFloatStrict("USAGE_LIMIT_DAILY_USD", 1.25); err == nil {
+			t.Fatalf("envFloatStrict accepted %q", value)
+		}
+	}
+}
+
 func TestValidateUsageLimitConfigRequiresFinitePositiveRateWhenLimitsEnabled(t *testing.T) {
 	for _, rate := range []float64{0, -1} {
 		cfg := &Config{UsageCreditUSDRate: rate, UsageLimitDailyUSD: 1}
@@ -80,6 +97,19 @@ func TestValidateUsageLimitConfigRequiresFinitePositiveRateWhenLimitsEnabled(t *
 	} {
 		if err := validateUsageLimitConfig(cfg); err == nil {
 			t.Fatalf("non-finite config accepted: %+v", cfg)
+		}
+	}
+}
+
+func TestValidateUsageLimitConfigRejectsNegativeValues(t *testing.T) {
+	for _, cfg := range []*Config{
+		{UsageCreditUSDRate: -0.01},
+		{UsageLimitDailyUSD: -1},
+		{UsageLimitWeeklyUSD: -1},
+		{UsageLimitMonthlyUSD: -1},
+	} {
+		if err := validateUsageLimitConfig(cfg); err == nil {
+			t.Fatalf("negative usage config accepted: %+v", cfg)
 		}
 	}
 }

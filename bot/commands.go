@@ -222,6 +222,12 @@ func (b *Bot) cmdAuditPrompt(ctx cmdCtx, prompt string) {
 }
 
 func (b *Bot) runAuditPrompt(ctx cmdCtx, prompt string) {
+	if msg, rejected := b.manager.UsageLimitRejection(ctx.guildID, ctx.userID); rejected {
+		b.recordAuditPromptAgentEvent(ctx, "agent_job_rejected", "policy_denied", msg, "", map[string]any{"reason": "usage_limit"})
+		replyLongWithMetadata(ctx, msg, map[string]any{"audit_prompt_result": true, "status": "rejected", "reason": "usage_limit"})
+		return
+	}
+
 	agentName := "audit-" + auditPromptInvocationID(ctx)
 	startedAt := time.Now()
 	b.recordAuditPromptAgentEvent(ctx, "agent_job_started", "", "", "", map[string]any{"delivery_mode": channel.DeliveryInline.String()})
@@ -909,14 +915,16 @@ func (b *Bot) cmdCompact(ctx cmdCtx) {
 	var result channel.AgentCommandResult
 	var err error
 	if ctx.inThread {
-		result, err = b.manager.SendCommandThreadResult(ctx.targetID, "/compact")
+		result, err = b.manager.SendCommandThreadResultForUser(ctx.targetID, "/compact", ctx.guildID, ctx.userID)
 	} else {
-		result, err = b.manager.SendCommandResult(ctx.channelID, "/compact")
+		result, err = b.manager.SendCommandResultForUser(ctx.channelID, "/compact", ctx.guildID, ctx.userID)
 	}
 	if err != nil {
 		b.recordAgentCommandUsage(ctx, "/compact", result, "error")
 		if result.Executed {
 			replyLongWithMetadata(ctx, agentCommandError(err, result), agentCommandMetadata(result, "error"))
+		} else if strings.TrimSpace(result.Response) != "" {
+			ctx.reply(result.Response)
 		} else {
 			ctx.reply(commandError(err))
 		}
@@ -935,7 +943,7 @@ func (b *Bot) cmdClear(ctx cmdCtx) {
 	var err error
 	localThreadOnly := false
 	if ctx.inThread {
-		result, err = b.manager.SendCommandThreadResult(ctx.targetID, "/clear")
+		result, err = b.manager.SendCommandThreadResultForUser(ctx.targetID, "/clear", ctx.guildID, ctx.userID)
 		if err == nil || errors.Is(err, channel.ErrNoThreadAgent) {
 			if clearErr := b.manager.ClearThreadHistory(ctx.targetID, ctx.channelID); clearErr != nil {
 				log.Printf("[clear] thread history clear failed thread=%s parent=%s: %v", ctx.targetID, ctx.channelID, clearErr)
@@ -948,7 +956,7 @@ func (b *Bot) cmdClear(ctx cmdCtx) {
 			}
 		}
 	} else {
-		result, err = b.manager.SendCommandResult(ctx.channelID, "/clear")
+		result, err = b.manager.SendCommandResultForUser(ctx.channelID, "/clear", ctx.guildID, ctx.userID)
 		if err == nil {
 			b.manager.ClearHistory(ctx.channelID)
 		}
@@ -957,6 +965,8 @@ func (b *Bot) cmdClear(ctx cmdCtx) {
 		b.recordAgentCommandUsage(ctx, "/clear", result, "error")
 		if result.Executed {
 			replyLongWithMetadata(ctx, agentCommandError(err, result), agentCommandMetadata(result, "error"))
+		} else if strings.TrimSpace(result.Response) != "" {
+			ctx.reply(result.Response)
 		} else {
 			ctx.reply(commandError(err))
 		}

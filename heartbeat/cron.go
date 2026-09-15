@@ -34,6 +34,7 @@ type CronDeps interface {
 	StartTempAgent(name, cwd, model, channelID string) (*acp.Agent, error)
 	StopTempAgent(agent *acp.Agent)
 	ChannelInitialized(channelID string) bool
+	UsageLimitRejection(guildID, userID string) (message string, rejected bool)
 	ChannelCWD(channelID string) string
 	AskAgentInThread(ctx context.Context, agent *acp.Agent, job *CronJob, threadName, prompt string) (response string, usedThreadID string, responseSent bool, err error)
 	RecordAgentUsage(agent *acp.Agent, job *CronJob, threadID, status string)
@@ -205,6 +206,25 @@ func (c *CronTask) execute(job *CronJob, now time.Time) {
 		history = c.loadHistory(job.ID, job.HistoryLimit)
 	}
 	prompt := c.buildPrompt(job, history)
+
+	userID := job.CreatedByID
+	if userID == "" {
+		userID = job.MentionID
+	}
+	guildID := job.GuildID
+	if guildID == "" {
+		guildID = c.guildID
+	}
+	if msg, rejected := c.deps.UsageLimitRejection(guildID, userID); rejected {
+		log.Printf("[cron] blocked job %s (%s): usage limit exceeded for user %s", job.ID, job.Name, userID)
+		c.deps.Notify(job.ChannelID, L.Getf("cron.exec.failed", label, job.Name, msg))
+		c.saveHistory(job.ID, CronHistory{
+			Timestamp: now.Format(time.RFC3339), Prompt: job.Prompt, Response: msg, Status: "error",
+			DurationSec: int(time.Since(start).Seconds()),
+		})
+		c.finishJob(job, now)
+		return
+	}
 
 	// Start temp agent with the current channel CWD. CronJob.CWD is kept only for
 	// backward-compatible JSON loading and is intentionally ignored.

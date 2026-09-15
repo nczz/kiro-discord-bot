@@ -108,10 +108,10 @@ func loadConfig() *Config {
 		PreflightMode:        envOr("PREFLIGHT_MODE", "warn"),
 		BotPeers:             envOr("BOT_PEERS", ""),
 		BotGMUserIDs:         envOr("BOT_GM_USER_IDS", ""),
-		UsageCreditUSDRate:   envFloat("USAGE_CREDIT_USD_RATE", 0),
-		UsageLimitDailyUSD:   envFloat("USAGE_LIMIT_DAILY_USD", 0),
-		UsageLimitWeeklyUSD:  envFloat("USAGE_LIMIT_WEEKLY_USD", 0),
-		UsageLimitMonthlyUSD: envFloat("USAGE_LIMIT_MONTHLY_USD", 0),
+		UsageCreditUSDRate:   mustEnvFloat("USAGE_CREDIT_USD_RATE", 0),
+		UsageLimitDailyUSD:   mustEnvFloat("USAGE_LIMIT_DAILY_USD", 0),
+		UsageLimitWeeklyUSD:  mustEnvFloat("USAGE_LIMIT_WEEKLY_USD", 0),
+		UsageLimitMonthlyUSD: mustEnvFloat("USAGE_LIMIT_MONTHLY_USD", 0),
 		AuditEnabled:         envBool("AUDIT_LOG_ENABLED", true),
 		AuditDBPath:          envOr("AUDIT_LOG_DB", ""),
 		AuditRetentionDays:   envInt("AUDIT_LOG_RETENTION_DAYS", 0),
@@ -200,14 +200,25 @@ func envInt(key string, def int) int {
 	return n
 }
 
-func envFloat(key string, def float64) float64 {
+func envFloatStrict(key string, def float64) (float64, error) {
 	v := os.Getenv(key)
 	if v == "" {
-		return def
+		return def, nil
 	}
 	n, err := strconv.ParseFloat(v, 64)
 	if err != nil {
-		return def
+		return 0, fmt.Errorf("%s must be a finite number: %w", key, err)
+	}
+	if math.IsNaN(n) || math.IsInf(n, 0) {
+		return 0, fmt.Errorf("%s must be finite", key)
+	}
+	return n, nil
+}
+
+func mustEnvFloat(key string, def float64) float64 {
+	n, err := envFloatStrict(key, def)
+	if err != nil {
+		log.Fatal(err)
 	}
 	return n
 }
@@ -254,6 +265,9 @@ func validateUsageLimitConfig(cfg *Config) error {
 	} {
 		if math.IsNaN(item.value) || math.IsInf(item.value, 0) {
 			return fmt.Errorf("%s must be finite", item.name)
+		}
+		if item.value < 0 {
+			return fmt.Errorf("%s must be non-negative", item.name)
 		}
 	}
 	if usageLimitsEnabled(cfg) && !(cfg.UsageCreditUSDRate > 0) {

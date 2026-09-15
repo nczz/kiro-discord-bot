@@ -2,12 +2,13 @@ package channel
 
 import (
 	"fmt"
+	"github.com/nczz/kiro-discord-bot/acp"
+	L "github.com/nczz/kiro-discord-bot/locale"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
-
-	"github.com/nczz/kiro-discord-bot/acp"
 )
 
 func TestUsageStoreMonthlyFilesAndReport(t *testing.T) {
@@ -608,5 +609,115 @@ func TestUsageLimitDecisionConvertsCreditsToEffectiveUSD(t *testing.T) {
 	}
 	if decision.Allowed || decision.Window != "monthly" || decision.UsedUSD != 2 || decision.LimitUSD != 2 {
 		t.Fatalf("decision = %+v, want monthly converted credit rejection", decision)
+	}
+}
+
+func TestManagerUsageLimitRejectionAppliesBeforeDirectAgentCommand(t *testing.T) {
+	L.Load("en")
+	m := NewManager(ManagerConfig{DataDir: t.TempDir(), GuildID: "g", UsageLimits: UsageLimitConfig{DailyUSD: 1}})
+	t.Cleanup(m.StopAll)
+	if err := m.RecordUsage(UsageRecord{
+		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		GuildID:   "g",
+		ChannelID: "c",
+		UserID:    "u",
+		CostUSD:   1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	msg, rejected := m.UsageLimitRejection("g", "u")
+	if !rejected || !strings.Contains(msg, "Usage limit reached") {
+		t.Fatalf("UsageLimitRejection = %q/%v, want localized rejection", msg, rejected)
+	}
+	result, err := m.SendCommandResultForUser("c", "/compact", "g", "u")
+	if err == nil || !strings.Contains(result.Response, "Usage limit reached") || result.Executed {
+		t.Fatalf("SendCommandResultForUser = %+v/%v, want usage rejection before agent command", result, err)
+	}
+}
+
+func TestManagerUsageLimitRejectionFailsClosedWithoutUserID(t *testing.T) {
+	L.Load("en")
+	m := NewManager(ManagerConfig{DataDir: t.TempDir(), GuildID: "g", UsageLimits: UsageLimitConfig{DailyUSD: 1}})
+	t.Cleanup(m.StopAll)
+	msg, rejected := m.UsageLimitRejection("g", "")
+	if !rejected || !strings.Contains(msg, "no owner") {
+		t.Fatalf("empty user usage rejection = %q/%v, want owner-required rejection", msg, rejected)
+	}
+}
+
+func TestManagerEnqueueUsageLimitRejectsBeforeAgentStart(t *testing.T) {
+	L.Load("en")
+	m := NewManager(ManagerConfig{DataDir: t.TempDir(), GuildID: "g", UsageLimits: UsageLimitConfig{DailyUSD: 1}})
+	t.Cleanup(m.StopAll)
+	if err := m.RecordUsage(UsageRecord{
+		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		GuildID:   "g",
+		ChannelID: "c",
+		UserID:    "u",
+		CostUSD:   1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var reply string
+	err := m.Enqueue(nil, &Job{GuildID: "g", ChannelID: "c", UserID: "u", DeliveryMode: DeliveryInline, FinalReply: func(content string) {
+		reply = content
+	}})
+	if err != nil {
+		t.Fatalf("Enqueue returned error instead of local usage rejection: %v", err)
+	}
+	if !strings.Contains(reply, "Usage limit reached") {
+		t.Fatalf("reply = %q, want usage-limit rejection", reply)
+	}
+	if _, ok := m.GetAgent("c"); ok {
+		t.Fatal("usage-limited channel enqueue started an agent")
+	}
+}
+
+func TestManagerEnqueueThreadUsageLimitRejectsBeforeAgentStart(t *testing.T) {
+	L.Load("en")
+	m := NewManager(ManagerConfig{DataDir: t.TempDir(), GuildID: "g", ThreadAgentMax: 1, UsageLimits: UsageLimitConfig{DailyUSD: 1}})
+	t.Cleanup(m.StopAll)
+	if err := m.RecordUsage(UsageRecord{
+		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		GuildID:   "g",
+		ChannelID: "parent",
+		ThreadID:  "thread",
+		UserID:    "u",
+		CostUSD:   1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var reply string
+	err := m.EnqueueThread(nil, &Job{GuildID: "g", ChannelID: "thread", ThreadID: "thread", UserID: "u", DeliveryMode: DeliveryInline, FinalReply: func(content string) {
+		reply = content
+	}}, "parent")
+	if err != nil {
+		t.Fatalf("EnqueueThread returned error instead of local usage rejection: %v", err)
+	}
+	if !strings.Contains(reply, "Usage limit reached") {
+		t.Fatalf("reply = %q, want usage-limit rejection", reply)
+	}
+	if _, active, ok := m.ThreadAgentDetails("thread"); ok || active {
+		t.Fatalf("usage-limited thread enqueue started thread agent: ok=%v active=%v", ok, active)
+	}
+}
+
+func TestManagerUsageLimitRejectionAllowsGM(t *testing.T) {
+	m := NewManager(ManagerConfig{DataDir: t.TempDir(), GuildID: "g", GMUserIDs: "gm", UsageLimits: UsageLimitConfig{DailyUSD: 1}})
+	t.Cleanup(m.StopAll)
+	if err := m.RecordUsage(UsageRecord{
+		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		GuildID:   "g",
+		ChannelID: "c",
+		UserID:    "gm",
+		CostUSD:   1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if msg, rejected := m.UsageLimitRejection("g", "gm"); rejected || msg != "" {
+		t.Fatalf("GM usage rejection = %q/%v, want bypass", msg, rejected)
 	}
 }

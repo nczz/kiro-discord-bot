@@ -664,6 +664,10 @@ func (b *Bot) handleCronPrompt(ds *discordgo.Session, i *discordgo.InteractionCr
 	})
 	visibilityMetadata := commandVisibilityMetadata(visibility)
 	b.recordInteractionResponseDelivery(auditCtx, command, "deferred", "", discordgo.InteractionResponseDeferredChannelMessageWithSource, visibilityMetadata, err)
+	if msg, rejected := b.manager.UsageLimitRejection(auditCtx.guildID, auditCtx.userID); rejected {
+		b.followupInteractionForCommand(ds, i, auditCtx, command, msg, map[string]any{"parse_status": "rejected", "reason": "usage_limit"})
+		return
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()

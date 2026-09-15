@@ -41,6 +41,10 @@ func (a *monitorAdapter) ChannelCWD(channelID string) string {
 	return a.bot.manager.CWDPath(channelID)
 }
 
+func (a *monitorAdapter) UsageLimitRejection(guildID, userID string) (string, bool) {
+	return a.bot.manager.UsageLimitRejection(guildID, userID)
+}
+
 func (a *monitorAdapter) EvaluateMonitor(ctx context.Context, agent *acp.Agent, job *heartbeat.MonitorJob, prompt string) (heartbeat.MonitorResult, error) {
 	if agent == nil {
 		return heartbeat.MonitorResult{}, fmt.Errorf("monitor agent is unavailable")

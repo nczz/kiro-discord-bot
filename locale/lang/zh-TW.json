@@ -123,6 +123,7 @@
   "usage.report.count": "共 %d 位使用者、%d 筆本月 turns。",
   "usage.report.forbidden": "除非你有管理伺服器或系統管理員權限，否則只能查看自己的全伺服器用量報表。",
   "usage.limit.exceeded": "❌ 已達 %s 用量上限。已使用 $%.4f / $%.4f。重置時間：`%s`。",
+  "usage.limit.owner_required": "❌ 已啟用用量上限，但此排程代理工作沒有擁有者。請重新建立它，讓後續用量可正確歸屬。",
   "usage.limit.window.daily": "今天",
   "usage.limit.window.weekly": "本週",
   "usage.limit.window.monthly": "本月",

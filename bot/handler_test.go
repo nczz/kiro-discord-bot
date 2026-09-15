@@ -2694,6 +2694,129 @@ func TestCmdClearThreadClearsLocalHistoryWithoutActiveAgent(t *testing.T) {
 	}
 }
 
+func TestAgentCommandUsageLimitRejectionRepliesWithoutGenericError(t *testing.T) {
+	L.Load("en")
+	m := channel.NewManager(channel.ManagerConfig{DataDir: t.TempDir(), GuildID: "guild-1", UsageLimits: channel.UsageLimitConfig{DailyUSD: 1}})
+	defer m.StopAll()
+	if err := m.RecordUsage(channel.UsageRecord{
+		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		GuildID:   "guild-1",
+		ChannelID: "channel-1",
+		UserID:    "user-1",
+		CostUSD:   1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	b := &Bot{manager: m}
+
+	var reply string
+	b.cmdCompact(cmdCtx{
+		channelID: "channel-1",
+		guildID:   "guild-1",
+		userID:    "user-1",
+		reply: func(s string) {
+			reply = s
+		},
+	})
+
+	if !strings.Contains(reply, "Usage limit reached") || strings.Contains(reply, "Error:") {
+		t.Fatalf("compact reply = %q, want direct usage-limit message", reply)
+	}
+}
+
+func TestAuditPromptUsageLimitRejectionSkipsAgentStart(t *testing.T) {
+	L.Load("en")
+	m := channel.NewManager(channel.ManagerConfig{DataDir: t.TempDir(), GuildID: "guild-1", UsageLimits: channel.UsageLimitConfig{DailyUSD: 1}})
+	defer m.StopAll()
+	if err := m.RecordUsage(channel.UsageRecord{
+		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		GuildID:   "guild-1",
+		ChannelID: "channel-1",
+		UserID:    "user-1",
+		CostUSD:   1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	b := &Bot{manager: m}
+
+	var reply string
+	b.runAuditPrompt(cmdCtx{
+		channelID: "channel-1",
+		targetID:  "channel-1",
+		guildID:   "guild-1",
+		userID:    "user-1",
+		reply: func(s string) {
+			reply = s
+		},
+		replyWithMetadata: func(s string, _ map[string]any) {
+			reply = s
+		},
+	}, "inspect audit")
+
+	if !strings.Contains(reply, "Usage limit reached") {
+		t.Fatalf("audit prompt reply = %q, want usage-limit rejection", reply)
+	}
+	if _, ok := m.GetAgent("channel-1"); ok {
+		t.Fatal("audit usage rejection started a channel agent")
+	}
+}
+
+func TestCronPromptUsageLimitRejectionSkipsParserAgent(t *testing.T) {
+	L.Load("en")
+	rt := &recordingDiscordTransport{}
+	ds := &discordgo.Session{State: discordgo.NewState(), Client: &http.Client{Transport: rt}, Ratelimiter: discordgo.NewRatelimiter()}
+	m := channel.NewManager(channel.ManagerConfig{DataDir: t.TempDir(), GuildID: "guild-1", UsageLimits: channel.UsageLimitConfig{DailyUSD: 1}})
+	defer m.StopAll()
+	if err := m.RecordUsage(channel.UsageRecord{
+		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		GuildID:   "guild-1",
+		ChannelID: "channel-1",
+		UserID:    "user-1",
+		CostUSD:   1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	b := &Bot{manager: m}
+	interaction := &discordgo.InteractionCreate{Interaction: &discordgo.Interaction{ID: "interaction-cron-prompt-limit", Token: "token-cron-prompt-limit", Type: discordgo.InteractionApplicationCommand, GuildID: "guild-1", ChannelID: "channel-1", Member: &discordgo.Member{User: &discordgo.User{ID: "user-1", Username: "User"}}}}
+	auditCtx := cmdCtx{guildID: "guild-1", channelID: "channel-1", targetID: "channel-1", userID: "user-1", username: "User", interactionID: interaction.ID}
+
+	b.handleCronPrompt(ds, interaction, auditCtx, "every day run")
+
+	_, bodies := waitDiscordRequests(t, rt, 2)
+	joined := strings.Join(bodies, "\n")
+	if !strings.Contains(joined, "Usage limit reached") || strings.Contains(joined, "couldn't parse") {
+		t.Fatalf("cron prompt bodies = %s, want usage-limit rejection before parser agent", joined)
+	}
+}
+
+func TestMonitorPromptUsageLimitRejectionSkipsParserAgent(t *testing.T) {
+	L.Load("en")
+	rt := &recordingDiscordTransport{}
+	ds := &discordgo.Session{State: discordgo.NewState(), Client: &http.Client{Transport: rt}, Ratelimiter: discordgo.NewRatelimiter()}
+	m := channel.NewManager(channel.ManagerConfig{DataDir: t.TempDir(), GuildID: "guild-1", UsageLimits: channel.UsageLimitConfig{DailyUSD: 1}})
+	defer m.StopAll()
+	if err := m.RecordUsage(channel.UsageRecord{
+		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		GuildID:   "guild-1",
+		ChannelID: "channel-1",
+		UserID:    "user-1",
+		CostUSD:   1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	b := &Bot{manager: m}
+	interaction := &discordgo.InteractionCreate{Interaction: &discordgo.Interaction{ID: "interaction-monitor-prompt-limit", Token: "token-monitor-prompt-limit", Type: discordgo.InteractionApplicationCommand, GuildID: "guild-1", ChannelID: "channel-1", Member: &discordgo.Member{User: &discordgo.User{ID: "user-1", Username: "User"}}}}
+	auditCtx := cmdCtx{guildID: "guild-1", channelID: "channel-1", targetID: "channel-1", userID: "user-1", username: "User", interactionID: interaction.ID}
+
+	b.handleMonitorPrompt(ds, interaction, auditCtx, "every hour check status")
+
+	_, bodies := waitDiscordRequests(t, rt, 2)
+	joined := strings.Join(bodies, "\n")
+	if !strings.Contains(joined, "Usage limit reached") || strings.Contains(joined, "couldn't parse") {
+		t.Fatalf("monitor prompt bodies = %s, want usage-limit rejection before parser agent", joined)
+	}
+}
+
 func TestBuildMCPManagePanel(t *testing.T) {
 	L.Load("en")
 	dir := t.TempDir()
