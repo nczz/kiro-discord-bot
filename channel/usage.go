@@ -115,6 +115,32 @@ type UsageHealth struct {
 	SchemaVersion, Records, FailedImports int
 	Error                                 string
 }
+type UsageLimitConfig struct {
+	CreditUSDRate float64
+	DailyUSD      float64
+	WeeklyUSD     float64
+	MonthlyUSD    float64
+}
+
+func (c UsageLimitConfig) Enabled() bool {
+	return c.DailyUSD > 0 || c.WeeklyUSD > 0 || c.MonthlyUSD > 0
+}
+
+type UsageLimitDecision struct {
+	Allowed  bool
+	Window   string
+	LimitUSD float64
+	UsedUSD  float64
+	ResetsAt time.Time
+}
+
+func usageEffectiveUSD(credits, costUSD, creditUSDRate float64) float64 {
+	out := costUSD
+	if creditUSDRate > 0 {
+		out += credits * creditUSDRate
+	}
+	return out
+}
 
 func NewUsageStore(dataDir, timezone string, retentionMonths int) *UsageStore {
 	loc := resolveUsageLocation(timezone)
@@ -644,6 +670,7 @@ func (s *UsageStore) Report(guildID, channelID, userID string, limit int, now ti
 		if out[i].MonthCostUSD != out[j].MonthCostUSD {
 			return out[i].MonthCostUSD > out[j].MonthCostUSD
 		}
+
 		if out[i].WeekCredits != out[j].WeekCredits {
 			return out[i].WeekCredits > out[j].WeekCredits
 		}
@@ -670,6 +697,35 @@ func (s *UsageStore) Report(guildID, channelID, userID string, limit int, now ti
 		Rows:        out,
 		Totals:      total,
 	}, nil
+}
+func (s *UsageStore) LimitDecision(guildID, userID string, cfg UsageLimitConfig, now time.Time) (UsageLimitDecision, error) {
+	if !cfg.Enabled() || strings.TrimSpace(userID) == "" {
+		return UsageLimitDecision{Allowed: true}, nil
+	}
+	report, err := s.Report(guildID, "", userID, 1, now)
+	if err != nil {
+		return UsageLimitDecision{}, err
+	}
+	used := UsageReportRow{}
+	if len(report.Rows) > 0 {
+		used = report.Rows[0]
+	}
+	checks := []struct {
+		window   string
+		limitUSD float64
+		usedUSD  float64
+		resetsAt time.Time
+	}{
+		{"daily", cfg.DailyUSD, usageEffectiveUSD(used.DayCredits, used.DayCostUSD, cfg.CreditUSDRate), report.DayStart.AddDate(0, 0, 1)},
+		{"weekly", cfg.WeeklyUSD, usageEffectiveUSD(used.WeekCredits, used.WeekCostUSD, cfg.CreditUSDRate), report.WeekStart.AddDate(0, 0, 7)},
+		{"monthly", cfg.MonthlyUSD, usageEffectiveUSD(used.MonthCredits, used.MonthCostUSD, cfg.CreditUSDRate), report.MonthStart.AddDate(0, 1, 0)},
+	}
+	for _, check := range checks {
+		if check.limitUSD > 0 && check.usedUSD >= check.limitUSD {
+			return UsageLimitDecision{Allowed: false, Window: check.window, LimitUSD: check.limitUSD, UsedUSD: check.usedUSD, ResetsAt: check.resetsAt}, nil
+		}
+	}
+	return UsageLimitDecision{Allowed: true}, nil
 }
 
 func (s *UsageStore) QueryHistory(opts UsageHistoryOptions) (UsageHistoryPage, error) {

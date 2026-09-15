@@ -1,6 +1,7 @@
 package main
 
 import (
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -42,6 +43,44 @@ func TestLoadConfigReadsBotGMUserIDs(t *testing.T) {
 	cfg := loadConfig()
 	if cfg.BotGMUserIDs != "gm-1,gm-2" {
 		t.Fatalf("BotGMUserIDs = %q, want env value", cfg.BotGMUserIDs)
+	}
+}
+
+func TestLoadConfigReadsUsageLimits(t *testing.T) {
+	t.Setenv("DISCORD_TOKEN", "token")
+	t.Setenv("DATA_DIR", t.TempDir())
+	t.Setenv("USAGE_CREDIT_USD_RATE", "0.25")
+	t.Setenv("USAGE_LIMIT_DAILY_USD", "1.50")
+	t.Setenv("USAGE_LIMIT_WEEKLY_USD", "7.50")
+	t.Setenv("USAGE_LIMIT_MONTHLY_USD", "25")
+
+	cfg := loadConfig()
+	if cfg.UsageCreditUSDRate != 0.25 || cfg.UsageLimitDailyUSD != 1.50 || cfg.UsageLimitWeeklyUSD != 7.50 || cfg.UsageLimitMonthlyUSD != 25 {
+		t.Fatalf("usage limit config = rate %.2f daily %.2f weekly %.2f monthly %.2f", cfg.UsageCreditUSDRate, cfg.UsageLimitDailyUSD, cfg.UsageLimitWeeklyUSD, cfg.UsageLimitMonthlyUSD)
+	}
+}
+
+func TestValidateUsageLimitConfigRequiresFinitePositiveRateWhenLimitsEnabled(t *testing.T) {
+	for _, rate := range []float64{0, -1} {
+		cfg := &Config{UsageCreditUSDRate: rate, UsageLimitDailyUSD: 1}
+		if err := validateUsageLimitConfig(cfg); err == nil {
+			t.Fatalf("rate %v accepted with enabled usage limits", rate)
+		}
+	}
+	for _, rate := range []float64{1, 0.25} {
+		cfg := &Config{UsageCreditUSDRate: rate, UsageLimitDailyUSD: 1}
+		if err := validateUsageLimitConfig(cfg); err != nil {
+			t.Fatalf("rate %v rejected: %v", rate, err)
+		}
+	}
+	for _, cfg := range []*Config{
+		{UsageCreditUSDRate: math.NaN(), UsageLimitDailyUSD: 1},
+		{UsageCreditUSDRate: math.Inf(1), UsageLimitDailyUSD: 1},
+		{UsageCreditUSDRate: 1, UsageLimitDailyUSD: math.Inf(1)},
+	} {
+		if err := validateUsageLimitConfig(cfg); err == nil {
+			t.Fatalf("non-finite config accepted: %+v", cfg)
+		}
 	}
 }
 

@@ -66,3 +66,5 @@ The report windows are:
 - This month from the first day local midnight.
 
 Use `USAGE_RETENTION_MONTHS` to prune old rows from the online SQLite database. The default `0` retains all online usage rows. This setting does not delete archived legacy JSONL migration backups.
+
+Usage limits are optional per-user effective USD gates. The bot checks the current day, week, and month totals before starting new agent work; if a configured ceiling is already reached, the job is rejected without adding usage. OMP USD cost counts directly, and Kiro credits count as `credits * USAGE_CREDIT_USD_RATE`. IDs in `BOT_GM_USER_IDS` bypass these gates.

@@ -101,6 +101,7 @@ Use the matching relay-side `RELAY_HOST_TOKEN_FILE` or `RELAY_HOST_TOKEN`. The p
 - `KIRO_MCP_CONFIG` is treated as an MCP catalog source. Runtime agents receive bot-managed, per-policy MCP settings under `DATA_DIR`, rather than inheriting the user's Kiro settings directly.
 - `TRUST_ALL_TOOLS` and `TRUST_TOOLS` approve ACP server permission requests. They do not replace Discord command ACLs or MCP channel policy.
 - `BOT_GM_USER_IDS` grants full bot-manager access to specific Discord user IDs. When it is set, manager-only slash commands are registered without Discord's default Manage Channels gate so the bot can enforce the GM allowlist itself; non-managers still receive an in-bot permission denial.
+- Usage limits compare each non-GM user's current effective USD usage before new agent work starts. OMP USD cost counts directly. Kiro credits count as `credits * USAGE_CREDIT_USD_RATE`; if any USD limit is enabled, `USAGE_CREDIT_USD_RATE` must be finite and greater than `0`.
 - `PREFLIGHT_MODE=skip` is the explicit way to disable ACP preflight. `SKIP_PREFLIGHT` exists for compatibility and skips preflight when non-empty.
 - WebShare uses two processes: the bot keeps durable share state under `DATA_DIR/webshare`, while the relay only serves static assets and routes encrypted WebSocket frames.
 - `WEBSHARE_PUBLIC_BASE_URL` must match the browser-facing HTTPS origin. `WEBSHARE_RELAY_URL` should point at the relay origin, usually the same origin with `wss://`; the bot appends `/r/<room>` for each host WebSocket.
@@ -172,6 +173,10 @@ Use the matching relay-side `RELAY_HOST_TOKEN_FILE` or `RELAY_HOST_TOKEN`. The p
 | `CRON_TIMEOUT_MIN` | `5` | Cron job agent execution timeout, in minutes. Values below `1` fall back to `5`. |
 | `USAGE_TIMEZONE` | `CRON_TIMEZONE`, then local default | Time zone for `/usage` day, week, and month windows. |
 | `USAGE_RETENTION_MONTHS` | `0` | Online SQLite usage retention in months. `0` keeps all rows; archived legacy JSONL migration backups are unaffected. |
+| `USAGE_CREDIT_USD_RATE` | `0` | USD value of one Kiro credit for effective USD limits. Required to be finite and greater than `0` when any USD usage limit is enabled. |
+| `USAGE_LIMIT_DAILY_USD` | `0` | Per-user daily effective USD ceiling. `0` disables the daily gate. |
+| `USAGE_LIMIT_WEEKLY_USD` | `0` | Per-user weekly effective USD ceiling. `0` disables the weekly gate. |
+| `USAGE_LIMIT_MONTHLY_USD` | `0` | Per-user monthly effective USD ceiling. `0` disables the monthly gate. |
 | `ATTACHMENT_RETAIN_DAYS` | `7` | Retention for downloaded Discord attachments. |
 | `ATTACHMENT_MAX_MB` | `25` | Maximum attachment size accepted by the bot. |
 | `PREFLIGHT_MODE` | `warn` | ACP compatibility preflight mode. `strict` exits on failure, `skip` disables the check, and unknown values fall back to warn. |

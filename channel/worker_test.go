@@ -1179,6 +1179,124 @@ func TestWorkerInlineDeliveryWithFinalReplyAvoidsPublicChannelPost(t *testing.T)
 	}
 }
 
+func TestWorkerRejectsInlineJobWhenUsageLimitExceeded(t *testing.T) {
+	L.Load("en")
+	store := NewUsageStore(t.TempDir(), "UTC", 0)
+	if err := store.Append(UsageRecord{
+		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		GuildID:   "guild-1",
+		ChannelID: "ch1",
+		UserID:    "user-1",
+		CostUSD:   1.00,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	agent := &fakeWorkerAgent{}
+	w := newWorker("ch1", agent, 1, 30, 1, 1440, nil, "")
+	w.SetUsageStore(store)
+	w.SetUsageLimits(UsageLimitConfig{DailyUSD: 1.00})
+
+	var replies []string
+	w.execute(&Job{
+		GuildID:      "guild-1",
+		ChannelID:    "ch1",
+		MessageID:    "m1",
+		UserID:       "user-1",
+		Prompt:       "hello",
+		DeliveryMode: DeliveryInline,
+		FinalReply: func(content string) {
+			replies = append(replies, content)
+		},
+	})
+
+	if len(agent.asyncContent) != 0 {
+		t.Fatalf("agent received prompt despite usage rejection: %+v", agent.asyncContent)
+	}
+	if len(replies) != 1 || !strings.Contains(replies[0], "Usage limit reached") {
+		t.Fatalf("replies = %#v, want usage limit rejection", replies)
+	}
+}
+
+func TestWorkerUsageLimitRejectionSignalsIdleForNextQueuedJob(t *testing.T) {
+	L.Load("en")
+	store := NewUsageStore(t.TempDir(), "UTC", 0)
+	if err := store.Append(UsageRecord{
+		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		GuildID:   "guild-1",
+		ChannelID: "ch1",
+		UserID:    "user-1",
+		CostUSD:   1.00,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	w := newWorker("ch1", &fakeWorkerAgent{}, 2, 30, 1, 1440, nil, "")
+	w.SetUsageStore(store)
+	w.SetUsageLimits(UsageLimitConfig{DailyUSD: 1.00})
+	replies := make(chan string, 2)
+	w.Start()
+	t.Cleanup(w.Stop)
+
+	for _, msgID := range []string{"m1", "m2"} {
+		if err := w.Enqueue(&Job{
+			GuildID:      "guild-1",
+			ChannelID:    "ch1",
+			MessageID:    msgID,
+			UserID:       "user-1",
+			Prompt:       "hello",
+			DeliveryMode: DeliveryInline,
+			FinalReply: func(content string) {
+				replies <- content
+			},
+		}); err != nil {
+			t.Fatalf("enqueue %s: %v", msgID, err)
+		}
+	}
+
+	for i := 0; i < 2; i++ {
+		select {
+		case reply := <-replies:
+			if !strings.Contains(reply, "Usage limit reached") {
+				t.Fatalf("reply %d = %q, want usage limit rejection", i, reply)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("timed out waiting for queued rejection; worker did not signal idle")
+		}
+	}
+}
+
+func TestWorkerGMBypassesUsageLimit(t *testing.T) {
+	L.Load("en")
+	store := NewUsageStore(t.TempDir(), "UTC", 0)
+	if err := store.Append(UsageRecord{
+		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		GuildID:   "guild-1",
+		ChannelID: "ch1",
+		UserID:    "12345",
+		CostUSD:   1.00,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	agent := &fakeWorkerAgent{}
+	w := newWorker("ch1", agent, 1, 30, 1, 1440, nil, "")
+	w.SetUsageStore(store)
+	w.SetUsageLimits(UsageLimitConfig{DailyUSD: 1.00})
+	w.SetGMUserIDs(map[string]bool{"12345": true})
+
+	w.execute(&Job{
+		GuildID:      "guild-1",
+		ChannelID:    "ch1",
+		MessageID:    "m1",
+		UserID:       "12345",
+		Prompt:       "hello",
+		DeliveryMode: DeliveryInline,
+		FinalReply:   func(string) {},
+	})
+
+	if len(agent.asyncContent) == 0 {
+		t.Fatal("GM job should reach agent despite exceeded usage limit")
+	}
+}
+
 func TestWorkerThreadDeliveryAppendsMetricsToFinalResponse(t *testing.T) {
 	L.Load("en")
 	rt := &recordingRoundTripper{}

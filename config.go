@@ -1,7 +1,9 @@
 package main
 
 import (
+	"fmt"
 	"log"
+	"math"
 	"os"
 	"strconv"
 
@@ -49,6 +51,10 @@ type Config struct {
 	PreflightMode        string
 	BotPeers             string
 	BotGMUserIDs         string
+	UsageCreditUSDRate   float64
+	UsageLimitDailyUSD   float64
+	UsageLimitWeeklyUSD  float64
+	UsageLimitMonthlyUSD float64
 	AuditEnabled         bool
 	AuditDBPath          string
 	AuditRetentionDays   int
@@ -102,6 +108,10 @@ func loadConfig() *Config {
 		PreflightMode:        envOr("PREFLIGHT_MODE", "warn"),
 		BotPeers:             envOr("BOT_PEERS", ""),
 		BotGMUserIDs:         envOr("BOT_GM_USER_IDS", ""),
+		UsageCreditUSDRate:   envFloat("USAGE_CREDIT_USD_RATE", 0),
+		UsageLimitDailyUSD:   envFloat("USAGE_LIMIT_DAILY_USD", 0),
+		UsageLimitWeeklyUSD:  envFloat("USAGE_LIMIT_WEEKLY_USD", 0),
+		UsageLimitMonthlyUSD: envFloat("USAGE_LIMIT_MONTHLY_USD", 0),
 		AuditEnabled:         envBool("AUDIT_LOG_ENABLED", true),
 		AuditDBPath:          envOr("AUDIT_LOG_DB", ""),
 		AuditRetentionDays:   envInt("AUDIT_LOG_RETENTION_DAYS", 0),
@@ -154,6 +164,9 @@ func loadConfig() *Config {
 		log.Fatalf("resolve DATA_DIR: %v", err)
 	}
 	cfg.DataDir = dataDir
+	if err := validateUsageLimitConfig(cfg); err != nil {
+		log.Fatal(err)
+	}
 	if err := cfg.A2A.ValidateStartup(); err != nil {
 		log.Fatalf("invalid A2A config: %v", err)
 	}
@@ -187,6 +200,18 @@ func envInt(key string, def int) int {
 	return n
 }
 
+func envFloat(key string, def float64) float64 {
+	v := os.Getenv(key)
+	if v == "" {
+		return def
+	}
+	n, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		return def
+	}
+	return n
+}
+
 func envPositiveInt(key string, def int) int {
 	n := envInt(key, def)
 	if n <= 0 {
@@ -208,4 +233,31 @@ func envBool(key string, def bool) bool {
 	default:
 		return def
 	}
+}
+
+func usageLimitsEnabled(cfg *Config) bool {
+	return cfg != nil && (cfg.UsageLimitDailyUSD > 0 || cfg.UsageLimitWeeklyUSD > 0 || cfg.UsageLimitMonthlyUSD > 0)
+}
+
+func validateUsageLimitConfig(cfg *Config) error {
+	if cfg == nil {
+		return nil
+	}
+	for _, item := range []struct {
+		name  string
+		value float64
+	}{
+		{"USAGE_CREDIT_USD_RATE", cfg.UsageCreditUSDRate},
+		{"USAGE_LIMIT_DAILY_USD", cfg.UsageLimitDailyUSD},
+		{"USAGE_LIMIT_WEEKLY_USD", cfg.UsageLimitWeeklyUSD},
+		{"USAGE_LIMIT_MONTHLY_USD", cfg.UsageLimitMonthlyUSD},
+	} {
+		if math.IsNaN(item.value) || math.IsInf(item.value, 0) {
+			return fmt.Errorf("%s must be finite", item.name)
+		}
+	}
+	if usageLimitsEnabled(cfg) && !(cfg.UsageCreditUSDRate > 0) {
+		return fmt.Errorf("USAGE_CREDIT_USD_RATE must be greater than 0 when USD usage limits are enabled")
+	}
+	return nil
 }

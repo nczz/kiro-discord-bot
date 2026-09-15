@@ -66,3 +66,5 @@ Cron job 會使用 job owner 或設定的 user context。Kiro usage 會加總 `c
 - 本月：每月 1 日本地午夜起算。
 
 用 `USAGE_RETENTION_MONTHS` 清理線上 SQLite 的舊資料列；預設 `0` 表示永久保留。此設定不會刪除封存的舊 JSONL 遷移備份。
+
+Usage limit 是可選的每使用者 effective USD gate。Bot 會在新 agent 工作開始前檢查目前今天、本週與本月總量；若已達任一已設定上限，該工作會被拒絕且不新增 usage。OMP 的 USD cost 直接計入，Kiro credits 以 `credits * USAGE_CREDIT_USD_RATE` 換算。`BOT_GM_USER_IDS` 內的 ID 會 bypass 這些 gate。

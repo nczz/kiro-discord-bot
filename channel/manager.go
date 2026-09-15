@@ -59,6 +59,7 @@ type Manager struct {
 	botID           string
 	dataDir         string
 	gmUserIDs       map[string]bool
+	usageLimits     UsageLimitConfig
 	a2aConfig       a2a.Config
 	a2aNode         *a2a.Node
 	a2aPeers        *a2a.SQLitePeerStore
@@ -208,6 +209,7 @@ type ManagerConfig struct {
 	GMUserIDs            string
 	UsageTimezone        string
 	UsageRetentionMonths int
+	UsageLimits          UsageLimitConfig
 	Audit                AuditSink
 	A2A                  a2a.Config
 	A2ANode              *a2a.Node
@@ -249,6 +251,7 @@ func NewManager(cfg ManagerConfig) *Manager {
 		guildID:             cfg.GuildID,
 		botID:               cfg.BotID,
 		gmUserIDs:           parseDiscordUserIDSet(cfg.GMUserIDs),
+		usageLimits:         cfg.UsageLimits,
 		dataDir:             cfg.DataDir,
 		a2aConfig:           cfg.A2A,
 		a2aNode:             cfg.A2ANode,
@@ -2781,6 +2784,7 @@ func (m *Manager) startAgentAndWorkerWithModelFallback(channelID string, allowSt
 	w.SetGMUserIDs(m.gmUserIDs)
 	w.OnBeforeFinalResponseFunc(m.safeEgressDrain)
 	w.SetUsageStore(m.usage)
+	w.SetUsageLimits(m.usageLimits)
 	w.SetAuditSink(m.audit)
 	w.OnThreadCreatedFunc(func(threadID string, mentionOnly bool) {
 		m.SetThreadListenMode(threadID, mentionOnly)
@@ -3887,6 +3891,7 @@ func (m *Manager) spawnThreadAgent(threadID, parentChannelID string, modelOverri
 	})
 	w.OnBeforeFinalResponseFunc(m.safeEgressDrain)
 	w.SetUsageStore(m.usage)
+	w.SetUsageLimits(m.usageLimits)
 	w.SetAuditSink(m.audit)
 	w.SetBotToolsTargetStatePath(botToolsTargetStatePath(m.dataDir, threadID))
 	w.SetGMUserIDs(m.gmUserIDs)

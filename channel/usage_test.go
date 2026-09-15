@@ -567,3 +567,46 @@ func TestUsageHistoryUsesStableKeysetPaginationAndFilters(t *testing.T) {
 		t.Fatalf("filtered=%+v", filtered.Records)
 	}
 }
+
+func TestUsageLimitDecisionUsesUSDCost(t *testing.T) {
+	store := NewUsageStore(t.TempDir(), "UTC", 0)
+	if err := store.Append(UsageRecord{
+		Timestamp: "2026-07-17T10:00:00Z",
+		GuildID:   "g",
+		ChannelID: "c",
+		UserID:    "u",
+		CostUSD:   1.25,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	decision, err := store.LimitDecision("g", "u", UsageLimitConfig{DailyUSD: 1.25}, time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Allowed || decision.Window != "daily" || decision.UsedUSD != 1.25 || decision.LimitUSD != 1.25 {
+		t.Fatalf("decision = %+v, want daily USD rejection", decision)
+	}
+	if want := time.Date(2026, 7, 18, 0, 0, 0, 0, time.UTC); !decision.ResetsAt.Equal(want) {
+		t.Fatalf("reset = %s, want %s", decision.ResetsAt, want)
+	}
+}
+
+func TestUsageLimitDecisionConvertsCreditsToEffectiveUSD(t *testing.T) {
+	store := NewUsageStore(t.TempDir(), "UTC", 0)
+	if err := store.Append(UsageRecord{
+		Timestamp: "2026-07-17T10:00:00Z",
+		GuildID:   "g",
+		ChannelID: "c",
+		UserID:    "u",
+		Credits:   10,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	decision, err := store.LimitDecision("g", "u", UsageLimitConfig{CreditUSDRate: 0.2, MonthlyUSD: 2}, time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.Allowed || decision.Window != "monthly" || decision.UsedUSD != 2 || decision.LimitUSD != 2 {
+		t.Fatalf("decision = %+v, want monthly converted credit rejection", decision)
+	}
+}

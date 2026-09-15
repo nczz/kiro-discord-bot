@@ -101,6 +101,7 @@ WEBSHARE_HOST_TOKEN_FILE=/etc/kdb-webshare/host-token
 - `KIRO_MCP_CONFIG` 會被視為 MCP catalog source。Runtime agents 會收到 `DATA_DIR` 內依照 bot policy 產生的 MCP settings，而不是直接繼承使用者自己的 Kiro settings。
 - `TRUST_ALL_TOOLS` 與 `TRUST_TOOLS` 是 ACP server permission request 的核准設定，不會取代 Discord command ACL 或 MCP channel policy。
 - `BOT_GM_USER_IDS` 會授予指定 Discord user ID 完整 bot 管理權限。設定後，管理型 slash commands 會移除 Discord 預設的 Manage Channels gate，改由 bot 自行套用 GM 白名單；非管理者仍會收到 bot 內部權限拒絕。
+- Usage limit 會在新 agent 工作開始前，比對每個非 GM 使用者目前的 effective USD 用量。OMP 的 USD cost 直接計入；Kiro credits 以 `credits * USAGE_CREDIT_USD_RATE` 換算。只要任一 USD limit 有設定，`USAGE_CREDIT_USD_RATE` 必須是 finite 且大於 `0`。
 - `PREFLIGHT_MODE=skip` 是停用 ACP preflight 的明確方式。`SKIP_PREFLIGHT` 是相容性設定，只要非空就會跳過 preflight。
 
 - WebShare 使用兩個 processes：bot 會把 durable share state 放在 `DATA_DIR/webshare`，relay 只提供 static assets 並轉送 encrypted WebSocket frames。
@@ -173,6 +174,10 @@ WEBSHARE_HOST_TOKEN_FILE=/etc/kdb-webshare/host-token
 | `CRON_TIMEOUT_MIN` | `5` | 排程任務 agent 執行逾時分鐘數。小於 `1` 會退回 `5`。 |
 | `USAGE_TIMEZONE` | `CRON_TIMEZONE`，再退回本機預設 | `/usage` 今日、本週、本月統計時區。 |
 | `USAGE_RETENTION_MONTHS` | `0` | 線上 SQLite usage 保留月數。`0` 表示全部保留；不影響封存的舊 JSONL 遷移備份。 |
+| `USAGE_CREDIT_USD_RATE` | `0` | 每 1 Kiro credit 對應的 USD 金額，用於 effective USD 限額。當任一 USD usage limit 有設定時，必須是 finite 且大於 `0`。 |
+| `USAGE_LIMIT_DAILY_USD` | `0` | 每使用者每日 effective USD 上限。`0` 停用每日 gate。 |
+| `USAGE_LIMIT_WEEKLY_USD` | `0` | 每使用者每週 effective USD 上限。`0` 停用每週 gate。 |
+| `USAGE_LIMIT_MONTHLY_USD` | `0` | 每使用者每月 effective USD 上限。`0` 停用每月 gate。 |
 | `ATTACHMENT_RETAIN_DAYS` | `7` | 已下載 Discord attachment 保留天數。 |
 | `ATTACHMENT_MAX_MB` | `25` | Bot 接受的最大 attachment 大小。 |
 | `PREFLIGHT_MODE` | `warn` | ACP 相容性 preflight 模式。`strict` 失敗即退出，`skip` 停用檢查，不明值會退回 warn。 |

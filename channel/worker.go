@@ -124,6 +124,7 @@ type Worker struct {
 	started                      sync.Once
 	logger                       *ChatLogger
 	usage                        *UsageStore
+	usageLimits                  UsageLimitConfig
 	audit                        AuditSink
 	model                        string
 	engine                       string
@@ -250,6 +251,9 @@ func (w *Worker) OnSkillPrefixFunc(fn func(targetID string) string) { w.skillPre
 
 // SetUsageStore sets the append-only usage ledger used for report commands.
 func (w *Worker) SetUsageStore(store *UsageStore) { w.usage = store }
+
+// SetUsageLimits sets per-user USD usage ceilings enforced before agent execution.
+func (w *Worker) SetUsageLimits(cfg UsageLimitConfig) { w.usageLimits = cfg }
 
 func (w *Worker) SetAuditSink(sink AuditSink) { w.audit = sink }
 
@@ -605,9 +609,61 @@ func promptVisibleBody(prompt string) string {
 	return strings.TrimSpace(prompt)
 }
 
+func (w *Worker) rejectForUsageLimit(job *Job) bool {
+	if w == nil || job == nil || w.usage == nil || !w.usageLimits.Enabled() {
+		return false
+	}
+	if discordUserIDSetContains(w.gmUserIDs, job.UserID) {
+		return false
+	}
+	decision, err := w.usage.LimitDecision(job.GuildID, job.UserID, w.usageLimits, time.Now())
+	if err != nil {
+		log.Printf("[usage-limit] decision failed channel=%s user=%s: %v", job.ChannelID, job.UserID, err)
+		return false
+	}
+	if decision.Allowed {
+		return false
+	}
+	content := formatUsageLimitExceeded(decision)
+	w.auditJobEvent("agent_job_rejected", job, "", "policy_denied", map[string]any{
+		"reason":    "usage_limit",
+		"window":    decision.Window,
+		"used_usd":  decision.UsedUSD,
+		"limit_usd": decision.LimitUSD,
+	})
+	if job.A2AResult != nil {
+		job.emitA2AResult(a2a.TaskExecutionResult{
+			State:   a2a.TaskStateRejected,
+			Content: content,
+			Error:   a2a.TaskError{Code: a2a.ErrorPolicyDenied, Message: content},
+		})
+		return true
+	}
+	if err := job.sendInlineFinalReply(job.Session, content); err != nil {
+		log.Printf("[usage-limit] reply failed channel=%s user=%s: %v", job.ChannelID, job.UserID, err)
+	}
+	if job.Session != nil && strings.TrimSpace(job.MessageID) != "" {
+		swapReaction(job.Session, job.ChannelID, job.MessageID, "⏳", "❌")
+	}
+	return true
+}
+
+func formatUsageLimitExceeded(decision UsageLimitDecision) string {
+	window := L.Get("usage.limit.window." + decision.Window)
+	if strings.TrimSpace(window) == "" {
+		window = decision.Window
+	}
+	reset := decision.ResetsAt.Format("2006-01-02 15:04 MST")
+	return fmt.Sprintf(L.Get("usage.limit.exceeded"), window, decision.UsedUSD, decision.LimitUSD, reset)
+}
+
 func (w *Worker) execute(job *Job) {
 	if job != nil {
 		job.MentionRefs = w.rememberMentionRefs(job.MentionRefs)
+	}
+	if w.rejectForUsageLimit(job) {
+		w.signalIdle()
+		return
 	}
 	if job.DeliveryMode == DeliveryInline {
 		w.executeInline(job)

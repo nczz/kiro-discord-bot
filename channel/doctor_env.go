@@ -81,6 +81,10 @@ var envSpecs = []envEntry{
 	{Name: "CRON_TIMEOUT_MIN", Group: "locale"},
 	{Name: "USAGE_TIMEZONE", Group: "locale"},
 	{Name: "USAGE_RETENTION_MONTHS", Group: "locale"},
+	{Name: "USAGE_CREDIT_USD_RATE", Group: "locale", Effective: func(m *Manager) string { return formatUsageLimitFloat(m.usageLimits.CreditUSDRate) }},
+	{Name: "USAGE_LIMIT_DAILY_USD", Group: "locale", Effective: func(m *Manager) string { return formatUsageLimitFloat(m.usageLimits.DailyUSD) }},
+	{Name: "USAGE_LIMIT_WEEKLY_USD", Group: "locale", Effective: func(m *Manager) string { return formatUsageLimitFloat(m.usageLimits.WeeklyUSD) }},
+	{Name: "USAGE_LIMIT_MONTHLY_USD", Group: "locale", Effective: func(m *Manager) string { return formatUsageLimitFloat(m.usageLimits.MonthlyUSD) }},
 
 	// Multi-bot
 	{Name: "BOT_PEERS", Group: "multibot"},
@@ -240,6 +244,13 @@ func defaultIfEmpty(v, def string) string {
 		return def
 	}
 	return v
+}
+
+func formatUsageLimitFloat(v float64) string {
+	if v <= 0 {
+		return L.Get("doctor.value.not_configured")
+	}
+	return strconv.FormatFloat(v, 'f', -1, 64)
 }
 
 func (m *Manager) doctorListenModeConsistency() string {
