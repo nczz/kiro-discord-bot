@@ -64,7 +64,7 @@ type mentionCandidate struct {
 
 func registerResolveMentionsTool(s *server.MCPServer) {
 	s.AddTool(
-		mcp.NewTool("discord_resolve_mentions",
+		discordWriteTool("discord_resolve_mentions",
 			mcp.WithDescription("Resolve comma- or newline-separated natural-language Discord member names to verified mention placeholders for the current bot task. Use this when a user asks to tag, mention, notify, or ping people who are not already listed in Discord mention references. The tool performs fresh Discord member lookup before cache fallback, grants exact/unique resolved users only for this active job, and returns placeholders such as [[discord:user:123]]; never write raw <@id>."),
 			mcp.WithString("channel_id", mcp.Required(), mcp.Description("Current Discord channel_id from context; if the task is bound to a thread, the bot dynamic target state is used automatically.")),
 			mcp.WithString("names", mcp.Required(), mcp.Description("Comma- or newline-separated names to resolve, for example: Wendy, Cheisy. Do not pass a whole request; extract the person/group names first.")),

@@ -271,16 +271,16 @@ WEBSHARE_HOST_TOKEN_FILE=/etc/kdb-webshare/host-token
 
 ## Discord MCP Server
 
-這些變數設定 `mcp-discord-server`，不是主 bot process；除非兩者共用同一份 process 環境。
+這些變數設定 `mcp-discord-server`。當主 bot 管理 `mcp-discord` catalog entry 時，bot 也會從 catalog entry 或 process environment 讀取 `MCP_DISCORD_ALLOWED_WRITE_TOOLS`，作為 write-policy tools 的部署層級上限。
 
 | 變數 | 預設 | 用途 |
 | --- | --- | --- |
 | `MCP_DISCORD_ALLOWED_GUILDS` | 空 | 可選的逗號分隔 guild allowlist。 |
 | `MCP_DISCORD_ALLOWED_CHANNELS` | 空 | 可選的逗號分隔 channel allowlist。 |
 | `MCP_DISCORD_DOWNLOAD_DIR` | 空 | 設定後，`discord_download_attachment` 的 save path 必須位於此 root 內。 |
-| `MCP_DISCORD_READ_ONLY` | `false` | `true` 時阻擋所有 write tools。 |
-| `MCP_DISCORD_ALLOWED_WRITE_TOOLS` | 空 | 可選的逗號分隔 write-tool allowlist。 |
-| `MCP_DISCORD_ALLOW_DESTRUCTIVE` | `true` | `false` 時阻擋 delete 等 destructive tools。 |
+| `MCP_DISCORD_READ_ONLY` | `false` | 在 standalone `mcp-discord` 阻擋所有 write tools；bot 管理的 session 會由 channel policy 注入。 |
+| `MCP_DISCORD_ALLOWED_WRITE_TOOLS` | 空 | 可選的逗號分隔部署層級 write-policy tool 上限。空值代表沒有部署上限。Bot 管理的 session 仍需要 per-channel grant；read tools 不受影響。 |
+| `MCP_DISCORD_ALLOW_DESTRUCTIVE` | `true` | `false` 時阻擋 delete 等 destructive tools；bot 管理的 session 還需要 channel destructive gate。 |
 | `MCP_DISCORD_UPLOAD_DENY_PATHS` | 空 | `discord_send_file` 追加封鎖的 comma 或 newline 分隔 wildcard patterns；預設仍封鎖 bot/Kiro/OMP runtime roots。 |
 | `MCP_DISCORD_UPLOAD_DENY_CASE_INSENSITIVE` | 平台預設 | 覆寫 upload denylist 大小寫比對；macOS/Windows 預設不分大小寫，其他平台預設分大小寫。 |
 

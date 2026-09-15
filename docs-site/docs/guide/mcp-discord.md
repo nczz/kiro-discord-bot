@@ -64,9 +64,11 @@ MCP_DISCORD_UPLOAD_DENY_PATHS=/srv/kiro-private/**
 MCP_DISCORD_UPLOAD_DENY_CASE_INSENSITIVE=
 ```
 
-Empty allowlists preserve legacy unrestricted behavior. Production deployments should prefer explicit guild/channel allowlists when the bot has broad Discord access.
+Empty guild/channel allowlists preserve legacy unrestricted target behavior. Empty `MCP_DISCORD_ALLOWED_WRITE_TOOLS` means there is no deployment-wide write-tool cap; any bot-managed channel policy can still expose write-policy tools unless its own channel policy blocks them. Production deployments should prefer explicit guild/channel allowlists when the bot has broad Discord access.
 
-For standalone `mcp-discord` processes, do not rely on the channel-policy injection path. Set `MCP_DISCORD_READ_ONLY=true` unless writes are required; when writes are required, keep `MCP_DISCORD_ALLOW_DESTRUCTIVE=false` and enumerate only non-destructive tools in `MCP_DISCORD_ALLOWED_WRITE_TOOLS`. Bot-managed channel sessions inject these guards from the channel policy automatically.
+For standalone `mcp-discord` processes, do not rely on the channel-policy injection path. Set `MCP_DISCORD_READ_ONLY=true` unless writes are required; when writes are required, keep `MCP_DISCORD_ALLOW_DESTRUCTIVE=false` and enumerate only non-destructive tools in `MCP_DISCORD_ALLOWED_WRITE_TOOLS`.
+
+For bot-managed channel sessions, `MCP_DISCORD_ALLOWED_WRITE_TOOLS` is a deployment-wide upper bound, not a grant. The effective exposed write tools are the channel policy intersection with this environment cap; read tools are unaffected, and destructive tools still require both the channel destructive gate and `MCP_DISCORD_ALLOW_DESTRUCTIVE`. `/mcp manage` hides or rejects write tools outside this cap.
 
 ## Enable Per Channel
 

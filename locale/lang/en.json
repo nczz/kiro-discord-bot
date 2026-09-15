@@ -453,6 +453,7 @@
   "mcp.restarted": "✅ MCP policy reload requested. Stopped %d active agent(s); next message starts with current policy.",
   "restart.success": "✅ Restart requested. Stopped %d active runtime(s); next message starts fresh runtime processes with the same channel settings.",
   "mcp.policy_no_tools": "MCP server `%s` would expose no tools with this policy. Use `full` to expose all tools, or use `/mcp manage` to scan and allow specific tools.",
+  "mcp.tool_blocked_by_deployment_policy": "Tool `%s` is blocked by the deployment-wide MCP_DISCORD_ALLOWED_WRITE_TOOLS cap.",
   "mcp.manage.slash_only": "Use `/mcp manage` to open the interactive MCP panel.",
   "mcp.manage.header": "**MCP policy panel**",
   "mcp.manage.summary": "Discovered %d MCP server(s). Select a server, then apply a policy.",

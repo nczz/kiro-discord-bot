@@ -148,6 +148,30 @@ func TestDiscordPolicyAllowedWriteTools(t *testing.T) {
 	}
 }
 
+func TestDiscordToolAnnotationHelpersClassifyPolicy(t *testing.T) {
+	cases := []struct {
+		name        string
+		tool        mcp.Tool
+		readOnly    bool
+		destructive bool
+	}{
+		{name: "read", tool: discordReadTool("discord_read_messages"), readOnly: true, destructive: false},
+		{name: "write", tool: discordWriteTool("discord_send_message"), readOnly: false, destructive: false},
+		{name: "destructive", tool: discordDestructiveTool("discord_delete_message"), readOnly: false, destructive: true},
+		{name: "get_user", tool: discordReadTool("discord_get_user"), readOnly: true, destructive: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.tool.Annotations.ReadOnlyHint == nil || *tc.tool.Annotations.ReadOnlyHint != tc.readOnly {
+				t.Fatalf("readOnlyHint = %v, want %v", tc.tool.Annotations.ReadOnlyHint, tc.readOnly)
+			}
+			if tc.tool.Annotations.DestructiveHint == nil || *tc.tool.Annotations.DestructiveHint != tc.destructive {
+				t.Fatalf("destructiveHint = %v, want %v", tc.tool.Annotations.DestructiveHint, tc.destructive)
+			}
+		})
+	}
+}
+
 func TestBotToolsBindingsRestrictReadPolicyTargets(t *testing.T) {
 	oldPolicy := policy
 	policy = discordPolicy{allowDestructive: true}

@@ -791,13 +791,36 @@ func ensureDiscord() error {
 	return nil
 }
 
+func discordReadTool(name string, opts ...mcp.ToolOption) mcp.Tool {
+	return discordAnnotatedTool(name, true, false, true, opts...)
+}
+
+func discordWriteTool(name string, opts ...mcp.ToolOption) mcp.Tool {
+	return discordAnnotatedTool(name, false, false, false, opts...)
+}
+
+func discordDestructiveTool(name string, opts ...mcp.ToolOption) mcp.Tool {
+	return discordAnnotatedTool(name, false, true, false, opts...)
+}
+
+func discordAnnotatedTool(name string, readOnly, destructive, idempotent bool, opts ...mcp.ToolOption) mcp.Tool {
+	annotations := []mcp.ToolOption{
+		mcp.WithReadOnlyHintAnnotation(readOnly),
+		mcp.WithDestructiveHintAnnotation(destructive),
+		mcp.WithIdempotentHintAnnotation(idempotent),
+		mcp.WithOpenWorldHintAnnotation(true),
+	}
+	opts = append(annotations, opts...)
+	return mcp.NewTool(name, opts...)
+}
+
 func main() {
 	L.Load(os.Getenv("BOT_LOCALE"))
 	s := server.NewMCPServer("mcp-discord", "1.0.0", server.WithToolCapabilities(false))
 
 	// 1. List channels
 	s.AddTool(
-		mcp.NewTool("discord_list_channels",
+		discordReadTool("discord_list_channels",
 			mcp.WithDescription("List text channels in a guild"),
 			mcp.WithString("guild_id", mcp.Required(), mcp.Description("Guild/server ID")),
 		),
@@ -825,7 +848,7 @@ func main() {
 
 	// 2. Read messages
 	s.AddTool(
-		mcp.NewTool("discord_read_messages",
+		discordReadTool("discord_read_messages",
 			mcp.WithDescription("Read recent messages from a channel"),
 			mcp.WithString("channel_id", mcp.Required(), mcp.Description("Channel ID")),
 			mcp.WithNumber("limit", mcp.Description("Number of messages, max 100, default 20")),
@@ -857,7 +880,7 @@ func main() {
 
 	// 3. Send message
 	s.AddTool(
-		mcp.NewTool("discord_send_message",
+		discordWriteTool("discord_send_message",
 			mcp.WithDescription("Send a message to a channel"),
 			mcp.WithString("channel_id", mcp.Required(), mcp.Description("Channel ID")),
 			mcp.WithString("content", mcp.Required(), mcp.Description("Message content")),
@@ -883,7 +906,7 @@ func main() {
 
 	// 4. Reply to message
 	s.AddTool(
-		mcp.NewTool("discord_reply_message",
+		discordWriteTool("discord_reply_message",
 			mcp.WithDescription("Reply to a specific message"),
 			mcp.WithString("channel_id", mcp.Required(), mcp.Description("Channel ID")),
 			mcp.WithString("message_id", mcp.Required(), mcp.Description("Message ID to reply to")),
@@ -909,7 +932,7 @@ func main() {
 
 	// 5. Add reaction
 	s.AddTool(
-		mcp.NewTool("discord_add_reaction",
+		discordWriteTool("discord_add_reaction",
 			mcp.WithDescription("Add a reaction emoji to a message"),
 			mcp.WithString("channel_id", mcp.Required(), mcp.Description("Channel ID")),
 			mcp.WithString("message_id", mcp.Required(), mcp.Description("Message ID")),
@@ -934,7 +957,7 @@ func main() {
 
 	// 6. List members
 	s.AddTool(
-		mcp.NewTool("discord_list_members",
+		discordReadTool("discord_list_members",
 			mcp.WithDescription("List members of a guild"),
 			mcp.WithString("guild_id", mcp.Required(), mcp.Description("Guild/server ID")),
 			mcp.WithNumber("limit", mcp.Description("Max members, default 50")),
@@ -972,7 +995,7 @@ func main() {
 
 	// 7. Search messages
 	s.AddTool(
-		mcp.NewTool("discord_search_messages",
+		discordReadTool("discord_search_messages",
 			mcp.WithDescription("Search recent messages in a channel by keyword"),
 			mcp.WithString("channel_id", mcp.Required(), mcp.Description("Channel ID")),
 			mcp.WithString("query", mcp.Required(), mcp.Description("Search keyword")),
@@ -1010,7 +1033,7 @@ func main() {
 
 	// 8. Channel info
 	s.AddTool(
-		mcp.NewTool("discord_channel_info",
+		discordReadTool("discord_channel_info",
 			mcp.WithDescription("Get detailed info about a channel"),
 			mcp.WithString("channel_id", mcp.Required(), mcp.Description("Channel ID")),
 		),
@@ -1038,7 +1061,7 @@ func main() {
 
 	// 9. Send file
 	s.AddTool(
-		mcp.NewTool("discord_send_file",
+		discordWriteTool("discord_send_file",
 			mcp.WithDescription("Upload a local file to a channel as an attachment"),
 			mcp.WithString("channel_id", mcp.Required(), mcp.Description("Channel ID")),
 			mcp.WithString("file_path", mcp.Required(), mcp.Description("Absolute path to the local file")),
@@ -1092,7 +1115,7 @@ func main() {
 
 	// 10. List attachments
 	s.AddTool(
-		mcp.NewTool("discord_list_attachments",
+		discordReadTool("discord_list_attachments",
 			mcp.WithDescription("List file attachments from recent messages in a channel"),
 			mcp.WithString("channel_id", mcp.Required(), mcp.Description("Channel ID")),
 			mcp.WithNumber("limit", mcp.Description("Messages to scan, default 50, max 100")),
@@ -1131,7 +1154,7 @@ func main() {
 
 	// 11. Download attachment
 	s.AddTool(
-		mcp.NewTool("discord_download_attachment",
+		discordWriteTool("discord_download_attachment",
 			mcp.WithDescription("Download a Discord attachment to a local file"),
 			mcp.WithString("url", mcp.Required(), mcp.Description("Attachment URL (from discord_list_attachments)")),
 			mcp.WithString("save_dir", mcp.Description("Directory to save the file (default: system temp dir)")),
@@ -1193,7 +1216,7 @@ func main() {
 
 	// 12. Edit message
 	s.AddTool(
-		mcp.NewTool("discord_edit_message",
+		discordDestructiveTool("discord_edit_message",
 			mcp.WithDescription("Edit a message (bot's own message)"),
 			mcp.WithString("channel_id", mcp.Required(), mcp.Description("Channel ID")),
 			mcp.WithString("message_id", mcp.Required(), mcp.Description("Message ID to edit")),
@@ -1228,7 +1251,7 @@ func main() {
 
 	// 13. Delete message
 	s.AddTool(
-		mcp.NewTool("discord_delete_message",
+		discordDestructiveTool("discord_delete_message",
 			mcp.WithDescription("Delete a message"),
 			mcp.WithString("channel_id", mcp.Required(), mcp.Description("Channel ID")),
 			mcp.WithString("message_id", mcp.Required(), mcp.Description("Message ID to delete")),
@@ -1251,7 +1274,7 @@ func main() {
 
 	// 14. Get message
 	s.AddTool(
-		mcp.NewTool("discord_get_message",
+		discordReadTool("discord_get_message",
 			mcp.WithDescription("Get a single message by ID"),
 			mcp.WithString("channel_id", mcp.Required(), mcp.Description("Channel ID")),
 			mcp.WithString("message_id", mcp.Required(), mcp.Description("Message ID")),
@@ -1284,7 +1307,7 @@ func main() {
 
 	// 15. Send embed
 	s.AddTool(
-		mcp.NewTool("discord_send_embed",
+		discordWriteTool("discord_send_embed",
 			mcp.WithDescription("Send a rich embed message to a channel"),
 			mcp.WithString("channel_id", mcp.Required(), mcp.Description("Channel ID")),
 			mcp.WithString("title", mcp.Required(), mcp.Description("Embed title")),
@@ -1336,7 +1359,7 @@ func main() {
 
 	// 16. Pin message
 	s.AddTool(
-		mcp.NewTool("discord_pin_message",
+		discordDestructiveTool("discord_pin_message",
 			mcp.WithDescription("Pin or unpin a message"),
 			mcp.WithString("channel_id", mcp.Required(), mcp.Description("Channel ID")),
 			mcp.WithString("message_id", mcp.Required(), mcp.Description("Message ID")),
@@ -1367,7 +1390,7 @@ func main() {
 
 	// 17. Create thread
 	s.AddTool(
-		mcp.NewTool("discord_create_thread",
+		discordWriteTool("discord_create_thread",
 			mcp.WithDescription("Create a thread from a message"),
 			mcp.WithString("channel_id", mcp.Required(), mcp.Description("Channel ID")),
 			mcp.WithString("message_id", mcp.Required(), mcp.Description("Message ID to start thread from")),
@@ -1395,7 +1418,7 @@ func main() {
 
 	// 18. List threads
 	s.AddTool(
-		mcp.NewTool("discord_list_threads",
+		discordReadTool("discord_list_threads",
 			mcp.WithDescription("List active threads in a guild"),
 			mcp.WithString("guild_id", mcp.Required(), mcp.Description("Guild/server ID")),
 		),
@@ -1426,7 +1449,7 @@ func main() {
 
 	// 19. Remove reaction
 	s.AddTool(
-		mcp.NewTool("discord_remove_reaction",
+		discordDestructiveTool("discord_remove_reaction",
 			mcp.WithDescription("Remove a reaction from a message (bot's own reaction, or specify user_id)"),
 			mcp.WithString("channel_id", mcp.Required(), mcp.Description("Channel ID")),
 			mcp.WithString("message_id", mcp.Required(), mcp.Description("Message ID")),
@@ -1453,7 +1476,7 @@ func main() {
 
 	// 20. Get reactions
 	s.AddTool(
-		mcp.NewTool("discord_get_reactions",
+		discordReadTool("discord_get_reactions",
 			mcp.WithDescription("Get users who reacted with a specific emoji on a message"),
 			mcp.WithString("channel_id", mcp.Required(), mcp.Description("Channel ID")),
 			mcp.WithString("message_id", mcp.Required(), mcp.Description("Message ID")),
@@ -1488,7 +1511,7 @@ func main() {
 
 	// 21. Edit channel topic
 	s.AddTool(
-		mcp.NewTool("discord_edit_channel_topic",
+		discordDestructiveTool("discord_edit_channel_topic",
 			mcp.WithDescription("Edit a channel's topic"),
 			mcp.WithString("channel_id", mcp.Required(), mcp.Description("Channel ID")),
 			mcp.WithString("topic", mcp.Required(), mcp.Description("New topic text (empty string to clear)")),
@@ -1518,7 +1541,7 @@ func main() {
 
 	// 22. List roles
 	s.AddTool(
-		mcp.NewTool("discord_list_roles",
+		discordReadTool("discord_list_roles",
 			mcp.WithDescription("List roles in a guild"),
 			mcp.WithString("guild_id", mcp.Required(), mcp.Description("Guild/server ID")),
 		),
@@ -1544,7 +1567,7 @@ func main() {
 
 	// 23. Get user
 	s.AddTool(
-		mcp.NewTool("discord_get_user",
+		discordReadTool("discord_get_user",
 			mcp.WithDescription("Get info about a specific user by ID after verifying membership in an allowed guild"),
 			mcp.WithString("user_id", mcp.Required(), mcp.Description("User ID")),
 			mcp.WithString("guild_id", mcp.Description("Guild/server ID. Defaults to bound bot-tools guild.")),

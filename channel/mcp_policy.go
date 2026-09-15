@@ -52,11 +52,13 @@ type MCPChannelPolicy struct {
 }
 
 type MCPToolInfo struct {
-	ServerName   string
-	Name         string
-	Description  string
-	InputSchema  string
-	DiscoveredAt time.Time
+	ServerName      string
+	Name            string
+	Description     string
+	InputSchema     string
+	ReadOnlyHint    *bool
+	DestructiveHint *bool
+	DiscoveredAt    time.Time
 }
 
 // MCPDiscoveryError preserves the scan stage and stderr for callers that can
@@ -169,6 +171,8 @@ func (s *MCPPolicyStore) init() error {
 			tool_name TEXT NOT NULL,
 			description TEXT NOT NULL DEFAULT '',
 			input_schema_json TEXT NOT NULL DEFAULT '{}',
+			read_only_hint INTEGER,
+			destructive_hint INTEGER,
 			discovered_at TEXT NOT NULL,
 			PRIMARY KEY (server_name, tool_name)
 		)`,
@@ -184,7 +188,10 @@ func (s *MCPPolicyStore) init() error {
 			return err
 		}
 	}
-	return s.ensureChannelMCPPolicyColumns()
+	if err := s.ensureChannelMCPPolicyColumns(); err != nil {
+		return err
+	}
+	return s.ensureMCPToolCatalogColumns()
 }
 
 func (s *MCPPolicyStore) ensureChannelMCPPolicyColumns() error {
@@ -208,11 +215,28 @@ func (s *MCPPolicyStore) ensureChannelMCPPolicyColumns() error {
 	return nil
 }
 
+func (s *MCPPolicyStore) ensureMCPToolCatalogColumns() error {
+	columns := []struct {
+		name string
+		def  string
+	}{
+		{name: "read_only_hint", def: "INTEGER"},
+		{name: "destructive_hint", def: "INTEGER"},
+	}
+	for _, column := range columns {
+		stmt := fmt.Sprintf("ALTER TABLE mcp_tool_catalog ADD COLUMN %s %s", column.name, column.def)
+		if _, err := s.db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column") {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *MCPPolicyStore) CachedTools(ctx context.Context, serverName string) ([]MCPToolInfo, error) {
 	if s == nil || s.db == nil {
 		return nil, nil
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT server_name, tool_name, description, input_schema_json, discovered_at
+	rows, err := s.db.QueryContext(ctx, `SELECT server_name, tool_name, description, input_schema_json, read_only_hint, destructive_hint, discovered_at
 		FROM mcp_tool_catalog WHERE server_name=? ORDER BY tool_name`, strings.TrimSpace(serverName))
 	if err != nil {
 		return nil, err
@@ -222,12 +246,15 @@ func (s *MCPPolicyStore) CachedTools(ctx context.Context, serverName string) ([]
 	for rows.Next() {
 		var item MCPToolInfo
 		var ts string
-		if err := rows.Scan(&item.ServerName, &item.Name, &item.Description, &item.InputSchema, &ts); err != nil {
+		var readOnlyHint, destructiveHint sql.NullInt64
+		if err := rows.Scan(&item.ServerName, &item.Name, &item.Description, &item.InputSchema, &readOnlyHint, &destructiveHint, &ts); err != nil {
 			return nil, err
 		}
 		if t, err := time.Parse(time.RFC3339, ts); err == nil {
 			item.DiscoveredAt = t
 		}
+		item.ReadOnlyHint = sqliteBoolPtr(readOnlyHint)
+		item.DestructiveHint = sqliteBoolPtr(destructiveHint)
 		out = append(out, item)
 	}
 	return out, rows.Err()
@@ -291,11 +318,13 @@ func (s *MCPPolicyStore) DiscoverTools(ctx context.Context, serverName string) (
 		}
 		rawSchema, _ := json.Marshal(tool.InputSchema)
 		tools = append(tools, MCPToolInfo{
-			ServerName:   serverName,
-			Name:         strings.TrimSpace(tool.Name),
-			Description:  strings.TrimSpace(tool.Description),
-			InputSchema:  string(rawSchema),
-			DiscoveredAt: now,
+			ServerName:      serverName,
+			Name:            strings.TrimSpace(tool.Name),
+			Description:     strings.TrimSpace(tool.Description),
+			InputSchema:     string(rawSchema),
+			ReadOnlyHint:    cloneBoolPtr(tool.Annotations.ReadOnlyHint),
+			DestructiveHint: cloneBoolPtr(tool.Annotations.DestructiveHint),
+			DiscoveredAt:    now,
 		})
 	}
 	if err := s.replaceTools(ctx, serverName, tools, now); err != nil {
@@ -360,6 +389,32 @@ func captureMCPClientStderr(c *mcpclient.Client) func() string {
 	}
 }
 
+func cloneBoolPtr(value *bool) *bool {
+	if value == nil {
+		return nil
+	}
+	copied := *value
+	return &copied
+}
+
+func sqliteBoolPtr(value sql.NullInt64) *bool {
+	if !value.Valid {
+		return nil
+	}
+	out := value.Int64 != 0
+	return &out
+}
+
+func sqliteBoolValue(value *bool) any {
+	if value == nil {
+		return nil
+	}
+	if *value {
+		return 1
+	}
+	return 0
+}
+
 func truncateLogValue(s string, max int) string {
 	r := []rune(strings.TrimSpace(s))
 	if max <= 0 || len(r) <= max {
@@ -390,9 +445,9 @@ func (s *MCPPolicyStore) replaceTools(ctx context.Context, serverName string, to
 		return err
 	}
 	for _, tool := range tools {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO mcp_tool_catalog(server_name, tool_name, description, input_schema_json, discovered_at)
-			VALUES(?, ?, ?, ?, ?)`,
-			serverName, tool.Name, tool.Description, tool.InputSchema, now.Format(time.RFC3339)); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO mcp_tool_catalog(server_name, tool_name, description, input_schema_json, read_only_hint, destructive_hint, discovered_at)
+			VALUES(?, ?, ?, ?, ?, ?, ?)`,
+			serverName, tool.Name, tool.Description, tool.InputSchema, sqliteBoolValue(tool.ReadOnlyHint), sqliteBoolValue(tool.DestructiveHint), now.Format(time.RFC3339)); err != nil {
 			return err
 		}
 	}
@@ -915,8 +970,8 @@ func (p MCPChannelPolicy) ToACPServer(entry MCPCatalogEntry, proxyCommand string
 			env["BOT_TOOLS_TARGET_CHANNEL_ID"] = strings.TrimSpace(targetChannelID)
 			env["BOT_TOOLS_GUILD_ID"] = guildID
 			env["MCP_DISCORD_READ_ONLY"] = fmt.Sprintf("%t", p.ReadOnly)
-			env["MCP_DISCORD_ALLOWED_WRITE_TOOLS"] = strings.Join(allowedTools, ",")
-			env["MCP_DISCORD_ALLOW_DESTRUCTIVE"] = fmt.Sprintf("%t", p.AllowDestructive)
+			env["MCP_DISCORD_ALLOWED_WRITE_TOOLS"] = mcpDiscordAllowedWriteToolsEnvValue(p, allowedTools)
+			env["MCP_DISCORD_ALLOW_DESTRUCTIVE"] = fmt.Sprintf("%t", p.AllowDestructive && mcpDiscordDeploymentAllowDestructive(entry))
 			if statePath := botToolsTargetStatePath(env["DATA_DIR"], botToolsTargetStateID(channelID, targetChannelID)); statePath != "" {
 				env["BOT_TOOLS_TARGET_STATE_PATH"] = statePath
 			}

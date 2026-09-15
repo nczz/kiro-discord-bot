@@ -271,16 +271,16 @@ After changing any A2A variable, restart the bot and run `/doctor`. `/doctor` re
 
 ## Discord MCP Server
 
-These variables configure `mcp-discord-server`, not the main bot process unless both run in the same environment.
+These variables configure `mcp-discord-server`. When the main bot manages an `mcp-discord` catalog entry, the bot also reads `MCP_DISCORD_ALLOWED_WRITE_TOOLS` from the catalog entry or process environment as a deployment-wide cap for write-policy tools.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `MCP_DISCORD_ALLOWED_GUILDS` | empty | Optional comma-separated guild allowlist. |
 | `MCP_DISCORD_ALLOWED_CHANNELS` | empty | Optional comma-separated channel allowlist. |
 | `MCP_DISCORD_DOWNLOAD_DIR` | empty | Required root for `discord_download_attachment` save paths when set. |
-| `MCP_DISCORD_READ_ONLY` | `false` | Blocks all write tools when `true`. |
-| `MCP_DISCORD_ALLOWED_WRITE_TOOLS` | empty | Optional comma-separated write-tool allowlist. |
-| `MCP_DISCORD_ALLOW_DESTRUCTIVE` | `true` | Blocks destructive tools, such as delete, when `false`. |
+| `MCP_DISCORD_READ_ONLY` | `false` | Blocks all write tools in standalone `mcp-discord`; bot-managed sessions inject this from channel policy. |
+| `MCP_DISCORD_ALLOWED_WRITE_TOOLS` | empty | Optional comma-separated deployment-wide cap for write-policy tools. Empty means no deployment cap. Bot-managed sessions still require per-channel grants; read tools are unaffected. |
+| `MCP_DISCORD_ALLOW_DESTRUCTIVE` | `true` | Blocks destructive tools, such as delete, when `false`; bot-managed sessions also require the channel destructive gate. |
 | `MCP_DISCORD_UPLOAD_DENY_PATHS` | empty | Additional comma- or newline-separated wildcard patterns denied by `discord_send_file`; defaults still block bot/Kiro/OMP runtime roots. |
 | `MCP_DISCORD_UPLOAD_DENY_CASE_INSENSITIVE` | platform default | Override upload denylist matching case sensitivity; default is case-insensitive on macOS/Windows and case-sensitive elsewhere. |
 
