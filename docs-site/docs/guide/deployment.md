@@ -27,6 +27,19 @@ For macOS, run the bot as a LaunchAgent with an explicit shell command that sour
 
 For Linux hosts, use a service unit with `WorkingDirectory`, `EnvironmentFile`, and an executable path pointing at the installed release binary. Build and test first, then stop the service, replace binaries, start it, and verify with `/doctor`.
 
+The gateway watchdog is enabled by default. Keep the service manager restart policy enabled so unrecoverable Discord Gateway stalls become a clean process restart:
+
+```ini
+Type=notify
+WatchdogSec=180s
+Restart=on-failure
+RestartSec=10s
+StartLimitIntervalSec=300
+StartLimitBurst=5
+```
+
+`Type=notify` / `WatchdogSec` is optional but recommended on systemd hosts. The bot sends `READY=1` after Discord Gateway open succeeds and sends `WATCHDOG=1` only while the Gateway is ready and heartbeat ACKs are fresh. Use `/doctor` after startup to confirm the Gateway watchdog status, heartbeat ACK age, reconnect attempts, and last reconnect error.
+
 ## Docker
 
 The Compose setup uses host networking, mounts the selected engine authentication state and project roots, and keeps runtime MCP config isolated from global catalog sources. Catalog servers still must be enabled per channel through `/mcp`.

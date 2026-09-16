@@ -27,6 +27,19 @@ macOS 建議用 LaunchAgent，明確透過 shell source `.env` 後執行 release
 
 Linux host 使用 service unit 設定 `WorkingDirectory`、`EnvironmentFile` 與 release binary 路徑。先 build/test，再 stop service、替換 binary、start service，最後用 `/doctor` 驗證。
 
+Gateway watchdog 預設啟用。請保留 service manager restart policy，讓無法復原的 Discord Gateway 僵死轉為乾淨的 process restart：
+
+```ini
+Type=notify
+WatchdogSec=180s
+Restart=on-failure
+RestartSec=10s
+StartLimitIntervalSec=300
+StartLimitBurst=5
+```
+
+`Type=notify` / `WatchdogSec` 在 systemd host 上屬於可選但建議啟用。Bot 會在 Discord Gateway open 成功後送出 `READY=1`，且只會在 Gateway ready 與 heartbeat ACK 新鮮時送出 `WATCHDOG=1`。啟動後用 `/doctor` 確認 Gateway watchdog 狀態、heartbeat ACK age、reconnect attempts 與 last reconnect error。
+
 ## Docker
 
 Compose 設定使用 host networking，掛載所選 engine 的 authentication state 與 project roots，並讓 runtime MCP config 和全域 catalog sources 隔離。Catalog servers 仍需透過 `/mcp` 依頻道啟用。

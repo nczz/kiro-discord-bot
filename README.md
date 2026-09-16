@@ -21,6 +21,7 @@ Kiro CLI and OMP are external agent CLIs. This project starts and controls them 
 - **Trainable context**: use memory, flash memory, steering files, conversation history, and project knowledge instead of starting from zero every time.
 - **Safe tool expansion**: MCP servers are discovered as a catalog, then exposed per channel through policy and a proxy.
 - **Operational controls**: admin panels and sensitive diagnostics use private replies where Discord supports them.
+- **Self-healing gateway**: the Discord Gateway watchdog is enabled by default and attempts reconnects before letting the process manager restart a wedged runtime.
 - **Automation**: cron jobs and reminders let an agent run scheduled work under channel ownership.
 
 ## Quick Start

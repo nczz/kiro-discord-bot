@@ -580,6 +580,31 @@ Regression expectation:
 - All user-visible time outputs in cron/thread/slash responses must show in `CRON_TIMEZONE`.
 - Test with a non-UTC `CRON_TIMEZONE` to catch implicit local-time bugs.
 
+### Discord Gateway Session Wedged While Process Stays Alive
+
+Symptoms:
+
+- Bot process remains active under systemd/launchd/Docker, but Discord users get no response.
+- Service manager does not restart because the process never exits.
+- Discord Gateway WebSocket heartbeat/session is stale, but discordgo does not surface a fatal error or complete automatic reconnect.
+
+First checks:
+
+- `/doctor` Gateway watchdog section: heartbeat ACK age, stale threshold, reconnect attempts, last reconnect error.
+- Service logs for `[discord-gateway] stale gateway detected`, recovery attempts, and process-manager restart.
+- Confirm there is still exactly one gateway runtime for the Discord token before testing replies.
+
+Fix pattern:
+
+- Detect Gateway health from Discord heartbeat ACK freshness, not from user message traffic.
+- Let `heartbeat.GatewayTask` own stale detection and escalation through `GatewayDeps`; keep discordgo session operations inside `bot`.
+- On stale Gateway, close and reopen the Discord session once per watchdog attempt, wait for `Open()` to return, and reset state on Ready/Resumed handlers.
+- After repeated failed reconnects, exit non-zero so the process manager restarts the bot. Do not call `systemctl` from inside the bot.
+- On systemd hosts, prefer `Type=notify` + `WatchdogSec`; the bot should send `READY=1` after Gateway open and `WATCHDOG=1` only while Gateway heartbeat ACKs are fresh.
+
+- Tests must cover fresh heartbeat no-op, stale ACK reconnect, repeated recovery failure escalation, disabled watchdog no-op, and `/doctor` Gateway status output.
+- Deployment docs must keep a restart policy example beside the default-on Gateway watchdog env vars.
+
 ## Architecture Decision Checklist
 
 Before implementing a structural change, answer:

@@ -22,53 +22,62 @@ import (
 )
 
 type Bot struct {
-	discord                  *discordgo.Session
-	manager                  *channel.Manager
-	guildID                  string
-	dataDir                  string
-	hb                       *heartbeat.Heartbeat
-	hbCancel                 context.CancelFunc
-	safeEgress               *safeEgressTask
-	cronStore                *heartbeat.CronStore
-	cronTask                 *heartbeat.CronTask
-	monitorStore             *heartbeat.MonitorStore
-	monitorTask              *heartbeat.MonitorTask
-	auditRecorder            *audit.Recorder
-	skillsStore              *skills.Store
-	a2aNode                  *a2a.Node
-	a2aConfig                a2a.Config
-	a2aPeerStore             *a2a.SQLitePeerStore
-	a2aPeerFallbackSub       *nats.Subscription
-	a2aInstanceID            string
-	cronTimezone             string
-	version                  string
-	startedAt                time.Time
-	downloadClient           *http.Client
-	attachmentMaxBytes       int64
-	seen                     *seenMessages
-	sttClient                *stt.Client
-	discussionContext        *discordDiscussionContextCache
-	sttMaxDuration           int
-	peerMu                   sync.RWMutex
-	peers                    []BotPeer
-	manualPeers              []BotPeer
-	peerPermMu               sync.Mutex
-	peerPermCache            map[string]peerPermissionCacheEntry
-	gmUserIDs                map[string]bool
-	cronPromptCache          cronPromptStore    // parsed cron jobs awaiting button confirmation
-	monitorPromptCache       monitorPromptStore // parsed monitor jobs awaiting button confirmation
-	a2aConfirmations         *a2aPolicyConfirmationStore
-	setupPromptMu            sync.Mutex
-	setupPromptCooldown      *setupPromptCooldown
-	webshareConfig           WebShareConfig
-	webshareStore            *webshare.Store
-	webshareMu               sync.Mutex
-	webshareHosts            map[string]*webshareHostLoop
-	webshareUploadMu         sync.Mutex
-	webshareUploads          map[string]*webshareUploadSession
-	webshareWebhookMu        sync.Mutex
-	webshareWebhookByChannel map[string]webshareWebhookCredential
-	webshareWebhookIDs       map[string]bool
+	discord                       *discordgo.Session
+	manager                       *channel.Manager
+	guildID                       string
+	dataDir                       string
+	hb                            *heartbeat.Heartbeat
+	hbCancel                      context.CancelFunc
+	safeEgress                    *safeEgressTask
+	cronStore                     *heartbeat.CronStore
+	cronTask                      *heartbeat.CronTask
+	monitorStore                  *heartbeat.MonitorStore
+	monitorTask                   *heartbeat.MonitorTask
+	auditRecorder                 *audit.Recorder
+	skillsStore                   *skills.Store
+	a2aNode                       *a2a.Node
+	a2aConfig                     a2a.Config
+	a2aPeerStore                  *a2a.SQLitePeerStore
+	a2aPeerFallbackSub            *nats.Subscription
+	a2aInstanceID                 string
+	cronTimezone                  string
+	version                       string
+	startedAt                     time.Time
+	downloadClient                *http.Client
+	attachmentMaxBytes            int64
+	seen                          *seenMessages
+	sttClient                     *stt.Client
+	discussionContext             *discordDiscussionContextCache
+	sttMaxDuration                int
+	peerMu                        sync.RWMutex
+	peers                         []BotPeer
+	manualPeers                   []BotPeer
+	peerPermMu                    sync.Mutex
+	peerPermCache                 map[string]peerPermissionCacheEntry
+	gmUserIDs                     map[string]bool
+	gatewayWatchdog               GatewayWatchdogConfig
+	gatewayStateMu                sync.RWMutex
+	gatewayLastReadyAt            time.Time
+	gatewayLastResumedAt          time.Time
+	gatewayLastDisconnectAt       time.Time
+	gatewayLastReconnectAttemptAt time.Time
+	gatewayReconnectAttempts      int
+	gatewayRecoveryInProgress     bool
+	gatewayLastReconnectError     string
+	cronPromptCache               cronPromptStore    // parsed cron jobs awaiting button confirmation
+	monitorPromptCache            monitorPromptStore // parsed monitor jobs awaiting button confirmation
+	a2aConfirmations              *a2aPolicyConfirmationStore
+	setupPromptMu                 sync.Mutex
+	setupPromptCooldown           *setupPromptCooldown
+	webshareConfig                WebShareConfig
+	webshareStore                 *webshare.Store
+	webshareMu                    sync.Mutex
+	webshareHosts                 map[string]*webshareHostLoop
+	webshareUploadMu              sync.Mutex
+	webshareUploads               map[string]*webshareUploadSession
+	webshareWebhookMu             sync.Mutex
+	webshareWebhookByChannel      map[string]webshareWebhookCredential
+	webshareWebhookIDs            map[string]bool
 }
 
 func New(cfg interface{ GetBotConfig() BotConfig }) (*Bot, error) {
@@ -102,6 +111,7 @@ type BotConfig struct {
 	Audit              audit.Config
 	A2ANode            *a2a.Node
 	WebShare           WebShareConfig
+	GatewayWatchdog    GatewayWatchdogConfig
 }
 
 func NewFromConfig(cfg BotConfig) (*Bot, error) {
@@ -193,6 +203,7 @@ func NewFromConfig(cfg BotConfig) (*Bot, error) {
 		manualPeers:              manualPeers,
 		peerPermCache:            make(map[string]peerPermissionCacheEntry),
 		gmUserIDs:                parseDiscordUserIDSet(cfg.GMUserIDs),
+		gatewayWatchdog:          heartbeat.NormalizeGatewayWatchdogConfig(cfg.GatewayWatchdog),
 		auditRecorder:            auditRecorder,
 		skillsStore:              skillsStore,
 		a2aNode:                  cfg.A2ANode,
@@ -232,6 +243,8 @@ func NewFromConfig(cfg BotConfig) (*Bot, error) {
 	hb := heartbeat.New(cfg.HeartbeatSec)
 	n := botNotifier{bot: b}
 	hb.Register(heartbeat.NewHealthTask(&healthAdapter{n}))
+	hb.Register(heartbeat.NewGatewayTask(&gatewayAdapter{bot: b}, b.gatewayWatchdog))
+	hb.Register(&systemdNotifyTask{bot: b})
 	hb.Register(heartbeat.NewCleanupTask(cfg.DataDir, cfg.AttRetainDays))
 	safeEgress := newSafeEgressTask(b)
 	b.safeEgress = safeEgress
@@ -267,7 +280,16 @@ func NewFromConfig(cfg BotConfig) (*Bot, error) {
 }
 
 func (b *Bot) Start() error {
+	b.discord.AddHandler(func(ds *discordgo.Session, r *discordgo.Resumed) {
+		b.markGatewayResumed()
+		log.Printf("[discord-gateway] session resumed")
+	})
+	b.discord.AddHandler(func(ds *discordgo.Session, d *discordgo.Disconnect) {
+		b.markGatewayDisconnect()
+		log.Printf("[discord-gateway] session disconnected")
+	})
 	b.discord.AddHandler(func(ds *discordgo.Session, r *discordgo.Ready) {
+		b.markGatewayReady()
 		log.Printf("Bot running as %s#%s", r.User.Username, r.User.Discriminator)
 		b.manager.SetBotID(r.User.ID)
 		for _, guildID := range b.peerDiscoveryGuildIDs(r) {
@@ -280,6 +302,9 @@ func (b *Bot) Start() error {
 	if err := b.discord.Open(); err != nil {
 		return err
 	}
+	if err := systemdNotify("READY=1"); err != nil {
+		log.Printf("[systemd] notify READY failed: %v", err)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	b.hbCancel = cancel
 	b.startA2APeerDiscovery(ctx)
@@ -289,6 +314,9 @@ func (b *Bot) Start() error {
 }
 
 func (b *Bot) Stop() {
+	if err := systemdNotify("STOPPING=1"); err != nil {
+		log.Printf("[systemd] notify STOPPING failed: %v", err)
+	}
 	if b.hbCancel != nil {
 		b.hbCancel()
 	}

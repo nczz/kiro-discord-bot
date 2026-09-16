@@ -21,6 +21,7 @@ Kiro CLI 與 OMP 都是外部 agent CLI。這個專案會從 Discord 啟動與�
 - **可累積的脈絡**：memory、flash memory、steering files、對話歷史與專案知識不必每次從零開始。
 - **安全擴充工具**：MCP server 先作為 catalog 被發現，再依頻道 policy 與 proxy 控制可見與可呼叫 tools。
 - **維運控制面**：管理面板與敏感診斷在 Discord 支援時使用私密回覆。
+- **Gateway 自我修復**：Discord Gateway watchdog 預設啟用，會先嘗試重連；若 runtime 僵死且無法復原，再交給 process manager 重啟。
 - **自動化**：cron jobs 與 reminders 可讓 agent 在頻道 owner 脈絡下執行排程工作。
 
 ## 快速開始

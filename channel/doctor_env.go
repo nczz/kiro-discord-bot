@@ -70,6 +70,10 @@ var envSpecs = []envEntry{
 	// Maintenance
 	{Name: "DATA_DIR", Group: "maintenance", Effective: func(m *Manager) string { return m.dataDir }},
 	{Name: "HEARTBEAT_SEC", Group: "maintenance"},
+	{Name: "DISCORD_GATEWAY_WATCHDOG_ENABLED", Group: "maintenance"},
+	{Name: "DISCORD_GATEWAY_STALE_AFTER_SEC", Group: "maintenance"},
+	{Name: "DISCORD_GATEWAY_RECONNECT_TIMEOUT_SEC", Group: "maintenance"},
+	{Name: "DISCORD_GATEWAY_MAX_RECONNECT_ATTEMPTS", Group: "maintenance"},
 	{Name: "ATTACHMENT_RETAIN_DAYS", Group: "maintenance"},
 	{Name: "ATTACHMENT_MAX_MB", Group: "maintenance"},
 	{Name: "PREFLIGHT_MODE", Group: "maintenance"},

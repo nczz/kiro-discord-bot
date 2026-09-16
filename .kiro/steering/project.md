@@ -44,6 +44,7 @@ acp/             → kiro-cli ACP child process (JSON-RPC over stdio)
   protocol.go    → ACP constants, capability structs, PromptContent (protocol version 1)
 heartbeat/       → background task loop
   health.go      → agent liveness check + auto-restart
+  gateway.go     → Discord Gateway heartbeat ACK watchdog + reconnect/escalate
   cleanup.go     → expired attachment removal
   cron.go        → cron scheduler + temp agent execution
   cron_store.go  → cron job JSON persistence
@@ -61,7 +62,7 @@ docs/release.md  → release and deployment safety checklist
 
 - handler 只做路由和轉發，業務邏輯在 channel/manager
 - acp/ 以外不直接操作 agent process
-- heartbeat/ 透過 interface (HealthDeps, CronDeps, ThreadCleanupDeps, ChannelCleanupDeps) 與 bot 解耦
+- heartbeat/ 透過 interface (HealthDeps, GatewayDeps, CronDeps, ThreadCleanupDeps, ChannelCleanupDeps) 與 bot 解耦
 
 ## Design Principles（設計原則）
 

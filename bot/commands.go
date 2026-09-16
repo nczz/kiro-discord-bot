@@ -730,6 +730,7 @@ func (b *Bot) doctor(ctx context.Context, channelID, targetID string) string {
 			sb.WriteString(L.Getf("doctor.discord.guild.ok", g.Name, b.guildID))
 		}
 	}
+	sb.WriteString(b.gatewayDoctorSummary())
 
 	sb.WriteString(b.doctorDiscordPermissions(channelID, targetID))
 	sb.WriteString(b.doctorBotPeers(targetID))

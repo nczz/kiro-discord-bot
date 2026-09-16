@@ -169,6 +169,10 @@ Use the matching relay-side `RELAY_HOST_TOKEN_FILE` or `RELAY_HOST_TOKEN`. The p
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `HEARTBEAT_SEC` | `60` | Background maintenance tick. |
+| `DISCORD_GATEWAY_WATCHDOG_ENABLED` | `true` | Enables Discord Gateway heartbeat health checks. When stale, the bot closes and reopens the gateway session; repeated failures exit so the process manager can restart it. |
+| `DISCORD_GATEWAY_STALE_AFTER_SEC` | `180` | Seconds without a Discord Gateway heartbeat ACK before the watchdog treats the session as stale. |
+| `DISCORD_GATEWAY_RECONNECT_TIMEOUT_SEC` | `45` | Timeout for one watchdog reconnect attempt. |
+| `DISCORD_GATEWAY_MAX_RECONNECT_ATTEMPTS` | `3` | Consecutive failed watchdog reconnect attempts before the bot exits with failure for systemd/launchd/Docker restart policy. |
 | `CRON_TIMEZONE` | empty | Time zone for scheduled jobs. |
 | `CRON_TIMEOUT_MIN` | `5` | Cron job agent execution timeout, in minutes. Values below `1` fall back to `5`. |
 | `USAGE_TIMEZONE` | `CRON_TIMEZONE`, then local default | Time zone for `/usage` day, week, and month windows. |

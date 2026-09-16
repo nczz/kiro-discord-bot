@@ -170,6 +170,10 @@ WEBSHARE_HOST_TOKEN_FILE=/etc/kdb-webshare/host-token
 | 變數 | 預設 | 用途 |
 | --- | --- | --- |
 | `HEARTBEAT_SEC` | `60` | 背景維護 tick 秒數。 |
+| `DISCORD_GATEWAY_WATCHDOG_ENABLED` | `true` | 啟用 Discord Gateway heartbeat 健康檢查。偵測 stale 後 bot 會 close/open gateway session；連續失敗時退出，交給 process manager 重啟。 |
+| `DISCORD_GATEWAY_STALE_AFTER_SEC` | `180` | Discord Gateway heartbeat ACK 停滯幾秒後，watchdog 將 session 視為 stale。 |
+| `DISCORD_GATEWAY_RECONNECT_TIMEOUT_SEC` | `45` | 單次 watchdog 重連嘗試逾時秒數。 |
+| `DISCORD_GATEWAY_MAX_RECONNECT_ATTEMPTS` | `3` | 連續 watchdog 重連失敗幾次後，bot 以 failure 退出，交給 systemd/launchd/Docker restart policy。 |
 | `CRON_TIMEZONE` | 空 | 排程任務時區。 |
 | `CRON_TIMEOUT_MIN` | `5` | 排程任務 agent 執行逾時分鐘數。小於 `1` 會退回 `5`。 |
 | `USAGE_TIMEZONE` | `CRON_TIMEZONE`，再退回本機預設 | `/usage` 今日、本週、本月統計時區。 |

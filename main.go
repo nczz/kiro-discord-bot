@@ -116,6 +116,7 @@ func main() {
 		DownloadTimeoutSec: cfg.DownloadTimeoutSec,
 		BotPeers:           cfg.BotPeers,
 		GMUserIDs:          cfg.BotGMUserIDs,
+		GatewayWatchdog:    cfg.GatewayWatchdog,
 		Audit: audit.Config{
 			Enabled:       cfg.AuditEnabled,
 			DBPath:        cfg.AuditDBPath,

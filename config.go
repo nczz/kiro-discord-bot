@@ -6,6 +6,7 @@ import (
 	"math"
 	"os"
 	"strconv"
+	"time"
 
 	"github.com/nczz/kiro-discord-bot/a2a"
 	"github.com/nczz/kiro-discord-bot/bot"
@@ -51,6 +52,7 @@ type Config struct {
 	PreflightMode        string
 	BotPeers             string
 	BotGMUserIDs         string
+	GatewayWatchdog      bot.GatewayWatchdogConfig
 	UsageCreditUSDRate   float64
 	UsageLimitDailyUSD   float64
 	UsageLimitWeeklyUSD  float64
@@ -108,6 +110,12 @@ func loadConfig() *Config {
 		PreflightMode:        envOr("PREFLIGHT_MODE", "warn"),
 		BotPeers:             envOr("BOT_PEERS", ""),
 		BotGMUserIDs:         envOr("BOT_GM_USER_IDS", ""),
+		GatewayWatchdog: bot.GatewayWatchdogConfig{
+			Enabled:              envBool("DISCORD_GATEWAY_WATCHDOG_ENABLED", true),
+			StaleAfter:           time.Duration(envPositiveInt("DISCORD_GATEWAY_STALE_AFTER_SEC", 180)) * time.Second,
+			ReconnectTimeout:     time.Duration(envPositiveInt("DISCORD_GATEWAY_RECONNECT_TIMEOUT_SEC", 45)) * time.Second,
+			MaxReconnectAttempts: envPositiveInt("DISCORD_GATEWAY_MAX_RECONNECT_ATTEMPTS", 3),
+		},
 		UsageCreditUSDRate:   mustEnvFloat("USAGE_CREDIT_USD_RATE", 0),
 		UsageLimitDailyUSD:   mustEnvFloat("USAGE_LIMIT_DAILY_USD", 0),
 		UsageLimitWeeklyUSD:  mustEnvFloat("USAGE_LIMIT_WEEKLY_USD", 0),
