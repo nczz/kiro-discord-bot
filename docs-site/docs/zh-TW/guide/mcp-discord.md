@@ -48,27 +48,20 @@ bot-managed runtime session 的 MCP 可見性仍由 channel policy 控制。
 
 本機多 bot 開發時，請確認 `.env` 是你正在測試的 bot 身分。如果畫面上是 M5Bot，但 catalog command 載入 ChunBot token，替 M5Bot 開 Discord 權限也無法修正 MCP `403 Missing Access`。
 
-## 加上 Defense-in-depth Guards
+## Direct Discord MCP Guards
 
-在載入的 `.env` 或 catalog environment 設定：
+只設定仍由 `mcp-discord` 本機執行的 guard：
 
 ```env
-MCP_DISCORD_ALLOWED_GUILDS=123456789012345678
-MCP_DISCORD_ALLOWED_CHANNELS=234567890123456789,345678901234567890
 MCP_DISCORD_DOWNLOAD_DIR=/tmp/kiro-discord-mcp
-MCP_DISCORD_READ_ONLY=false
-MCP_DISCORD_ALLOWED_WRITE_TOOLS=discord_send_message,discord_reply_message,discord_resolve_mentions
-MCP_DISCORD_ALLOW_DESTRUCTIVE=false
 MCP_DISCORD_MEMBER_SCAN_LIMIT=5000
 MCP_DISCORD_UPLOAD_DENY_PATHS=/srv/kiro-private/**
 MCP_DISCORD_UPLOAD_DENY_CASE_INSENSITIVE=
 ```
 
-空 guild/channel allowlist 會保留舊版 unrestricted target 行為。`MCP_DISCORD_ALLOWED_WRITE_TOOLS` 空值代表沒有部署層級 write-tool 上限；bot 管理的 channel policy 仍可開放 write-policy tools，除非該頻道自己的 policy 阻擋。正式環境若 bot 有廣泛 Discord 權限，建議明確設定 guild/channel allowlist。
+`mcp-discord` 是純 Discord REST MCP server。它不再套用本地 guild/channel allowlist、read-only cap、write-tool cap、destructive cap 或 bot session target binding。Bot 管理的 session 由 `/mcp manage` 透過 MCP proxy 決定哪些 `discord_*` tools 暴露給 agent。實際 guild/channel 範圍與寫入成敗由 Discord bot token 與 Discord API 權限決定；Discord `403 Missing Access` 代表 token 無法存取或操作該資源。
 
-Standalone `mcp-discord` process 不會走 bot 的 channel-policy injection path；除非必要，請設定 `MCP_DISCORD_READ_ONLY=true`。若必須開寫入，請維持 `MCP_DISCORD_ALLOW_DESTRUCTIVE=false`，並只在 `MCP_DISCORD_ALLOWED_WRITE_TOOLS` 列出非破壞性 tools。
-
-Bot 管理的 channel session 會把 `MCP_DISCORD_ALLOWED_WRITE_TOOLS` 視為部署層級上限，不是 grant。實際暴露的 write tools 是 channel policy 與此環境變數上限的交集；read tools 不受影響，destructive tools 仍同時需要 channel destructive gate 與 `MCP_DISCORD_ALLOW_DESTRUCTIVE`。`/mcp manage` 會隱藏或拒絕超出此上限的 write tools。
+Direct tools 仍保留本機內容與檔案 guard：Discord-friendly formatting 與 split、verified mention placeholders 搭配 `AllowedMentions`、`discord_send_file` upload source denylist、以及 `discord_download_attachment` path-root/path-traversal 檢查。
 
 ## 依頻道啟用
 

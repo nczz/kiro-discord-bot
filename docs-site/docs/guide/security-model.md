@@ -18,7 +18,7 @@
 
 Initialize each channel separately and enable only the MCP tools that channel needs. The built-in `bot-tools` server starts with a small safe default allowlist; sensitive tools such as `bot_query_audit` and destructive tools such as `bot_delete_cron` are not part of the default set.
 
-External MCP servers should also enforce their own environment-level policy. The Discord MCP server supports guild allowlists, channel allowlists, read-only mode, write-tool allowlists, and destructive-operation blocking.
+External MCP servers may enforce their own policy. `mcp-discord` is pure Discord REST: `/mcp manage` controls exposed tools, Discord token permissions control guild/channel reach, and the server retains file path and mention-rendering guards.
 
 ## WebShare Delegation
 

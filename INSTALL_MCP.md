@@ -51,17 +51,16 @@ URL or SSE servers that require authentication can define `headers` in the same 
 }
 ```
 
-Add defense-in-depth environment guards where appropriate:
+Configure only the direct Discord MCP guards that still apply locally:
 
 ```env
-MCP_DISCORD_ALLOWED_GUILDS=123456789012345678
-MCP_DISCORD_ALLOWED_CHANNELS=234567890123456789,345678901234567890
-MCP_DISCORD_READ_ONLY=false
-MCP_DISCORD_ALLOWED_WRITE_TOOLS=discord_send_message,discord_reply_message
-MCP_DISCORD_ALLOW_DESTRUCTIVE=false
+MCP_DISCORD_DOWNLOAD_DIR=/tmp/kiro-discord-mcp
+MCP_DISCORD_MEMBER_SCAN_LIMIT=5000
+MCP_DISCORD_UPLOAD_DENY_PATHS=/srv/kiro-private/**
+MCP_DISCORD_UPLOAD_DENY_CASE_INSENSITIVE=
 ```
 
-For standalone `mcp-discord` processes, default to read-only or explicitly enumerate the non-destructive write tools that are allowed. Bot-managed channel sessions inject these policy environment variables automatically.
+`mcp-discord` is a pure Discord REST MCP server. `/mcp manage` decides which `discord_*` tools are exposed to the agent; Discord guild/channel access and write success are decided by the bot token and Discord API permissions. A Discord `403 Missing Access` means the token cannot access or act on that resource.
 
 Then use `/mcp status` and `/mcp manage` in the target Discord channel.
 

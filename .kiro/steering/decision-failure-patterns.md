@@ -59,6 +59,39 @@ These are deliberate boundaries unless a new architecture task changes them:
 - Do not patch multi-bot coordination by weakening `requiresHumanMention`, peer filtering, MCP policy, or safe egress.
 - If reliable multi-bot orchestration becomes a product goal, design it as an explicit server-side architecture with owned routing, state, audit, and bot identity boundaries.
 
+### Strict Pure mcp-discord
+
+Decision:
+
+- `mcp-discord` is a pure Discord REST MCP server. `/mcp manage` / MCP proxy tool exposure is the local grant boundary; Discord bot token permissions and Discord API responses decide guild/channel resource scope and operation success.
+- Remove local `mcp-discord` guild/channel allowlists, read-only env caps, write-tool env caps, destructive env caps, and bot-tools target binding authorization. Keep direct formatting, `AllowedMentions`, upload source denylist, download path root/traversal guard, and optional verified mention refs bridge.
+
+Context:
+
+- Local env/session caps made authorized tools fail with `channel ... is not allowed for this mcp-discord session` even when `/mcp manage` exposed the requested `discord_*` tools.
+- Product direction wants strict pure REST semantics: tool exposure is managed at MCP proxy level, and Discord access errors such as `403 Missing Access` reflect token/API permissions.
+
+Rejected alternatives:
+
+- Keeping guild/channel allowlists as defense-in-depth was rejected because it creates a second resource policy that conflicts with `/mcp manage` and obscures Discord permission failures.
+- Keeping `MCP_DISCORD_ALLOWED_WRITE_TOOLS`, `MCP_DISCORD_READ_ONLY`, or `MCP_DISCORD_ALLOW_DESTRUCTIVE` as bot-managed caps was rejected because tool grant belongs to MCP proxy exposure.
+- Reusing `BOT_TOOLS_CHANNEL_ID`, `BOT_TOOLS_TARGET_CHANNEL_ID`, or `BOT_TOOLS_GUILD_ID` for `mcp-discord` was rejected because those bindings belong to bot-owned safe egress/admin `bot-tools`.
+
+Current scope:
+
+- `BOT_TOOLS_TARGET_STATE_PATH` may still be injected for local `mcp-discord` only as an optional verified mention refs bridge. Missing state path must not fail mention resolution; corrupt/unwritable state may fail with a clear bridge-state error.
+- `bot-tools` remains binding-sensitive and keeps channel/session target binding, authenticated actor context, safe egress queue, redaction/sanitizer, and audit semantics.
+- Direct `discord_*` writes preserve caller payload semantics and do not gain bot safe-egress redaction.
+
+Future trigger:
+
+- If product needs resource-level Discord scoping beyond token permissions, design it as an explicit MCP proxy/channel-policy feature with user-visible management and docs, not hidden env caps inside `mcp-discord`.
+- If Discord adds app-level scoped tokens or richer resource grants, revisit whether token provisioning should become the primary least-privilege mechanism.
+
+Verification:
+
+- Regression tests should prove legacy env vars no longer restrict direct helpers, `mcp-discord` injection omits removed env/binding keys, URL `mcp-discord` servers are allowed, mention refs state is optional, and bot-tools binding remains intact.
+
 ### Tagged Discord Webhook Prompts Are Explicit Per-Channel Input, Not Bot Handoff
 
 Decision:

@@ -70,81 +70,24 @@ func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
 }
 
-func TestParseIDSet(t *testing.T) {
-	got := parseIDSet(" 123,456,,123 ")
-	if len(got) != 2 {
-		t.Fatalf("len = %d, want 2", len(got))
-	}
-	if _, ok := got["123"]; !ok {
-		t.Fatal("missing 123")
-	}
-	if _, ok := got["456"]; !ok {
-		t.Fatal("missing 456")
+func TestLegacyPolicyEnvDoesNotRestrictAttachmentGuard(t *testing.T) {
+	t.Setenv("MCP_DISCORD_ALLOWED_GUILDS", "guild-1")
+	t.Setenv("MCP_DISCORD_ALLOWED_CHANNELS", "channel-1")
+	t.Setenv("MCP_DISCORD_ALLOWED_WRITE_TOOLS", "discord_send_message")
+	t.Setenv("MCP_DISCORD_READ_ONLY", "true")
+	t.Setenv("MCP_DISCORD_ALLOW_DESTRUCTIVE", "false")
+	t.Setenv("BOT_TOOLS_CHANNEL_ID", "channel-1")
+	t.Setenv("BOT_TOOLS_TARGET_CHANNEL_ID", "thread-1")
+	t.Setenv("BOT_TOOLS_GUILD_ID", "guild-1")
+
+	if err := authorizeAttachmentChannel("channel-2"); err != nil {
+		t.Fatalf("authorizeAttachmentChannel denied by legacy env: %v", err)
 	}
 }
 
-func TestDiscordPolicyGuildAllowed(t *testing.T) {
-	p := discordPolicy{allowedGuilds: parseIDSet("g1,g2")}
-	if !p.guildAllowed("g1") {
-		t.Fatal("g1 should be allowed")
-	}
-	if p.guildAllowed("g3") {
-		t.Fatal("g3 should be denied")
-	}
-
-	p = discordPolicy{}
-	if !p.guildAllowed("anything") {
-		t.Fatal("empty guild allowlist should allow")
-	}
-}
-
-func TestDiscordPolicyChannelAllowed(t *testing.T) {
-	p := discordPolicy{allowedChannels: parseIDSet("c1,c2")}
-	if !p.channelIDAllowed("c2") {
-		t.Fatal("c2 should be allowed")
-	}
-	if p.channelIDAllowed("c3") {
-		t.Fatal("c3 should be denied")
-	}
-
-	p = discordPolicy{}
-	if !p.channelIDAllowed("anything") {
-		t.Fatal("empty channel allowlist should allow")
-	}
-}
-
-func TestDiscordPolicyWriteAllowedDefaultsToLegacyOpen(t *testing.T) {
-	p := discordPolicy{allowDestructive: true}
-	if err := p.writeAllowed("discord_send_message", false); err != nil {
-		t.Fatalf("default send denied: %v", err)
-	}
-	if err := p.writeAllowed("discord_delete_message", true); err != nil {
-		t.Fatalf("default destructive denied: %v", err)
-	}
-}
-
-func TestDiscordPolicyReadOnlyBlocksWrites(t *testing.T) {
-	p := discordPolicy{readOnly: true, allowDestructive: true}
-	if err := p.writeAllowed("discord_send_message", false); err == nil {
-		t.Fatal("read-only policy should block writes")
-	}
-}
-
-func TestDiscordPolicyAllowedWriteTools(t *testing.T) {
-	p := discordPolicy{
-		allowedWriteTools: parseIDSet("discord_send_message"),
-		allowDestructive:  true,
-	}
-	if err := p.writeAllowed("discord_send_message", false); err != nil {
-		t.Fatalf("allowed write denied: %v", err)
-	}
-	if err := p.writeAllowed("discord_reply_message", false); err == nil {
-		t.Fatal("unlisted write should be denied")
-	}
-
-	p.allowedWriteTools = parseIDSet("discord_resolve_mentions")
-	if err := p.writeAllowed("discord_resolve_mentions", false); err != nil {
-		t.Fatalf("mention resolver write grant denied: %v", err)
+func TestAuthorizeAttachmentChannelRequiresChannelID(t *testing.T) {
+	if err := authorizeAttachmentChannel(" "); err == nil {
+		t.Fatal("empty attachment channel accepted")
 	}
 }
 
@@ -172,80 +115,14 @@ func TestDiscordToolAnnotationHelpersClassifyPolicy(t *testing.T) {
 	}
 }
 
-func TestBotToolsBindingsRestrictReadPolicyTargets(t *testing.T) {
-	oldPolicy := policy
-	policy = discordPolicy{allowDestructive: true}
-	defer func() { policy = oldPolicy }()
-	t.Setenv("BOT_TOOLS_CHANNEL_ID", "channel-1")
-	t.Setenv("BOT_TOOLS_TARGET_CHANNEL_ID", "thread-1")
-
-	if err := ensureChannelAllowed("channel-1"); err != nil {
-		t.Fatalf("bound parent channel denied: %v", err)
-	}
-	if err := ensureChannelAllowed("thread-1"); err != nil {
-		t.Fatalf("bound target thread denied: %v", err)
-	}
-	if err := ensureChannelAllowed("channel-2"); err == nil || !strings.Contains(err.Error(), "mcp-discord session") {
-		t.Fatalf("unbound channel result = %v, want bot-tools binding denial", err)
-	}
-}
-
-func TestDiscordListVisibilityRespectsBoundChannelPolicy(t *testing.T) {
-	t.Setenv("BOT_TOOLS_CHANNEL_ID", "channel-1")
-	t.Setenv("BOT_TOOLS_TARGET_CHANNEL_ID", "thread-1")
-	oldPolicy := policy
-	policy = discordPolicy{allowedGuilds: parseIDSet("guild-1"), allowedChannels: parseIDSet("channel-1"), allowDestructive: true}
-	defer func() { policy = oldPolicy }()
-
-	if !discordChannelVisibleForList(&discordgo.Channel{ID: "channel-1", GuildID: "guild-1", Type: discordgo.ChannelTypeGuildText}) {
-		t.Fatal("bound parent channel should be visible")
-	}
-	if !discordChannelVisibleForList(&discordgo.Channel{ID: "thread-1", GuildID: "guild-1", ParentID: "channel-1", Type: discordgo.ChannelTypeGuildPublicThread}) {
-		t.Fatal("bound target thread under allowed parent should be visible")
-	}
-	if !discordChannelVisibleForList(&discordgo.Channel{ID: "thread-2", GuildID: "guild-1", ParentID: "channel-1", Type: discordgo.ChannelTypeGuildPublicThread}) {
-		t.Fatal("thread under bound allowed parent should be visible")
-	}
-	if discordChannelVisibleForList(&discordgo.Channel{ID: "channel-2", GuildID: "guild-1", Type: discordgo.ChannelTypeGuildText}) {
-		t.Fatal("unbound channel should not be visible")
-	}
-	if discordChannelVisibleForList(&discordgo.Channel{ID: "thread-3", GuildID: "guild-1", ParentID: "channel-2", Type: discordgo.ChannelTypeGuildPublicThread}) {
-		t.Fatal("thread under unbound parent should not be visible")
-	}
-	if discordChannelVisibleForList(&discordgo.Channel{ID: "channel-1", GuildID: "guild-2", Type: discordgo.ChannelTypeGuildText}) {
-		t.Fatal("wrong guild channel should not be visible")
-	}
-}
-
-func TestBotToolsGuildBindingRestrictsReadPolicyTargets(t *testing.T) {
-	oldPolicy := policy
-	policy = discordPolicy{allowDestructive: true}
-	defer func() { policy = oldPolicy }()
+func TestDiscordUserGuildScopeUsesExplicitScopeOnly(t *testing.T) {
 	t.Setenv("BOT_TOOLS_GUILD_ID", "guild-1")
-
-	if err := ensureGuildAllowed("guild-1"); err != nil {
-		t.Fatalf("bound guild denied: %v", err)
-	}
-	if err := ensureGuildAllowed("guild-2"); err == nil || !strings.Contains(err.Error(), "mcp-discord session") {
-		t.Fatalf("unbound guild result = %v, want bot-tools binding denial", err)
-	}
-}
-
-func TestDiscordUserGuildScopeRequiresAllowedGuild(t *testing.T) {
-	oldPolicy := policy
-	policy = discordPolicy{allowDestructive: true}
-	defer func() { policy = oldPolicy }()
 
 	if _, err := discordUserGuildScope(mcp.CallToolRequest{Params: mcp.CallToolParams{Arguments: map[string]any{"user_id": "user-1"}}}); err == nil || !strings.Contains(err.Error(), "guild_id or channel_id") {
 		t.Fatalf("unscoped user lookup error = %v, want scope requirement", err)
 	}
-
-	t.Setenv("BOT_TOOLS_GUILD_ID", "guild-1")
-	if guildID, err := discordUserGuildScope(mcp.CallToolRequest{Params: mcp.CallToolParams{Arguments: map[string]any{"user_id": "user-1"}}}); err != nil || guildID != "guild-1" {
-		t.Fatalf("bound guild scope = %q, %v; want guild-1", guildID, err)
-	}
-	if _, err := discordUserGuildScope(mcp.CallToolRequest{Params: mcp.CallToolParams{Arguments: map[string]any{"user_id": "user-1", "guild_id": "guild-2"}}}); err == nil || !strings.Contains(err.Error(), "mcp-discord session") {
-		t.Fatalf("cross-guild user lookup error = %v, want bot-tools binding denial", err)
+	if guildID, err := discordUserGuildScope(mcp.CallToolRequest{Params: mcp.CallToolParams{Arguments: map[string]any{"user_id": "user-1", "guild_id": "guild-2"}}}); err != nil || guildID != "guild-2" {
+		t.Fatalf("explicit guild scope = %q, %v; want guild-2 without bot-tools binding restriction", guildID, err)
 	}
 }
 
@@ -282,163 +159,6 @@ func TestOpenDiscordUploadFilePreservesOriginalBytesAndName(t *testing.T) {
 	}
 	if got := safeDiscordUploadError(fmt.Errorf("file exceeds upload size limit (1 bytes)")); got != "file exceeds upload size limit" {
 		t.Fatalf("safe upload error = %q, want size reason", got)
-	}
-}
-
-func TestResolveWriteTargetChannelUsesBotTargetStateForChildThread(t *testing.T) {
-	dir := t.TempDir()
-	statePath := filepath.Join(dir, "target.json")
-	if err := os.WriteFile(statePath, []byte(`{"target_channel_id":"thread-1"}`+"\n"), 0644); err != nil {
-		t.Fatalf("write target state: %v", err)
-	}
-	t.Setenv("BOT_TOOLS_TARGET_STATE_PATH", statePath)
-
-	oldPolicy := policy
-	policy = discordPolicy{allowedChannels: parseIDSet("channel-1"), allowDestructive: true}
-	defer func() { policy = oldPolicy }()
-
-	ds, err := discordgo.New("Bot test")
-	if err != nil {
-		t.Fatalf("new discord session: %v", err)
-	}
-	ds.Client = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		return &http.Response{StatusCode: http.StatusOK, Status: "200 OK", Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"id":"thread-1","type":11,"guild_id":"guild-1","parent_id":"channel-1"}`)), Request: req}, nil
-	})}
-	oldDG := dg
-	dg = ds
-	defer func() { dg = oldDG }()
-
-	got, err := resolveWriteTargetChannel("channel-1")
-	if err != nil {
-		t.Fatalf("resolve target: %v", err)
-	}
-	if got != "thread-1" {
-		t.Fatalf("resolved target = %q, want thread-1", got)
-	}
-}
-
-func TestResolveWriteTargetChannelRejectsUnrelatedDynamicTarget(t *testing.T) {
-	dir := t.TempDir()
-	statePath := filepath.Join(dir, "target.json")
-	if err := os.WriteFile(statePath, []byte(`{"target_channel_id":"channel-2"}`+"\n"), 0644); err != nil {
-		t.Fatalf("write target state: %v", err)
-	}
-	t.Setenv("BOT_TOOLS_TARGET_STATE_PATH", statePath)
-
-	oldPolicy := policy
-	policy = discordPolicy{allowedChannels: parseIDSet("channel-1"), allowDestructive: true}
-	defer func() { policy = oldPolicy }()
-
-	ds, err := discordgo.New("Bot test")
-	if err != nil {
-		t.Fatalf("new discord session: %v", err)
-	}
-	ds.Client = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		return &http.Response{StatusCode: http.StatusOK, Status: "200 OK", Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"id":"channel-2","type":0,"guild_id":"guild-1"}`)), Request: req}, nil
-	})}
-	oldDG := dg
-	dg = ds
-	defer func() { dg = oldDG }()
-
-	if got, err := resolveWriteTargetChannel("channel-1"); err == nil || got != "" || !strings.Contains(err.Error(), "not allowed") {
-		t.Fatalf("unrelated dynamic target result = %q, %v; want denial", got, err)
-	}
-}
-
-func TestEnsureWriteAllowedBlocksMonitorTargetState(t *testing.T) {
-	dir := t.TempDir()
-	statePath := filepath.Join(dir, "target.json")
-	if err := os.WriteFile(statePath, []byte(`{"target_channel_id":"channel-1","disable_egress":true,"source":"monitor"}`+"\n"), 0644); err != nil {
-		t.Fatalf("write target state: %v", err)
-	}
-	t.Setenv("BOT_TOOLS_TARGET_STATE_PATH", statePath)
-	oldPolicy := policy
-	policy = discordPolicy{allowDestructive: true}
-	defer func() { policy = oldPolicy }()
-	if got := currentTargetStateChannelID(); got != "channel-1" {
-		t.Fatalf("disabled-egress target channel = %q, want channel-1", got)
-	}
-
-	err := ensureWriteAllowed("discord_send_message", false)
-	if err == nil || !strings.Contains(err.Error(), "monitor background checks") {
-		t.Fatalf("ensureWriteAllowed error = %v, want monitor disable", err)
-	}
-}
-
-func TestEnsureWriteAllowedBlocksRemoteA2ATargetState(t *testing.T) {
-	dir := t.TempDir()
-	statePath := filepath.Join(dir, "target.json")
-	if err := os.WriteFile(statePath, []byte(`{"target_channel_id":"channel-1","remote_a2a":true,"disable_egress":true}`+"\n"), 0644); err != nil {
-		t.Fatalf("write target state: %v", err)
-	}
-	t.Setenv("BOT_TOOLS_TARGET_STATE_PATH", statePath)
-	oldPolicy := policy
-	policy = discordPolicy{allowDestructive: true}
-	defer func() { policy = oldPolicy }()
-
-	err := ensureWriteAllowed("discord_send_message", false)
-	if err == nil || !strings.Contains(err.Error(), "remote A2A") {
-		t.Fatalf("ensureWriteAllowed error = %v, want remote A2A write block", err)
-	}
-}
-
-func TestEnsureWriteAllowedRejectsMissingTargetState(t *testing.T) {
-	t.Setenv("BOT_TOOLS_TARGET_STATE_PATH", filepath.Join(t.TempDir(), "missing.json"))
-	oldPolicy := policy
-	policy = discordPolicy{allowDestructive: true}
-	defer func() { policy = oldPolicy }()
-
-	err := ensureWriteAllowed("discord_send_message", false)
-	if err == nil || !strings.Contains(err.Error(), "target state can be verified") {
-		t.Fatalf("ensureWriteAllowed error = %v, want fail-closed target-state verification", err)
-	}
-}
-
-func TestEnsureWriteAllowedDestructiveRequiresAuthenticatedChannelManager(t *testing.T) {
-	oldPolicy := policy
-	policy = discordPolicy{allowDestructive: true}
-	defer func() { policy = oldPolicy }()
-
-	if err := ensureWriteAllowed("discord_delete_message", true); err == nil || !strings.Contains(err.Error(), "authenticated channel manager") {
-		t.Fatalf("destructive write without target state error = %v, want authenticated manager denial", err)
-	}
-
-	dir := t.TempDir()
-	statePath := filepath.Join(dir, "target.json")
-	t.Setenv("BOT_TOOLS_TARGET_STATE_PATH", statePath)
-
-	if err := os.WriteFile(statePath, []byte(`{"target_channel_id":"channel-1","can_manage_channel":true}`+"\n"), 0644); err != nil {
-		t.Fatalf("write target state: %v", err)
-	}
-	if err := ensureWriteAllowed("discord_delete_message", true); err == nil || !strings.Contains(err.Error(), "authenticated channel manager") {
-		t.Fatalf("destructive write without requester error = %v, want authenticated manager denial", err)
-	}
-	if err := ensureWriteAllowed("discord_send_message", false); err != nil {
-		t.Fatalf("non-destructive write should not require manager bit: %v", err)
-	}
-
-	if err := os.WriteFile(statePath, []byte(`{"target_channel_id":"channel-1","requester_id":"user-1","requester_name":"alice","can_manage_channel":false}`+"\n"), 0644); err != nil {
-		t.Fatalf("write non-manager target state: %v", err)
-	}
-	if err := ensureWriteAllowed("discord_delete_message", true); err == nil || !strings.Contains(err.Error(), "channel management permissions") {
-		t.Fatalf("destructive write without manager bit error = %v, want permission denial", err)
-	}
-
-	if err := os.WriteFile(statePath, []byte(`{"target_channel_id":"channel-1","requester_id":"user-1","requester_name":"alice","can_manage_channel":true}`+"\n"), 0644); err != nil {
-		t.Fatalf("write manager target state: %v", err)
-	}
-	if err := ensureWriteAllowed("discord_delete_message", true); err != nil {
-		t.Fatalf("destructive write with authenticated channel manager denied: %v", err)
-	}
-}
-
-func TestDiscordPolicyDestructiveGuard(t *testing.T) {
-	p := discordPolicy{allowDestructive: false}
-	if err := p.writeAllowed("discord_send_message", false); err != nil {
-		t.Fatalf("non-destructive write denied: %v", err)
-	}
-	if err := p.writeAllowed("discord_delete_message", true); err == nil {
-		t.Fatal("destructive write should be denied")
 	}
 }
 
@@ -509,214 +229,6 @@ func TestCopyDiscordAttachmentToFileRejectsOversizedContentLength(t *testing.T) 
 	}
 	if _, statErr := os.Stat(dst); !os.IsNotExist(statErr) {
 		t.Fatalf("content-length rejected file exists: %v", statErr)
-	}
-}
-
-func TestEnsureBoundDiscordChannelAllowsDynamicTargetState(t *testing.T) {
-	dir := t.TempDir()
-	statePath := filepath.Join(dir, "target.json")
-	if err := os.WriteFile(statePath, []byte(`{"target_channel_id":"thread-1"}`+"\n"), 0644); err != nil {
-		t.Fatalf("write target state: %v", err)
-	}
-	t.Setenv("BOT_TOOLS_TARGET_STATE_PATH", statePath)
-	t.Setenv("BOT_TOOLS_CHANNEL_ID", "channel-1")
-
-	if err := ensureBoundDiscordChannel("thread-1"); err != nil {
-		t.Fatalf("dynamic target rejected: %v", err)
-	}
-	if err := ensureBoundDiscordChannel("channel-2"); err == nil {
-		t.Fatal("unrelated channel accepted")
-	}
-}
-
-func TestEnsureChannelAllowedAllowsDynamicTargetWhenParentAllowlisted(t *testing.T) {
-	dir := t.TempDir()
-	statePath := filepath.Join(dir, "target.json")
-	if err := os.WriteFile(statePath, []byte(`{"target_channel_id":"thread-1"}`+"\n"), 0644); err != nil {
-		t.Fatalf("write target state: %v", err)
-	}
-	t.Setenv("BOT_TOOLS_TARGET_STATE_PATH", statePath)
-	t.Setenv("BOT_TOOLS_CHANNEL_ID", "channel-1")
-
-	oldPolicy := policy
-	policy = discordPolicy{allowedChannels: parseIDSet("channel-1"), allowDestructive: true}
-	defer func() { policy = oldPolicy }()
-
-	oldDG := dg
-	ds, err := discordgo.New("Bot test")
-	if err != nil {
-		t.Fatalf("new discord session: %v", err)
-	}
-	ds.Client = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		return &http.Response{StatusCode: http.StatusOK, Status: "200 OK", Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"id":"thread-1","type":11,"guild_id":"guild-1","parent_id":"channel-1"}`)), Request: req}, nil
-	})}
-	dg = ds
-	defer func() { dg = oldDG }()
-
-	if err := ensureChannelAllowed("thread-1"); err != nil {
-		t.Fatalf("dynamic thread denied despite allowlisted parent: %v", err)
-	}
-}
-
-func TestEnsureChannelAllowedRejectsDynamicTargetOutsideAllowlistedParent(t *testing.T) {
-	dir := t.TempDir()
-	statePath := filepath.Join(dir, "target.json")
-	if err := os.WriteFile(statePath, []byte(`{"target_channel_id":"thread-2"}`+"\n"), 0644); err != nil {
-		t.Fatalf("write target state: %v", err)
-	}
-	t.Setenv("BOT_TOOLS_TARGET_STATE_PATH", statePath)
-	t.Setenv("BOT_TOOLS_CHANNEL_ID", "channel-1")
-
-	oldPolicy := policy
-	policy = discordPolicy{allowedChannels: parseIDSet("channel-1"), allowDestructive: true}
-	defer func() { policy = oldPolicy }()
-
-	oldDG := dg
-	ds, err := discordgo.New("Bot test")
-	if err != nil {
-		t.Fatalf("new discord session: %v", err)
-	}
-	ds.Client = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		return &http.Response{StatusCode: http.StatusOK, Status: "200 OK", Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"id":"thread-2","type":11,"guild_id":"guild-1","parent_id":"channel-2"}`)), Request: req}, nil
-	})}
-	dg = ds
-	defer func() { dg = oldDG }()
-
-	if err := ensureChannelAllowed("thread-2"); err == nil {
-		t.Fatal("dynamic thread outside allowlisted parent accepted")
-	}
-}
-
-func TestAuthorizeMessageWriteChannelRejectsParentWhenDynamicTargetActive(t *testing.T) {
-	dir := t.TempDir()
-	statePath := filepath.Join(dir, "target.json")
-	if err := os.WriteFile(statePath, []byte(`{"target_channel_id":"thread-1"}`+"\n"), 0644); err != nil {
-		t.Fatalf("write target state: %v", err)
-	}
-	t.Setenv("BOT_TOOLS_TARGET_STATE_PATH", statePath)
-	t.Setenv("BOT_TOOLS_CHANNEL_ID", "channel-1")
-
-	oldPolicy := policy
-	policy = discordPolicy{allowDestructive: true}
-	defer func() { policy = oldPolicy }()
-
-	if err := authorizeMessageWriteChannel("discord_reply_message", false, "channel-1"); err == nil {
-		t.Fatal("parent channel message write accepted during dynamic target session")
-	}
-	if err := authorizeMessageWriteChannel("discord_reply_message", false, "thread-1"); err != nil {
-		t.Fatalf("dynamic target message write rejected: %v", err)
-	}
-}
-
-func TestCreateThreadRejectedWhenDynamicTargetActive(t *testing.T) {
-	dir := t.TempDir()
-	statePath := filepath.Join(dir, "target.json")
-	if err := os.WriteFile(statePath, []byte(`{"target_channel_id":"thread-1"}`+"\n"), 0644); err != nil {
-		t.Fatalf("write target state: %v", err)
-	}
-	t.Setenv("BOT_TOOLS_TARGET_STATE_PATH", statePath)
-	if err := authorizeCreateThreadChannel("thread-1"); err == nil {
-		t.Fatal("create thread accepted during dynamic target session")
-	}
-}
-
-func TestDiscordAttachmentAllowlistUsesURLChannel(t *testing.T) {
-	oldPolicy := policy
-	policy = discordPolicy{allowedChannels: parseIDSet("channel-1"), allowDestructive: true}
-	defer func() { policy = oldPolicy }()
-
-	allowedURL, err := validateDiscordAttachmentURL("https://cdn.discordapp.com/attachments/channel-1/message-1/file.txt")
-	if err != nil {
-		t.Fatal(err)
-	}
-	allowedChannel, err := discordAttachmentChannelID(allowedURL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := authorizeAttachmentChannel(allowedChannel); err != nil {
-		t.Fatalf("allowed attachment channel denied: %v", err)
-	}
-
-	deniedURL, err := validateDiscordAttachmentURL("https://cdn.discordapp.com/attachments/channel-2/message-1/file.txt")
-	if err != nil {
-		t.Fatal(err)
-	}
-	deniedChannel, err := discordAttachmentChannelID(deniedURL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := authorizeAttachmentChannel(deniedChannel); err == nil || !strings.Contains(err.Error(), "MCP_DISCORD_ALLOWED_CHANNELS") {
-		t.Fatalf("off-channel attachment allowlist result = %v, want channel allowlist denial", err)
-	}
-}
-
-func TestDiscordAttachmentTargetStateRestrictsWithoutStaticAllowlist(t *testing.T) {
-	dir := t.TempDir()
-	statePath := filepath.Join(dir, "target.json")
-	if err := os.WriteFile(statePath, []byte(`{"target_channel_id":"channel-1"}`+"\n"), 0644); err != nil {
-		t.Fatalf("write target state: %v", err)
-	}
-	t.Setenv("BOT_TOOLS_TARGET_STATE_PATH", statePath)
-	t.Setenv("BOT_TOOLS_CHANNEL_ID", "channel-1")
-
-	oldPolicy := policy
-	policy = discordPolicy{allowDestructive: true}
-	defer func() { policy = oldPolicy }()
-
-	if err := authorizeAttachmentChannel("channel-1"); err != nil {
-		t.Fatalf("bound attachment channel denied: %v", err)
-	}
-	if err := authorizeAttachmentChannel("channel-2"); err == nil {
-		t.Fatal("unrelated attachment channel accepted without static allowlist")
-	}
-
-	ds, err := discordgo.New("Bot test")
-	if err != nil {
-		t.Fatalf("new discord session: %v", err)
-	}
-	ds.Client = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		return &http.Response{StatusCode: http.StatusOK, Status: "200 OK", Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"id":"thread-1","type":11,"guild_id":"guild-1","parent_id":"channel-1"}`)), Request: req}, nil
-	})}
-	oldDG := dg
-	dg = ds
-	defer func() { dg = oldDG }()
-	if err := authorizeAttachmentChannel("thread-1"); err != nil {
-		t.Fatalf("child thread attachment channel denied: %v", err)
-	}
-}
-
-func TestDiscordAttachmentTargetStateAllowsOnlySelectedThreadWhenThreadBound(t *testing.T) {
-	dir := t.TempDir()
-	statePath := filepath.Join(dir, "target.json")
-	if err := os.WriteFile(statePath, []byte(`{"target_channel_id":"thread-1"}`+"\n"), 0644); err != nil {
-		t.Fatalf("write target state: %v", err)
-	}
-	t.Setenv("BOT_TOOLS_TARGET_STATE_PATH", statePath)
-	t.Setenv("BOT_TOOLS_CHANNEL_ID", "channel-1")
-
-	oldPolicy := policy
-	policy = discordPolicy{allowedChannels: parseIDSet("channel-1"), allowDestructive: true}
-	defer func() { policy = oldPolicy }()
-
-	ds, err := discordgo.New("Bot test")
-	if err != nil {
-		t.Fatalf("new discord session: %v", err)
-	}
-	ds.Client = &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-		return &http.Response{StatusCode: http.StatusOK, Status: "200 OK", Header: make(http.Header), Body: io.NopCloser(strings.NewReader(`{"id":"thread-2","type":11,"guild_id":"guild-1","parent_id":"channel-1"}`)), Request: req}, nil
-	})}
-	oldDG := dg
-	dg = ds
-	defer func() { dg = oldDG }()
-
-	if err := authorizeAttachmentChannel("thread-1"); err != nil {
-		t.Fatalf("selected thread attachment channel denied: %v", err)
-	}
-	if err := authorizeAttachmentChannel("channel-1"); err == nil {
-		t.Fatal("parent attachment channel accepted for thread-bound target")
-	}
-	if err := authorizeAttachmentChannel("thread-2"); err == nil {
-		t.Fatal("sibling thread attachment channel accepted")
 	}
 }
 
@@ -1118,6 +630,13 @@ func TestGrantMentionRefsForCurrentJobUpdatesTargetState(t *testing.T) {
 	}
 	if !state.RemoteA2A || state.DelegationDepth != 2 || state.RequesterID != "user-1" || state.RequesterName != "alice" || !state.CanManageChannel || !state.CanManageGuild {
 		t.Fatalf("security target-state fields were not preserved: %+v", state)
+	}
+}
+
+func TestGrantMentionRefsForCurrentJobNoTargetStatePathIsNoop(t *testing.T) {
+	t.Setenv("BOT_TOOLS_TARGET_STATE_PATH", "")
+	if err := grantMentionRefsForCurrentJob([]discordmention.Ref{discordmention.UserRef("123", "Wendy")}); err != nil {
+		t.Fatalf("grant mention refs without target state: %v", err)
 	}
 }
 

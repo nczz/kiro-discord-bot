@@ -18,7 +18,7 @@
 
 每個 channel 應獨立初始化，只啟用該 channel 真的需要的 MCP tools。內建 `bot-tools` server 只有小範圍安全預設 allowlist；`bot_query_audit` 這類敏感工具與 `bot_delete_cron` 這類 destructive tools 不在預設集合內。
 
-外部 MCP servers 也應有自己的 environment-level policy。Discord MCP server 支援 guild allowlist、channel allowlist、read-only mode、write-tool allowlist 與 destructive-operation blocking。
+外部 MCP servers 可能有自己的 policy。`mcp-discord` 是純 Discord REST：`/mcp manage` 控制暴露 tools，Discord token 權限控制 guild/channel 可達範圍，server 保留檔案路徑與 mention rendering guards。
 
 ## WebShare 委派
 

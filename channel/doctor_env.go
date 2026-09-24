@@ -136,12 +136,7 @@ var envSpecs = []envEntry{
 	{Name: "A2A_MAX_EVENT_RATE_PER_MIN", Group: "a2a", Effective: func(m *Manager) string { return strconv.Itoa(m.a2aConfig.MaxEventRatePerMin) }},
 
 	// Discord MCP
-	{Name: "MCP_DISCORD_ALLOWED_GUILDS", Group: "mcp_discord"},
-	{Name: "MCP_DISCORD_ALLOWED_CHANNELS", Group: "mcp_discord"},
 	{Name: "MCP_DISCORD_DOWNLOAD_DIR", Group: "mcp_discord"},
-	{Name: "MCP_DISCORD_READ_ONLY", Group: "mcp_discord"},
-	{Name: "MCP_DISCORD_ALLOWED_WRITE_TOOLS", Group: "mcp_discord"},
-	{Name: "MCP_DISCORD_ALLOW_DESTRUCTIVE", Group: "mcp_discord"},
 }
 
 // doctorRuntimeOverview returns a safe runtime configuration overview for /doctor.

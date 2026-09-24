@@ -417,230 +417,7 @@ const (
 )
 
 func mcpBindingSensitiveServer(name string) bool {
-	switch strings.TrimSpace(name) {
-	case "bot-tools", mcpDiscordServerName:
-		return true
-	default:
-		return false
-	}
-}
-
-var mcpDiscordWriteToolNames = map[string]struct{}{
-	"discord_add_reaction":        {},
-	"discord_create_thread":       {},
-	"discord_delete_message":      {},
-	"discord_download_attachment": {},
-	"discord_edit_channel_topic":  {},
-	"discord_edit_message":        {},
-	"discord_pin_message":         {},
-	"discord_remove_reaction":     {},
-	"discord_reply_message":       {},
-	"discord_resolve_mentions":    {},
-	"discord_send_embed":          {},
-	"discord_send_file":           {},
-	"discord_send_message":        {},
-}
-
-var mcpDiscordReadToolNames = map[string]struct{}{
-	"discord_channel_info":     {},
-	"discord_get_message":      {},
-	"discord_get_reactions":    {},
-	"discord_list_attachments": {},
-	"discord_list_channels":    {},
-	"discord_list_members":     {},
-	"discord_list_roles":       {},
-	"discord_list_threads":     {},
-	"discord_read_messages":    {},
-	"discord_get_user":         {},
-	"discord_search_messages":  {},
-}
-
-func mcpDiscordAllowedWriteCap(entry MCPCatalogEntry) (map[string]struct{}, bool) {
-	if entry.Name != mcpDiscordServerName {
-		return nil, false
-	}
-	raw, ok := entry.Env["MCP_DISCORD_ALLOWED_WRITE_TOOLS"]
-	if !ok {
-		raw = os.Getenv("MCP_DISCORD_ALLOWED_WRITE_TOOLS")
-	}
-	names := splitMCPEnvList(raw)
-	if len(names) == 0 {
-		return nil, false
-	}
-	cap := make(map[string]struct{}, len(names))
-	for _, name := range names {
-		cap[name] = struct{}{}
-	}
-	return cap, true
-}
-
-func splitMCPEnvList(raw string) []string {
-	return normalizeStrings(strings.FieldsFunc(raw, func(r rune) bool {
-		return r == ',' || r == '\n' || r == '\r' || r == '\t'
-	}))
-}
-
-func applyMCPDiscordWriteCapToPolicy(p MCPChannelPolicy, entry MCPCatalogEntry, tools []MCPToolInfo) MCPChannelPolicy {
-	cap, capped := mcpDiscordAllowedWriteCap(entry)
-	if p.ServerName != mcpDiscordServerName || !capped {
-		return p
-	}
-	byName := mcpDiscordToolInfoByName(tools)
-	if p.AllowAllTools {
-		p.AllowAllTools = false
-		p.ReadOnly = false
-		if len(tools) == 0 {
-			p.AllowedTools = mcpDiscordFallbackToolNamesForWriteCap(cap)
-		} else {
-			p.AllowedTools = mcpDiscordFilteredToolNames(tools, cap, capped)
-		}
-		return p
-	}
-	if p.ReadOnly {
-		return p
-	}
-	p.AllowedTools = mcpDiscordFilterAllowedToolNames(p.AllowedTools, p.ServerName, byName, cap, capped)
-	return p
-}
-
-func mcpDiscordToolInfoByName(tools []MCPToolInfo) map[string]MCPToolInfo {
-	byName := make(map[string]MCPToolInfo, len(tools))
-	for _, tool := range tools {
-		byName[tool.Name] = tool
-	}
-	return byName
-}
-
-func mcpDiscordFilteredToolNames(tools []MCPToolInfo, cap map[string]struct{}, capped bool) []string {
-	out := make([]string, 0, len(tools))
-	for _, tool := range tools {
-		if mcpDiscordToolAllowedByWriteCap(tool, cap, capped) {
-			out = append(out, tool.Name)
-		}
-	}
-	return normalizeStrings(out)
-}
-
-func mcpDiscordFallbackToolNamesForWriteCap(cap map[string]struct{}) []string {
-	out := make([]string, 0, len(mcpDiscordReadToolNames)+len(cap))
-	for name := range mcpDiscordReadToolNames {
-		out = append(out, name)
-	}
-	for name := range cap {
-		out = append(out, name)
-	}
-	return normalizeStrings(out)
-}
-
-func mcpDiscordWriteToolNamesForEnv(names []string) []string {
-	out := make([]string, 0, len(names))
-	for _, name := range normalizeStrings(names) {
-		if _, ok := mcpDiscordReadToolNames[name]; ok {
-			continue
-		}
-		if _, ok := mcpDiscordWriteToolNames[name]; ok {
-			out = append(out, name)
-			continue
-		}
-		out = append(out, name)
-	}
-	return normalizeStrings(out)
-}
-
-func mcpDiscordAllowedWriteToolsEnvValue(p MCPChannelPolicy, allowedTools []string) string {
-	writeTools := mcpDiscordWriteToolNamesForEnv(allowedTools)
-	if len(writeTools) == 0 && len(allowedTools) > 0 && !p.AllowAllTools && !p.ReadOnly {
-		return "__kiro_no_write_tools__"
-	}
-	return strings.Join(writeTools, ",")
-}
-
-func mcpDiscordDeploymentAllowDestructive(entry MCPCatalogEntry) bool {
-	if entry.Name != mcpDiscordServerName {
-		return true
-	}
-	raw, ok := entry.Env["MCP_DISCORD_ALLOW_DESTRUCTIVE"]
-	if !ok {
-		raw = os.Getenv("MCP_DISCORD_ALLOW_DESTRUCTIVE")
-	}
-	return boolEnvValue(raw, true)
-}
-
-func boolEnvValue(raw string, def bool) bool {
-	switch strings.TrimSpace(strings.ToLower(raw)) {
-	case "":
-		return def
-	case "1", "true", "yes", "on":
-		return true
-	case "0", "false", "no", "off":
-		return false
-	default:
-		return def
-	}
-}
-
-func mcpDiscordFilterToolInfos(tools []MCPToolInfo, entry MCPCatalogEntry) []MCPToolInfo {
-	cap, capped := mcpDiscordAllowedWriteCap(entry)
-	if !capped {
-		return tools
-	}
-	out := make([]MCPToolInfo, 0, len(tools))
-	for _, tool := range tools {
-		if mcpDiscordToolAllowedByWriteCap(tool, cap, capped) {
-			out = append(out, tool)
-		}
-	}
-	return out
-}
-
-func mcpDiscordFilterAllowedToolNames(names []string, serverName string, byName map[string]MCPToolInfo, cap map[string]struct{}, capped bool) []string {
-	out := make([]string, 0, len(names))
-	for _, name := range normalizeStrings(names) {
-		if mcpDiscordToolNameAllowedByWriteCap(serverName, name, byName, cap, capped) {
-			out = append(out, name)
-		}
-	}
-	return out
-}
-
-func mcpDiscordToolNameAllowedByWriteCap(serverName, name string, byName map[string]MCPToolInfo, cap map[string]struct{}, capped bool) bool {
-	if !capped || serverName != mcpDiscordServerName {
-		return true
-	}
-	if tool, ok := byName[name]; ok {
-		return mcpDiscordToolAllowedByWriteCap(tool, cap, capped)
-	}
-	if _, ok := mcpDiscordReadToolNames[name]; ok {
-		return true
-	}
-	if _, ok := mcpDiscordWriteToolNames[name]; !ok {
-		return true
-	}
-	_, ok := cap[name]
-	return ok
-}
-
-func mcpDiscordToolAllowedByWriteCap(tool MCPToolInfo, cap map[string]struct{}, capped bool) bool {
-	if !capped || !mcpDiscordToolIsWritePolicy(tool) {
-		return true
-	}
-	_, ok := cap[tool.Name]
-	return ok
-}
-
-func mcpDiscordToolIsWritePolicy(tool MCPToolInfo) bool {
-	if tool.ServerName == mcpDiscordServerName {
-		if _, ok := mcpDiscordReadToolNames[tool.Name]; ok {
-			return false
-		}
-		if _, ok := mcpDiscordWriteToolNames[tool.Name]; ok {
-			return true
-		}
-	}
-	if tool.ReadOnlyHint != nil {
-		return !*tool.ReadOnlyHint
-	}
-	return false
+	return strings.TrimSpace(name) == "bot-tools"
 }
 
 func (m *Manager) applyLegacyMCPMigration() error {
@@ -1067,7 +844,6 @@ func (m *Manager) mcpServersForTarget(channelID, targetChannelID string) []acp.M
 		return nil
 	}
 	policies = m.filterChannelBoundMCPPolicies(policies)
-	policies = m.applyMCPDiscordDeploymentCaps(policies)
 	channelTools, channelAllowAll := m.channelEffectiveMCPTools(policies)
 	projectCWD := m.TargetCWDPath(targetChannelID, channelID)
 	var servers []acp.MCPServerConfig
@@ -1107,31 +883,6 @@ func (m *Manager) filterChannelBoundMCPPolicies(policies []MCPChannelPolicy) []M
 			continue
 		}
 		out = append(out, policy)
-	}
-	return out
-}
-
-func (m *Manager) applyMCPDiscordDeploymentCaps(policies []MCPChannelPolicy) []MCPChannelPolicy {
-	if m == nil || m.mcpPolicies == nil || len(policies) == 0 {
-		return policies
-	}
-	out := make([]MCPChannelPolicy, 0, len(policies))
-	for _, policy := range policies {
-		if policy.ServerName != mcpDiscordServerName {
-			out = append(out, policy)
-			continue
-		}
-		entry, ok := m.mcpPolicies.CatalogEntry(policy.ServerName)
-		if !ok {
-			out = append(out, policy)
-			continue
-		}
-		entry = m.withRuntimeMCPEnv(entry)
-		tools, err := m.mcpPolicies.CachedTools(context.Background(), policy.ServerName)
-		if err != nil {
-			log.Printf("[mcp-policy] load mcp-discord tools for deployment cap: %v", err)
-		}
-		out = append(out, applyMCPDiscordWriteCapToPolicy(policy, entry, tools))
 	}
 	return out
 }
@@ -1798,11 +1549,6 @@ func (m *Manager) MCPToolViews(channelID, serverName string) ([]MCPToolView, err
 			return nil, err
 		}
 	}
-	if serverName == mcpDiscordServerName {
-		if entry, ok := m.mcpPolicies.CatalogEntry(serverName); ok {
-			tools = mcpDiscordFilterToolInfos(tools, m.withRuntimeMCPEnv(entry))
-		}
-	}
 	allowed := make(map[string]struct{}, len(p.EffectiveTools()))
 	for _, name := range p.EffectiveTools() {
 		allowed[name] = struct{}{}
@@ -1823,11 +1569,6 @@ func (m *Manager) DiscoverMCPTools(ctx context.Context, serverName string) ([]MC
 	tools, err := m.mcpPolicies.DiscoverTools(ctx, serverName)
 	if err != nil {
 		return nil, err
-	}
-	if serverName == mcpDiscordServerName {
-		if entry, ok := m.mcpPolicies.CatalogEntry(serverName); ok {
-			tools = mcpDiscordFilterToolInfos(tools, m.withRuntimeMCPEnv(entry))
-		}
 	}
 	return tools, nil
 }
@@ -1926,37 +1667,9 @@ func (m *Manager) SetMCPPolicy(channelID, userID, serverName string, enabled boo
 	return nil
 }
 
-func (m *Manager) ensureMCPDiscordToolAllowedByDeploymentCap(serverName, tool string) error {
-	if serverName != mcpDiscordServerName || m == nil || m.mcpPolicies == nil {
-		return nil
-	}
-	entry, ok := m.mcpPolicies.CatalogEntry(serverName)
-	if !ok {
-		return nil
-	}
-	entry = m.withRuntimeMCPEnv(entry)
-	cap, capped := mcpDiscordAllowedWriteCap(entry)
-	if !capped {
-		return nil
-	}
-	tools, err := m.mcpPolicies.CachedTools(context.Background(), serverName)
-	if err != nil {
-		return err
-	}
-	if mcpDiscordToolNameAllowedByWriteCap(serverName, tool, mcpDiscordToolInfoByName(tools), cap, capped) {
-		return nil
-	}
-	return errors.New(L.Getf("mcp.tool_blocked_by_deployment_policy", tool))
-}
-
 func (m *Manager) SetMCPTool(channelID, userID, serverName, tool string, allowed bool) error {
 	serverName = strings.TrimSpace(serverName)
 	tool = strings.TrimSpace(tool)
-	if allowed {
-		if err := m.ensureMCPDiscordToolAllowedByDeploymentCap(serverName, tool); err != nil {
-			return err
-		}
-	}
 	return m.updateMCPPolicy(channelID, userID, serverName, map[string]any{"action": "tool", "tool": tool, "allowed": allowed}, func(p MCPChannelPolicy) MCPChannelPolicy {
 		p.Enabled = true
 		p.Preset = ""

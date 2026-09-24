@@ -23,19 +23,18 @@ bot 會把 discovery 與 permission 分開：
 
 ## Discord MCP
 
-`mcp-discord` 是可選 catalog server，可以讀訊息、列頻道、送訊息、開 thread 與執行其他 Discord REST 操作。廣泛啟用前，請先限制它的環境：
+`mcp-discord` 是可選的純 Discord REST catalog server，可以讀訊息、列頻道、送訊息、開 thread 與執行其他 Discord REST 操作。`/mcp manage` 控制哪些 `discord_*` tools 會暴露給 agent。Guild/channel 範圍與操作成敗來自 Discord bot token 與 Discord API 權限；Discord `403 Missing Access` 代表 token 無法存取或操作該資源。
+
+需要時保留 direct 檔案與 mention guard：
 
 ```bash
-MCP_DISCORD_ALLOWED_GUILDS=123456789012345678
-MCP_DISCORD_ALLOWED_CHANNELS=234567890123456789,345678901234567890
-MCP_DISCORD_READ_ONLY=false
-MCP_DISCORD_ALLOWED_WRITE_TOOLS=discord_send_message,discord_reply_message
-MCP_DISCORD_ALLOW_DESTRUCTIVE=false
+MCP_DISCORD_DOWNLOAD_DIR=/tmp/kiro-discord-mcp
+MCP_DISCORD_UPLOAD_DENY_PATHS=/srv/kiro-private/**
 ```
 
 本機多 bot 測試時，請確認 catalog command 載入的是你預期 bot 身分的 `.env`。Discord 回 403 可能代表 MCP server 使用了和畫面上 bot 不同的 token。
 
-完整 Discord MCP tools 與 policy guards 見 [Discord MCP](mcp-discord.md)。可選媒體生成工具見 [Media MCP](media-mcp.md)。
+完整 Discord MCP tools 與保留的檔案/mention guards 見 [Discord MCP](mcp-discord.md)。可選媒體生成工具見 [Media MCP](media-mcp.md)。
 
 ## 帶 Headers 的 URL/SSE Servers
 

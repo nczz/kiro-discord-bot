@@ -966,12 +966,6 @@ func (p MCPChannelPolicy) ToACPServer(entry MCPCatalogEntry, proxyCommand string
 				env["BOT_TOOLS_TARGET_STATE_PATH"] = statePath
 			}
 		} else if entry.Name == "mcp-discord" {
-			env["BOT_TOOLS_CHANNEL_ID"] = channelID
-			env["BOT_TOOLS_TARGET_CHANNEL_ID"] = strings.TrimSpace(targetChannelID)
-			env["BOT_TOOLS_GUILD_ID"] = guildID
-			env["MCP_DISCORD_READ_ONLY"] = fmt.Sprintf("%t", p.ReadOnly)
-			env["MCP_DISCORD_ALLOWED_WRITE_TOOLS"] = mcpDiscordAllowedWriteToolsEnvValue(p, allowedTools)
-			env["MCP_DISCORD_ALLOW_DESTRUCTIVE"] = fmt.Sprintf("%t", p.AllowDestructive && mcpDiscordDeploymentAllowDestructive(entry))
 			if statePath := botToolsTargetStatePath(env["DATA_DIR"], botToolsTargetStateID(channelID, targetChannelID)); statePath != "" {
 				env["BOT_TOOLS_TARGET_STATE_PATH"] = statePath
 			}

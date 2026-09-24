@@ -43,7 +43,7 @@ Then classify the change:
 | Discord routing / commands | `bot/handler.go`, `bot/commands.go`, `bot/peers.go` | Slash registration, bang dispatch, i18n, audit delivery |
 | Agent lifecycle / worker | `channel/manager.go`, `channel/worker.go`, `acp/` | Session continuity, timeout/cancel paths, stderr/log evidence |
 | Cron / reminders | `heartbeat/cron.go`, `bot/handler_cron.go`, `internal/cronpolicy/` | Timezone, owner channel, thread target, run history |
-| MCP policy / tools | `channel/mcp_policy.go`, `mcpproxy/`, `internal/botmcp/`, `cmd/mcp-discord/` | Allowlist, read-only/write/destructive guards, audit, redaction or direct-payload contract |
+| MCP policy / tools | `channel/mcp_policy.go`, `mcpproxy/`, `internal/botmcp/`, `cmd/mcp-discord/` | Tool exposure, bot-tools binding, direct Discord guards, audit, redaction or direct-payload contract |
 | Discord egress / formatting | `bot/safe_egress.go`, `internal/discordfmt/`, `internal/botegress/` | 2000-char split, code fence handling, AllowedMentions, bot safe-egress redaction |
 | Runtime config / env | `config.go`, `main.go`, `channel/doctor_env.go` | README, `.env.example`, locale descriptions, `/doctor` |
 | Documentation-only | `README.md`, `docs/`, `.kiro/steering/` | Must match current code names and command behavior |
@@ -97,7 +97,7 @@ Before writing new code, look for the established module that already owns the c
 |---------|---------------|------------------|
 | Discord text splitting and Markdown repair | `internal/discordfmt` plus existing `bot` / `channel` send helpers | Manual 2000-char slicing, code fence repair, part prefixes |
 | Secret and path redaction | `internal/secrets`, `internal/botegress`, safe egress wrappers | Local regex redactors in handlers or MCP tools; applying bot safe-egress redaction to `discord_*` direct tools |
-| Discord write policy and allowlists | `cmd/mcp-discord`, `mcpproxy`, `channel/mcp_policy.go` | Raw REST calls that skip read-only/write/destructive guards |
+| Discord direct REST tool exposure and guards | `mcpproxy`, `channel/mcp_policy.go`, `cmd/mcp-discord` | Raw REST calls that skip MCP proxy exposure, `AllowedMentions`, direct formatting, or file path guards |
 | Safe Discord egress from agents | `internal/botmcp`, `internal/botegress`, `bot/safe_egress.go` | Direct message/file sending from bot-owned egress paths |
 | CWD and project steering paths | `channel.Manager.ValidateCWD`, manager steering helpers, `internal/paths` | Handler-side path joins or trusting user-provided cwd |
 | Kiro CLI settings isolation | `internal/kirosettings`, manager `agentOptsForTarget` | Writing `.kiro/settings` or `mcp.json` ad hoc |

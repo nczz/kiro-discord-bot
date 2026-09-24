@@ -136,100 +136,39 @@ func TestMCPPolicyToACPServerPreservesCatalogEnvOnly(t *testing.T) {
 	}
 }
 
-func TestMCPPolicyToACPServerConstrainsMCPDiscordWritePolicy(t *testing.T) {
-	p := MCPChannelPolicy{GuildID: "guild-1", ChannelID: "channel-1", ServerName: mcpDiscordServerName, Enabled: true, ReadOnly: false, AllowDestructive: false, AllowedTools: []string{"discord_send_message", "discord_delete_message"}}
-	entry := MCPCatalogEntry{Name: mcpDiscordServerName, Command: "mcp-discord", Env: map[string]string{"DATA_DIR": t.TempDir(), "MCP_DISCORD_ALLOW_DESTRUCTIVE": "true"}}
-	cfg := p.ToACPServer(entry, "/tmp/bot", "guild-1", "channel-1", "thread-1")
-	targetEnv := proxyTargetEnv(t, cfg.Env)
-	if targetEnv["MCP_DISCORD_READ_ONLY"] != "false" || targetEnv["MCP_DISCORD_ALLOW_DESTRUCTIVE"] != "false" {
-		t.Fatalf("mcp-discord write policy env = %+v, want channel policy booleans", targetEnv)
-	}
-	if targetEnv["MCP_DISCORD_ALLOWED_WRITE_TOOLS"] != "discord_delete_message,discord_send_message" {
-		t.Fatalf("mcp-discord allowed writes = %q, want effective tool allowlist", targetEnv["MCP_DISCORD_ALLOWED_WRITE_TOOLS"])
-	}
-}
-
-func TestMCPPolicyToACPServerBlocksWritesWhenOnlyReadToolsAreAllowed(t *testing.T) {
-	p := MCPChannelPolicy{GuildID: "guild-1", ChannelID: "channel-1", ServerName: mcpDiscordServerName, Enabled: true, ReadOnly: false, AllowDestructive: false, AllowedTools: []string{"discord_read_messages"}}
+func TestMCPPolicyToACPServerKeepsMCPDiscordPure(t *testing.T) {
+	p := MCPChannelPolicy{GuildID: "guild-1", ChannelID: "channel-1", ServerName: mcpDiscordServerName, Enabled: true, ReadOnly: false, AllowDestructive: false, AllowedTools: []string{"discord_read_messages", "discord_send_message"}}
 	entry := MCPCatalogEntry{Name: mcpDiscordServerName, Command: "mcp-discord", Env: map[string]string{"DATA_DIR": t.TempDir()}}
 	cfg := p.ToACPServer(entry, "/tmp/bot", "guild-1", "channel-1", "thread-1")
 	targetEnv := proxyTargetEnv(t, cfg.Env)
-	if targetEnv["MCP_DISCORD_ALLOWED_WRITE_TOOLS"] == "" || strings.Contains(targetEnv["MCP_DISCORD_ALLOWED_WRITE_TOOLS"], "discord_read_messages") {
-		t.Fatalf("mcp-discord write guard = %q, want non-empty sentinel without read tool names", targetEnv["MCP_DISCORD_ALLOWED_WRITE_TOOLS"])
-	}
-}
-
-func TestMCPPolicyToACPServerHonorsMCPDiscordDeploymentDestructiveCap(t *testing.T) {
-	p := MCPChannelPolicy{GuildID: "guild-1", ChannelID: "channel-1", ServerName: mcpDiscordServerName, Enabled: true, ReadOnly: false, AllowDestructive: true, AllowedTools: []string{"discord_delete_message"}}
-	entry := MCPCatalogEntry{Name: mcpDiscordServerName, Command: "mcp-discord", Env: map[string]string{"DATA_DIR": t.TempDir(), "MCP_DISCORD_ALLOW_DESTRUCTIVE": "false"}}
-	cfg := p.ToACPServer(entry, "/tmp/bot", "guild-1", "channel-1", "thread-1")
-	targetEnv := proxyTargetEnv(t, cfg.Env)
-	if targetEnv["MCP_DISCORD_ALLOW_DESTRUCTIVE"] != "false" {
-		t.Fatalf("mcp-discord destructive env = %q, want deployment cap to override channel full", targetEnv["MCP_DISCORD_ALLOW_DESTRUCTIVE"])
-	}
-}
-
-func TestMCPDiscordBuiltInToolClassificationCoversKnownTools(t *testing.T) {
-	known := []string{
-		"discord_add_reaction",
-		"discord_channel_info",
-		"discord_create_thread",
-		"discord_delete_message",
-		"discord_download_attachment",
-		"discord_edit_channel_topic",
-		"discord_edit_message",
-		"discord_get_message",
-		"discord_get_reactions",
-		"discord_get_user",
-		"discord_list_attachments",
-		"discord_list_channels",
-		"discord_list_members",
-		"discord_list_roles",
-		"discord_list_threads",
-		"discord_pin_message",
-		"discord_read_messages",
-		"discord_remove_reaction",
-		"discord_reply_message",
-		"discord_resolve_mentions",
-		"discord_search_messages",
-		"discord_send_embed",
-		"discord_send_file",
-		"discord_send_message",
-	}
-	for _, name := range known {
-		_, read := mcpDiscordReadToolNames[name]
-		_, write := mcpDiscordWriteToolNames[name]
-		if read == write {
-			t.Fatalf("%s classification read=%t write=%t, want exactly one", name, read, write)
+	for _, key := range []string{
+		"BOT_TOOLS_CHANNEL_ID",
+		"BOT_TOOLS_TARGET_CHANNEL_ID",
+		"BOT_TOOLS_GUILD_ID",
+		"MCP_DISCORD_READ_ONLY",
+		"MCP_DISCORD_ALLOWED_WRITE_TOOLS",
+		"MCP_DISCORD_ALLOW_DESTRUCTIVE",
+	} {
+		if _, ok := targetEnv[key]; ok {
+			t.Fatalf("mcp-discord target env includes removed local policy key %s: %+v", key, targetEnv)
 		}
 	}
-}
-
-func TestManagerMCPDiscordDeploymentWriteCapKeepsReadToolsWithoutCache(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("MCP_DISCORD_ALLOWED_WRITE_TOOLS", "discord_send_message")
-	m := NewManager(ManagerConfig{DataDir: dir, GuildID: "guild-1"})
-	defer m.StopAll()
-	m.RegisterBuiltinMCP(mcpDiscordServerName, []string{"mcp-discord"}, map[string]string{"DATA_DIR": dir})
-	if err := m.SetMCPPolicy("channel-1", "user-1", mcpDiscordServerName, true, "full"); err != nil {
-		t.Fatalf("enable full mcp-discord policy: %v", err)
-	}
-	opts := m.agentOptsForChannel("channel-1")
-	if len(opts.MCPServers) != 1 {
-		t.Fatalf("mcp servers = %+v, want one mcp-discord server", opts.MCPServers)
+	if targetEnv["BOT_TOOLS_TARGET_STATE_PATH"] != filepath.Join(entry.Env["DATA_DIR"], "bot-tools-targets", "thread-1.json") {
+		t.Fatalf("mcp-discord target state bridge path = %q", targetEnv["BOT_TOOLS_TARGET_STATE_PATH"])
 	}
 	var allowed []string
-	if err := json.Unmarshal([]byte(opts.MCPServers[0].Env["MCP_PROXY_ALLOWED_TOOLS_JSON"]), &allowed); err != nil {
+	if err := json.Unmarshal([]byte(cfg.Env["MCP_PROXY_ALLOWED_TOOLS_JSON"]), &allowed); err != nil {
 		t.Fatalf("allowed tools json: %v", err)
 	}
-	if !containsString(allowed, "discord_read_messages") || !containsString(allowed, "discord_get_user") || !containsString(allowed, "discord_send_message") || containsString(allowed, "discord_send_file") {
-		t.Fatalf("fallback allowed tools = %+v, want built-in reads plus capped writes", allowed)
+	if !containsString(allowed, "discord_read_messages") || !containsString(allowed, "discord_send_message") {
+		t.Fatalf("proxy allowed tools = %+v, want policy-selected tools", allowed)
 	}
 }
 
-func TestManagerMCPDiscordDeploymentWriteCapFiltersBotManagedTools(t *testing.T) {
+func TestManagerMCPDiscordIgnoresLegacyDeploymentWriteCap(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("MCP_DISCORD_ALLOWED_WRITE_TOOLS", "discord_send_message")
+	t.Setenv("MCP_DISCORD_ALLOW_DESTRUCTIVE", "false")
 	m := NewManager(ManagerConfig{DataDir: dir, GuildID: "guild-1"})
 	defer m.StopAll()
 	m.RegisterBuiltinMCP(mcpDiscordServerName, []string{"mcp-discord"}, map[string]string{"DATA_DIR": dir})
@@ -251,34 +190,23 @@ func TestManagerMCPDiscordDeploymentWriteCapFiltersBotManagedTools(t *testing.T)
 	if len(opts.MCPServers) != 1 {
 		t.Fatalf("mcp servers = %+v, want one mcp-discord server", opts.MCPServers)
 	}
-	var allowed []string
-	if err := json.Unmarshal([]byte(opts.MCPServers[0].Env["MCP_PROXY_ALLOWED_TOOLS_JSON"]), &allowed); err != nil {
-		t.Fatalf("allowed tools json: %v", err)
-	}
-	if opts.MCPServers[0].Env["MCP_PROXY_ALLOW_ALL_TOOLS"] != "false" {
-		t.Fatalf("mcp-discord proxy should not expose all tools under deployment cap: %+v", opts.MCPServers[0].Env)
-	}
-	allowedText := strings.Join(allowed, ",")
-	if !containsString(allowed, "discord_read_messages") || !containsString(allowed, "discord_send_message") || containsString(allowed, "discord_send_file") {
-		t.Fatalf("allowed tools = %s, want read tools plus capped write tool only", allowedText)
+	if opts.MCPServers[0].Env["MCP_PROXY_ALLOW_ALL_TOOLS"] != "true" {
+		t.Fatalf("mcp-discord proxy should expose policy full despite legacy cap env: %+v", opts.MCPServers[0].Env)
 	}
 	targetEnv := proxyTargetEnv(t, opts.MCPServers[0].Env)
-	if strings.Contains(targetEnv["MCP_DISCORD_ALLOWED_WRITE_TOOLS"], "discord_send_file") || !strings.Contains(targetEnv["MCP_DISCORD_ALLOWED_WRITE_TOOLS"], "discord_send_message") {
-		t.Fatalf("target write allowlist = %q, want deployment-capped writes", targetEnv["MCP_DISCORD_ALLOWED_WRITE_TOOLS"])
+	if _, ok := targetEnv["MCP_DISCORD_ALLOWED_WRITE_TOOLS"]; ok {
+		t.Fatalf("target env includes legacy write cap: %+v", targetEnv)
 	}
 
 	views, err := m.MCPToolViews("channel-1", mcpDiscordServerName)
 	if err != nil {
 		t.Fatalf("tool views: %v", err)
 	}
-	if len(views) != 2 {
-		t.Fatalf("visible tools = %+v, want capped write tool hidden", views)
+	if len(views) != 3 {
+		t.Fatalf("visible tools = %+v, want legacy cap ignored", views)
 	}
-	if err := m.SetMCPTool("channel-1", "user-1", mcpDiscordServerName, "discord_send_file", true); err == nil {
-		t.Fatal("uncapped write tool should be denied by deployment cap")
-	}
-	if err := m.SetMCPTool("channel-1", "user-1", mcpDiscordServerName, "discord_send_message", true); err != nil {
-		t.Fatalf("capped write tool should be enableable: %v", err)
+	if err := m.SetMCPTool("channel-1", "user-1", mcpDiscordServerName, "discord_send_file", true); err != nil {
+		t.Fatalf("legacy cap should not deny write tool selection: %v", err)
 	}
 }
 
@@ -417,7 +345,7 @@ func TestToACPServerURLType(t *testing.T) {
 	}
 }
 
-func TestManagerSkipsURLBindingSensitiveMCPServers(t *testing.T) {
+func TestManagerAllowsURLMCPDiscordServers(t *testing.T) {
 	dir := t.TempDir()
 	m := NewManager(ManagerConfig{DataDir: dir, GuildID: "guild-1"})
 	defer m.StopAll()
@@ -431,11 +359,20 @@ func TestManagerSkipsURLBindingSensitiveMCPServers(t *testing.T) {
 		t.Fatalf("set URL mcp-discord policy: %v", err)
 	}
 	got := m.agentOptsForChannel("channel-1").MCPServers
-	if len(got) != 1 || got[0].Name != "bot-tools" {
-		t.Fatalf("URL mcp-discord should be skipped for channel-bound bot tools: %+v", got)
+	if len(got) != 2 {
+		t.Fatalf("URL mcp-discord should be included with bot-tools: %+v", got)
 	}
-	if got[0].Env["BOT_TOOLS_CHANNEL_ALLOW_ALL_TOOLS"] != "false" || strings.Contains(got[0].Env["BOT_TOOLS_CHANNEL_ALLOWED_TOOLS_JSON"], "discord_") {
-		t.Fatalf("skipped URL mcp-discord leaked into bot-tools effective policy env: %+v", got[0].Env)
+	var foundDiscord bool
+	for _, server := range got {
+		if server.Name == mcpDiscordServerName {
+			foundDiscord = true
+			if server.Env["MCP_PROXY_URL"] != "http://127.0.0.1:18900" {
+				t.Fatalf("URL mcp-discord proxy env = %+v", server.Env)
+			}
+		}
+	}
+	if !foundDiscord {
+		t.Fatalf("URL mcp-discord missing from servers: %+v", got)
 	}
 }
 
@@ -547,11 +484,13 @@ func TestManagerBuiltinMCPRequiresExplicitPolicy(t *testing.T) {
 	if targetEnv["BOT_TOOLS_TARGET_STATE_PATH"] != filepath.Join(dir, "bot-tools-targets", "channel-1.json") {
 		t.Fatalf("builtin env missing dynamic target state path: %+v", targetEnv)
 	}
-	if discordEnv["BOT_TOOLS_CHANNEL_ID"] != "channel-1" || discordEnv["BOT_TOOLS_TARGET_CHANNEL_ID"] != "channel-1" || discordEnv["BOT_TOOLS_GUILD_ID"] != "guild-1" {
-		t.Fatalf("mcp-discord env missing channel binding: %+v", discordEnv)
+	for _, key := range []string{"BOT_TOOLS_CHANNEL_ID", "BOT_TOOLS_TARGET_CHANNEL_ID", "BOT_TOOLS_GUILD_ID"} {
+		if _, ok := discordEnv[key]; ok {
+			t.Fatalf("mcp-discord env includes bot-tools binding key %s: %+v", key, discordEnv)
+		}
 	}
 	if discordEnv["BOT_TOOLS_TARGET_STATE_PATH"] != filepath.Join(dir, "bot-tools-targets", "channel-1.json") {
-		t.Fatalf("mcp-discord env missing dynamic target state path: %+v", discordEnv)
+		t.Fatalf("mcp-discord env missing mention bridge state path: %+v", discordEnv)
 	}
 	if err := m.SetBotToolsTargetState("channel-1", "thread-1"); err != nil {
 		t.Fatalf("set target state: %v", err)
@@ -587,11 +526,13 @@ func TestManagerBuiltinMCPRequiresExplicitPolicy(t *testing.T) {
 	if tempEnv["BOT_TOOLS_TARGET_STATE_PATH"] != filepath.Join(dir, "bot-tools-targets", "cron-job-1.json") {
 		t.Fatalf("temp target state path = %q, want cron-specific path", tempEnv["BOT_TOOLS_TARGET_STATE_PATH"])
 	}
-	if tempDiscordEnv["BOT_TOOLS_CHANNEL_ID"] != "channel-1" || tempDiscordEnv["BOT_TOOLS_TARGET_CHANNEL_ID"] != "channel-1" || tempDiscordEnv["BOT_TOOLS_GUILD_ID"] != "guild-1" {
-		t.Fatalf("temp mcp-discord env missing channel binding: %+v", tempDiscordEnv)
+	for _, key := range []string{"BOT_TOOLS_CHANNEL_ID", "BOT_TOOLS_TARGET_CHANNEL_ID", "BOT_TOOLS_GUILD_ID"} {
+		if _, ok := tempDiscordEnv[key]; ok {
+			t.Fatalf("temp mcp-discord env includes bot-tools binding key %s: %+v", key, tempDiscordEnv)
+		}
 	}
 	if tempDiscordEnv["BOT_TOOLS_TARGET_STATE_PATH"] != filepath.Join(dir, "bot-tools-targets", "cron-job-1.json") {
-		t.Fatalf("temp mcp-discord target state path = %q, want cron-specific path", tempDiscordEnv["BOT_TOOLS_TARGET_STATE_PATH"])
+		t.Fatalf("temp mcp-discord target state path = %q, want cron-specific mention bridge path", tempDiscordEnv["BOT_TOOLS_TARGET_STATE_PATH"])
 	}
 
 	threadOpts := m.agentOptsForTarget("channel-1", "thread-1")
@@ -617,11 +558,13 @@ func TestManagerBuiltinMCPRequiresExplicitPolicy(t *testing.T) {
 	if threadEnv["BOT_TOOLS_TARGET_STATE_PATH"] != filepath.Join(dir, "bot-tools-targets", "thread-1.json") {
 		t.Fatalf("thread target state path = %q, want target-scoped thread state path", threadEnv["BOT_TOOLS_TARGET_STATE_PATH"])
 	}
-	if threadDiscordEnv["BOT_TOOLS_CHANNEL_ID"] != "channel-1" || threadDiscordEnv["BOT_TOOLS_TARGET_CHANNEL_ID"] != "thread-1" || threadDiscordEnv["BOT_TOOLS_GUILD_ID"] != "guild-1" {
-		t.Fatalf("thread mcp-discord env missing target binding: %+v", threadDiscordEnv)
+	for _, key := range []string{"BOT_TOOLS_CHANNEL_ID", "BOT_TOOLS_TARGET_CHANNEL_ID", "BOT_TOOLS_GUILD_ID"} {
+		if _, ok := threadDiscordEnv[key]; ok {
+			t.Fatalf("thread mcp-discord env includes bot-tools binding key %s: %+v", key, threadDiscordEnv)
+		}
 	}
 	if threadDiscordEnv["BOT_TOOLS_TARGET_STATE_PATH"] != filepath.Join(dir, "bot-tools-targets", "thread-1.json") {
-		t.Fatalf("thread mcp-discord target state path = %q, want target-scoped thread state path", threadDiscordEnv["BOT_TOOLS_TARGET_STATE_PATH"])
+		t.Fatalf("thread mcp-discord target state path = %q, want target-scoped mention bridge path", threadDiscordEnv["BOT_TOOLS_TARGET_STATE_PATH"])
 	}
 
 	if err := m.SetMCPPolicy("channel-1", "user-1", "bot-tools", false, "full"); err != nil {
@@ -1655,6 +1598,8 @@ func TestMCPPolicyStoreDiscoveryErrorCapturesStderr(t *testing.T) {
 
 func TestManagerRefreshesMCPCatalogForStatusAndInjection(t *testing.T) {
 	dir := t.TempDir()
+	L.Load("en")
+	t.Cleanup(func() { L.Load("en") })
 	cfgPath := filepath.Join(dir, "mcp.json")
 	if err := os.WriteFile(cfgPath, []byte(`{"mcpServers":{"generic-tools":{"command":"/tmp/generic-mcp"}}}`), 0644); err != nil {
 		t.Fatalf("write config: %v", err)

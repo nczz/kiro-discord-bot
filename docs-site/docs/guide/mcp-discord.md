@@ -48,27 +48,20 @@ Add an entry to `~/.kiro/settings/mcp.json` or the file pointed to by `KIRO_MCP_
 
 For multi-bot local development, make sure the `.env` is the same bot identity you are testing. If the visible Discord bot is M5Bot but the catalog command loads ChunBot's token, Discord permission changes for M5Bot will not fix MCP `403 Missing Access` errors.
 
-## Add Defense-in-depth Guards
+## Direct Discord MCP Guards
 
-Set env guards in the loaded `.env` or catalog environment:
+Set only the guards that still apply inside `mcp-discord`:
 
 ```env
-MCP_DISCORD_ALLOWED_GUILDS=123456789012345678
-MCP_DISCORD_ALLOWED_CHANNELS=234567890123456789,345678901234567890
 MCP_DISCORD_DOWNLOAD_DIR=/tmp/kiro-discord-mcp
-MCP_DISCORD_READ_ONLY=false
-MCP_DISCORD_ALLOWED_WRITE_TOOLS=discord_send_message,discord_reply_message,discord_resolve_mentions
-MCP_DISCORD_ALLOW_DESTRUCTIVE=false
 MCP_DISCORD_MEMBER_SCAN_LIMIT=5000
 MCP_DISCORD_UPLOAD_DENY_PATHS=/srv/kiro-private/**
 MCP_DISCORD_UPLOAD_DENY_CASE_INSENSITIVE=
 ```
 
-Empty guild/channel allowlists preserve legacy unrestricted target behavior. Empty `MCP_DISCORD_ALLOWED_WRITE_TOOLS` means there is no deployment-wide write-tool cap; any bot-managed channel policy can still expose write-policy tools unless its own channel policy blocks them. Production deployments should prefer explicit guild/channel allowlists when the bot has broad Discord access.
+`mcp-discord` is a pure Discord REST MCP server. It does not apply local guild/channel allowlists, read-only caps, write-tool caps, destructive caps, or bot session target binding. For bot-managed sessions, `/mcp manage` decides which `discord_*` tools are exposed to the agent through the MCP proxy. Actual guild/channel scope and write success are decided by the Discord bot token and Discord API permissions; a Discord `403 Missing Access` means the token cannot access or act on that resource.
 
-For standalone `mcp-discord` processes, do not rely on the channel-policy injection path. Set `MCP_DISCORD_READ_ONLY=true` unless writes are required; when writes are required, keep `MCP_DISCORD_ALLOW_DESTRUCTIVE=false` and enumerate only non-destructive tools in `MCP_DISCORD_ALLOWED_WRITE_TOOLS`.
-
-For bot-managed channel sessions, `MCP_DISCORD_ALLOWED_WRITE_TOOLS` is a deployment-wide upper bound, not a grant. The effective exposed write tools are the channel policy intersection with this environment cap; read tools are unaffected, and destructive tools still require both the channel destructive gate and `MCP_DISCORD_ALLOW_DESTRUCTIVE`. `/mcp manage` hides or rejects write tools outside this cap.
+The direct tools still keep their local content/file guards: Discord-friendly formatting and split behavior, verified mention placeholders with `AllowedMentions`, `discord_send_file` upload source denylist, and `discord_download_attachment` path-root/path-traversal checks.
 
 ## Enable Per Channel
 

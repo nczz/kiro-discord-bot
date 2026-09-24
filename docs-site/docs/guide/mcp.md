@@ -23,19 +23,18 @@ See [Bot Tools MCP](bot-tools.md) for the exact tool list, defaults, scope rules
 
 ## Discord MCP
 
-`mcp-discord` is an optional catalog server that can read messages, list channels, send messages, create threads, and perform other Discord REST operations. Before enabling it broadly, restrict its environment:
+`mcp-discord` is an optional pure Discord REST catalog server that can read messages, list channels, send messages, create threads, and perform other Discord REST operations. `/mcp manage` controls which `discord_*` tools are exposed to the agent. Guild/channel scope and operation success come from the Discord bot token and Discord API permissions; a Discord `403 Missing Access` means the token cannot access or act on that resource.
+
+Keep the direct file and mention guards configured where needed:
 
 ```bash
-MCP_DISCORD_ALLOWED_GUILDS=123456789012345678
-MCP_DISCORD_ALLOWED_CHANNELS=234567890123456789,345678901234567890
-MCP_DISCORD_READ_ONLY=false
-MCP_DISCORD_ALLOWED_WRITE_TOOLS=discord_send_message,discord_reply_message
-MCP_DISCORD_ALLOW_DESTRUCTIVE=false
+MCP_DISCORD_DOWNLOAD_DIR=/tmp/kiro-discord-mcp
+MCP_DISCORD_UPLOAD_DENY_PATHS=/srv/kiro-private/**
 ```
 
 For local multi-bot setups, make sure the catalog command loads the `.env` for the same bot identity you are testing. A 403 from Discord may mean the MCP server is using a different bot token than the visible Discord bot.
 
-See [Discord MCP](mcp-discord.md) for the complete tool categories and policy guards. See [Media MCP](media-mcp.md) for optional media-generation tools.
+See [Discord MCP](mcp-discord.md) for the complete tool categories and retained file/mention guards. See [Media MCP](media-mcp.md) for optional media-generation tools.
 
 ## URL and SSE Servers with Headers
 
