@@ -39,7 +39,7 @@ Parent channel 擁有：
 - Cron jobs。
 - Default thread/listen settings。
 
-Threads 可以用 parent channel context 與 bounded thread transcript 建立獨立 agents。Idle cleanup 可以停止 inactive thread agents，但 active work 不會被 capacity cleanup evict。
+Threads 可以用 parent channel context 與 bounded thread transcript 建立獨立 agents。Manager 在啟動新的 channel、thread 或 temporary agent 前會依 CPU/load 與記憶體訊號檢查主機即時容量；容量不足時會先回收 inactive agents，active work 不會被 capacity cleanup evict。
 
 ## MCP Policy Proxy
 

@@ -19,6 +19,10 @@ func commandError(err error) string {
 	if errors.As(err, &limitErr) {
 		return threadAgentLimitMessage(limitErr)
 	}
+	var capacityErr *channel.AgentCapacityError
+	if errors.As(err, &capacityErr) {
+		return capacityErr.Error()
+	}
 	var mcpDiscoveryErr *channel.MCPDiscoveryError
 	if errors.As(err, &mcpDiscoveryErr) {
 		return mcpDiscoveryErrorMessage(mcpDiscoveryErr)
@@ -118,19 +122,22 @@ func mcpDiscoveryUserReason(err *channel.MCPDiscoveryError) string {
 }
 
 func threadAgentLimitMessage(err *channel.ThreadAgentLimitError) string {
-	if err.Inactive == 0 {
-		return L.Getf("error.thread_agent_limit_all_active", err.Max, err.Active)
+	if err == nil {
+		return ""
 	}
-
-	candidates := make([]string, 0, len(err.Candidates))
-	for i, c := range err.Candidates {
+	active := make([]string, 0, len(err.ActiveThreads))
+	for i, c := range err.ActiveThreads {
 		if i >= 5 {
 			break
 		}
-		candidates = append(candidates, fmt.Sprintf("<#%s> `%s`", c.ThreadID, c.ThreadID))
+		active = append(active, fmt.Sprintf("<#%s> `%s`", c.ThreadID, c.ThreadID))
 	}
-	if len(candidates) == 0 {
+	if len(active) == 0 {
 		return L.Getf("error.thread_agent_limit_all_active", err.Max, err.Active)
 	}
-	return L.Getf("error.thread_agent_limit_choose", err.Max, err.Active, err.Inactive, strings.Join(candidates, "\n"))
+	reclaimNote := L.Get("error.thread_agent_limit_no_idle")
+	if err.Reclaimed > 0 {
+		reclaimNote = L.Getf("error.thread_agent_limit_reclaimed", err.Reclaimed)
+	}
+	return L.Getf("error.thread_agent_limit_active_wait", err.Max, err.Active, reclaimNote, strings.Join(active, "\n"))
 }

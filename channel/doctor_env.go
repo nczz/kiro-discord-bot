@@ -59,6 +59,7 @@ var envSpecs = []envEntry{
 	{Name: "STREAM_UPDATE_SEC", Group: "execution", Effective: func(m *Manager) string { return strconv.Itoa(m.streamUpdateSec) }},
 	{Name: "QUEUE_BUFFER_SIZE", Group: "execution", Effective: func(m *Manager) string { return strconv.Itoa(m.queueBufSize) }},
 	{Name: "MAX_SCANNER_BUFFER_MB", Group: "execution", Effective: func(m *Manager) string { return strconv.Itoa(m.maxScannerBuffer / 1024 / 1024) }},
+	{Name: "AGENT_CAPACITY_MODE", Group: "execution", Effective: func(m *Manager) string { return m.agentCapacityModeEffective() }},
 	{Name: "DOWNLOAD_TIMEOUT_SEC", Group: "execution"},
 
 	// Thread & Channel

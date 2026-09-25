@@ -237,7 +237,7 @@ func (b *Bot) runAuditPrompt(ctx cmdCtx, prompt string) {
 		replyLongWithMetadata(ctx, commandError(err), map[string]any{"audit_prompt_result": true, "status": "error"})
 		return
 	}
-	defer agent.Stop()
+	defer b.manager.StopTempAgent(agent)
 	if currentModel := strings.TrimSpace(agent.CurrentModelID()); currentModel != "" {
 		model = currentModel
 	}

@@ -91,6 +91,7 @@ func main() {
 			ThreadAgentMax:       cfg.ThreadAgentMax,
 			ThreadAgentIdleSec:   cfg.ThreadAgentIdleSec,
 			ChannelAgentIdleSec:  cfg.ChannelAgentIdleSec,
+			AgentCapacityMode:    cfg.AgentCapacityMode,
 			MaxScannerBuffer:     cfg.MaxScannerBuffer,
 			AgentProfile:         cfg.AgentProfile,
 			TrustAllTools:        cfg.TrustAllTools,

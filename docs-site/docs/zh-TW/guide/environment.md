@@ -149,6 +149,7 @@ WEBSHARE_HOST_TOKEN_FILE=/etc/kdb-webshare/host-token
 | `STREAM_UPDATE_SEC` | `3` | 串流更新最小間隔秒數。 |
 | `MAX_SCANNER_BUFFER_MB` | `64` | 長輸出 scanner buffer。 |
 | `DOWNLOAD_TIMEOUT_SEC` | `120` | Discord attachment 下載 timeout。 |
+| `AGENT_CAPACITY_MODE` | `auto` | ACP child agent 啟動前的主機資源動態 gate。`auto` 會檢查 CPU/load 與記憶體，先回收 idle agents，仍不足才拒絕啟動。`off` 會停用此動態 gate；明確設定的 legacy cap（例如 `THREAD_AGENT_MAX>0`）仍生效。 |
 | `KIRO_MODEL` | 空 | 初始 model override。 |
 | `KIRO_AGENT` | 空 | 初始 Kiro agent profile 或 mode。 |
 | `TRUST_ALL_TOOLS` | `true` | 完全等於 `true` 時預設允許 ACP server permission request；其他值預設拒絕，除非符合 `TRUST_TOOLS`。 |
@@ -160,7 +161,7 @@ WEBSHARE_HOST_TOKEN_FILE=/etc/kdb-webshare/host-token
 | 變數 | 預設 | 用途 |
 | --- | --- | --- |
 | `THREAD_AUTO_ARCHIVE` | `1440` | 任務討論串自動封存分鐘數。 |
-| `THREAD_AGENT_MAX` | `5` | 最大 active thread agents。小於 `1` 啟動時視為錯誤。 |
+| `THREAD_AGENT_MAX` | `0` | Legacy thread agent hard cap。`0` 表示不設定固定數量，改用主機 CPU/記憶體的動態 agent 容量判斷。若設定此上限且已滿，bot 會先自動關閉 inactive thread agents；若剩下的都正在工作，錯誤訊息會列出需要等待的 threads。 |
 | `THREAD_AGENT_IDLE_SEC` | `900` | Thread agent 閒置 timeout 秒數。 |
 | `CHANNEL_AGENT_IDLE_SEC` | `0` | Channel agent 閒置 timeout 秒數。`0` 表示停用。 |
 | `BOT_PEERS` | 空 | 多 bot mention 與 handoff 的逗號分隔 peer hints。 |

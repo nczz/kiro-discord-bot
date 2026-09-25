@@ -79,20 +79,25 @@ func TestCommandErrorAgentBinaryMissingIsEngineNeutral(t *testing.T) {
 	}
 }
 
-func TestCommandErrorThreadAgentLimitWithCandidates(t *testing.T) {
+func TestCommandErrorThreadAgentLimitListsActiveThreads(t *testing.T) {
 	L.Load("en")
 	msg := commandError(&channel.ThreadAgentLimitError{
-		Max:      5,
-		Active:   3,
-		Inactive: 2,
-		Candidates: []channel.ThreadAgentLimitCandidate{
+		Max:       5,
+		Active:    3,
+		Reclaimed: 2,
+		ActiveThreads: []channel.ThreadAgentLimitCandidate{
 			{ThreadID: "thread-old", LastActivity: time.Now().Add(-time.Hour)},
 			{ThreadID: "thread-new", LastActivity: time.Now()},
 		},
 	})
-	for _, want := range []string{"Capacity is full", "No agent was closed automatically", "<#thread-old>", "`thread-old`", "/close-thread"} {
+	for _, want := range []string{"Capacity is full", "Closed 2 idle thread agents automatically", "<#thread-old>", "`thread-old`", "Currently working thread agents"} {
 		if !strings.Contains(msg, want) {
 			t.Fatalf("missing %q in message:\n%s", want, msg)
+		}
+	}
+	for _, unwanted := range []string{"No agent was closed automatically", "/close-thread", "Oldest inactive candidates"} {
+		if strings.Contains(msg, unwanted) {
+			t.Fatalf("unexpected %q in message:\n%s", unwanted, msg)
 		}
 	}
 }
@@ -116,12 +121,18 @@ func TestParseThreadIDArg(t *testing.T) {
 
 func TestCommandErrorThreadAgentLimitAllActive(t *testing.T) {
 	L.Load("en")
-	msg := commandError(&channel.ThreadAgentLimitError{Max: 5, Active: 5})
-	if !strings.Contains(msg, "All thread agent slots are currently working") {
-		t.Fatalf("missing all-active explanation:\n%s", msg)
+	msg := commandError(&channel.ThreadAgentLimitError{
+		Max:    5,
+		Active: 5,
+		ActiveThreads: []channel.ThreadAgentLimitCandidate{
+			{ThreadID: "thread-active"},
+		},
+	})
+	if !strings.Contains(msg, "Currently working thread agents") || !strings.Contains(msg, "<#thread-active>") {
+		t.Fatalf("missing active thread list:\n%s", msg)
 	}
-	if strings.Contains(msg, "Oldest inactive candidates") {
-		t.Fatalf("all-active message should not list inactive candidates:\n%s", msg)
+	if strings.Contains(msg, "Oldest inactive candidates") || strings.Contains(msg, "/close-thread") {
+		t.Fatalf("all-active message should not list inactive candidates or manual close instruction:\n%s", msg)
 	}
 }
 

@@ -39,7 +39,7 @@ Parent channels own:
 - Cron jobs.
 - Default thread/listen settings.
 
-Threads can spawn independent agents with the parent channel's context and a bounded thread transcript. Idle cleanup can stop inactive thread agents, but active work is not evicted by capacity cleanup.
+Threads can spawn independent agents with the parent channel's context and a bounded thread transcript. Before starting a new channel, thread, or temporary agent, the manager checks live host capacity from CPU/load and memory signals. If capacity is constrained, it reclaims inactive agents first; active work is not evicted by capacity cleanup.
 
 ## MCP Policy Proxy
 

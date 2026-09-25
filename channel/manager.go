@@ -79,6 +79,9 @@ type Manager struct {
 	threadAgentMax     int
 	threadAgentIdleSec int
 	maxScannerBuffer   int
+	tempAgents         int
+	agentCapacityMode  string
+	capacitySnapshot   func() agentCapacitySnapshot
 	agentProfile       string // --agent flag
 	trustAllTools      bool   // --trust-all-tools
 	trustTools         string // --trust-tools <names>
@@ -113,10 +116,12 @@ type ThreadAgentLimitCandidate struct {
 // ThreadAgentLimitError reports that no new thread agent can be started
 // without exceeding the configured capacity.
 type ThreadAgentLimitError struct {
-	Max        int
-	Active     int
-	Inactive   int
-	Candidates []ThreadAgentLimitCandidate
+	Max           int
+	Active        int
+	Inactive      int
+	Candidates    []ThreadAgentLimitCandidate
+	Reclaimed     int
+	ActiveThreads []ThreadAgentLimitCandidate
 }
 
 var ErrNoThreadAgent = errors.New("no active or saved thread agent")
@@ -201,6 +206,7 @@ type ManagerConfig struct {
 	ThreadAgentMax       int
 	ThreadAgentIdleSec   int
 	ChannelAgentIdleSec  int
+	AgentCapacityMode    string
 	MaxScannerBuffer     int
 	AgentProfile         string
 	TrustAllTools        bool
@@ -268,6 +274,8 @@ func NewManager(cfg ManagerConfig) *Manager {
 		channelAgentIdleSec: cfg.ChannelAgentIdleSec,
 		channelLastActivity: make(map[string]time.Time),
 		maxScannerBuffer:    cfg.MaxScannerBuffer,
+		agentCapacityMode:   strings.ToLower(strings.TrimSpace(cfg.AgentCapacityMode)),
+		capacitySnapshot:    defaultAgentCapacitySnapshot,
 		agentProfile:        cfg.AgentProfile,
 		trustAllTools:       cfg.TrustAllTools,
 		trustTools:          cfg.TrustTools,
@@ -970,7 +978,9 @@ func (m *Manager) stopChannel(channelID string) {
 		delete(m.workers, channelID)
 	}
 	if agent, ok := m.agents[channelID]; ok {
-		agent.Stop()
+		if agent != nil {
+			agent.Stop()
+		}
 		delete(m.agents, channelID)
 	}
 	delete(m.channelLastActivity, channelID)
@@ -1160,7 +1170,7 @@ func (m *Manager) Resume(channelID string) (SessionResumeResult, error) {
 	if !ok || strings.TrimSpace(sess.SessionID) == "" {
 		return SessionResumeResult{}, ErrNoSavedSession
 	}
-	if w, ok := m.workers[channelID]; ok && (w.IsActive() || w.QueueLen() > 0) {
+	if w, ok := m.workers[channelID]; ok && w.HasWork() {
 		return SessionResumeResult{}, ErrSessionBusy
 	}
 	if agent, ok := m.agents[channelID]; ok && agent.IsAlive() && !agent.IsBusy() {
@@ -1205,7 +1215,7 @@ func (m *Manager) ResumeThreadAgent(threadID, parentChannelID string) (SessionRe
 		return SessionResumeResult{}, ErrNoThreadAgent
 	}
 	if entry, ok := m.threadAgents[threadID]; ok {
-		if entry.worker != nil && (entry.worker.IsActive() || entry.worker.QueueLen() > 0) {
+		if entry.worker != nil && entry.worker.HasWork() {
 			return SessionResumeResult{}, ErrSessionBusy
 		}
 		if entry.agent != nil && entry.agent.IsAlive() && !entry.agent.IsBusy() {
@@ -1220,8 +1230,8 @@ func (m *Manager) ResumeThreadAgent(threadID, parentChannelID string) (SessionRe
 			}, nil
 		}
 		m.stopThreadAgentLocked(threadID)
-	} else if len(m.threadAgents) >= m.threadAgentMax {
-		return SessionResumeResult{}, m.threadAgentLimitErrorLocked()
+	} else if err := m.ensureThreadAgentLimitSlotLocked(threadID); err != nil {
+		return SessionResumeResult{}, err
 	}
 
 	entry, err := m.spawnThreadAgent(threadID, parentChannelID)
@@ -1863,7 +1873,7 @@ func (m *Manager) Cancel(channelID string) error {
 		return fmt.Errorf("no active session")
 	}
 	if !w.CancelCurrent() {
-		if w.IsActive() {
+		if w.HasWork() {
 			return fmt.Errorf("active job is not cancellable yet")
 		}
 		return fmt.Errorf("no active job")
@@ -2401,11 +2411,15 @@ func (m *Manager) listModelsFromOneShotAgent(name string, dialect acp.Dialect, b
 }
 
 func (m *Manager) modelsFromOneShotAgent(name string, dialect acp.Dialect, binary, cwd string) ([]acp.ModelEntry, string, error) {
+	if err := m.reserveTempAgentSlot(name); err != nil {
+		return nil, "", err
+	}
 	agent, err := acp.StartAgent(name, binary, cwd, "", m.preflightAgentOptionsFor(dialect))
 	if err != nil {
+		m.releaseTempAgentSlot()
 		return nil, "", fmt.Errorf("list %s models: %w", dialect.String(), err)
 	}
-	defer agent.Stop()
+	defer m.StopTempAgent(agent)
 
 	models := agent.AvailableModels()
 	if len(models) == 0 {
@@ -2750,6 +2764,10 @@ func (m *Manager) startAgentAndWorkerWithModelFallback(channelID string, allowSt
 	}
 	opts = m.applyEngine(opts, dialect)
 
+	if err := m.ensureAgentCapacityLocked("channel", channelID); err != nil {
+		return nil, err
+	}
+
 	agent, err := acp.StartAgent(agentName, binary, cwd, model, opts)
 	if err != nil && model != "" && agentStartModelError(err) {
 		if !allowStartupModelFallback {
@@ -2947,7 +2965,8 @@ func (m *Manager) Doctor(ctx context.Context) string {
 	activeAgents := len(m.agents)
 	activeThreadAgents := len(m.threadAgents)
 	m.mu.Unlock()
-	sb.WriteString(L.Getf("doctor.agents", activeAgents, activeThreadAgents, m.threadAgentMax))
+	sb.WriteString(L.Getf("doctor.agents", activeAgents, activeThreadAgents, threadAgentLimitDisplay(m.threadAgentMax)))
+	sb.WriteString(m.doctorAgentCapacity())
 
 	if err := os.MkdirAll(m.dataDir, 0755); err != nil {
 		sb.WriteString(L.Getf("doctor.data_dir.error", err.Error()))
@@ -3268,7 +3287,15 @@ func (m *Manager) StartTempAgent(name, cwd, model, channelID string) (*acp.Agent
 	}
 	dialect, binary := m.engineForChannel(channelID)
 	opts := m.applyEngine(m.agentOptsForTempChannel(name, channelID), dialect)
-	return acp.StartAgent(name, binary, cwd, model, opts)
+	if err := m.reserveTempAgentSlot(name); err != nil {
+		return nil, err
+	}
+	agent, err := acp.StartAgent(name, binary, cwd, model, opts)
+	if err != nil {
+		m.releaseTempAgentSlot()
+		return nil, err
+	}
+	return agent, nil
 }
 
 // StartAuditPromptAgent starts a private, short-lived agent for an already
@@ -3299,8 +3326,12 @@ func (m *Manager) StartAuditPromptAgent(name, channelID, targetChannelID string)
 	opts.MCPServers = servers
 	dialect, binary := m.engineForChannel(channelID)
 	opts = m.applyEngine(opts, dialect)
+	if err := m.reserveTempAgentSlot(name); err != nil {
+		return nil, "", err
+	}
 	agent, err := acp.StartAgent(name, binary, cwd, model, opts)
 	if err != nil {
+		m.releaseTempAgentSlot()
 		return nil, "", err
 	}
 	return agent, model, nil
@@ -3359,7 +3390,10 @@ func (m *Manager) SendCommandResult(channelID, command string) (AgentCommandResu
 
 // StopTempAgent stops a temporary agent.
 func (m *Manager) StopTempAgent(agent *acp.Agent) {
-	agent.Stop()
+	if agent != nil {
+		agent.Stop()
+	}
+	m.releaseTempAgentSlot()
 }
 
 // AskAgent sends a prompt to a named agent and returns the response.
@@ -3783,11 +3817,8 @@ func (m *Manager) EnqueueThread(ds *discordgo.Session, job *Job, parentChannelID
 	}
 
 	if !ok {
-		// Capacity decisions are user-facing. Never kill an existing thread
-		// agent automatically; report inactive candidates so the user can choose
-		// what to close.
-		if len(m.threadAgents) >= m.threadAgentMax {
-			return m.threadAgentLimitErrorLocked()
+		if err := m.ensureThreadAgentLimitSlotLocked(job.ThreadID); err != nil {
+			return err
 		}
 
 		var err error
@@ -3818,21 +3849,79 @@ func (m *Manager) EnqueueThread(ds *discordgo.Session, job *Job, parentChannelID
 	return nil
 }
 
-func (m *Manager) threadAgentLimitErrorLocked() error {
-	err := &ThreadAgentLimitError{Max: m.threadAgentMax}
-	for _, e := range m.threadAgents {
-		active := e.worker != nil && e.worker.IsActive()
-		if active {
-			err.Active++
+func (m *Manager) ensureThreadAgentLimitSlotLocked(targetThreadID string) error {
+	if m.threadAgentMax <= 0 || len(m.threadAgents) < m.threadAgentMax {
+		return nil
+	}
+	reclaimed := m.reclaimInactiveThreadAgentSlotsLocked(targetThreadID)
+	if len(m.threadAgents) < m.threadAgentMax {
+		return nil
+	}
+	return m.threadAgentLimitErrorLocked(reclaimed)
+}
+
+func (m *Manager) reclaimInactiveThreadAgentSlotsLocked(targetThreadID string) int {
+	candidates := make([]ThreadAgentLimitCandidate, 0, len(m.threadAgents))
+	for threadID, entry := range m.threadAgents {
+		if entry == nil || threadID == targetThreadID || threadAgentEntryBusy(entry) {
 			continue
 		}
-		err.Inactive++
-		err.Candidates = append(err.Candidates, ThreadAgentLimitCandidate{
+		candidates = append(candidates, ThreadAgentLimitCandidate{
+			ThreadID:     entry.threadID,
+			ParentChID:   entry.parentChannelID,
+			LastActivity: entry.lastActivity,
+		})
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].LastActivity.Before(candidates[j].LastActivity)
+	})
+	reclaimed := 0
+	for _, c := range candidates {
+		if len(m.threadAgents) < m.threadAgentMax {
+			break
+		}
+		if m.stopThreadAgentLocked(c.ThreadID) {
+			reclaimed++
+		}
+	}
+	return reclaimed
+}
+
+func threadAgentEntryBusy(entry *threadAgentEntry) bool {
+	if entry == nil {
+		return false
+	}
+	if entry.worker != nil && entry.worker.HasWork() {
+		return true
+	}
+	return entry.agent != nil && entry.agent.IsBusy()
+}
+
+func (m *Manager) threadAgentLimitErrorLocked(reclaimed ...int) error {
+	err := &ThreadAgentLimitError{Max: m.threadAgentMax}
+	if len(reclaimed) > 0 {
+		err.Reclaimed = reclaimed[0]
+	}
+	for _, e := range m.threadAgents {
+		if e == nil {
+			continue
+		}
+		candidate := ThreadAgentLimitCandidate{
 			ThreadID:     e.threadID,
 			ParentChID:   e.parentChannelID,
 			LastActivity: e.lastActivity,
-		})
+		}
+		if threadAgentEntryBusy(e) {
+			err.Active++
+			err.ActiveThreads = append(err.ActiveThreads, candidate)
+			continue
+		}
+		err.Inactive++
+		err.Candidates = append(err.Candidates, candidate)
 	}
+	sort.Slice(err.ActiveThreads, func(i, j int) bool {
+		return err.ActiveThreads[i].LastActivity.Before(err.ActiveThreads[j].LastActivity)
+	})
 	sort.Slice(err.Candidates, func(i, j int) bool {
 		return err.Candidates[i].LastActivity.Before(err.Candidates[j].LastActivity)
 	})
@@ -3901,6 +3990,10 @@ func (m *Manager) spawnThreadAgent(threadID, parentChannelID string, modelOverri
 		}
 	}
 	opts = m.applyEngine(opts, dialect)
+
+	if err := m.ensureAgentCapacityLocked("thread", threadID); err != nil {
+		return nil, err
+	}
 
 	agent, err := acp.StartAgent(agentName, binary, cwd, model, opts)
 	if err != nil && modelSource != "override" && model != "" && agentStartModelError(err) {
@@ -4009,8 +4102,12 @@ func (m *Manager) StopThreadAgent(threadID string) bool {
 
 func (m *Manager) stopThreadAgentLocked(threadID string) bool {
 	if entry, ok := m.threadAgents[threadID]; ok {
-		entry.worker.Stop()
-		entry.agent.Stop()
+		if entry.worker != nil {
+			entry.worker.Stop()
+		}
+		if entry.agent != nil {
+			entry.agent.Stop()
+		}
 		delete(m.threadAgents, threadID)
 		log.Printf("[manager] stopped thread agent thread-%s", threadID)
 		return true
@@ -4027,7 +4124,7 @@ func (m *Manager) MarkThreadArchived(threadID string) (stopped bool, deferred bo
 	if !ok {
 		return false, false
 	}
-	if entry.worker != nil && entry.worker.IsActive() {
+	if entry.worker != nil && entry.worker.HasWork() {
 		entry.closeWhenIdle = true
 		return false, true
 	}
@@ -4042,7 +4139,7 @@ func (m *Manager) StopThreadAgentIfCloseWhenIdle(threadID string) bool {
 	if !ok || !entry.closeWhenIdle {
 		return false
 	}
-	if entry.worker != nil && entry.worker.IsActive() {
+	if entry.worker != nil && entry.worker.HasWork() {
 		return false
 	}
 	return m.stopThreadAgentLocked(threadID)
@@ -4057,7 +4154,7 @@ func (m *Manager) CancelThreadAgent(threadID string) error {
 		return ErrNoThreadAgent
 	}
 	if !entry.worker.CancelCurrent() {
-		if entry.worker.IsActive() {
+		if entry.worker.HasWork() {
 			return fmt.Errorf("active job is not cancellable yet")
 		}
 		return fmt.Errorf("no active job")
@@ -4124,12 +4221,19 @@ func (m *Manager) ThreadAgentEntries() []struct {
 		Active       bool
 	}, 0, len(m.threadAgents))
 	for _, e := range m.threadAgents {
+		if e == nil {
+			continue
+		}
+		active := false
+		if e.worker != nil {
+			active = e.worker.HasWork()
+		}
 		out = append(out, struct {
 			ThreadID     string
 			ParentChID   string
 			LastActivity time.Time
 			Active       bool
-		}{e.threadID, e.parentChannelID, e.lastActivity, e.worker != nil && e.worker.IsActive()})
+		}{e.threadID, e.parentChannelID, e.lastActivity, active})
 	}
 	return out
 }
@@ -4150,7 +4254,7 @@ func (m *Manager) ThreadAgentDetails(threadID string) (parentChannelID string, a
 	if !ok {
 		return "", false, false
 	}
-	return entry.parentChannelID, entry.worker != nil && entry.worker.IsActive(), true
+	return entry.parentChannelID, entry.worker != nil && entry.worker.HasWork(), true
 }
 
 // IsThreadAgentActive reports whether a thread agent is currently executing a job.
@@ -4158,7 +4262,7 @@ func (m *Manager) IsThreadAgentActive(threadID string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	entry, ok := m.threadAgents[threadID]
-	return ok && entry.worker != nil && entry.worker.IsActive()
+	return ok && entry.worker != nil && entry.worker.HasWork()
 }
 
 // SendCommandThread sends a slash command (e.g. "/compact", "/clear") to a thread agent.

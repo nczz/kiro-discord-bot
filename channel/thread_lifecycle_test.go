@@ -84,6 +84,93 @@ func TestThreadAgentLimitErrorReportsInactiveCandidates(t *testing.T) {
 	if err.Candidates[0].ThreadID != "idle-old" || err.Candidates[1].ThreadID != "idle-new" {
 		t.Fatalf("candidate order = %v, want idle-old then idle-new", err.Candidates)
 	}
+	if len(err.ActiveThreads) != 1 || err.ActiveThreads[0].ThreadID != "active" {
+		t.Fatalf("active threads = %v, want active", err.ActiveThreads)
+	}
+}
+
+func TestThreadAgentLimitReclaimsInactiveBeforeRefusing(t *testing.T) {
+	active := newWorker("thread-active", &fakeWorkerAgent{}, 1, 30, 1, 0, nil, "")
+	_, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	active.cancelMu.Lock()
+	active.cancelFn = cancel
+	active.currentJobSeq = 1
+	active.currentJobActive = true
+	active.cancelMu.Unlock()
+
+	idle := newWorker("thread-idle", &fakeWorkerAgent{}, 1, 30, 1, 0, nil, "")
+
+	m := &Manager{threadAgentMax: 2, threadAgents: map[string]*threadAgentEntry{
+		"active": {threadID: "active", worker: active, lastActivity: time.Now()},
+		"idle":   {threadID: "idle", worker: idle, agent: &acp.Agent{}, lastActivity: time.Now().Add(-time.Hour)},
+	}}
+
+	if err := m.ensureThreadAgentLimitSlotLocked("new"); err != nil {
+		t.Fatalf("ensureThreadAgentLimitSlotLocked error = %v, want nil after reclaim", err)
+	}
+	if _, ok := m.threadAgents["idle"]; ok {
+		t.Fatal("idle thread agent was not reclaimed")
+	}
+	if _, ok := m.threadAgents["active"]; !ok {
+		t.Fatal("active thread agent was reclaimed")
+	}
+}
+
+func TestThreadAgentLimitDoesNotReclaimDequeuedWorker(t *testing.T) {
+	dequeued := newWorker("thread-dequeued", &fakeWorkerAgent{}, 1, 30, 1, 0, nil, "")
+	dequeued.markJobDequeued(true)
+
+	m := &Manager{threadAgentMax: 1, threadAgents: map[string]*threadAgentEntry{
+		"dequeued": {threadID: "dequeued", worker: dequeued, agent: &acp.Agent{}, lastActivity: time.Now().Add(-time.Hour)},
+	}}
+
+	err, ok := m.ensureThreadAgentLimitSlotLocked("new").(*ThreadAgentLimitError)
+	if !ok {
+		t.Fatal("expected ThreadAgentLimitError")
+	}
+	if err.Reclaimed != 0 || err.Active != 1 || err.Inactive != 0 {
+		t.Fatalf("limit stats = reclaimed:%d active:%d inactive:%d, want 0/1/0", err.Reclaimed, err.Active, err.Inactive)
+	}
+	if _, ok := m.threadAgents["dequeued"]; !ok {
+		t.Fatal("dequeued worker was reclaimed")
+	}
+}
+
+func TestThreadAgentLimitReportsActiveThreadsAfterReclaim(t *testing.T) {
+	activeOld := newWorker("thread-active-old", &fakeWorkerAgent{}, 1, 30, 1, 0, nil, "")
+	activeNew := newWorker("thread-active-new", &fakeWorkerAgent{}, 1, 30, 1, 0, nil, "")
+	for _, worker := range []*Worker{activeOld, activeNew} {
+		_, cancel := context.WithCancel(context.Background())
+		t.Cleanup(cancel)
+		worker.cancelMu.Lock()
+		worker.cancelFn = cancel
+		worker.currentJobSeq = 1
+		worker.currentJobActive = true
+		worker.cancelMu.Unlock()
+	}
+
+	idle := newWorker("thread-idle", &fakeWorkerAgent{}, 1, 30, 1, 0, nil, "")
+
+	m := &Manager{threadAgentMax: 2, threadAgents: map[string]*threadAgentEntry{
+		"active-old": {threadID: "active-old", worker: activeOld, lastActivity: time.Now().Add(-time.Hour)},
+		"active-new": {threadID: "active-new", worker: activeNew, lastActivity: time.Now()},
+		"idle":       {threadID: "idle", worker: idle, agent: &acp.Agent{}, lastActivity: time.Now().Add(-2 * time.Hour)},
+	}}
+
+	err, ok := m.ensureThreadAgentLimitSlotLocked("new").(*ThreadAgentLimitError)
+	if !ok {
+		t.Fatal("expected ThreadAgentLimitError")
+	}
+	if err.Reclaimed != 1 || err.Active != 2 || err.Inactive != 0 {
+		t.Fatalf("limit stats = reclaimed:%d active:%d inactive:%d, want 1/2/0", err.Reclaimed, err.Active, err.Inactive)
+	}
+	if len(err.ActiveThreads) != 2 || err.ActiveThreads[0].ThreadID != "active-old" || err.ActiveThreads[1].ThreadID != "active-new" {
+		t.Fatalf("active thread order = %v, want active-old then active-new", err.ActiveThreads)
+	}
+	if _, ok := m.threadAgents["idle"]; ok {
+		t.Fatal("idle thread agent was not reclaimed before refusing")
+	}
 }
 
 func TestThreadAgentLimitErrorWhenAllActive(t *testing.T) {

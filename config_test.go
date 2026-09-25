@@ -36,3 +36,19 @@ func TestLoadConfigGatewayWatchdogOverrides(t *testing.T) {
 		t.Fatalf("GatewayWatchdog = %+v, want 240s/30s/5", cfg.GatewayWatchdog)
 	}
 }
+
+func TestLoadConfigAgentCapacityModeDefaultAndOverride(t *testing.T) {
+	t.Setenv("DISCORD_TOKEN", "token")
+	t.Setenv("AGENT_CAPACITY_MODE", "")
+
+	cfg := loadConfig()
+	if cfg.AgentCapacityMode != "auto" {
+		t.Fatalf("AgentCapacityMode = %q, want auto", cfg.AgentCapacityMode)
+	}
+
+	t.Setenv("AGENT_CAPACITY_MODE", "off")
+	cfg = loadConfig()
+	if cfg.AgentCapacityMode != "off" {
+		t.Fatalf("AgentCapacityMode = %q, want off", cfg.AgentCapacityMode)
+	}
+}

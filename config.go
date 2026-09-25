@@ -45,6 +45,7 @@ type Config struct {
 	ThreadAgentMax       int
 	ThreadAgentIdleSec   int
 	ChannelAgentIdleSec  int
+	AgentCapacityMode    string
 	MaxScannerBuffer     int // bytes, scanner buffer upper limit for kiro-cli stdout
 	AgentProfile         string
 	TrustAllTools        bool
@@ -100,9 +101,10 @@ func loadConfig() *Config {
 		BotLocale:            envOr("BOT_LOCALE", "en"),
 		DownloadTimeoutSec:   envInt("DOWNLOAD_TIMEOUT_SEC", 120),
 		ThreadAutoArchive:    envInt("THREAD_AUTO_ARCHIVE", 1440),
-		ThreadAgentMax:       envInt("THREAD_AGENT_MAX", 5),
+		ThreadAgentMax:       envInt("THREAD_AGENT_MAX", 0),
 		ThreadAgentIdleSec:   envInt("THREAD_AGENT_IDLE_SEC", 900),
 		ChannelAgentIdleSec:  envInt("CHANNEL_AGENT_IDLE_SEC", 0),
+		AgentCapacityMode:    envOr("AGENT_CAPACITY_MODE", "auto"),
 		MaxScannerBuffer:     envInt("MAX_SCANNER_BUFFER_MB", 64) * 1024 * 1024,
 		AgentProfile:         envOr("KIRO_AGENT", ""),
 		TrustAllTools:        envOr("TRUST_ALL_TOOLS", "true") == "true",
@@ -163,9 +165,6 @@ func loadConfig() *Config {
 			MaxInboundTasksPerChannel:    envInt("A2A_MAX_INBOUND_TASKS_PER_CHANNEL", 10),
 			MaxEventRatePerMin:           envInt("A2A_MAX_EVENT_RATE_PER_MIN", 120),
 		},
-	}
-	if cfg.ThreadAgentMax <= 0 {
-		log.Fatalf("THREAD_AGENT_MAX must be greater than 0, got %d", cfg.ThreadAgentMax)
 	}
 	dataDir, err := paths.DataDir(cfg.DataDir)
 	if err != nil {

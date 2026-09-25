@@ -139,6 +139,8 @@ type Worker struct {
 	currentJobID        string
 	currentJobSeq       uint64
 	currentJobActive    bool
+	queuedJobs          int
+	currentJobDequeued  bool
 	pendingInterruptSeq uint64
 
 	onActivity      func()      // called during work to signal liveness (prevents idle cleanup)
@@ -283,10 +285,18 @@ func (w *Worker) compactOutput() bool { return w.currentOutputMode() != OutputMo
 func (w *Worker) SetHistoryPrefix(s string) { w.historyPrefix = s }
 
 func (w *Worker) Enqueue(job *Job) error {
+	w.cancelMu.Lock()
+	w.queuedJobs++
+	w.cancelMu.Unlock()
 	select {
 	case w.queue <- job:
 		return nil
 	default:
+		w.cancelMu.Lock()
+		if w.queuedJobs > 0 {
+			w.queuedJobs--
+		}
+		w.cancelMu.Unlock()
 		return fmt.Errorf("queue full")
 	}
 }
@@ -399,6 +409,39 @@ func (w *Worker) CancelCurrent() bool {
 		return true
 	}
 	return false
+}
+
+func (w *Worker) markJobDequeued(dequeued bool) {
+	if w == nil {
+		return
+	}
+	w.cancelMu.Lock()
+	w.currentJobDequeued = dequeued
+	w.cancelMu.Unlock()
+}
+
+func (w *Worker) markJobDequeuedFromQueue() {
+	if w == nil {
+		return
+	}
+	w.cancelMu.Lock()
+	if w.queuedJobs > 0 {
+		w.queuedJobs--
+	}
+	w.currentJobDequeued = true
+	w.cancelMu.Unlock()
+}
+
+// HasWork reports whether this worker has accepted work that must not be
+// reclaimed, including jobs already dequeued but not yet marked active.
+func (w *Worker) HasWork() bool {
+	if w == nil {
+		return false
+	}
+	w.cancelMu.Lock()
+	busy := w.currentJobActive || w.currentJobDequeued || w.queuedJobs > 0
+	w.cancelMu.Unlock()
+	return busy
 }
 
 // IsActive reports whether this worker is currently executing a job.
@@ -522,10 +565,13 @@ func (w *Worker) run() {
 		case <-w.stopCh:
 			return
 		case job := <-w.queue:
+			w.markJobDequeuedFromQueue()
 			if !w.waitIdle() {
+				w.markJobDequeued(false)
 				return
 			}
 			if w.isStopped() {
+				w.markJobDequeued(false)
 				return
 			}
 			w.execute(job)
@@ -677,6 +723,7 @@ func formatUsageLimitExceeded(decision UsageLimitDecision) string {
 }
 
 func (w *Worker) execute(job *Job) {
+	defer w.markJobDequeued(false)
 	if job != nil {
 		job.MentionRefs = w.rememberMentionRefs(job.MentionRefs)
 	}

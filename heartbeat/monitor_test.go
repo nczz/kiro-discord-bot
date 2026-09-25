@@ -15,6 +15,12 @@ import (
 	L "github.com/nczz/kiro-discord-bot/locale"
 )
 
+type safeMonitorTestError string
+
+func (e safeMonitorTestError) Error() string { return string(e) }
+
+func (e safeMonitorTestError) UserFacingError() string { return string(e) }
+
 type fakeMonitorDeps struct {
 	result             MonitorResult
 	err                error
@@ -196,6 +202,28 @@ func TestMonitorExecuteStartFailureCreatesNoNotification(t *testing.T) {
 	}
 	if deps.recordedState != MonitorStatusError {
 		t.Fatalf("status = %q, want %q", deps.recordedState, MonitorStatusError)
+	}
+}
+
+func TestMonitorStartFailurePreservesSafeUserFacingError(t *testing.T) {
+	L.Load("en")
+	dir := t.TempDir()
+	store, err := NewMonitorStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := &MonitorJob{ID: "job-1", Name: "CI", ChannelID: "channel-1", GuildID: "guild-1", Schedule: "*/5 * * * *", CheckPrompt: "check CI", NotifyWhen: "CI fails", Enabled: true, CreatedAt: time.Now().Add(-time.Hour).Format(time.RFC3339)}
+	if err := store.Add(job); err != nil {
+		t.Fatal(err)
+	}
+	deps := &fakeMonitorDeps{initialized: true, startErr: safeMonitorTestError("safe capacity detail")}
+	task := NewMonitorTask(store, deps, dir, "Asia/Taipei", "guild-1", 1)
+
+	task.execute(job, time.Date(2026, 5, 28, 12, 0, 0, 0, task.location))
+
+	history := task.loadHistory(job.ID, 10)
+	if len(history) != 1 || history[0].Reason != "safe capacity detail" {
+		t.Fatalf("start failure history = %+v, want safe capacity detail", history)
 	}
 }
 

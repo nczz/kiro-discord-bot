@@ -260,7 +260,15 @@ func (m *MonitorTask) execute(job *MonitorJob, now time.Time) {
 	m.finishJob(job, now, manual)
 }
 
+type monitorUserFacingError interface {
+	UserFacingError() string
+}
+
 func (m *MonitorTask) userFacingError(err error) string {
+	var safe monitorUserFacingError
+	if errors.As(err, &safe) {
+		return safe.UserFacingError()
+	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return L.Getf("monitor.exec.timeout_reason", m.timeoutMinutes())
 	}

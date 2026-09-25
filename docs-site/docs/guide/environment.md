@@ -148,6 +148,7 @@ Use the matching relay-side `RELAY_HOST_TOKEN_FILE` or `RELAY_HOST_TOKEN`. The p
 | `STREAM_UPDATE_SEC` | `3` | Minimum streaming update interval. |
 | `MAX_SCANNER_BUFFER_MB` | `64` | Scanner buffer for long Kiro CLI output. |
 | `DOWNLOAD_TIMEOUT_SEC` | `120` | Attachment download timeout. |
+| `AGENT_CAPACITY_MODE` | `auto` | Dynamic host resource gate for starting ACP child agents. `auto` checks CPU/load and memory, reclaims idle agents first, then refuses starts under pressure. `off` disables this dynamic gate; explicit legacy caps such as `THREAD_AGENT_MAX>0` still apply. |
 | `KIRO_MODEL` | empty | Initial model override. |
 | `KIRO_AGENT` | empty | Initial Kiro agent profile or mode. |
 | `TRUST_ALL_TOOLS` | `true` | If exactly `true`, ACP server permission requests are approved by default. Any other value denies by default unless covered by `TRUST_TOOLS`. |
@@ -159,7 +160,7 @@ Use the matching relay-side `RELAY_HOST_TOKEN_FILE` or `RELAY_HOST_TOKEN`. The p
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `THREAD_AUTO_ARCHIVE` | `1440` | Auto-archive duration for task threads, in minutes. |
-| `THREAD_AGENT_MAX` | `5` | Maximum active thread agents. Values below `1` are invalid at startup. |
+| `THREAD_AGENT_MAX` | `0` | Legacy thread-agent hard cap. `0` means no fixed count; the bot uses dynamic CPU/memory agent capacity instead. When this cap is set and full, the bot closes inactive thread agents automatically before refusing; if only working agents remain, the error lists those threads to wait for. |
 | `THREAD_AGENT_IDLE_SEC` | `900` | Idle timeout for thread agents. |
 | `CHANNEL_AGENT_IDLE_SEC` | `0` | Idle timeout for channel agents. `0` disables channel-agent idle shutdown. |
 | `BOT_PEERS` | empty | Comma-separated bot peer hints for multi-bot mention and handoff behavior. |

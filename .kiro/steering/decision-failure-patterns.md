@@ -352,6 +352,31 @@ Verification:
 - `go build ./...`, `go vet`, and `go test ./acp ./channel ./bot` pass with kiro behavior unchanged at
   each stage commit; omp dialect gets its own parse/cost/cancel tests + a gated ACP smoke.
 
+### Dynamic Agent Capacity Replaces Fixed Deployment Counts
+
+Decision:
+
+- Agent startup capacity is controlled by live host pressure, not by a deployment-time fixed count. `THREAD_AGENT_MAX=0` is the default and means no legacy thread-only hard cap; channel, thread, model-list, cron/monitor, and audit temp agents all pass through `channel.Manager` capacity checks before spawning an ACP child.
+- When capacity is constrained, the manager first reclaims idle non-active channel/thread agents. It never kills active work to make room. If resources remain constrained, the new start is refused with a localized capacity error and `/doctor` shows capacity signals.
+- Default thresholds are intentionally small-host friendly: require roughly 256 MiB free reserve plus the measured average RSS of currently live ACP agents for the next ACP child. If no live agent measurement is available yet, fall back to a 256 MiB cold-start estimate. CPU is pressured only around load1 >= 3x logical CPUs. These thresholds are guards, not exact sizing claims; the check re-runs before each start.
+- `AGENT_CAPACITY_MODE=auto` is the default. `AGENT_CAPACITY_MODE=off` is an operator escape hatch that disables the dynamic host-resource gate without disabling explicit legacy limits such as `THREAD_AGENT_MAX>0`.
+- If operators set `THREAD_AGENT_MAX>0`, that legacy cap still follows the same policy: close inactive thread agents automatically before refusal, then list the remaining working thread agents so users know to wait instead of manually closing idle agents.
+
+Context:
+
+- Deployment hosts vary widely. Requiring operators to guess a safe `THREAD_AGENT_MAX` is unfriendly and left channel agents without any global resource guard.
+- The owning layer is `channel.Manager`, because it already owns ACP lifecycle, worker maps, and idle cleanup. Bot and heartbeat adapters must remain thin.
+
+Rejected alternatives:
+
+- Starting more Discord bot processes for one token is rejected by the gateway runtime invariant.
+- Keeping a fixed thread-only cap is rejected because it underuses strong hosts and does not protect weak hosts from channel or temp agents.
+- Auto-killing active agents is rejected because it loses user work and breaks the existing capacity/cleanup safety model.
+
+Regression expectation:
+
+- Tests must prove healthy resource signals allow a start, unknown signals fall back to CPU-derived capacity, constrained capacity reclaims idle agents without evicting active work, explicit thread caps auto-close inactive thread agents before refusal, refusal messages list working threads, and `AGENT_CAPACITY_MODE=off` bypasses only the dynamic resource gate.
+
 ## Known Failure Patterns
 
 ### Duplicate Gateway Runtime For One Bot Identity

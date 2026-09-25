@@ -805,6 +805,34 @@ func TestWorkerIsActive(t *testing.T) {
 	}
 }
 
+func TestWorkerHasWorkIncludesDequeuedJob(t *testing.T) {
+	agent := &fakeWorkerAgent{}
+	w := newWorker("ch1", agent, 1, 30, 1, 1440, nil, "")
+
+	if w.HasWork() {
+		t.Fatal("new worker should not have work")
+	}
+	if err := w.Enqueue(&Job{}); err != nil {
+		t.Fatalf("enqueue job: %v", err)
+	}
+	if !w.HasWork() {
+		t.Fatal("queued worker should report work before run loop dequeues")
+	}
+
+	w = newWorker("ch2", agent, 1, 30, 1, 1440, nil, "")
+	w.markJobDequeued(true)
+	if !w.HasWork() {
+		t.Fatal("dequeued worker should report work")
+	}
+	if w.IsActive() {
+		t.Fatal("dequeued worker should not report executing active job")
+	}
+	w.markJobDequeued(false)
+	if w.HasWork() {
+		t.Fatal("cleared dequeued worker should not have work")
+	}
+}
+
 func TestWorkerSignalIdleDoesNotReleaseNextJobWhenStopped(t *testing.T) {
 	agent := &fakeWorkerAgent{}
 	w := newWorker("ch1", agent, 2, 30, 1, 1440, nil, "")
