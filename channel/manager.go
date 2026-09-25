@@ -35,7 +35,7 @@ type Manager struct {
 	paused          map[string]bool
 	threadMode      map[string]bool       // parent channel ID -> agent opens new threads (default true)
 	threadListen    map[string]string     // thread ID -> "full" or "mention" snapshot
-	outputMode      map[string]OutputMode // channelID/threadID → output mode (default compact when absent)
+	outputMode      map[string]OutputMode // channelID/threadID → output mode (default folded when absent)
 	webhookListen   map[string]bool       // parent channel ID -> allow tagged Discord webhook messages (default false)
 	store           *SessionStore
 	kiroCLI         string
@@ -3728,7 +3728,7 @@ func (m *Manager) SetOutputMode(channelID string, mode OutputMode) {
 }
 
 // OutputMode returns the Discord progress output mode for a channel or thread.
-// Default is compact when not explicitly set.
+// Default is folded when not explicitly set.
 func (m *Manager) OutputMode(channelID string) OutputMode {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -3745,7 +3745,7 @@ func (m *Manager) SetSilent(channelID string, on bool) {
 }
 
 // IsSilent returns true if the channel is not in full output mode.
-// Default is true (compact) when not explicitly set.
+// Default is true (folded) when not explicitly set.
 func (m *Manager) IsSilent(channelID string) bool {
 	return m.OutputMode(channelID) != OutputModeFull
 }

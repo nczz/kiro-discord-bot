@@ -12,12 +12,15 @@ const (
 	OutputModeFolded OutputMode = "folded"
 )
 
-// NormalizeOutputMode returns a supported output mode, preserving compact as the default.
+// DefaultOutputMode is used for targets without an explicit output-mode setting.
+const DefaultOutputMode = OutputModeFolded
+
+// NormalizeOutputMode returns a supported output mode, preserving folded as the default.
 func NormalizeOutputMode(mode OutputMode) OutputMode {
 	switch mode {
 	case OutputModeFull, OutputModeCompact, OutputModeFolded:
 		return mode
 	default:
-		return OutputModeCompact
+		return DefaultOutputMode
 	}
 }

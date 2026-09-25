@@ -1918,12 +1918,18 @@ func TestCmdSilentSetsFoldedAndLegacyModes(t *testing.T) {
 		reply:     func(msg string) { replies = append(replies, msg) },
 	}
 
+	ctx.args = ""
+	b.cmdSilent(ctx)
+	if got := replies[len(replies)-1]; !strings.Contains(got, "folded") {
+		t.Fatalf("default status reply = %q, want folded", got)
+	}
+
 	ctx.args = "folded"
 	b.cmdSilent(ctx)
 	if got := manager.OutputMode("channel-1"); got != channel.OutputModeFolded {
 		t.Fatalf("folded output mode = %q, want %q", got, channel.OutputModeFolded)
 	}
-	if len(replies) != 1 || !strings.Contains(replies[0], "folded") {
+	if !strings.Contains(replies[len(replies)-1], "folded") {
 		t.Fatalf("folded reply = %#v", replies)
 	}
 
@@ -1945,7 +1951,6 @@ func TestCmdSilentSetsFoldedAndLegacyModes(t *testing.T) {
 		t.Fatalf("status reply = %q, want compact", got)
 	}
 }
-
 
 func TestSlashCommandsIncludeAgentAndUsage(t *testing.T) {
 	foundAgent := false

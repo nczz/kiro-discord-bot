@@ -87,11 +87,11 @@ func TestWebhookListenModePersistsAcrossManagerRestart(t *testing.T) {
 func TestManagerOutputModeLegacySilentCompatibility(t *testing.T) {
 	m := NewManager(ManagerConfig{})
 
-	if got := m.OutputMode("channel-1"); got != OutputModeCompact {
-		t.Fatalf("default output mode = %q, want %q", got, OutputModeCompact)
+	if got := m.OutputMode("channel-1"); got != OutputModeFolded {
+		t.Fatalf("default output mode = %q, want %q", got, OutputModeFolded)
 	}
 	if !m.IsSilent("channel-1") {
-		t.Fatal("default output mode should remain legacy silent/compact")
+		t.Fatal("default folded output mode should remain legacy silent-compatible")
 	}
 
 	m.SetSilent("channel-1", false)
