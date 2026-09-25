@@ -1494,7 +1494,7 @@ func TestWorkerThreadFoldedProgressEditsCardAndPreservesFinalAndAudit(t *testing
 		if req == "POST /api/v9/channels/thread-1/messages" && strings.Contains(body, "Read config") {
 			t.Fatalf("folded mode posted per-tool progress instead of editing card: %q", body)
 		}
-		if req == "PATCH /api/v9/channels/thread-1/messages/reply-1" && strings.Contains(body, "Progress complete") {
+		if req == "PATCH /api/v9/channels/thread-1/messages/reply-1" && strings.Contains(body, "Done") && strings.Contains(body, "tool calls: 2") {
 			progressEdits++
 		}
 		if req == "POST /api/v9/channels/thread-1/messages" && strings.Contains(body, "final response") {
@@ -1519,6 +1519,41 @@ func TestWorkerThreadFoldedProgressEditsCardAndPreservesFinalAndAudit(t *testing
 	}
 	if !toolCallAudited || !toolResultAudited {
 		t.Fatalf("missing folded tool audit events: call=%v result=%v events=%+v", toolCallAudited, toolResultAudited, sink.Snapshot())
+	}
+}
+
+func TestWorkerThreadFoldedProgressCountsToolCallsForEnabledEngines(t *testing.T) {
+	for _, engine := range []string{acp.DialectKiro.String(), acp.DialectOmp.String()} {
+		t.Run(engine, func(t *testing.T) {
+			L.Load("en")
+			rt := &recordingRoundTripper{}
+			ds := testDiscordSession(rt)
+			agent := &fakeWorkerAgent{}
+			w := newWorkerWithEngine("ch1", agent, 1, 30, 1, 1440, nil, "", engine)
+			w.OnOutputModeFunc(func() OutputMode { return OutputModeFolded })
+
+			w.execute(&Job{
+				ChannelID: "ch1",
+				ThreadID:  "thread-1",
+				MessageID: "m1",
+				Prompt:    "hello",
+				Session:   ds,
+			})
+			cb := agent.Callbacks()
+			cb.OnToolCall(acp.ToolCallEvent{ToolCallID: "tool-1", Title: "Read config", Kind: "read"})
+			cb.OnToolCall(acp.ToolCallEvent{ToolCallID: "tool-2", Title: "Broken tool", Kind: "execute"})
+			cb.OnToolResult(acp.ToolCallEvent{ToolCallID: "tool-1", Title: "Read config", Kind: "read", Status: "completed"})
+			cb.OnToolResult(acp.ToolCallEvent{ToolCallID: "tool-2", Title: "Broken tool", Kind: "execute", Status: "failed", RawOutput: "boom"})
+			cb.OnComplete("final response", nil)
+
+			reqs, bodies := rt.Snapshot()
+			for i, req := range reqs {
+				if req == "PATCH /api/v9/channels/thread-1/messages/reply-1" && strings.Contains(bodies[i], "Done") && strings.Contains(bodies[i], "tool calls: 2") && strings.Contains(bodies[i], "failed: 1") {
+					return
+				}
+			}
+			t.Fatalf("%s folded card missing tool call count; reqs=%v bodies=%v", engine, reqs, bodies)
+		})
 	}
 }
 
@@ -1607,7 +1642,7 @@ func TestWorkerThreadFoldedProgressReadErrorCompletesCard(t *testing.T) {
 
 	reqs, bodies := rt.Snapshot()
 	for i, req := range reqs {
-		if req == "PATCH /api/v9/channels/thread-1/messages/reply-1" && strings.Contains(bodies[i], "Progress failed") && strings.Contains(bodies[i], "stream broke") {
+		if req == "PATCH /api/v9/channels/thread-1/messages/reply-1" && strings.Contains(bodies[i], "Failed") && strings.Contains(bodies[i], "stream broke") {
 			return
 		}
 	}
@@ -1643,6 +1678,41 @@ func TestWorkerThreadFoldedProgressReadErrorFallsBackWhenEditFails(t *testing.T)
 	}
 	if !fallbackPost || !warningReaction {
 		t.Fatalf("fallback post=%v warning=%v; reqs=%v bodies=%v", fallbackPost, warningReaction, reqs, bodies)
+	}
+}
+
+func TestFoldedProgressCardWordingUsesToolCalls(t *testing.T) {
+	L.Load("zh-TW")
+	reporter := &threadProgressReporter{
+		mode:      OutputModeFolded,
+		startedAt: time.Now().Add(-9 * time.Second),
+	}
+
+	noTools := reporter.renderLocked("success")
+	if !strings.Contains(noTools, "✅ 已完成") || !strings.Contains(noTools, "未使用工具") {
+		t.Fatalf("no-tool folded card = %q, want completed without tools", noTools)
+	}
+	if strings.Contains(noTools, "完成 0") || strings.Contains(noTools, "失敗 0") {
+		t.Fatalf("no-tool folded card leaked counter wording: %q", noTools)
+	}
+
+	reporter.toolStarted = 3
+	reporter.toolCompleted = 2
+	reporter.toolFailed = 1
+	toolCalls := reporter.renderLocked("success")
+	if !strings.Contains(toolCalls, "3 次工具呼叫") || !strings.Contains(toolCalls, "失敗 1 次") {
+		t.Fatalf("tool-call folded card = %q, want call count and failure count", toolCalls)
+	}
+	if strings.Contains(toolCalls, "完成 2") {
+		t.Fatalf("tool-call folded card should not show completed-result counter: %q", toolCalls)
+	}
+
+	reporter.toolStarted = 4
+	reporter.toolCompleted = 2
+	reporter.toolFailed = 1
+	running := reporter.renderLocked("running")
+	if !strings.Contains(running, "4 次工具呼叫") || !strings.Contains(running, "執行中 1") || !strings.Contains(running, "失敗 1 次") {
+		t.Fatalf("running folded card = %q, want call count, running count, and failure count", running)
 	}
 }
 

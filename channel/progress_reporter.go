@@ -169,14 +169,15 @@ func (r *threadProgressReporter) renderLocked(status string) string {
 	if running < 0 {
 		running = 0
 	}
+	summary := r.foldedToolSummaryLocked(status, running)
 	var msg string
 	switch status {
 	case "success":
-		msg = L.Getf("worker.progress.folded.completed", elapsed, r.toolCompleted, r.toolFailed)
+		msg = L.Getf("worker.progress.folded.completed", elapsed, summary)
 	case "failed":
-		msg = L.Getf("worker.progress.folded.failed", elapsed, r.toolCompleted, r.toolFailed)
+		msg = L.Getf("worker.progress.folded.failed", elapsed, summary)
 	default:
-		msg = L.Getf("worker.progress.folded.running", elapsed, r.toolCompleted, running, r.toolFailed)
+		msg = L.Getf("worker.progress.folded.running", elapsed, summary)
 	}
 	if r.latest != "" && status == "running" {
 		msg += "\n" + L.Getf("worker.progress.folded.latest", r.latest)
@@ -185,6 +186,25 @@ func (r *threadProgressReporter) renderLocked(status string) string {
 		msg += "\n" + L.Getf("worker.progress.folded.reason", EscapeDiscordMarkdown(r.failedReason))
 	}
 	return msg
+}
+
+func (r *threadProgressReporter) foldedToolSummaryLocked(status string, running int) string {
+	if r.toolStarted == 0 {
+		if status == "running" {
+			return L.Get("worker.progress.folded.no_tools_yet")
+		}
+		return L.Get("worker.progress.folded.no_tools")
+	}
+	if status == "running" && running > 0 && r.toolFailed > 0 {
+		return L.Getf("worker.progress.folded.tool_calls_running_failed", r.toolStarted, running, r.toolFailed)
+	}
+	if status == "running" && running > 0 {
+		return L.Getf("worker.progress.folded.tool_calls_running", r.toolStarted, running)
+	}
+	if r.toolFailed > 0 {
+		return L.Getf("worker.progress.folded.tool_calls_failed", r.toolStarted, r.toolFailed)
+	}
+	return L.Getf("worker.progress.folded.tool_calls", r.toolStarted)
 }
 
 func formatFoldedElapsed(d time.Duration) string {
