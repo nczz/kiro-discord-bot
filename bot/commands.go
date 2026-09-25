@@ -391,19 +391,21 @@ func (b *Bot) cmdBack(ctx cmdCtx) {
 }
 
 func (b *Bot) cmdSilent(ctx cmdCtx) {
-	switch ctx.args {
-	case "on":
-		b.manager.SetSilent(ctx.targetID, true)
-		ctx.reply(L.Get("silent.on"))
-	case "off":
-		b.manager.SetSilent(ctx.targetID, false)
-		ctx.reply(L.Get("silent.off"))
+	arg := strings.ToLower(strings.TrimSpace(ctx.args))
+	switch arg {
+	case "on", "compact":
+		b.manager.SetOutputMode(ctx.targetID, channel.OutputModeCompact)
+		ctx.reply(L.Get("silent.compact"))
+	case "off", "full":
+		b.manager.SetOutputMode(ctx.targetID, channel.OutputModeFull)
+		ctx.reply(L.Get("silent.full"))
+	case "folded":
+		b.manager.SetOutputMode(ctx.targetID, channel.OutputModeFolded)
+		ctx.reply(L.Get("silent.folded"))
+	case "":
+		ctx.reply(L.Getf("silent.status", b.manager.OutputMode(ctx.targetID)))
 	default:
-		if b.manager.IsSilent(ctx.targetID) {
-			ctx.reply(L.Get("silent.status.on"))
-		} else {
-			ctx.reply(L.Get("silent.status.off"))
-		}
+		ctx.reply(L.Get("silent.usage"))
 	}
 }
 

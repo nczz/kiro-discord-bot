@@ -150,7 +150,7 @@ type Worker struct {
 	memoryPrefix func() string // returns memory+flash prefix to inject into prompts
 	skillPrefix  func(targetID string) string
 
-	isSilent func() bool // returns true if silent mode is on (compact tool output)
+	outputMode func() OutputMode // returns current Discord progress output mode
 
 	historyPrefix string // prepended to first job's prompt, then cleared
 
@@ -257,8 +257,27 @@ func (w *Worker) SetUsageLimits(cfg UsageLimitConfig) { w.usageLimits = cfg }
 
 func (w *Worker) SetAuditSink(sink AuditSink) { w.audit = sink }
 
-// OnSilentFunc sets a callback that returns whether silent mode is active.
-func (w *Worker) OnSilentFunc(fn func() bool) { w.isSilent = fn }
+// OnSilentFunc sets a legacy callback that returns whether compact output is active.
+func (w *Worker) OnSilentFunc(fn func() bool) {
+	w.outputMode = func() OutputMode {
+		if fn != nil && !fn() {
+			return OutputModeFull
+		}
+		return OutputModeCompact
+	}
+}
+
+// OnOutputModeFunc sets a callback that returns the current Discord progress output mode.
+func (w *Worker) OnOutputModeFunc(fn func() OutputMode) { w.outputMode = fn }
+
+func (w *Worker) currentOutputMode() OutputMode {
+	if w == nil || w.outputMode == nil {
+		return OutputModeFull
+	}
+	return NormalizeOutputMode(w.outputMode())
+}
+
+func (w *Worker) compactOutput() bool { return w.currentOutputMode() != OutputModeFull }
 
 // SetHistoryPrefix sets conversation history to prepend to the first job's prompt.
 func (w *Worker) SetHistoryPrefix(s string) { w.historyPrefix = s }
@@ -769,7 +788,8 @@ func (w *Worker) execute(job *Job) {
 	if job.Transcript != "" {
 		_, _ = SendLongThread(ds, threadID, L.Get("stt.prefix")+job.Transcript)
 	}
-	SendProcessMessage(ds, threadID, "🔄 "+L.Get("worker.processing"))
+	progress := newThreadProgressReporter(w.currentOutputMode(), ds, threadID, job.DisplayCWD)
+	progress.Start()
 
 	// Setup timeout context as safety net
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(w.askTimeoutSec)*time.Second)
@@ -793,11 +813,13 @@ func (w *Worker) execute(job *Job) {
 			}
 			title := toolDisplayTitle(evt)
 			icon := ToolKindIcon(evt.Kind)
-			silent := w.isSilent != nil && w.isSilent()
-			if silent {
+			switch w.currentOutputMode() {
+			case OutputModeFolded:
+				progress.ToolCall(evt)
+			case OutputModeCompact:
 				// Compact: icon + title only
 				SendProcessMessage(ds, threadID, CompactToolStartMessage(icon, evt, job.DisplayCWD))
-			} else {
+			default:
 				// Full: icon + title + affected files
 				msg := icon + " " + EscapeDiscordMarkdown(title)
 				if len(evt.Locations) > 0 {
@@ -826,8 +848,11 @@ func (w *Worker) execute(job *Job) {
 				"display_title": title,
 				"tool_call_id":  evt.ToolCallID,
 			})
-			silent := w.isSilent != nil && w.isSilent()
-			if silent {
+			switch w.currentOutputMode() {
+			case OutputModeFolded:
+				progress.ToolResult(evt)
+				return
+			case OutputModeCompact:
 				// Compact: only show one-line failure
 				if evt.Status == "failed" {
 					SendProcessMessage(ds, threadID, FormatToolFailureMessage(title, evt.RawOutput, 500))
@@ -845,7 +870,11 @@ func (w *Worker) execute(job *Job) {
 			if w.onActivity != nil {
 				w.onActivity()
 			}
-			if w.isSilent != nil && w.isSilent() {
+			if w.currentOutputMode() == OutputModeFolded {
+				progress.Thought(text)
+				return
+			}
+			if w.compactOutput() {
 				return // Compact: skip thoughts
 			}
 			// Accumulate thought chunks — send as a single collapsed block would be ideal,
@@ -859,7 +888,11 @@ func (w *Worker) execute(job *Job) {
 			if w.onActivity != nil {
 				w.onActivity()
 			}
-			if w.isSilent != nil && w.isSilent() {
+			if w.currentOutputMode() == OutputModeFolded {
+				progress.Subagent(state)
+				return
+			}
+			if w.compactOutput() {
 				return // Compact: skip subagent progress
 			}
 			if msg := FormatSubagentProgress(state); msg != "" {
@@ -870,7 +903,11 @@ func (w *Worker) execute(job *Job) {
 			if w.onActivity != nil {
 				w.onActivity()
 			}
-			if w.isSilent != nil && w.isSilent() {
+			if w.currentOutputMode() == OutputModeFolded {
+				progress.Plan(state)
+				return
+			}
+			if w.compactOutput() {
 				return // Compact: skip plan updates
 			}
 			if msg := FormatPlanUpdate(state); msg != "" {
@@ -918,6 +955,7 @@ func (w *Worker) execute(job *Job) {
 						"suppressed_agent_error":  askErr.Error(),
 						"suppressed_error_reason": "safe_egress_delivered",
 					})
+					progress.CompleteSuccess()
 					w.recordUsage(job, threadID, "success", startTime)
 					finishJob()
 					return
@@ -948,6 +986,7 @@ func (w *Worker) execute(job *Job) {
 				})
 				w.auditResponseEvent(job, threadID, "error", errorContent)
 				w.recordUsage(job, threadID, "error", startTime)
+				progress.CompleteFailure(errMsg)
 				finishJob()
 				return
 			}
@@ -983,9 +1022,11 @@ func (w *Worker) execute(job *Job) {
 					Error:   a2a.TaskError{Code: a2a.ErrorInternal, Message: sendErr.Error()},
 					Metrics: a2aMetrics(w.agent.TurnMetrics(), startTime),
 				})
+				progress.CompleteFailure(sendErr.Error())
 				finishJob()
 				return
 			}
+			progress.CompleteSuccess()
 			swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "✅")
 			if job.FinalReply != nil {
 				job.FinalReply(responseWithMetrics)
@@ -1039,7 +1080,13 @@ func (w *Worker) execute(job *Job) {
 	w.agent.OnReadErrorFunc(func(err error) {
 		log.Printf("[worker %s] agent read error | user=%s msg=%s elapsed=%s err=%v",
 			w.channelID, job.Username, job.MessageID, time.Since(startTime).Round(time.Millisecond), err)
-		if !w.isSilent() {
+		switch w.currentOutputMode() {
+		case OutputModeFolded:
+			if progress.CompleteFailure(err.Error()) {
+				break
+			}
+			fallthrough
+		case OutputModeFull:
 			msg := L.Getf("error.agent_read", err)
 			SendProcessMessage(ds, threadID, msg)
 			swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "⚠️")

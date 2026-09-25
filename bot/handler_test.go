@@ -1907,6 +1907,46 @@ func TestCwdCommandRequiresChannelManager(t *testing.T) {
 	}
 }
 
+func TestCmdSilentSetsFoldedAndLegacyModes(t *testing.T) {
+	L.Load("en")
+	manager := channel.NewManager(channel.ManagerConfig{})
+	b := &Bot{manager: manager}
+	var replies []string
+	ctx := cmdCtx{
+		channelID: "channel-1",
+		targetID:  "channel-1",
+		reply:     func(msg string) { replies = append(replies, msg) },
+	}
+
+	ctx.args = "folded"
+	b.cmdSilent(ctx)
+	if got := manager.OutputMode("channel-1"); got != channel.OutputModeFolded {
+		t.Fatalf("folded output mode = %q, want %q", got, channel.OutputModeFolded)
+	}
+	if len(replies) != 1 || !strings.Contains(replies[0], "folded") {
+		t.Fatalf("folded reply = %#v", replies)
+	}
+
+	ctx.args = "off"
+	b.cmdSilent(ctx)
+	if got := manager.OutputMode("channel-1"); got != channel.OutputModeFull {
+		t.Fatalf("off output mode = %q, want %q", got, channel.OutputModeFull)
+	}
+
+	ctx.args = "on"
+	b.cmdSilent(ctx)
+	if got := manager.OutputMode("channel-1"); got != channel.OutputModeCompact {
+		t.Fatalf("on output mode = %q, want %q", got, channel.OutputModeCompact)
+	}
+
+	ctx.args = ""
+	b.cmdSilent(ctx)
+	if got := replies[len(replies)-1]; !strings.Contains(got, "compact") {
+		t.Fatalf("status reply = %q, want compact", got)
+	}
+}
+
+
 func TestSlashCommandsIncludeAgentAndUsage(t *testing.T) {
 	foundAgent := false
 	foundUsage := false
@@ -1914,6 +1954,7 @@ func TestSlashCommandsIncludeAgentAndUsage(t *testing.T) {
 	foundThread := false
 	foundMCP := false
 	foundSteering := false
+	foundSilent := false
 	foundA2A := false
 	foundRestart := false
 	for _, cmd := range buildSlashCommands() {
@@ -1963,6 +2004,22 @@ func TestSlashCommandsIncludeAgentAndUsage(t *testing.T) {
 			}
 			continue
 		}
+		if cmd.Name == "silent" {
+			foundSilent = true
+			if len(cmd.Options) != 1 || cmd.Options[0].Name != "mode" {
+				t.Fatalf("/silent options = %+v, want optional mode", cmd.Options)
+			}
+			choices := map[string]bool{}
+			for _, choice := range cmd.Options[0].Choices {
+				choices[choice.Value.(string)] = true
+			}
+			for _, want := range []string{"on", "off", "compact", "full", "folded"} {
+				if !choices[want] {
+					t.Fatalf("/silent choices missing %q: %+v", want, cmd.Options[0].Choices)
+				}
+			}
+			continue
+		}
 		if cmd.Name == "interrupt" {
 			foundInterrupt = true
 			continue
@@ -1996,8 +2053,8 @@ func TestSlashCommandsIncludeAgentAndUsage(t *testing.T) {
 			t.Fatalf("/agent options = %+v, want optional mode", cmd.Options)
 		}
 	}
-	if !foundAgent || !foundUsage || !foundInterrupt || !foundThread || !foundMCP || !foundSteering || !foundA2A || !foundRestart {
-		t.Fatal("expected /agent, /usage, /interrupt, /thread, /mcp, /steering, /a2a, and /restart slash commands to be registered")
+	if !foundAgent || !foundUsage || !foundInterrupt || !foundThread || !foundSilent || !foundMCP || !foundSteering || !foundA2A || !foundRestart {
+		t.Fatal("expected /agent, /usage, /interrupt, /thread, /silent, /mcp, /steering, /a2a, and /restart slash commands to be registered")
 	}
 }
 

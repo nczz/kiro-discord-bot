@@ -26,7 +26,7 @@ In a parent channel, `/clear` clears the active agent session and the bot-local 
 | `/pause` | Switch the current target to mention-only mode. In a parent channel, also disables new task threads. |
 | `/back` | Restore full-listen mode and new task threads for the parent channel or current thread. |
 | `/thread [on|off]` | Show or set whether future parent-channel tasks create Discord threads. |
-| `/silent [on|off]` | Control compact vs detailed tool output visibility. |
+| `/silent [on|off|compact|full|folded]` | Control progress output visibility. `on`/`compact` posts compact tool starts, `off`/`full` posts detailed tool output, and `folded` edits one live progress card while keeping the final answer unchanged. |
 | `/webhook mode:<status|on|off>` | Show or set tagged Discord channel webhook listening. When enabled, a webhook message must start with a real bot mention such as `<@BOT_ID>`; use `/webhook mode:status` in the channel to see the exact tag for this bot. |
 | `/webshare start/stop/status/revoke` | Manage a WebShare browser control link for the current channel or thread. The link delegates the opener's Discord authority for this target until stopped or revoked; see [WebShare](webshare.md). |
 

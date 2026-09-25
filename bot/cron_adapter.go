@@ -194,7 +194,7 @@ func (a *cronAdapter) AskAgentInThread(ctx context.Context, agent *acp.Agent, jo
 	}
 	done := make(chan result, 1)
 
-	isSilent := func() bool { return a.bot.manager.IsSilent(channelID) }
+	outputMode := func() channel.OutputMode { return a.bot.manager.OutputMode(channelID) }
 	displayCWD := a.bot.manager.CWDPath(channelID)
 
 	updateProgress := func() {
@@ -217,9 +217,12 @@ func (a *cronAdapter) AskAgentInThread(ctx context.Context, agent *acp.Agent, jo
 				title = L.Get("worker.tool_fallback")
 			}
 			icon := channel.ToolKindIcon(evt.Kind)
-			if isSilent() {
+			switch outputMode() {
+			case channel.OutputModeFolded:
+				// Folded mode keeps cron progress in the single status message.
+			case channel.OutputModeCompact:
 				channel.SendProcessMessage(ds, threadID, channel.CompactToolStartMessage(icon, evt, displayCWD))
-			} else {
+			default:
 				msg := icon + " " + channel.EscapeDiscordMarkdown(title)
 				if len(evt.Locations) > 0 {
 					msg += "\n📁 " + channel.FormatToolLocations(evt.Locations, true, displayCWD)
@@ -230,7 +233,10 @@ func (a *cronAdapter) AskAgentInThread(ctx context.Context, agent *acp.Agent, jo
 		},
 		OnToolResult: func(evt acp.ToolCallEvent) {
 			a.recordCronToolAuditEvent(agent, job, threadID, "agent_tool_result", evt)
-			if isSilent() {
+			switch outputMode() {
+			case channel.OutputModeFolded:
+				return
+			case channel.OutputModeCompact:
 				if evt.Status == "failed" {
 					channel.SendProcessMessage(ds, threadID, "❌ "+channel.EscapeDiscordMarkdown(evt.Title))
 				}
@@ -243,7 +249,7 @@ func (a *cronAdapter) AskAgentInThread(ctx context.Context, agent *acp.Agent, jo
 			}
 		},
 		OnThought: func(text string) {
-			if isSilent() {
+			if outputMode() != channel.OutputModeFull {
 				return
 			}
 			if len(text) > 1900 {

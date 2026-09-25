@@ -26,7 +26,7 @@
 | `/pause` | 將目前目標切成 mention-only。Parent channel 也會停用新任務 thread。 |
 | `/back` | 恢復 full-listen 與 parent channel 新任務開 thread。 |
 | `/thread [on|off]` | 查詢或設定未來 parent-channel task 是否建立 Discord thread。 |
-| `/silent [on|off]` | 控制 compact 或詳細 tool output。 |
+| `/silent [on|off|compact|full|folded]` | 控制進度輸出可見度。`on`/`compact` 會發送精簡工具開始訊息，`off`/`full` 會發送詳細工具輸出，`folded` 只更新同一張即時進度卡，最終回答不變。 |
 | `/webhook mode:<status|on|off>` | 查詢或設定帶 bot tag 的 Discord channel webhook 監聽。開啟後，webhook 訊息仍必須以真正的 bot mention（例如 `<@BOT_ID>`）開頭；在頻道內用 `/webhook mode:status` 可看到這個 bot 的實際 tag。 |
 | `/webshare start/stop/status/revoke` | 管理目前 channel 或 thread 的 WebShare browser control link。此連結會在停止或撤銷前，於此 target 委派 opener 的 Discord authority；詳見 [WebShare](webshare.md)。 |
 

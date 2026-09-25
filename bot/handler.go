@@ -752,7 +752,7 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 		b.cmdPause(ctx)
 	case content == "!back":
 		b.cmdBack(ctx)
-	case content == "!silent", content == "!silent on", content == "!silent off":
+	case content == "!silent" || strings.HasPrefix(content, "!silent "):
 		ctx.args = strings.TrimSpace(strings.TrimPrefix(content, "!silent"))
 		b.cmdSilent(ctx)
 	case content == "!thread", content == "!thread on", content == "!thread off":
@@ -1141,7 +1141,7 @@ func (b *Bot) handleThreadMessage(ds *discordgo.Session, m *discordgo.MessageCre
 	case content == "!back":
 		b.cmdBack(ctx)
 		return
-	case content == "!silent", content == "!silent on", content == "!silent off":
+	case content == "!silent" || strings.HasPrefix(content, "!silent "):
 		ctx.args = strings.TrimSpace(strings.TrimPrefix(content, "!silent"))
 		b.cmdSilent(ctx)
 		return
@@ -1267,6 +1267,9 @@ func buildSlashCommandsWithA2APolicy(a2aEnabled bool, useDefaultMemberPermission
 				Choices: []*discordgo.ApplicationCommandOptionChoice{
 					{Name: "on", Value: "on"},
 					{Name: "off", Value: "off"},
+					{Name: "compact", Value: "compact"},
+					{Name: "full", Value: "full"},
+					{Name: "folded", Value: "folded"},
 				}},
 		}},
 		{Name: "thread", Description: L.Get("cmd.thread.desc"), Options: []*discordgo.ApplicationCommandOption{

@@ -84,6 +84,38 @@ func TestWebhookListenModePersistsAcrossManagerRestart(t *testing.T) {
 	}
 }
 
+func TestManagerOutputModeLegacySilentCompatibility(t *testing.T) {
+	m := NewManager(ManagerConfig{})
+
+	if got := m.OutputMode("channel-1"); got != OutputModeCompact {
+		t.Fatalf("default output mode = %q, want %q", got, OutputModeCompact)
+	}
+	if !m.IsSilent("channel-1") {
+		t.Fatal("default output mode should remain legacy silent/compact")
+	}
+
+	m.SetSilent("channel-1", false)
+	if got := m.OutputMode("channel-1"); got != OutputModeFull {
+		t.Fatalf("SetSilent(false) output mode = %q, want %q", got, OutputModeFull)
+	}
+	if m.IsSilent("channel-1") {
+		t.Fatal("full output should not be legacy silent")
+	}
+
+	m.SetSilent("channel-1", true)
+	if got := m.OutputMode("channel-1"); got != OutputModeCompact {
+		t.Fatalf("SetSilent(true) output mode = %q, want %q", got, OutputModeCompact)
+	}
+
+	m.SetOutputMode("channel-1", OutputModeFolded)
+	if got := m.OutputMode("channel-1"); got != OutputModeFolded {
+		t.Fatalf("folded output mode = %q, want %q", got, OutputModeFolded)
+	}
+	if !m.IsSilent("channel-1") {
+		t.Fatal("folded output should remain compact from legacy IsSilent callers")
+	}
+}
+
 func TestPausedListenModeMigratesThreadModeOff(t *testing.T) {
 	dataDir := t.TempDir()
 

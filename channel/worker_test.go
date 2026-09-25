@@ -435,6 +435,24 @@ func (rt failingRoundTripper) RoundTrip(req *http.Request) (*http.Response, erro
 	}, nil
 }
 
+type patchFailRoundTripper struct {
+	recordingRoundTripper
+}
+
+func (rt *patchFailRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.Method != http.MethodPatch {
+		return rt.recordingRoundTripper.RoundTrip(req)
+	}
+	_, _ = rt.recordingRoundTripper.RoundTrip(req)
+	return &http.Response{
+		StatusCode: http.StatusInternalServerError,
+		Status:     http.StatusText(http.StatusInternalServerError),
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(`{"message":"forced patch failure"}`)),
+		Request:    req,
+	}, nil
+}
+
 func testDiscordSession(rt http.RoundTripper) *discordgo.Session {
 	ds, _ := discordgo.New("Bot test")
 	ds.Client = &http.Client{Transport: rt}
@@ -1440,6 +1458,191 @@ func TestWorkerThreadPlanUpdateSilentModeSkipsMessage(t *testing.T) {
 		if strings.Contains(body, "📋 **Plan:**") {
 			t.Fatalf("silent mode should skip plan update, body=%q", body)
 		}
+	}
+}
+
+func TestWorkerThreadFoldedProgressEditsCardAndPreservesFinalAndAudit(t *testing.T) {
+	L.Load("en")
+	rt := &recordingRoundTripper{}
+	ds := testDiscordSession(rt)
+	agent := &fakeWorkerAgent{}
+	sink := &recordingAuditSink{}
+	w := newWorker("ch1", agent, 1, 30, 1, 1440, nil, "model-1")
+	w.SetAuditSink(sink)
+	w.OnOutputModeFunc(func() OutputMode { return OutputModeFolded })
+
+	w.execute(&Job{
+		ChannelID: "ch1",
+		ThreadID:  "thread-1",
+		MessageID: "m1",
+		Prompt:    "hello",
+		Session:   ds,
+	})
+	cb := agent.Callbacks()
+	if cb.OnToolCall == nil || cb.OnToolResult == nil || cb.OnComplete == nil {
+		t.Fatal("expected thread callbacks to be registered")
+	}
+	cb.OnToolCall(acp.ToolCallEvent{ToolCallID: "tool-1", Title: "Read config", Kind: "read"})
+	cb.OnToolCall(acp.ToolCallEvent{ToolCallID: "tool-2", Title: "Edit config", Kind: "edit"})
+	cb.OnToolResult(acp.ToolCallEvent{ToolCallID: "tool-1", Title: "Read config", Kind: "read", Status: "completed"})
+	cb.OnComplete("final response", nil)
+
+	reqs, bodies := rt.Snapshot()
+	var progressEdits, finalPosts int
+	for i, req := range reqs {
+		body := bodies[i]
+		if req == "POST /api/v9/channels/thread-1/messages" && strings.Contains(body, "Read config") {
+			t.Fatalf("folded mode posted per-tool progress instead of editing card: %q", body)
+		}
+		if req == "PATCH /api/v9/channels/thread-1/messages/reply-1" && strings.Contains(body, "Progress complete") {
+			progressEdits++
+		}
+		if req == "POST /api/v9/channels/thread-1/messages" && strings.Contains(body, "final response") {
+			finalPosts++
+		}
+	}
+	if progressEdits == 0 {
+		t.Fatalf("missing folded progress card edit; reqs=%v bodies=%v", reqs, bodies)
+	}
+	if finalPosts != 1 {
+		t.Fatalf("final response posts = %d, want 1; reqs=%v bodies=%v", finalPosts, reqs, bodies)
+	}
+
+	var toolCallAudited, toolResultAudited bool
+	for _, evt := range sink.Snapshot() {
+		switch evt.Type {
+		case "agent_tool_call":
+			toolCallAudited = true
+		case "agent_tool_result":
+			toolResultAudited = true
+		}
+	}
+	if !toolCallAudited || !toolResultAudited {
+		t.Fatalf("missing folded tool audit events: call=%v result=%v events=%+v", toolCallAudited, toolResultAudited, sink.Snapshot())
+	}
+}
+
+func TestWorkerThreadFoldedProgressKeepsToolFailureVisible(t *testing.T) {
+	L.Load("en")
+	rt := &recordingRoundTripper{}
+	ds := testDiscordSession(rt)
+	agent := &fakeWorkerAgent{}
+	w := newWorker("ch1", agent, 1, 30, 1, 1440, nil, "")
+	w.OnOutputModeFunc(func() OutputMode { return OutputModeFolded })
+
+	w.execute(&Job{
+		ChannelID: "ch1",
+		ThreadID:  "thread-1",
+		MessageID: "m1",
+		Prompt:    "hello",
+		Session:   ds,
+	})
+	cb := agent.Callbacks()
+	cb.OnToolCall(acp.ToolCallEvent{ToolCallID: "tool-1", Title: "Broken tool", Kind: "execute"})
+	cb.OnToolResult(acp.ToolCallEvent{ToolCallID: "tool-1", Title: "Broken tool", Kind: "execute", Status: "failed", RawOutput: "boom"})
+
+	reqs, bodies := rt.Snapshot()
+	for i, req := range reqs {
+		if req == "PATCH /api/v9/channels/thread-1/messages/reply-1" && strings.Contains(bodies[i], "Broken tool") && strings.Contains(bodies[i], "failed") {
+			return
+		}
+	}
+	t.Fatalf("missing folded failed-tool card edit; reqs=%v bodies=%v", reqs, bodies)
+}
+
+func TestWorkerThreadFoldedProgressEditFailureStillDeliversFinalAndFailure(t *testing.T) {
+	L.Load("en")
+	rt := &patchFailRoundTripper{}
+	ds := testDiscordSession(rt)
+	agent := &fakeWorkerAgent{}
+	w := newWorker("ch1", agent, 1, 30, 1, 1440, nil, "")
+	w.OnOutputModeFunc(func() OutputMode { return OutputModeFolded })
+
+	w.execute(&Job{
+		ChannelID: "ch1",
+		ThreadID:  "thread-1",
+		MessageID: "m1",
+		Prompt:    "hello",
+		Session:   ds,
+	})
+	cb := agent.Callbacks()
+	cb.OnToolCall(acp.ToolCallEvent{ToolCallID: "tool-1", Title: "Broken tool", Kind: "execute"})
+	cb.OnToolResult(acp.ToolCallEvent{ToolCallID: "tool-1", Title: "Broken tool", Kind: "execute", Status: "failed", RawOutput: "boom"})
+	cb.OnComplete("final response", nil)
+
+	reqs, bodies := rt.Snapshot()
+	var fallbackFailure, finalResponse bool
+	for i, req := range reqs {
+		if req != "POST /api/v9/channels/thread-1/messages" {
+			continue
+		}
+		if strings.Contains(bodies[i], "Broken tool") && strings.Contains(bodies[i], "boom") {
+			fallbackFailure = true
+		}
+		if strings.Contains(bodies[i], "final response") {
+			finalResponse = true
+		}
+	}
+	if !fallbackFailure || !finalResponse {
+		t.Fatalf("fallback failure=%v final=%v; reqs=%v bodies=%v", fallbackFailure, finalResponse, reqs, bodies)
+	}
+}
+
+func TestWorkerThreadFoldedProgressReadErrorCompletesCard(t *testing.T) {
+	L.Load("en")
+	rt := &recordingRoundTripper{}
+	ds := testDiscordSession(rt)
+	agent := &fakeWorkerAgent{}
+	w := newWorker("ch1", agent, 1, 30, 1, 1440, nil, "")
+	w.OnOutputModeFunc(func() OutputMode { return OutputModeFolded })
+
+	w.execute(&Job{
+		ChannelID: "ch1",
+		ThreadID:  "thread-1",
+		MessageID: "m1",
+		Prompt:    "hello",
+		Session:   ds,
+	})
+	agent.TriggerReadError(errors.New("stream broke"))
+
+	reqs, bodies := rt.Snapshot()
+	for i, req := range reqs {
+		if req == "PATCH /api/v9/channels/thread-1/messages/reply-1" && strings.Contains(bodies[i], "Progress failed") && strings.Contains(bodies[i], "stream broke") {
+			return
+		}
+	}
+	t.Fatalf("missing folded read-error card completion; reqs=%v bodies=%v", reqs, bodies)
+}
+
+func TestWorkerThreadFoldedProgressReadErrorFallsBackWhenEditFails(t *testing.T) {
+	L.Load("en")
+	rt := &patchFailRoundTripper{}
+	ds := testDiscordSession(rt)
+	agent := &fakeWorkerAgent{}
+	w := newWorker("ch1", agent, 1, 30, 1, 1440, nil, "")
+	w.OnOutputModeFunc(func() OutputMode { return OutputModeFolded })
+
+	w.execute(&Job{
+		ChannelID: "ch1",
+		ThreadID:  "thread-1",
+		MessageID: "m1",
+		Prompt:    "hello",
+		Session:   ds,
+	})
+	agent.TriggerReadError(errors.New("stream broke"))
+
+	reqs, bodies := rt.Snapshot()
+	var fallbackPost, warningReaction bool
+	for i, req := range reqs {
+		if req == "POST /api/v9/channels/thread-1/messages" && strings.Contains(bodies[i], "Agent communication lost") {
+			fallbackPost = true
+		}
+		if strings.HasPrefix(req, "PUT ") && strings.Contains(req, "/reactions/⚠️/@me") {
+			warningReaction = true
+		}
+	}
+	if !fallbackPost || !warningReaction {
+		t.Fatalf("fallback post=%v warning=%v; reqs=%v bodies=%v", fallbackPost, warningReaction, reqs, bodies)
 	}
 }
 

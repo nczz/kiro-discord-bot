@@ -33,10 +33,10 @@ type Manager struct {
 	workers         map[string]*Worker
 	agents          map[string]*acp.Agent
 	paused          map[string]bool
-	threadMode      map[string]bool   // parent channel ID -> agent opens new threads (default true)
-	threadListen    map[string]string // thread ID -> "full" or "mention" snapshot
-	silent          map[string]bool   // channelID → silent mode (default true when absent)
-	webhookListen   map[string]bool   // parent channel ID -> allow tagged Discord webhook messages (default false)
+	threadMode      map[string]bool       // parent channel ID -> agent opens new threads (default true)
+	threadListen    map[string]string     // thread ID -> "full" or "mention" snapshot
+	outputMode      map[string]OutputMode // channelID/threadID → output mode (default compact when absent)
+	webhookListen   map[string]bool       // parent channel ID -> allow tagged Discord webhook messages (default false)
 	store           *SessionStore
 	kiroCLI         string
 	ompPath         string
@@ -226,7 +226,7 @@ func NewManager(cfg ManagerConfig) *Manager {
 		paused:              make(map[string]bool),
 		threadMode:          make(map[string]bool),
 		threadListen:        make(map[string]string),
-		silent:              make(map[string]bool),
+		outputMode:          make(map[string]OutputMode),
 		webhookListen:       make(map[string]bool),
 		threadAgents:        make(map[string]*threadAgentEntry),
 		discord:             cfg.DiscordSession,
@@ -2823,7 +2823,7 @@ func (m *Manager) startAgentAndWorkerWithModelFallback(channelID string, allowSt
 		defer m.mu.Unlock()
 		return m.BuildMemoryPrefix(channelID)
 	})
-	w.OnSilentFunc(func() bool { return m.IsSilent(channelID) })
+	w.OnOutputModeFunc(func() OutputMode { return m.OutputMode(channelID) })
 	w.OnActivityFunc(func() {
 		m.mu.Lock()
 		m.channelLastActivity[channelID] = time.Now()
@@ -3717,23 +3717,37 @@ func (m *Manager) WebhookListenEnabled(parentChannelID string) bool {
 	return m.webhookListen[parentChannelID]
 }
 
-// SetSilent sets the silent (compact output) mode for a channel.
-func (m *Manager) SetSilent(channelID string, on bool) {
+// SetOutputMode sets the Discord progress output mode for a channel or thread.
+func (m *Manager) SetOutputMode(channelID string, mode OutputMode) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.silent[channelID] = on
+	if m.outputMode == nil {
+		m.outputMode = make(map[string]OutputMode)
+	}
+	m.outputMode[channelID] = NormalizeOutputMode(mode)
 }
 
-// IsSilent returns true if the channel is in silent mode (compact tool output).
-// Default is true (silent) when not explicitly set.
-func (m *Manager) IsSilent(channelID string) bool {
+// OutputMode returns the Discord progress output mode for a channel or thread.
+// Default is compact when not explicitly set.
+func (m *Manager) OutputMode(channelID string) OutputMode {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	v, ok := m.silent[channelID]
-	if !ok {
-		return true
+	return NormalizeOutputMode(m.outputMode[channelID])
+}
+
+// SetSilent sets the legacy silent (compact output) mode for a channel.
+func (m *Manager) SetSilent(channelID string, on bool) {
+	if on {
+		m.SetOutputMode(channelID, OutputModeCompact)
+		return
 	}
-	return v
+	m.SetOutputMode(channelID, OutputModeFull)
+}
+
+// IsSilent returns true if the channel is not in full output mode.
+// Default is true (compact) when not explicitly set.
+func (m *Manager) IsSilent(channelID string) bool {
+	return m.OutputMode(channelID) != OutputModeFull
 }
 
 // --- Thread Agent Management ---
@@ -3969,7 +3983,7 @@ func (m *Manager) spawnThreadAgent(threadID, parentChannelID string, modelOverri
 		defer m.mu.Unlock()
 		return m.BuildMemoryPrefix(parentChannelID)
 	})
-	w.OnSilentFunc(func() bool { return m.IsSilent(threadID) })
+	w.OnOutputModeFunc(func() OutputMode { return m.OutputMode(threadID) })
 	w.Start()
 	entry.worker = w
 
