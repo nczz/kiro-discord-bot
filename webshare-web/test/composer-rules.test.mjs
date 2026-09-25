@@ -35,7 +35,13 @@ test("command names and WebShare command availability are classified explicitly"
   assert.equal(highRiskCommand("restart"), true);
   assert.equal(highRiskCommand("status"), false);
   assert.equal(webshareCommandAllowed("usage-history"), true);
-  assert.equal(webshareCommandAllowed("status"), false);
+  assert.equal(webshareCommandAllowed("status"), true);
+  assert.equal(webshareCommandAllowed("cancel"), true);
+  assert.equal(webshareCommandAllowed("interrupt"), true);
+  assert.equal(webshareCommandAllowed("restart"), true);
+  assert.equal(webshareCommandAllowed("reset"), true);
+  assert.equal(webshareCommandAllowed("compact"), true);
+  assert.equal(webshareCommandAllowed("clear"), true);
   assert.equal(webshareCommandAllowed("cwd"), false);
   assert.equal(webshareCommandAllowed("session"), false);
   assert.equal(webshareCommandAllowed("doctor"), false);

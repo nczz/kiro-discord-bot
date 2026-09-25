@@ -76,6 +76,13 @@ func (b *Bot) HandleWebShareAction(ctx context.Context, shareID string, action w
 		b.recordWebShareAudit(*share, webshare.EventActionRejected, share.OpenerUserID, action.DisplayName, share.TargetID, false, "capability_disabled", map[string]any{"action": action.Type})
 		return webshare.ServerEvent{Type: "error", Status: "rejected", ReasonCode: "capability_disabled", Content: L.Get("webshare.rejected")}
 	}
+	if action.Type == "run_bot_command" {
+		commandName := webshareBotCommandName(action.Command)
+		if !webshareBotCommandCapabilityAllowed(share.Capabilities, commandName) {
+			b.recordWebShareAudit(*share, webshare.EventActionRejected, share.OpenerUserID, action.DisplayName, share.TargetID, false, "capability_disabled", map[string]any{"action": action.Type, "command": commandName})
+			return webshare.ServerEvent{Type: "error", Status: "rejected", ReasonCode: "capability_disabled", Content: L.Get("webshare.rejected")}
+		}
+	}
 
 	requestedThreadID := action.TargetThreadID
 	if action.Type == "select_thread" {
@@ -843,9 +850,7 @@ func replaceSelectedRawMentions(text string, refs []discordmention.Ref) string {
 }
 
 func (b *Bot) webshareRunBotCommand(ctx context.Context, share webshare.Share, action webshare.ClientAction, targetID, parentID string) webshare.ServerEvent {
-	cmd := strings.TrimPrefix(strings.TrimSpace(action.Command), "/")
-	name, args, _ := strings.Cut(cmd, " ")
-	name = strings.ToLower(name)
+	name, args := webshareBotCommandNameAndArgs(action.Command)
 	if name == "" {
 		return webshare.ServerEvent{Type: "error", Status: "rejected", ReasonCode: "command_required", Content: L.Get("webshare.command_required")}
 	}
@@ -862,6 +867,10 @@ func (b *Bot) webshareRunBotCommand(ctx context.Context, share webshare.Share, a
 	args = webshareCommandArgs(args, action.Args)
 	var replies []string
 	ctxCmd := cmdCtx{channelID: websharePromptParent(share, targetID, parentID), targetID: targetID, inThread: parentID != "" || share.TargetType == webshare.TargetThread, guildID: share.GuildID, userID: share.OpenerUserID, username: share.OpenerUsername, reply: func(s string) { replies = append(replies, s) }, replyWithMetadata: func(s string, _ map[string]any) { replies = append(replies, s) }, replyWithComponents: func(s string, _ []discordgo.MessageComponent, _ map[string]any) { replies = append(replies, s) }}
+	if !webshareBotCommandTargetAllowed(name, ctxCmd) {
+		return webshare.ServerEvent{Type: "command_result", Status: "rejected", ReasonCode: "command_unavailable", Content: L.Get("webshare.command_unavailable")}
+	}
+
 	ctxCmd.args = args
 	switch name {
 	case "cron-list":
@@ -872,17 +881,60 @@ func (b *Bot) webshareRunBotCommand(ctx context.Context, share webshare.Share, a
 		b.cmdWebShareRemind(ctxCmd)
 	case "usage-history":
 		b.cmdWebShareUsageHistory(ctxCmd)
+	case "status":
+		b.cmdStatus(ctxCmd)
+	case "cancel":
+		b.cmdCancel(ctxCmd)
+	case "interrupt":
+		b.cmdInterrupt(ctxCmd)
+	case "restart":
+		b.cmdRestart(ctxCmd)
+	case "reset":
+		b.cmdReset(ctxCmd)
+	case "compact":
+		b.cmdCompact(ctxCmd)
+	case "clear":
+		b.cmdClear(ctxCmd)
 	default:
 		return webshare.ServerEvent{Type: "command_result", Status: "rejected", ReasonCode: "unknown_command", Content: L.Get("webshare.unknown_command")}
 	}
 	return webshare.ServerEvent{Type: "command_result", Status: "ok", Content: strings.Join(replies, "\n")}
 }
 
+func webshareBotCommandName(command string) string {
+	name, _ := webshareBotCommandNameAndArgs(command)
+	return name
+}
+
+func webshareBotCommandNameAndArgs(command string) (string, string) {
+	cmd := strings.TrimPrefix(strings.TrimSpace(command), "/")
+	name, args, _ := strings.Cut(cmd, " ")
+	return strings.ToLower(name), args
+}
+
+func webshareBotCommandCapabilityAllowed(caps webshare.Capabilities, name string) bool {
+	switch name {
+	case "cancel", "interrupt", "restart", "reset":
+		return caps.InterruptAgent
+	default:
+		return true
+	}
+}
+
+func webshareBotCommandTargetAllowed(name string, ctx cmdCtx) bool {
+	switch name {
+	case "restart":
+		return !ctx.inThread
+	default:
+		return true
+	}
+}
+
 func webshareCommandAvailability(name string) (allowed bool, known bool) {
 	switch name {
-	case "cron-list", "cron-run", "remind", "usage-history":
+	case "cron-list", "cron-run", "remind", "usage-history", "status", "cancel", "interrupt", "restart", "reset", "compact", "clear":
 		return true, true
-	case "help", "status", "usage", "pause", "back", "silent", "thread", "interrupt", "compact", "clear", "model", "models", "engine", "close", "close-thread", "start", "cwd", "doctor", "audit", "mcp", "skill", "steering", "a2a", "webhook", "reset", "restart", "cancel", "agent", "resume", "session", "memory", "flashmemory", "cron", "cron-prompt":
+	case "help", "usage", "pause", "back", "silent", "thread", "model", "models", "engine", "close", "close-thread", "start", "cwd", "doctor", "audit", "mcp", "skill", "steering", "a2a", "webhook", "agent", "resume", "session", "memory", "flashmemory", "cron", "cron-prompt":
 		return false, true
 	default:
 		return false, false

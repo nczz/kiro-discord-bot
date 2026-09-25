@@ -65,7 +65,7 @@ Write-capable WebShare 可執行：
 
 Browser 不會取得任意 Discord channels、raw local paths 或 direct ACP sessions 的權限。每個 action 都會重新檢查 opener 的 Discord access 與 channel management state。如果 opener 失去存取或管理權限，新的 actions 會被拒絕，share 會進入 degraded 或 revoked 狀態。
 
-WebShare command bridge 會刻意維持窄範圍：browser-originated bot commands 只限 WebShare-safe 的排程與用量指令，例如 `cron-list`、`cron-run`、`remind`、`usage-history`。Path、session、runtime、setup、MCP、model、engine、restart/reset，以及巢狀 WebShare 指令都不會在 browser 內提供。
+WebShare command bridge 會維持在 delegated target 操作範圍內：browser-originated bot commands 只允許 `cron-list`、`cron-run`、`remind`、`usage-history`，以及 shared target 常用 runtime controls：`status`、`cancel`、`interrupt`、`restart`、`reset`、`compact`、`clear`。`restart` 只在 browser target 是 parent channel 時可用，thread target 不提供。Path、session、setup、MCP、model、engine，以及巢狀 WebShare 指令仍不會在 browser 內提供。
 
 
 ## Live Mirror 限制

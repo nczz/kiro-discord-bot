@@ -1251,11 +1251,55 @@ func TestWebShareCommandBridgeRejectsNestedWebShare(t *testing.T) {
 	}
 }
 
+func TestWebShareCommandBridgeAllowsDelegatedRuntimeCommands(t *testing.T) {
+	L.Load("en")
+	store, share, token := newTestWebShareStoreShareAndToken(t, webshare.WriteCapabilities())
+	manager := channel.NewManager(channel.ManagerConfig{DataDir: t.TempDir(), DefaultCWD: t.TempDir()})
+	t.Cleanup(manager.StopAll)
+	b := &Bot{discord: webshareAuthoritySession(t), manager: manager, webshareStore: store}
+	for _, command := range []string{"status", "cancel", "interrupt", "restart", "reset", "compact", "clear"} {
+		got := b.HandleWebShareAction(context.Background(), share.ShareID, webshare.ClientAction{Type: "run_bot_command", Command: command, WriteToken: token, EventID: "evt-allowed-" + command})
+		if got.Type != "command_result" || got.Status != "ok" {
+			t.Fatalf("%s command event = %+v", command, got)
+		}
+		if got.ReasonCode == "command_unavailable" || got.ReasonCode == "unknown_command" {
+			t.Fatalf("%s command unexpectedly rejected: %+v", command, got)
+		}
+	}
+}
+
+func TestWebShareCommandBridgeHonorsInterruptCapability(t *testing.T) {
+	L.Load("en")
+	store, share, token := newTestWebShareStoreShareAndToken(t, webshare.Capabilities{View: true, Write: true, RunBotCommand: true, InterruptAgent: false})
+	b := &Bot{discord: webshareAuthoritySession(t), webshareStore: store}
+
+	for _, command := range []string{"cancel", "interrupt", "restart", "reset"} {
+		got := b.HandleWebShareAction(context.Background(), share.ShareID, webshare.ClientAction{Type: "run_bot_command", Command: command, WriteToken: token, EventID: "evt-runtime-capability-" + command})
+		if got.Type != "error" || got.Status != "rejected" || got.ReasonCode != "capability_disabled" {
+			t.Fatalf("%s command should honor interrupt capability: %+v", command, got)
+		}
+	}
+}
+
+func TestWebShareCommandBridgeRejectsRestartForThreadTargets(t *testing.T) {
+	L.Load("en")
+	store, share, token := newTestWebShareStoreShareAndToken(t, webshare.WriteCapabilities())
+	if err := store.RegisterManagedChildThread(context.Background(), webshare.ManagedChildThread{ShareID: share.ShareID, ParentChannelID: share.TargetID, ThreadID: "thread-1", Name: "Spec Review"}); err != nil {
+		t.Fatal(err)
+	}
+	b := &Bot{discord: webshareAuthoritySession(t), webshareStore: store}
+
+	got := b.HandleWebShareAction(context.Background(), share.ShareID, webshare.ClientAction{Type: "run_bot_command", Command: "restart", TargetThreadID: "thread-1", WriteToken: token, EventID: "evt-restart-thread-target"})
+	if got.Type != "command_result" || got.Status != "rejected" || got.ReasonCode != "command_unavailable" {
+		t.Fatalf("restart command should reject thread target: %+v", got)
+	}
+}
+
 func TestWebShareCommandBridgeRejectsPathAndSessionCommands(t *testing.T) {
 	L.Load("en")
 	store, share, token := newTestWebShareStoreShareAndToken(t, webshare.WriteCapabilities())
 	b := &Bot{discord: webshareAuthoritySession(t), webshareStore: store}
-	for _, command := range []string{"cwd", "doctor", "session", "start /tmp", "resume abc", "mcp list", "status", "model bad", "engine bad"} {
+	for _, command := range []string{"cwd", "doctor", "session", "start /tmp", "resume abc", "mcp list", "model bad", "engine bad"} {
 		got := b.HandleWebShareAction(context.Background(), share.ShareID, webshare.ClientAction{Type: "run_bot_command", Command: command, WriteToken: token, EventID: "evt-forbidden-" + command})
 		if got.Type != "command_result" || got.Status != "rejected" || got.ReasonCode != "command_unavailable" {
 			t.Fatalf("%s command event = %+v", command, got)

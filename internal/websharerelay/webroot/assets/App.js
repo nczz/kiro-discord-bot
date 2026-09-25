@@ -14,6 +14,13 @@ const commandSuggestions = [
     "cron-run",
     "remind",
     "usage-history",
+    "status",
+    "cancel",
+    "interrupt",
+    "restart",
+    "reset",
+    "compact",
+    "clear",
 ];
 const state = {
     locale: chooseLocale(),
@@ -664,7 +671,7 @@ function composerSuggestions(textarea) {
         if (!canWrite("runBotCommand"))
             return [];
         return commandSuggestions
-            .filter((command) => command.startsWith(token.query))
+            .filter((command) => command.startsWith(token.query) && webshareCommandAvailable(command))
             .slice(0, 8)
             .map((command) => ({ kind: "command", id: command, label: `/${command}`, detail: t(state.locale, "botCommand"), insert: `/${command} ` }));
     }
@@ -922,7 +929,7 @@ function sendDraft() {
         const name = commandName(command);
         if (!command || !name)
             return;
-        if (!webshareCommandAllowed(name)) {
+        if (!webshareCommandAvailable(name)) {
             const message = t(state.locale, "commandNotAllowed");
             setError(message);
             pushMessage("error", t(state.locale, "systemAuthor"), message);
@@ -953,6 +960,16 @@ function writableCapabilities() {
 }
 function canWrite(capability) {
     return state.terminalReason === undefined && shareWritableState() && Boolean(state.join?.canWrite) && hasCapability(writableCapabilities(), capability);
+}
+function webshareCommandAvailable(name) {
+    if (!webshareCommandAllowed(name))
+        return false;
+    if (name === "cancel" || name === "interrupt" || name === "reset")
+        return canWrite("interruptAgent");
+    if (name === "restart") {
+        return canWrite("interruptAgent") && !state.draft.targetThreadID && !state.target?.threadID && state.target?.targetType !== "thread";
+    }
+    return true;
 }
 function modeCapability(mode) {
     if (mode === "command")

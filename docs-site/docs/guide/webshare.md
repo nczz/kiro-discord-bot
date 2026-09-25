@@ -65,7 +65,7 @@ A write-capable WebShare can:
 
 The browser does not gain access to arbitrary Discord channels, raw local paths, or direct ACP sessions. Each action rechecks the opener's Discord access and channel management state. If the opener loses access or management authority, new actions are rejected and the share becomes degraded or revoked.
 
-The WebShare command bridge is intentionally narrow: browser-originated bot commands are limited to WebShare-safe scheduling and usage commands such as `cron-list`, `cron-run`, `remind`, and `usage-history`. Path, session, runtime, setup, MCP, model, engine, restart/reset, and nested WebShare commands are unavailable from the browser.
+The WebShare command bridge is intentionally scoped to delegated target operations. Browser-originated bot commands are limited to `cron-list`, `cron-run`, `remind`, `usage-history`, plus common runtime controls for the shared target: `status`, `cancel`, `interrupt`, `restart`, `reset`, `compact`, and `clear`. `restart` is available only while the browser targets the parent channel, not a thread. Path, session, setup, MCP, model, engine, and nested WebShare commands remain unavailable from the browser.
 
 
 ## Live Mirror Limits

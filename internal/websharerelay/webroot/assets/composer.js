@@ -30,6 +30,13 @@ export function webshareCommandAllowed(name) {
         case "cron-run":
         case "remind":
         case "usage-history":
+        case "status":
+        case "cancel":
+        case "interrupt":
+        case "restart":
+        case "reset":
+        case "compact":
+        case "clear":
             return true;
         default:
             return false;
