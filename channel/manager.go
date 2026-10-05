@@ -1038,6 +1038,13 @@ func (m *Manager) UsageHistory(opts UsageHistoryOptions) (UsageHistoryPage, erro
 	return m.usage.QueryHistory(opts)
 }
 
+func (m *Manager) UsageHistoryExport(opts UsageHistoryOptions, maxRecords int) (UsageHistoryExport, error) {
+	if m == nil || m.usage == nil {
+		return UsageHistoryExport{}, errors.New("usage store not configured")
+	}
+	return m.usage.QueryHistoryExport(opts, maxRecords)
+}
+
 func (m *Manager) UsageLocation() *time.Location {
 	if m == nil || m.usage == nil {
 		return time.Local
@@ -2863,6 +2870,14 @@ func (m *Manager) UsageReport(guildID, channelID, userID string, limit int) (Usa
 		return UsageReport{}, fmt.Errorf("usage store not configured")
 	}
 	return m.usage.Report(guildID, channelID, userID, limit, time.Now())
+}
+
+// UsageHistorySummary returns aggregate usage history statistics for a selected range.
+func (m *Manager) UsageHistorySummary(opts UsageHistoryOptions, topLimit int) (UsageHistorySummary, error) {
+	if m.usage == nil {
+		return UsageHistorySummary{}, fmt.Errorf("usage store not configured")
+	}
+	return m.usage.QueryHistorySummary(opts, topLimit)
 }
 
 // RecordUsage appends one usage record to the usage ledger.

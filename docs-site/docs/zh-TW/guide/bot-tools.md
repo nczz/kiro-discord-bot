@@ -24,6 +24,7 @@
 | `bot_create_monitor` | Write, non-destructive | 排入建立背景監控的請求；它會靜默檢查，只在條件命中時通知。 |
 | `bot_update_monitor` | Write, non-destructive, idempotent | 排入修改既有 monitor 的 name、schedule、check prompt、notify condition 或 enabled state。 |
 | `bot_query_channel_history` | Read | 搜尋或分頁讀取目前 channel/thread context 的已儲存歷史。 |
+| `bot_query_usage` | Read | 以目前 requester 或具 guild 管理權限時的所有使用者／指定使用者範圍，摘要 guild 用量。 |
 | `bot_memory_list` | Read | 列出目前 parent channel 的 persistent memory rules。 |
 | `bot_memory_add` | Write, non-destructive | 排入使用者明確要求、且已 audit-recorded 的 channel memory rule。 |
 | `bot_skills_search` | Read | 搜尋 visible scoped skills，不暴露 raw bot data paths。 |
@@ -122,6 +123,13 @@ File egress 採保守設計：
 `bot_query_channel_history` 是 read-only，且限制在目前 bot-tools channel 或 thread context。`target_id` 只能使用 context 中目前的 channel/thread ID：parent channel ID 會包含 child threads，thread ID 則只查該 thread。
 
 `query` 是 optional。若要 broad/exhaustive review 已保留的歷史可省略；若要篩選，則提供 keyword/phrase 搜尋 stored message、bot response content 與 timeline metadata。結果是 paginated JSON page，包含 `limit`、`offset`、`returned`、`has_more`、`next_offset` 與 compact `results`；要整理完整歷史時，必須用 `offset=next_offset` 持續查到 `has_more=false`。
+
+## Usage 查詢工具
+
+`bot_query_usage` 是 read-only，且限制在目前 Discord guild context。一般成員只能查自己的用量；`scope: all` 或查其他 `user_id` 需要管理伺服器、系統管理員或 bot GM context。
+
+回應是給 agent 對話使用的聚合 JSON：records、active users、credits、USD cost、duration、context usage、status/source/engine buckets，以及小型 top-user summary。它不回傳 row-level message IDs 或原始逐筆用量；管理者需要完整 CSV 明細時請用 `/usage-history export:true`。支援的 period presets 是 `7d`、`30d`、`this-month` 與 `last-month`；source filters 包含 `all`、`message`、`webhook`、`webshare`、`command`、`cron`、`reminder` 與 `monitor`。
+
 
 ## Audit Query Tool
 

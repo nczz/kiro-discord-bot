@@ -1955,6 +1955,7 @@ func TestCmdSilentSetsFoldedAndLegacyModes(t *testing.T) {
 func TestSlashCommandsIncludeAgentAndUsage(t *testing.T) {
 	foundAgent := false
 	foundUsage := false
+	foundUsageHistory := false
 	foundInterrupt := false
 	foundThread := false
 	foundMCP := false
@@ -2036,6 +2037,17 @@ func TestSlashCommandsIncludeAgentAndUsage(t *testing.T) {
 			}
 			continue
 		}
+		if cmd.Name == "usage-history" {
+			foundUsageHistory = true
+			options := map[string]discordgo.ApplicationCommandOptionType{}
+			for _, opt := range cmd.Options {
+				options[opt.Name] = opt.Type
+			}
+			if options["user"] != discordgo.ApplicationCommandOptionUser || options["period"] != discordgo.ApplicationCommandOptionString || options["status"] != discordgo.ApplicationCommandOptionString || options["source"] != discordgo.ApplicationCommandOptionString || options["export"] != discordgo.ApplicationCommandOptionBoolean {
+				t.Fatalf("/usage-history options = %+v", cmd.Options)
+			}
+			continue
+		}
 		if cmd.Name == "a2a" {
 			foundA2A = true
 			if len(cmd.Options) != 8 {
@@ -2058,8 +2070,8 @@ func TestSlashCommandsIncludeAgentAndUsage(t *testing.T) {
 			t.Fatalf("/agent options = %+v, want optional mode", cmd.Options)
 		}
 	}
-	if !foundAgent || !foundUsage || !foundInterrupt || !foundThread || !foundSilent || !foundMCP || !foundSteering || !foundA2A || !foundRestart {
-		t.Fatal("expected /agent, /usage, /interrupt, /thread, /silent, /mcp, /steering, /a2a, and /restart slash commands to be registered")
+	if !foundAgent || !foundUsage || !foundUsageHistory || !foundInterrupt || !foundThread || !foundSilent || !foundMCP || !foundSteering || !foundA2A || !foundRestart {
+		t.Fatal("expected /agent, /usage, /usage-history, /interrupt, /thread, /silent, /mcp, /steering, /a2a, and /restart slash commands to be registered")
 	}
 }
 

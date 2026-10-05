@@ -3,6 +3,7 @@ package botmcp
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"image"
 	"image/color"
@@ -14,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	mcpclient "github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -145,6 +147,9 @@ func TestDefaultSafeToolNamesExcludeDestructiveTools(t *testing.T) {
 	if !seen[ToolQueryChannelHistory] {
 		t.Fatalf("channel history query tool should be default-enabled for scoped discussion lookup: %+v", tools)
 	}
+	if !seen[ToolQueryUsage] {
+		t.Fatalf("usage query tool should be default-enabled for scoped usage summaries: %+v", tools)
+	}
 	if !seen[ToolCreateReminder] {
 		t.Fatalf("one-time reminder tool should be default-enabled to avoid agent-side scheduling bypasses: %+v", tools)
 	}
@@ -207,6 +212,118 @@ func TestNewServerWithOptionsGatesA2ATools(t *testing.T) {
 		if enabled[tool] {
 			t.Fatalf("retired expert A2A tool %s should not be registered: %+v", tool, enabled)
 		}
+	}
+}
+
+func TestQueryUsageToolScopesAndSummarizes(t *testing.T) {
+	dir := t.TempDir()
+	writeUsageTestDB(t, dir)
+	statePath := filepath.Join(dir, "target.json")
+	t.Setenv("DATA_DIR", dir)
+	t.Setenv("BOT_TOOLS_GUILD_ID", "guild-1")
+	t.Setenv("BOT_TOOLS_TARGET_STATE_PATH", statePath)
+	client := initializedTestClient(t, NewServerWithOptions(ServerOptions{}))
+
+	if err := os.WriteFile(statePath, []byte(`{"target_channel_id":"channel-1","source":"message","requester_id":"manager","requester_name":"manager","can_manage_guild":true}`), 0644); err != nil {
+		t.Fatalf("write manager target state: %v", err)
+	}
+	result := callTestTool(t, client, ToolQueryUsage, map[string]any{"period": "30d", "scope": "all"})
+	if result.IsError {
+		t.Fatalf("manager usage query failed: %s", callToolText(t, result))
+	}
+	text := callToolText(t, result)
+	for _, want := range []string{`"scope": "all"`, `"records": 3`, `"users": 3`, `"username": "bob"`} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("usage result missing %q:\n%s", want, text)
+		}
+	}
+
+	if err := os.WriteFile(statePath, []byte(`{"target_channel_id":"channel-1","source":"message","requester_id":"manager","requester_name":"manager","can_manage_guild":true,"mention_refs":[{"kind":"user","id":"alice-id","display_name":"alice","placeholder":"[[discord:user:alice-id]]"}]}`), 0644); err != nil {
+		t.Fatalf("write manager mention state: %v", err)
+	}
+	selected := callTestTool(t, client, ToolQueryUsage, map[string]any{"period": "30d", "scope": "user", "user_id": "alice-id"})
+	if selected.IsError {
+		t.Fatalf("selected usage query failed: %s", callToolText(t, selected))
+	}
+	if text := callToolText(t, selected); !strings.Contains(text, `"records": 2`) || !strings.Contains(text, `"users": 1`) || !strings.Contains(text, `"user_id": "alice-id"`) {
+		t.Fatalf("selected usage query did not merge verified legacy rows:\n%s", text)
+	}
+
+	if err := os.WriteFile(statePath, []byte(`{"target_channel_id":"channel-1","source":"message","requester_id":"alice-id","requester_name":"alice"}`), 0644); err != nil {
+		t.Fatalf("write user target state: %v", err)
+	}
+	denied := callTestTool(t, client, ToolQueryUsage, map[string]any{"period": "30d", "scope": "all"})
+	if !denied.IsError || !strings.Contains(callToolText(t, denied), "all-user usage query requires") {
+		t.Fatalf("non-manager all usage result = error:%v text:%q", denied.IsError, callToolText(t, denied))
+	}
+	self := callTestTool(t, client, ToolQueryUsage, map[string]any{"period": "30d"})
+	if self.IsError {
+		t.Fatalf("self usage query failed: %s", callToolText(t, self))
+	}
+	if text := callToolText(t, self); !strings.Contains(text, `"scope": "self"`) || !strings.Contains(text, `"records": 1`) || strings.Contains(text, `"username": "bob"`) {
+		t.Fatalf("self usage query leaked or missed rows:\n%s", text)
+	}
+	invalidPeriod := callTestTool(t, client, ToolQueryUsage, map[string]any{"period": "forever"})
+	if !invalidPeriod.IsError || !strings.Contains(callToolText(t, invalidPeriod), "unsupported usage period") {
+		t.Fatalf("invalid period result = error:%v text:%q", invalidPeriod.IsError, callToolText(t, invalidPeriod))
+	}
+	if text := callToolText(t, self); strings.Contains(text, `"usage-legacy"`) || strings.Contains(text, `"records": 2`) {
+		t.Fatalf("self usage query included mutable-username legacy row:\n%s", text)
+	}
+}
+
+func TestQueryUsageToolSanitizesStoreErrors(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "target.json")
+	if err := os.WriteFile(statePath, []byte(`{"target_channel_id":"channel-1","source":"message","requester_id":"manager","requester_name":"manager","can_manage_guild":true}`), 0644); err != nil {
+		t.Fatalf("write target state: %v", err)
+	}
+	t.Setenv("DATA_DIR", dir)
+	t.Setenv("BOT_TOOLS_GUILD_ID", "guild-1")
+	t.Setenv("BOT_TOOLS_TARGET_STATE_PATH", statePath)
+	client := initializedTestClient(t, NewServerWithOptions(ServerOptions{}))
+	result := callTestTool(t, client, ToolQueryUsage, map[string]any{"period": "30d", "scope": "all"})
+	text := callToolText(t, result)
+	if !result.IsError || !strings.Contains(text, "usage query failed") {
+		t.Fatalf("missing usage store result = error:%v text:%q", result.IsError, text)
+	}
+	for _, forbidden := range []string{dir, "usage.sqlite", "file:"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("usage store error exposed %q in %q", forbidden, text)
+		}
+	}
+}
+
+func writeUsageTestDB(t *testing.T, dataDir string) {
+	t.Helper()
+	usageDir := filepath.Join(dataDir, "usage")
+	if err := os.MkdirAll(usageDir, 0755); err != nil {
+		t.Fatalf("mkdir usage: %v", err)
+	}
+	db, err := sql.Open("sqlite", filepath.Join(usageDir, "usage.sqlite"))
+	if err != nil {
+		t.Fatalf("open usage db: %v", err)
+	}
+	defer db.Close()
+	_, err = db.Exec(`CREATE TABLE usage_records (
+		usage_id TEXT PRIMARY KEY, occurred_at TEXT NOT NULL, guild_id TEXT NOT NULL DEFAULT '',
+		user_id TEXT NOT NULL DEFAULT '', username TEXT NOT NULL DEFAULT '', source TEXT NOT NULL,
+		status TEXT NOT NULL, engine TEXT NOT NULL DEFAULT '', credits REAL NOT NULL DEFAULT 0,
+		cost_usd REAL NOT NULL DEFAULT 0, metering_supported INTEGER NOT NULL DEFAULT 0,
+		duration_ms INTEGER NOT NULL DEFAULT 0, context_usage REAL NOT NULL DEFAULT 0
+	)`)
+	if err != nil {
+		t.Fatalf("create usage table: %v", err)
+	}
+	occurredAlice := time.Now().AddDate(0, 0, -10).UTC().Format("2006-01-02T15:04:05.000000000Z07:00")
+	occurredLegacyAlice := time.Now().AddDate(0, 0, -9).UTC().Format("2006-01-02T15:04:05.000000000Z07:00")
+	occurredBob := time.Now().AddDate(0, 0, -8).UTC().Format("2006-01-02T15:04:05.000000000Z07:00")
+	_, err = db.Exec(`INSERT INTO usage_records (usage_id, occurred_at, guild_id, user_id, username, source, status, engine, credits, cost_usd, metering_supported, duration_ms, context_usage) VALUES
+		('usage-1',?,'guild-1','alice-id','alice','message','success','omp',1.5,0.02,1,1200,10.5),
+		('usage-legacy',?,'guild-1','','alice','message','success','omp',0.5,0.01,1,800,5.5),
+		('usage-2',?,'guild-1','bob-id','bob','command:agent','success','kiro',2.5,0.03,1,2200,20.5)`, occurredAlice, occurredLegacyAlice, occurredBob)
+	if err != nil {
+		t.Fatalf("insert usage rows: %v", err)
 	}
 }
 

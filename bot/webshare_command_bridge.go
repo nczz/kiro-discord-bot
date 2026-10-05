@@ -110,8 +110,14 @@ func (b *Bot) cmdWebShareUsageHistory(ctx cmdCtx) {
 		return
 	}
 	now := time.Now().In(b.manager.UsageLocation())
-	state := &usageHistoryState{RequesterID: ctx.userID, TargetID: ctx.userID, GuildID: ctx.guildID, Period: "30d", Status: "all", Source: "all", From: now.AddDate(0, 0, -30), To: now, Cursors: []usageHistoryCursor{{}}, Page: 0, Expires: time.Now().Add(15 * time.Minute)}
-	content, _, err := b.renderUsageHistory(state, uuid.NewString())
+	permissionTarget := ctx.targetID
+	if permissionTarget == "" {
+		permissionTarget = ctx.channelID
+	}
+	canManageUsage := b.userCanManageUsageGuild(b.discord, ctx.userID, permissionTarget)
+	targetID, targetUsername, _ := usageHistoryEffectiveTarget(ctx.userID, ctx.username, false, ctx.userID, ctx.username, canManageUsage)
+	state := &usageHistoryState{RequesterID: ctx.userID, TargetID: targetID, TargetUsername: targetUsername, GuildID: ctx.guildID, Period: "30d", Status: "all", Source: "all", AllowLegacyUsername: canManageUsage, From: now.AddDate(0, 0, -30), To: now, Cursors: []usageHistoryCursor{{}}, Page: 0, Expires: time.Now().Add(15 * time.Minute)}
+	content, _, err := b.renderUsageHistory(b.discord, state, uuid.NewString())
 	if err != nil {
 		ctx.reply(commandError(err))
 		return

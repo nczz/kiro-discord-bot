@@ -569,6 +569,152 @@ func TestUsageHistoryUsesStableKeysetPaginationAndFilters(t *testing.T) {
 	}
 }
 
+func TestUsageHistoryIncludesLegacyUsernameRowsForTarget(t *testing.T) {
+	store := NewUsageStore(t.TempDir(), "UTC", 0)
+	records := []UsageRecord{
+		{Timestamp: "2026-09-01T10:00:00Z", GuildID: "g", ChannelID: "c", UserID: "", Username: "alice", Source: "message", Status: "success"},
+		{Timestamp: "2026-09-02T10:00:00Z", GuildID: "g", ChannelID: "c", UserID: "u1", Username: "alice", Source: "message", Status: "success"},
+		{Timestamp: "2026-09-03T10:00:00Z", GuildID: "g", ChannelID: "c", UserID: "", Username: "bob", Source: "message", Status: "success"},
+		{Timestamp: "2026-09-04T10:00:00Z", GuildID: "g", ChannelID: "c", UserID: "", Username: "charlie", Source: "message", Status: "success"},
+	}
+	for _, rec := range records {
+		if err := store.Append(rec); err != nil {
+			t.Fatal(err)
+		}
+	}
+	opts := UsageHistoryOptions{GuildID: "g", UserID: "u1", LegacyUsernames: []string{"alice"}, From: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC), To: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC), Limit: 10}
+	page, err := store.QueryHistory(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Records) != 2 {
+		t.Fatalf("records=%d, want modern+legacy target rows: %+v", len(page.Records), page.Records)
+	}
+	for _, rec := range page.Records {
+		if rec.Username != "alice" {
+			t.Fatalf("included non-target legacy row: %+v", rec)
+		}
+	}
+	withoutLegacy, err := store.QueryHistory(UsageHistoryOptions{GuildID: "g", UserID: "u1", From: opts.From, To: opts.To, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(withoutLegacy.Records) != 1 {
+		t.Fatalf("records without legacy username=%d, want 1", len(withoutLegacy.Records))
+	}
+	ambiguous, err := store.QueryHistory(UsageHistoryOptions{GuildID: "g", UserID: "u2", LegacyUsernames: []string{"alice"}, From: opts.From, To: opts.To, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ambiguous.Records) != 0 {
+		t.Fatalf("ambiguous username legacy rows should not attach to another user: %+v", ambiguous.Records)
+	}
+	unbound, err := store.QueryHistory(UsageHistoryOptions{GuildID: "g", UserID: "u3", LegacyUsernames: []string{"charlie"}, From: opts.From, To: opts.To, Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(unbound.Records) != 0 {
+		t.Fatalf("legacy username row without positive user binding should not attach: %+v", unbound.Records)
+	}
+	unboundExport, err := store.QueryHistoryExport(UsageHistoryOptions{GuildID: "g", UserID: "u3", LegacyUsernames: []string{"charlie"}, From: opts.From, To: opts.To}, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(unboundExport.Records) != 0 {
+		t.Fatalf("legacy username export without positive user binding should not attach: %+v", unboundExport.Records)
+	}
+}
+
+func TestUsageHistorySummaryMergesTargetLegacyUsernameRows(t *testing.T) {
+	store := NewUsageStore(t.TempDir(), "UTC", 0)
+	for _, rec := range []UsageRecord{
+		{Timestamp: "2026-09-01T10:00:00Z", GuildID: "g", ChannelID: "c", UserID: "", Username: "alice", Source: "message", Status: "success", Credits: 1, CostUSD: 0.01},
+		{Timestamp: "2026-09-02T10:00:00Z", GuildID: "g", ChannelID: "c", UserID: "u1", Username: "alice", Source: "message", Status: "success", Credits: 2, CostUSD: 0.02},
+	} {
+		if err := store.Append(rec); err != nil {
+			t.Fatal(err)
+		}
+	}
+	summary, err := store.QueryHistorySummary(UsageHistoryOptions{GuildID: "g", UserID: "u1", LegacyUsernames: []string{"alice"}, From: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC), To: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)}, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Records != 2 || summary.Users != 1 {
+		t.Fatalf("summary records/users = %d/%d, want 2/1", summary.Records, summary.Users)
+	}
+	if len(summary.TopUsers) != 1 || summary.TopUsers[0].UserID != "u1" || summary.TopUsers[0].Records != 2 || summary.TopUsers[0].Credits != 3 {
+		t.Fatalf("top users = %+v, want single merged target", summary.TopUsers)
+	}
+}
+
+func TestUsageHistoryDoesNotAttachAmbiguousLegacyUsernameRows(t *testing.T) {
+	store := NewUsageStore(t.TempDir(), "UTC", 0)
+	for _, rec := range []UsageRecord{
+		{Timestamp: "2026-09-01T10:00:00Z", GuildID: "g", ChannelID: "c", UserID: "", Username: "shared", Source: "message", Status: "success"},
+		{Timestamp: "2026-09-02T10:00:00Z", GuildID: "g", ChannelID: "c", UserID: "u1", Username: "shared", Source: "message", Status: "success"},
+		{Timestamp: "2026-09-03T10:00:00Z", GuildID: "g", ChannelID: "c", UserID: "u2", Username: "shared", Source: "message", Status: "success"},
+	} {
+		if err := store.Append(rec); err != nil {
+			t.Fatal(err)
+		}
+	}
+	opts := UsageHistoryOptions{GuildID: "g", UserID: "u1", LegacyUsernames: []string{"shared"}, From: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC), To: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC), Limit: 10}
+	page, err := store.QueryHistory(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Records) != 1 || page.Records[0].UserID != "u1" {
+		t.Fatalf("ambiguous legacy username should return only target modern row: %+v", page.Records)
+	}
+	export, err := store.QueryHistoryExport(opts, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(export.Records) != 1 || export.Records[0].UserID != "u1" {
+		t.Fatalf("ambiguous legacy username export should return only target modern row: %+v", export.Records)
+	}
+}
+
+func TestUsageHistoryEmptyUserQueriesAllUsers(t *testing.T) {
+	store := NewUsageStore(t.TempDir(), "UTC", 0)
+	for _, rec := range []UsageRecord{
+		{Timestamp: "2026-09-01T10:00:00Z", GuildID: "g", ChannelID: "c", UserID: "u1", Username: "alice", Source: "message", Status: "success"},
+		{Timestamp: "2026-09-02T10:00:00Z", GuildID: "g", ChannelID: "c", UserID: "u2", Username: "bob", Source: "message", Status: "success"},
+		{Timestamp: "2026-09-03T10:00:00Z", GuildID: "g", ChannelID: "c", UserID: "", Username: "legacy", Source: "message", Status: "success"},
+	} {
+		if err := store.Append(rec); err != nil {
+			t.Fatal(err)
+		}
+	}
+	page, err := store.QueryHistory(UsageHistoryOptions{GuildID: "g", From: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC), To: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC), Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Records) != 3 {
+		t.Fatalf("all-user history records=%d, want 3", len(page.Records))
+	}
+}
+
+func TestUsageHistoryExportHonorsLimitAndLegacyUsernameRows(t *testing.T) {
+	store := NewUsageStore(t.TempDir(), "UTC", 0)
+	for i := range 3 {
+		rec := UsageRecord{Timestamp: fmt.Sprintf("2026-09-0%dT10:00:00Z", i+1), GuildID: "g", ChannelID: "c", UserID: "u1", Username: "alice", Source: "message", Status: "success"}
+		if i == 0 {
+			rec.UserID = ""
+		}
+		if err := store.Append(rec); err != nil {
+			t.Fatal(err)
+		}
+	}
+	export, err := store.QueryHistoryExport(UsageHistoryOptions{GuildID: "g", UserID: "u1", LegacyUsernames: []string{"alice"}, From: time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC), To: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)}, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !export.Truncated || len(export.Records) != 2 {
+		t.Fatalf("export=%+v, want 2 truncated records", export)
+	}
+}
+
 func TestUsageLimitDecisionUsesUSDCost(t *testing.T) {
 	store := NewUsageStore(t.TempDir(), "UTC", 0)
 	if err := store.Append(UsageRecord{

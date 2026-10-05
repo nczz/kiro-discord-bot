@@ -103,11 +103,45 @@ type UsageHistoryOptions struct {
 	From, To                        time.Time
 	Limit                           int
 	BeforeTime, BeforeID            string
+	LegacyUsernames                 []string
 }
 
 type UsageHistoryPage struct {
 	Records          []UsageRecord
 	NextTime, NextID string
+}
+
+type UsageHistoryExport struct {
+	Records   []UsageRecord
+	Truncated bool
+}
+
+type UsageHistorySummary struct {
+	Records        int
+	Users          int
+	Credits        float64
+	CostUSD        float64
+	DurationMs     int64
+	ContextUsage   float64
+	MeteredRecords int
+	TopUsers       []UsageHistoryUserSummary
+	StatusCounts   []UsageHistoryCount
+	SourceCounts   []UsageHistoryCount
+	EngineCounts   []UsageHistoryCount
+}
+
+type UsageHistoryUserSummary struct {
+	UserID     string
+	Username   string
+	Records    int
+	Credits    float64
+	CostUSD    float64
+	DurationMs int64
+}
+
+type UsageHistoryCount struct {
+	Name    string
+	Records int
 }
 
 type UsageHealth struct {
@@ -729,14 +763,133 @@ func (s *UsageStore) LimitDecision(guildID, userID string, cfg UsageLimitConfig,
 }
 
 func (s *UsageStore) QueryHistory(opts UsageHistoryOptions) (UsageHistoryPage, error) {
-	if s == nil || s.db == nil {
-		return UsageHistoryPage{}, errors.New("usage store not configured")
-	}
 	if opts.Limit <= 0 || opts.Limit > 50 {
 		opts.Limit = 12
 	}
-	where := []string{"guild_id = ?", "user_id = ?", "occurred_at >= ?", "occurred_at <= ?"}
-	args := []any{opts.GuildID, opts.UserID, formatUsageDBTime(opts.From), formatUsageDBTime(opts.To)}
+	out, err := s.queryHistoryRecords(opts, opts.Limit+1)
+	if err != nil {
+		return UsageHistoryPage{}, err
+	}
+	page := UsageHistoryPage{}
+	if len(out) > opts.Limit {
+		last := out[opts.Limit-1]
+		page.NextTime = last.Timestamp
+		page.NextID = last.UsageID
+		out = out[:opts.Limit]
+	}
+	page.Records = out
+	return page, nil
+}
+
+func (s *UsageStore) QueryHistoryExport(opts UsageHistoryOptions, maxRecords int) (UsageHistoryExport, error) {
+	if maxRecords <= 0 {
+		maxRecords = 10000
+	}
+	out, err := s.queryHistoryRecords(opts, maxRecords+1)
+	if err != nil {
+		return UsageHistoryExport{}, err
+	}
+	export := UsageHistoryExport{Records: out}
+	if len(out) > maxRecords {
+		export.Truncated = true
+		export.Records = out[:maxRecords]
+	}
+	return export, nil
+}
+
+func (s *UsageStore) QueryHistorySummary(opts UsageHistoryOptions, topLimit int) (UsageHistorySummary, error) {
+	if s == nil || s.db == nil {
+		return UsageHistorySummary{}, errors.New("usage store not configured")
+	}
+	if topLimit <= 0 {
+		topLimit = 5
+	}
+	if topLimit > 10 {
+		topLimit = 10
+	}
+	where, args := usageHistoryWhere(opts)
+	query := `SELECT COUNT(*), COALESCE(SUM(credits),0), COALESCE(SUM(cost_usd),0), COALESCE(SUM(duration_ms),0), COALESCE(SUM(context_usage),0), COALESCE(SUM(CASE WHEN metering_supported THEN 1 ELSE 0 END),0), COUNT(DISTINCT CASE WHEN user_id <> '' THEN 'id:' || user_id WHEN username <> '' THEN 'legacy:' || username ELSE usage_id END) FROM usage_records WHERE ` + strings.Join(where, " AND ")
+	var summary UsageHistorySummary
+	if err := s.db.QueryRow(query, args...).Scan(&summary.Records, &summary.Credits, &summary.CostUSD, &summary.DurationMs, &summary.ContextUsage, &summary.MeteredRecords, &summary.Users); err != nil {
+		return UsageHistorySummary{}, err
+	}
+	if strings.TrimSpace(opts.UserID) != "" {
+		if summary.Records > 0 {
+			summary.Users = 1
+		} else {
+			summary.Users = 0
+		}
+	}
+	users, err := s.queryUsageHistoryTopUsers(opts, where, args, topLimit)
+	if err != nil {
+		return UsageHistorySummary{}, err
+	}
+	status, err := s.queryUsageHistoryCounts(where, args, "status", topLimit)
+	if err != nil {
+		return UsageHistorySummary{}, err
+	}
+	source, err := s.queryUsageHistoryCounts(where, args, "source", topLimit)
+	if err != nil {
+		return UsageHistorySummary{}, err
+	}
+	engine, err := s.queryUsageHistoryCounts(where, args, "engine", topLimit)
+	if err != nil {
+		return UsageHistorySummary{}, err
+	}
+	summary.TopUsers = users
+	summary.StatusCounts = status
+	summary.SourceCounts = source
+	summary.EngineCounts = engine
+	return summary, nil
+}
+
+func (s *UsageStore) queryHistoryRecords(opts UsageHistoryOptions, limit int) ([]UsageRecord, error) {
+	if s == nil || s.db == nil {
+		return nil, errors.New("usage store not configured")
+	}
+	where, args := usageHistoryWhere(opts)
+	args = append(args, limit)
+	rows, err := s.db.Query(`SELECT usage_id,occurred_at,guild_id,channel_id,thread_id,user_id,username,message_id,interaction_id,invocation_id,model,engine,source,status,credits,cost_usd,metering_supported,metering_usage_json,duration_ms,context_usage FROM usage_records WHERE `+strings.Join(where, " AND ")+` ORDER BY occurred_at DESC, usage_id DESC LIMIT ?`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []UsageRecord
+	for rows.Next() {
+		var rec UsageRecord
+		var metering string
+		if err := rows.Scan(&rec.UsageID, &rec.Timestamp, &rec.GuildID, &rec.ChannelID, &rec.ThreadID, &rec.UserID, &rec.Username, &rec.MessageID, &rec.InteractionID, &rec.InvocationID, &rec.Model, &rec.Engine, &rec.Source, &rec.Status, &rec.Credits, &rec.CostUSD, &rec.MeteringSupported, &metering, &rec.DurationMs, &rec.ContextUsage); err != nil {
+			return nil, err
+		}
+		_ = json.Unmarshal([]byte(metering), &rec.MeteringUsage)
+		out = append(out, rec)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func usageHistoryWhere(opts UsageHistoryOptions) ([]string, []any) {
+	where := []string{"guild_id = ?", "occurred_at >= ?", "occurred_at <= ?"}
+	args := []any{opts.GuildID, formatUsageDBTime(opts.From), formatUsageDBTime(opts.To)}
+	if strings.TrimSpace(opts.UserID) != "" {
+		legacyNames := normalizedUsageHistoryLegacyUsernames(opts.LegacyUsernames)
+		if len(legacyNames) == 0 {
+			where = append(where, "user_id = ?")
+			args = append(args, opts.UserID)
+		} else {
+			legacyPredicates := make([]string, 0, len(legacyNames))
+			whereArgs := []any{opts.UserID}
+			from, to := formatUsageDBTime(opts.From), formatUsageDBTime(opts.To)
+			for _, name := range legacyNames {
+				legacyPredicates = append(legacyPredicates, "(user_id = '' AND username = ? AND EXISTS (SELECT 1 FROM usage_records ux WHERE ux.guild_id = ? AND ux.username = ? AND ux.user_id = ? AND ux.occurred_at >= ? AND ux.occurred_at <= ?) AND NOT EXISTS (SELECT 1 FROM usage_records ux WHERE ux.guild_id = ? AND ux.username = ? AND ux.user_id <> '' AND ux.user_id <> ? AND ux.occurred_at >= ? AND ux.occurred_at <= ?))")
+				whereArgs = append(whereArgs, name, opts.GuildID, name, opts.UserID, from, to, opts.GuildID, name, opts.UserID, from, to)
+			}
+			where = append(where, "(user_id = ? OR "+strings.Join(legacyPredicates, " OR ")+")")
+			args = append(args, whereArgs...)
+		}
+	}
 	if opts.Status != "" && opts.Status != "all" {
 		where = append(where, "status = ?")
 		args = append(args, opts.Status)
@@ -753,34 +906,84 @@ func (s *UsageStore) QueryHistory(opts UsageHistoryOptions) (UsageHistoryPage, e
 		where = append(where, "(occurred_at < ? OR (occurred_at = ? AND usage_id < ?))")
 		args = append(args, opts.BeforeTime, opts.BeforeTime, opts.BeforeID)
 	}
-	args = append(args, opts.Limit+1)
-	rows, err := s.db.Query(`SELECT usage_id,occurred_at,guild_id,channel_id,thread_id,user_id,username,message_id,interaction_id,invocation_id,model,engine,source,status,credits,cost_usd,metering_supported,metering_usage_json,duration_ms,context_usage FROM usage_records WHERE `+strings.Join(where, " AND ")+` ORDER BY occurred_at DESC, usage_id DESC LIMIT ?`, args...)
+	return where, args
+}
+
+func (s *UsageStore) queryUsageHistoryTopUsers(opts UsageHistoryOptions, where []string, args []any, limit int) ([]UsageHistoryUserSummary, error) {
+	if strings.TrimSpace(opts.UserID) != "" {
+		return s.queryUsageHistoryTargetUserSummary(opts.UserID, where, args)
+	}
+	queryArgs := append([]any{}, args...)
+	queryArgs = append(queryArgs, limit)
+	rows, err := s.db.Query(`SELECT MAX(user_id), MAX(username), COUNT(*), COALESCE(SUM(credits),0), COALESCE(SUM(cost_usd),0), COALESCE(SUM(duration_ms),0) FROM usage_records WHERE `+strings.Join(where, " AND ")+` GROUP BY CASE WHEN user_id <> '' THEN 'id:' || user_id WHEN username <> '' THEN 'legacy:' || username ELSE usage_id END ORDER BY COALESCE(SUM(cost_usd),0) DESC, COALESCE(SUM(credits),0) DESC, COUNT(*) DESC LIMIT ?`, queryArgs...)
 	if err != nil {
-		return UsageHistoryPage{}, err
+		return nil, err
 	}
 	defer rows.Close()
-	var out []UsageRecord
+	var out []UsageHistoryUserSummary
 	for rows.Next() {
-		var rec UsageRecord
-		var metering string
-		if err := rows.Scan(&rec.UsageID, &rec.Timestamp, &rec.GuildID, &rec.ChannelID, &rec.ThreadID, &rec.UserID, &rec.Username, &rec.MessageID, &rec.InteractionID, &rec.InvocationID, &rec.Model, &rec.Engine, &rec.Source, &rec.Status, &rec.Credits, &rec.CostUSD, &rec.MeteringSupported, &metering, &rec.DurationMs, &rec.ContextUsage); err != nil {
-			return UsageHistoryPage{}, err
+		var row UsageHistoryUserSummary
+		if err := rows.Scan(&row.UserID, &row.Username, &row.Records, &row.Credits, &row.CostUSD, &row.DurationMs); err != nil {
+			return nil, err
 		}
-		_ = json.Unmarshal([]byte(metering), &rec.MeteringUsage)
-		out = append(out, rec)
+		out = append(out, row)
 	}
 	if err := rows.Err(); err != nil {
-		return UsageHistoryPage{}, err
+		return nil, err
 	}
-	page := UsageHistoryPage{}
-	if len(out) > opts.Limit {
-		last := out[opts.Limit-1]
-		page.NextTime = last.Timestamp
-		page.NextID = last.UsageID
-		out = out[:opts.Limit]
+	return out, nil
+}
+
+func (s *UsageStore) queryUsageHistoryTargetUserSummary(userID string, where []string, args []any) ([]UsageHistoryUserSummary, error) {
+	row := UsageHistoryUserSummary{UserID: strings.TrimSpace(userID)}
+	if err := s.db.QueryRow(`SELECT COALESCE(MAX(username),''), COUNT(*), COALESCE(SUM(credits),0), COALESCE(SUM(cost_usd),0), COALESCE(SUM(duration_ms),0) FROM usage_records WHERE `+strings.Join(where, " AND "), args...).Scan(&row.Username, &row.Records, &row.Credits, &row.CostUSD, &row.DurationMs); err != nil {
+		return nil, err
 	}
-	page.Records = out
-	return page, nil
+	if row.Records == 0 {
+		return nil, nil
+	}
+	return []UsageHistoryUserSummary{row}, nil
+}
+
+func (s *UsageStore) queryUsageHistoryCounts(where []string, args []any, column string, limit int) ([]UsageHistoryCount, error) {
+	switch column {
+	case "status", "source", "engine":
+	default:
+		return nil, fmt.Errorf("unsupported usage count column %q", column)
+	}
+	queryArgs := append([]any{}, args...)
+	queryArgs = append(queryArgs, limit)
+	rows, err := s.db.Query(`SELECT `+column+`, COUNT(*) FROM usage_records WHERE `+strings.Join(where, " AND ")+` GROUP BY `+column+` ORDER BY COUNT(*) DESC, `+column+` ASC LIMIT ?`, queryArgs...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []UsageHistoryCount
+	for rows.Next() {
+		var row UsageHistoryCount
+		if err := rows.Scan(&row.Name, &row.Records); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func normalizedUsageHistoryLegacyUsernames(names []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
+	return out
 }
 
 func reportAddDay(total *UsageReportTotals, credits, cost float64) {

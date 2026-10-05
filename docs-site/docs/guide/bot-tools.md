@@ -24,6 +24,7 @@ On first channel setup, these safe tools are enabled by default:
 | `bot_create_monitor` | Write, non-destructive | Queue creation of a background monitor that checks silently and only notifies when its condition matches. |
 | `bot_update_monitor` | Write, non-destructive, idempotent | Queue changes to an existing monitor: name, schedule, check prompt, notify condition, or enabled state. |
 | `bot_query_channel_history` | Read | Search or page through stored history for the current channel or thread context. |
+| `bot_query_usage` | Read | Summarize guild usage for the current requester or, with guild-management context, all users or one selected user. |
 | `bot_memory_list` | Read | List persistent memory rules for the current parent channel. |
 | `bot_memory_add` | Write, non-destructive | Queue an explicitly requested, audit-recorded channel memory rule. |
 | `bot_skills_search` | Read | Search visible scoped skills without exposing raw bot data paths. |
@@ -122,6 +123,13 @@ When the `mcp-discord` catalog entry is present, default bot-tools setup also en
 `bot_query_channel_history` is read-only and scoped to the current bot-tools channel or thread context. Use `target_id` only for the current channel/thread IDs from context: a parent channel ID includes child threads, and a thread ID narrows results to that thread.
 
 `query` is optional. Omit it for broad/exhaustive review of retained history, or provide a keyword/phrase to filter stored message and bot response content plus timeline metadata. Results are paginated JSON pages with `limit`, `offset`, `returned`, `has_more`, `next_offset`, and compact `results`; continue with `offset=next_offset` until `has_more=false` before summarizing full history.
+
+## Usage Query Tool
+
+`bot_query_usage` is read-only and scoped to the current Discord guild context. Regular members can query only their own usage. Requests for `scope: all` or another `user_id` require Manage Guild, Administrator, or bot GM context.
+
+The response is aggregate JSON for agent conversation: records, active users, credits, USD cost, duration, context usage, status/source/engine buckets, and a small top-user summary. It does not return row-level message IDs or raw usage rows; use `/usage-history export:true` when a manager needs the complete CSV detail. Supported period presets are `7d`, `30d`, `this-month`, and `last-month`; source filters include `all`, `message`, `webhook`, `webshare`, `command`, `cron`, `reminder`, and `monitor`.
+
 
 ## Audit Query Tool
 

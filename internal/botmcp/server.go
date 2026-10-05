@@ -2,6 +2,7 @@ package botmcp
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -17,6 +18,7 @@ import (
 	"github.com/robfig/cron/v3"
 	"io"
 	"log"
+	_ "modernc.org/sqlite"
 	"net"
 	"net/http"
 	"net/netip"
@@ -56,6 +58,7 @@ const (
 	ToolListMonitor         = "bot_list_monitor"
 	ToolDeleteMonitor       = "bot_delete_monitor"
 	ToolQueryAudit          = "bot_query_audit"
+	ToolQueryUsage          = "bot_query_usage"
 )
 
 // DefaultSafeToolNames returns the bot-tools allowlist enabled during first channel setup.
@@ -74,6 +77,7 @@ func DefaultSafeToolNamesForA2A(a2aEnabled bool) []string {
 		ToolSendFile,
 		ToolSendImageURL,
 		ToolQueryChannelHistory,
+		ToolQueryUsage,
 		ToolMemoryList,
 		ToolMemoryAdd,
 		ToolSkillsSearch,
@@ -418,6 +422,17 @@ func NewServerWithOptions(opts ServerOptions) *server.MCPServer {
 				page.Message = "No stored channel history results. Content search requires audit content retention to be enabled."
 			}
 			raw, _ := json.MarshalIndent(page, "", "  ")
+			return mcp.NewToolResultText(string(raw)), nil
+		},
+	)
+	s.AddTool(
+		queryUsageTool(),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			result, err := queryUsage(dataDir(), os.Getenv("USAGE_TIMEZONE"), req)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			raw, _ := json.MarshalIndent(result, "", "  ")
 			return mcp.NewToolResultText(string(raw)), nil
 		},
 	)
@@ -1041,6 +1056,368 @@ func queryChannelHistoryTool() mcp.Tool {
 		mcp.WithIdempotentHintAnnotation(true),
 		mcp.WithOpenWorldHintAnnotation(false),
 	)
+}
+
+func queryUsageTool() mcp.Tool {
+	return mcp.NewTool(ToolQueryUsage,
+		mcp.WithDescription("Read-only usage summary for the current Discord guild. Defaults to the current requester for regular members and all guild users for Manage Guild/Administrator/bot GM contexts. Use this when a user asks the agent to inspect bot usage, costs, credits, active users, sources, statuses, engines, or top usage without exporting raw rows. This never mutates usage data and never returns host paths."),
+		mcp.WithString("guild_id", mcp.Description("Optional Discord guild/server ID. Defaults to the bound bot-tools guild and cannot override it.")),
+		mcp.WithString("scope", mcp.Description("Optional scope: self, all, or user. Defaults to all for guild managers and self for regular users.")),
+		mcp.WithString("user_id", mcp.Description("Discord user ID when scope=user. Non-managers may only request their own user ID.")),
+		mcp.WithString("period", mcp.Description("Range preset: 7d, 30d, this-month, or last-month. Defaults to 30d.")),
+		mcp.WithString("status", mcp.Description("Optional status filter: all, success, or error. Defaults to all.")),
+		mcp.WithString("source", mcp.Description("Optional source filter: all, message, webhook, webshare, command, cron, reminder, or monitor. Defaults to all.")),
+		mcp.WithNumber("top_limit", mcp.Description("Maximum summary buckets per dimension, 1-10. Defaults to 5.")),
+		mcp.WithReadOnlyHintAnnotation(true),
+		mcp.WithDestructiveHintAnnotation(false),
+		mcp.WithIdempotentHintAnnotation(true),
+		mcp.WithOpenWorldHintAnnotation(false),
+	)
+}
+
+func queryUsage(dataDir, usageTimezone string, req mcp.CallToolRequest) (map[string]any, error) {
+	state, err := authenticatedUsageActor()
+	if err != nil {
+		return nil, err
+	}
+	guildID, err := boundGuildID(req.GetString("guild_id", ""))
+	if err != nil {
+		return nil, err
+	}
+	targetUserID, scope, err := usageQueryTarget(state, req)
+	if err != nil {
+		return nil, err
+	}
+	loc := usageQueryLocation(usageTimezone)
+	now := time.Now().In(loc)
+	period, err := usageQueryNormalizePeriod(req.GetString("period", "30d"))
+	if err != nil {
+		return nil, err
+	}
+	from, to := usageQueryPeriod(period, now)
+	status := strings.TrimSpace(req.GetString("status", "all"))
+	source := strings.TrimSpace(req.GetString("source", "all"))
+	topLimit := req.GetInt("top_limit", 5)
+	opts := usageQueryOptions{GuildID: guildID, UserID: targetUserID, LegacyUsernames: usageQueryVerifiedLegacyUsernames(targetUserID, state), From: from, To: to, Status: status, Source: source}
+	summary, err := queryUsageSummary(dataDir, opts, topLimit)
+	if err != nil {
+		return nil, fmt.Errorf("usage query failed")
+	}
+	return map[string]any{
+		"scope":       scope,
+		"guild_id":    guildID,
+		"user_id":     targetUserID,
+		"period":      period,
+		"from":        from.Format(time.RFC3339),
+		"to":          to.Format(time.RFC3339),
+		"timezone":    loc.String(),
+		"status":      status,
+		"source":      source,
+		"summary":     summary,
+		"privacy":     "regular users can query only self; all/user-other scopes require Manage Guild, Administrator, or bot GM context",
+		"raw_details": "use the Discord /usage-history export:true command for row-level CSV details",
+	}, nil
+}
+
+func authenticatedUsageActor() (targetState, error) {
+	state, ok := currentTargetState()
+	if !ok || strings.TrimSpace(state.RequesterID) == "" {
+		return targetState{}, fmt.Errorf("usage query requires authenticated Discord request context")
+	}
+	if state.RemoteA2A {
+		return targetState{}, fmt.Errorf("usage query requires a local Discord request context")
+	}
+	return state, nil
+}
+
+func usageQueryTarget(state targetState, req mcp.CallToolRequest) (string, string, error) {
+	scope := strings.ToLower(strings.TrimSpace(req.GetString("scope", "")))
+	requestedUserID := strings.TrimSpace(req.GetString("user_id", ""))
+	if scope == "" {
+		if requestedUserID != "" {
+			scope = "user"
+		} else if state.CanManageGuild {
+			scope = "all"
+		} else {
+			scope = "self"
+		}
+	}
+	switch scope {
+	case "self":
+		return strings.TrimSpace(state.RequesterID), "self", nil
+	case "all":
+		if !state.CanManageGuild {
+			return "", "", fmt.Errorf("all-user usage query requires Manage Guild, Administrator, or bot GM context")
+		}
+		return "", "all", nil
+	case "user":
+		if requestedUserID == "" {
+			return "", "", fmt.Errorf("user_id is required when scope=user")
+		}
+		if requestedUserID != strings.TrimSpace(state.RequesterID) && !state.CanManageGuild {
+			return "", "", fmt.Errorf("querying another user's usage requires Manage Guild, Administrator, or bot GM context")
+		}
+		return requestedUserID, "user", nil
+	default:
+		return "", "", fmt.Errorf("unsupported usage scope %q", scope)
+	}
+}
+
+func usageQueryNormalizePeriod(period string) (string, error) {
+	period = strings.TrimSpace(period)
+	if period == "" {
+		return "30d", nil
+	}
+	switch period {
+	case "7d", "30d", "this-month", "last-month":
+		return period, nil
+	default:
+		return "", fmt.Errorf("unsupported usage period %q", period)
+	}
+}
+
+func usageQueryPeriod(period string, now time.Time) (time.Time, time.Time) {
+	switch period {
+	case "7d":
+		return now.AddDate(0, 0, -7), now
+	case "this-month":
+		return time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location()), now
+	case "last-month":
+		end := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
+		return end.AddDate(0, -1, 0), end.Add(-time.Nanosecond)
+	default:
+		return now.AddDate(0, 0, -30), now
+	}
+}
+
+type usageQueryOptions struct {
+	GuildID, UserID, Status, Source string
+	From, To                        time.Time
+	LegacyUsernames                 []string
+}
+
+type usageQuerySummary struct {
+	Records        int                     `json:"records"`
+	Users          int                     `json:"users"`
+	Credits        float64                 `json:"credits"`
+	CostUSD        float64                 `json:"cost_usd"`
+	DurationMs     int64                   `json:"duration_ms"`
+	ContextUsage   float64                 `json:"context_usage"`
+	MeteredRecords int                     `json:"metered_records"`
+	TopUsers       []usageQueryUserSummary `json:"top_users"`
+	StatusCounts   []usageQueryCount       `json:"status_counts"`
+	SourceCounts   []usageQueryCount       `json:"source_counts"`
+	EngineCounts   []usageQueryCount       `json:"engine_counts"`
+}
+
+type usageQueryUserSummary struct {
+	UserID     string  `json:"user_id"`
+	Username   string  `json:"username"`
+	Records    int     `json:"records"`
+	Credits    float64 `json:"credits"`
+	CostUSD    float64 `json:"cost_usd"`
+	DurationMs int64   `json:"duration_ms"`
+}
+
+type usageQueryCount struct {
+	Name    string `json:"name"`
+	Records int    `json:"records"`
+}
+
+func queryUsageSummary(dataDir string, opts usageQueryOptions, topLimit int) (usageQuerySummary, error) {
+	if topLimit <= 0 {
+		topLimit = 5
+	}
+	if topLimit > 10 {
+		topLimit = 10
+	}
+	db, err := openUsageDBReadOnly(dataDir)
+	if err != nil {
+		return usageQuerySummary{}, err
+	}
+	defer db.Close()
+	where, args := usageQueryWhere(opts)
+	var summary usageQuerySummary
+	err = db.QueryRow(`SELECT COUNT(*), COALESCE(SUM(credits),0), COALESCE(SUM(cost_usd),0), COALESCE(SUM(duration_ms),0), COALESCE(SUM(context_usage),0), COALESCE(SUM(CASE WHEN metering_supported THEN 1 ELSE 0 END),0), COUNT(DISTINCT CASE WHEN user_id <> '' THEN 'id:' || user_id WHEN username <> '' THEN 'legacy:' || username ELSE usage_id END) FROM usage_records WHERE `+strings.Join(where, " AND "), args...).Scan(&summary.Records, &summary.Credits, &summary.CostUSD, &summary.DurationMs, &summary.ContextUsage, &summary.MeteredRecords, &summary.Users)
+	if err != nil {
+		return usageQuerySummary{}, err
+	}
+	if strings.TrimSpace(opts.UserID) != "" {
+		if summary.Records > 0 {
+			summary.Users = 1
+		} else {
+			summary.Users = 0
+		}
+	}
+	summary.TopUsers, err = queryUsageTopUsers(db, opts, where, args, topLimit)
+	if err != nil {
+		return usageQuerySummary{}, err
+	}
+	if summary.StatusCounts, err = queryUsageCounts(db, where, args, "status", topLimit); err != nil {
+		return usageQuerySummary{}, err
+	}
+	if summary.SourceCounts, err = queryUsageCounts(db, where, args, "source", topLimit); err != nil {
+		return usageQuerySummary{}, err
+	}
+	if summary.EngineCounts, err = queryUsageCounts(db, where, args, "engine", topLimit); err != nil {
+		return usageQuerySummary{}, err
+	}
+	return summary, nil
+}
+
+func openUsageDBReadOnly(dataDir string) (*sql.DB, error) {
+	dataDir = strings.TrimSpace(dataDir)
+	if dataDir == "" {
+		return nil, fmt.Errorf("data dir is required")
+	}
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(dataDir, "usage", "usage.sqlite")+"?mode=ro")
+	if err != nil {
+		return nil, err
+	}
+	if err := db.Ping(); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return db, nil
+}
+
+func usageQueryWhere(opts usageQueryOptions) ([]string, []any) {
+	where := []string{"guild_id = ?", "occurred_at >= ?", "occurred_at <= ?"}
+	args := []any{opts.GuildID, usageQueryFormatDBTime(opts.From), usageQueryFormatDBTime(opts.To)}
+	if strings.TrimSpace(opts.UserID) != "" {
+		legacyNames := usageQueryNormalizeLegacyUsernames(opts.LegacyUsernames)
+		if len(legacyNames) == 0 {
+			where = append(where, "user_id = ?")
+			args = append(args, opts.UserID)
+		} else {
+			legacyPredicates := make([]string, 0, len(legacyNames))
+			whereArgs := []any{opts.UserID}
+			from, to := usageQueryFormatDBTime(opts.From), usageQueryFormatDBTime(opts.To)
+			for _, name := range legacyNames {
+				legacyPredicates = append(legacyPredicates, "(user_id = '' AND username = ? AND EXISTS (SELECT 1 FROM usage_records ux WHERE ux.guild_id = ? AND ux.username = ? AND ux.user_id = ? AND ux.occurred_at >= ? AND ux.occurred_at <= ?) AND NOT EXISTS (SELECT 1 FROM usage_records ux WHERE ux.guild_id = ? AND ux.username = ? AND ux.user_id <> '' AND ux.user_id <> ? AND ux.occurred_at >= ? AND ux.occurred_at <= ?))")
+				whereArgs = append(whereArgs, name, opts.GuildID, name, opts.UserID, from, to, opts.GuildID, name, opts.UserID, from, to)
+			}
+			where = append(where, "(user_id = ? OR "+strings.Join(legacyPredicates, " OR ")+")")
+			args = append(args, whereArgs...)
+		}
+	}
+	if opts.Status != "" && opts.Status != "all" {
+		where = append(where, "status = ?")
+		args = append(args, opts.Status)
+	}
+	if opts.Source != "" && opts.Source != "all" {
+		if opts.Source == "command" {
+			where = append(where, "source LIKE 'command:%'")
+		} else {
+			where = append(where, "source = ?")
+			args = append(args, opts.Source)
+		}
+	}
+	return where, args
+}
+
+func usageQueryVerifiedLegacyUsernames(targetUserID string, state targetState) []string {
+	if strings.TrimSpace(targetUserID) == "" || !state.CanManageGuild {
+		return nil
+	}
+	for _, ref := range state.MentionRefs {
+		if ref.Kind == "user" && strings.TrimSpace(ref.ID) == strings.TrimSpace(targetUserID) {
+			name := strings.TrimSpace(ref.DisplayName)
+			if name == "" {
+				return nil
+			}
+			return []string{name}
+		}
+	}
+	return nil
+}
+
+func usageQueryNormalizeLegacyUsernames(names []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, name := range names {
+		name = strings.TrimSpace(name)
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
+	return out
+}
+
+func usageQueryFormatDBTime(t time.Time) string {
+	return t.UTC().Format("2006-01-02T15:04:05.000000000Z07:00")
+}
+
+func usageQueryLocation(timezone string) *time.Location {
+	if loc, err := time.LoadLocation(strings.TrimSpace(timezone)); err == nil {
+		return loc
+	}
+	return time.Local
+}
+
+func queryUsageTopUsers(db *sql.DB, opts usageQueryOptions, where []string, args []any, limit int) ([]usageQueryUserSummary, error) {
+	if strings.TrimSpace(opts.UserID) != "" {
+		return queryUsageTargetUserSummary(db, opts.UserID, where, args)
+	}
+	queryArgs := append([]any{}, args...)
+	queryArgs = append(queryArgs, limit)
+	rows, err := db.Query(`SELECT MAX(user_id), MAX(username), COUNT(*), COALESCE(SUM(credits),0), COALESCE(SUM(cost_usd),0), COALESCE(SUM(duration_ms),0) FROM usage_records WHERE `+strings.Join(where, " AND ")+` GROUP BY CASE WHEN user_id <> '' THEN 'id:' || user_id WHEN username <> '' THEN 'legacy:' || username ELSE usage_id END ORDER BY COALESCE(SUM(cost_usd),0) DESC, COALESCE(SUM(credits),0) DESC, COUNT(*) DESC LIMIT ?`, queryArgs...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []usageQueryUserSummary
+	for rows.Next() {
+		var row usageQueryUserSummary
+		if err := rows.Scan(&row.UserID, &row.Username, &row.Records, &row.Credits, &row.CostUSD, &row.DurationMs); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func queryUsageTargetUserSummary(db *sql.DB, userID string, where []string, args []any) ([]usageQueryUserSummary, error) {
+	row := usageQueryUserSummary{UserID: strings.TrimSpace(userID)}
+	if err := db.QueryRow(`SELECT COALESCE(MAX(username),''), COUNT(*), COALESCE(SUM(credits),0), COALESCE(SUM(cost_usd),0), COALESCE(SUM(duration_ms),0) FROM usage_records WHERE `+strings.Join(where, " AND "), args...).Scan(&row.Username, &row.Records, &row.Credits, &row.CostUSD, &row.DurationMs); err != nil {
+		return nil, err
+	}
+	if row.Records == 0 {
+		return nil, nil
+	}
+	return []usageQueryUserSummary{row}, nil
+}
+
+func queryUsageCounts(db *sql.DB, where []string, args []any, column string, limit int) ([]usageQueryCount, error) {
+	switch column {
+	case "status", "source", "engine":
+	default:
+		return nil, fmt.Errorf("unsupported usage count column %q", column)
+	}
+	queryArgs := append([]any{}, args...)
+	queryArgs = append(queryArgs, limit)
+	rows, err := db.Query(`SELECT `+column+`, COUNT(*) FROM usage_records WHERE `+strings.Join(where, " AND ")+` GROUP BY `+column+` ORDER BY COUNT(*) DESC, `+column+` ASC LIMIT ?`, queryArgs...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []usageQueryCount
+	for rows.Next() {
+		var row usageQueryCount
+		if err := rows.Scan(&row.Name, &row.Records); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 type summary struct {
