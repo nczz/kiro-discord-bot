@@ -222,6 +222,7 @@ func TestQueryUsageToolScopesAndSummarizes(t *testing.T) {
 	t.Setenv("DATA_DIR", dir)
 	t.Setenv("BOT_TOOLS_GUILD_ID", "guild-1")
 	t.Setenv("BOT_TOOLS_TARGET_STATE_PATH", statePath)
+	t.Setenv("USAGE_TIMEZONE", "UTC")
 	client := initializedTestClient(t, NewServerWithOptions(ServerOptions{}))
 
 	if err := os.WriteFile(statePath, []byte(`{"target_channel_id":"channel-1","source":"message","requester_id":"manager","requester_name":"manager","can_manage_guild":true}`), 0644); err != nil {
@@ -236,6 +237,31 @@ func TestQueryUsageToolScopesAndSummarizes(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Fatalf("usage result missing %q:\n%s", want, text)
 		}
+	}
+
+	customFrom := time.Now().AddDate(0, 0, -11).UTC().Format("2006-01-02")
+	customTo := time.Now().AddDate(0, 0, -8).UTC().Format("2006-01-02")
+	custom := callTestTool(t, client, ToolQueryUsage, map[string]any{"from": customFrom, "to": customTo, "scope": "all"})
+	if custom.IsError {
+		t.Fatalf("custom usage query failed: %s", callToolText(t, custom))
+	}
+	if text := callToolText(t, custom); !strings.Contains(text, `"period": "custom"`) || !strings.Contains(text, `"records": 3`) || !strings.Contains(text, `"timezone": "UTC"`) {
+		t.Fatalf("custom usage result missing normalized range:\n%s", text)
+	}
+	overridePeriod := callTestTool(t, client, ToolQueryUsage, map[string]any{"period": "forever", "from": customFrom, "scope": "all"})
+	if overridePeriod.IsError {
+		t.Fatalf("custom from should override invalid period: %s", callToolText(t, overridePeriod))
+	}
+	if text := callToolText(t, overridePeriod); !strings.Contains(text, `"period": "custom"`) || !strings.Contains(text, `"records": 3`) {
+		t.Fatalf("custom from override result missing expected summary:\n%s", text)
+	}
+	toOnly := callTestTool(t, client, ToolQueryUsage, map[string]any{"to": customTo, "scope": "all"})
+	if !toOnly.IsError || !strings.Contains(callToolText(t, toOnly), "from is required when to is set") {
+		t.Fatalf("to-only usage query result = error:%v text:%q", toOnly.IsError, callToolText(t, toOnly))
+	}
+	tooLargePeriod := callTestTool(t, client, ToolQueryUsage, map[string]any{"period": "3651d", "scope": "all"})
+	if !tooLargePeriod.IsError || !strings.Contains(callToolText(t, tooLargePeriod), "relative day periods are limited to 3650d") {
+		t.Fatalf("too-large period result = error:%v text:%q", tooLargePeriod.IsError, callToolText(t, tooLargePeriod))
 	}
 
 	if err := os.WriteFile(statePath, []byte(`{"target_channel_id":"channel-1","source":"message","requester_id":"manager","requester_name":"manager","can_manage_guild":true,"mention_refs":[{"kind":"user","id":"alice-id","display_name":"alice","placeholder":"[[discord:user:alice-id]]"}]}`), 0644); err != nil {
@@ -264,7 +290,7 @@ func TestQueryUsageToolScopesAndSummarizes(t *testing.T) {
 		t.Fatalf("self usage query leaked or missed rows:\n%s", text)
 	}
 	invalidPeriod := callTestTool(t, client, ToolQueryUsage, map[string]any{"period": "forever"})
-	if !invalidPeriod.IsError || !strings.Contains(callToolText(t, invalidPeriod), "unsupported usage period") {
+	if !invalidPeriod.IsError || !strings.Contains(callToolText(t, invalidPeriod), "invalid usage time range") || !strings.Contains(callToolText(t, invalidPeriod), "period must be a day count") {
 		t.Fatalf("invalid period result = error:%v text:%q", invalidPeriod.IsError, callToolText(t, invalidPeriod))
 	}
 	if text := callToolText(t, self); strings.Contains(text, `"usage-legacy"`) || strings.Contains(text, `"records": 2`) {

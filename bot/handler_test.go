@@ -2043,8 +2043,13 @@ func TestSlashCommandsIncludeAgentAndUsage(t *testing.T) {
 			for _, opt := range cmd.Options {
 				options[opt.Name] = opt.Type
 			}
-			if options["user"] != discordgo.ApplicationCommandOptionUser || options["period"] != discordgo.ApplicationCommandOptionString || options["status"] != discordgo.ApplicationCommandOptionString || options["source"] != discordgo.ApplicationCommandOptionString || options["export"] != discordgo.ApplicationCommandOptionBoolean {
+			if len(cmd.Options) != 7 || options["user"] != discordgo.ApplicationCommandOptionUser || options["period"] != discordgo.ApplicationCommandOptionString || options["from"] != discordgo.ApplicationCommandOptionString || options["to"] != discordgo.ApplicationCommandOptionString || options["status"] != discordgo.ApplicationCommandOptionString || options["source"] != discordgo.ApplicationCommandOptionString || options["export"] != discordgo.ApplicationCommandOptionBoolean {
 				t.Fatalf("/usage-history options = %+v", cmd.Options)
+			}
+			for _, opt := range cmd.Options {
+				if opt.Name == "period" && len(opt.Choices) != 0 {
+					t.Fatalf("/usage-history period should allow free-form ranges, got choices %+v", opt.Choices)
+				}
 			}
 			continue
 		}
@@ -3370,6 +3375,10 @@ func TestBuildPromptInjectsCurrentDatetimeGuidance(t *testing.T) {
 		"明天 => range_type=day offset=1",
 		"下個月第二週 => range_type=month_week offset=1 week_index=2",
 		"過去7天 => range_type=relative_days days=7 direction=past",
+		"For bot_query_usage or usage-history questions",
+		"phrases like 上季, 今年, last quarter, or past 90 days",
+		"pass period only for simple Nd ranges or pass explicit from/to",
+		"Never pass natural-language text to period/from/to",
 		"Do not calculate weekdays, month boundaries, or relative ranges from model memory",
 		"Use the [Current datetime] timezone for date/time reasoning",
 		"Do not append a timezone to every date/time answer",
@@ -4099,6 +4108,52 @@ func TestUsageHistoryClassifiesDenialAndDeliveryFailure(t *testing.T) {
 	}
 	if status, reason := b.handleUsageHistory(ds, interaction("history-delivery-failed", ""), auditCtx); status != "error" || reason != "usage_history_deferred_response_failed" {
 		t.Fatalf("delivery status/reason = %q/%q", status, reason)
+	}
+}
+
+func TestUsageHistoryInvalidRangeRejectsBeforeDefer(t *testing.T) {
+	L.Load("en")
+	b, _, cleanup := newAuditTestBot(t)
+	defer cleanup()
+	rt := &recordingDiscordTransport{}
+	ds, err := discordgo.New("Bot test")
+	if err != nil {
+		t.Fatalf("new discord session: %v", err)
+	}
+	ds.Client = &http.Client{Transport: rt}
+	ds.State = testPeerPermissionSession(t, nil).State
+	i := &discordgo.InteractionCreate{Interaction: &discordgo.Interaction{
+		ID:        "history-invalid-range",
+		Type:      discordgo.InteractionApplicationCommand,
+		GuildID:   "guild-1",
+		ChannelID: "channel-1",
+		Token:     "token-1",
+		Member:    &discordgo.Member{User: &discordgo.User{ID: "viewer", Username: "viewer"}},
+		Data: discordgo.ApplicationCommandInteractionData{
+			Name: "usage-history",
+			Options: []*discordgo.ApplicationCommandInteractionDataOption{
+				{Name: "from", Type: discordgo.ApplicationCommandOptionString, Value: "2026-10-10"},
+				{Name: "to", Type: discordgo.ApplicationCommandOptionString, Value: "2026-10-01"},
+			},
+		},
+	}}
+	auditCtx := cmdCtx{guildID: "guild-1", channelID: "channel-1", targetID: "channel-1", userID: "viewer"}
+
+	if status, reason := b.handleUsageHistory(ds, i, auditCtx); status != "rejected" || reason != "usage_history_invalid_range" {
+		t.Fatalf("status/reason = %q/%q", status, reason)
+	}
+	paths, bodies := rt.Snapshot()
+	if len(paths) != 1 || !strings.Contains(paths[0], "/interactions/history-invalid-range/token-1/callback") {
+		t.Fatalf("interaction response paths = %+v", paths)
+	}
+	body := bodies[0]
+	for _, want := range []string{"Invalid time range: from must be before to", `"flags":64`, `"allowed_mentions"`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("invalid range response missing %q:\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, `"type":5`) {
+		t.Fatalf("invalid range should reject immediately, not defer:\n%s", body)
 	}
 }
 

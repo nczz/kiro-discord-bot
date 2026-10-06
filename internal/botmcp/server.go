@@ -15,6 +15,7 @@ import (
 	"github.com/nczz/kiro-discord-bot/internal/discordmention"
 	"github.com/nczz/kiro-discord-bot/internal/secrets"
 	"github.com/nczz/kiro-discord-bot/internal/timectx"
+	"github.com/nczz/kiro-discord-bot/internal/usagerange"
 	"github.com/robfig/cron/v3"
 	"io"
 	"log"
@@ -1064,7 +1065,9 @@ func queryUsageTool() mcp.Tool {
 		mcp.WithString("guild_id", mcp.Description("Optional Discord guild/server ID. Defaults to the bound bot-tools guild and cannot override it.")),
 		mcp.WithString("scope", mcp.Description("Optional scope: self, all, or user. Defaults to all for guild managers and self for regular users.")),
 		mcp.WithString("user_id", mcp.Description("Discord user ID when scope=user. Non-managers may only request their own user ID.")),
-		mcp.WithString("period", mcp.Description("Range preset: 7d, 30d, this-month, or last-month. Defaults to 30d.")),
+		mcp.WithString("period", mcp.Description("Range preset or relative day count such as 7d, 30d, 90d, this-month, or last-month. Defaults to 30d. Ignored when from is set.")),
+		mcp.WithString("from", mcp.Description("Optional custom range start. Use YYYY-MM-DD, YYYY-MM-DD HH:MM, YYYY-MM-DDTHH:MM, or RFC3339 in USAGE_TIMEZONE. Required when to is set.")),
+		mcp.WithString("to", mcp.Description("Optional custom range end. Date-only values are inclusive through that local day. Defaults to now when from is set.")),
 		mcp.WithString("status", mcp.Description("Optional status filter: all, success, or error. Defaults to all.")),
 		mcp.WithString("source", mcp.Description("Optional source filter: all, message, webhook, webshare, command, cron, reminder, or monitor. Defaults to all.")),
 		mcp.WithNumber("top_limit", mcp.Description("Maximum summary buckets per dimension, 1-10. Defaults to 5.")),
@@ -1090,11 +1093,18 @@ func queryUsage(dataDir, usageTimezone string, req mcp.CallToolRequest) (map[str
 	}
 	loc := usageQueryLocation(usageTimezone)
 	now := time.Now().In(loc)
-	period, err := usageQueryNormalizePeriod(req.GetString("period", "30d"))
+	resolvedRange, err := usagerange.Resolve(usagerange.Options{
+		Period: req.GetString("period", "30d"),
+		From:   req.GetString("from", ""),
+		To:     req.GetString("to", ""),
+		Now:    now,
+		Loc:    loc,
+	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("invalid usage time range: %s", usagerange.Message(err))
 	}
-	from, to := usageQueryPeriod(period, now)
+	period := resolvedRange.Label
+	from, to := resolvedRange.From, resolvedRange.To
 	status := strings.TrimSpace(req.GetString("status", "all"))
 	source := strings.TrimSpace(req.GetString("source", "all"))
 	topLimit := req.GetInt("top_limit", 5)
@@ -1160,33 +1170,6 @@ func usageQueryTarget(state targetState, req mcp.CallToolRequest) (string, strin
 		return requestedUserID, "user", nil
 	default:
 		return "", "", fmt.Errorf("unsupported usage scope %q", scope)
-	}
-}
-
-func usageQueryNormalizePeriod(period string) (string, error) {
-	period = strings.TrimSpace(period)
-	if period == "" {
-		return "30d", nil
-	}
-	switch period {
-	case "7d", "30d", "this-month", "last-month":
-		return period, nil
-	default:
-		return "", fmt.Errorf("unsupported usage period %q", period)
-	}
-}
-
-func usageQueryPeriod(period string, now time.Time) (time.Time, time.Time) {
-	switch period {
-	case "7d":
-		return now.AddDate(0, 0, -7), now
-	case "this-month":
-		return time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location()), now
-	case "last-month":
-		end := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
-		return end.AddDate(0, -1, 0), end.Add(-time.Nanosecond)
-	default:
-		return now.AddDate(0, 0, -30), now
 	}
 }
 

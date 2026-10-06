@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/nczz/kiro-discord-bot/channel"
 	"github.com/nczz/kiro-discord-bot/internal/textutil"
+	"github.com/nczz/kiro-discord-bot/internal/usagerange"
 	L "github.com/nczz/kiro-discord-bot/locale"
 )
 
@@ -52,7 +53,7 @@ func (b *Bot) handleUsageHistory(ds *discordgo.Session, i *discordgo.Interaction
 	pruneUsageHistoryStates(time.Now())
 	data := i.ApplicationCommandData()
 	requester, requesterUsername := interactionUser(i)
-	target, targetUsername, period, status, source := requester, requesterUsername, "30d", "all", "all"
+	target, targetUsername, period, status, source, fromText, toText := requester, requesterUsername, "30d", "all", "all", "", ""
 	targetSpecified := false
 	exportCSV := false
 	for _, opt := range data.Options {
@@ -69,6 +70,10 @@ func (b *Bot) handleUsageHistory(ds *discordgo.Session, i *discordgo.Interaction
 			status = opt.StringValue()
 		case "source":
 			source = opt.StringValue()
+		case "from":
+			fromText = opt.StringValue()
+		case "to":
+			toText = opt.StringValue()
 		case "export":
 			exportCSV = opt.BoolValue()
 		}
@@ -82,23 +87,22 @@ func (b *Bot) handleUsageHistory(ds *discordgo.Session, i *discordgo.Interaction
 		b.recordInteractionResponseDelivery(auditCtx, data.Name, "rejected", msg, discordgo.InteractionResponseChannelMessageWithSource, metadata, err)
 		return "rejected", "usage_history_forbidden"
 	}
-	deferredMetadata := map[string]any{"ephemeral": true, "target_user_id": target, "target_scope": usageHistoryAuditScope(target)}
-	err := ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{Type: discordgo.InteractionResponseDeferredChannelMessageWithSource, Data: &discordgo.InteractionResponseData{Flags: discordgo.MessageFlagsEphemeral}})
+	now := time.Now().In(b.manager.UsageLocation())
+	resolvedRange, err := usagerange.Resolve(usagerange.Options{Period: period, From: fromText, To: toText, Now: now, Loc: b.manager.UsageLocation()})
+	if err != nil {
+		msg := L.Getf("usage.history.range.invalid", usageHistoryRangeErrorMessage(err))
+		metadata := map[string]any{"ephemeral": true, "target_user_id": target, "target_scope": usageHistoryAuditScope(target), "period": period, "from": fromText != "", "to": toText != ""}
+		respondErr := ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{Type: discordgo.InteractionResponseChannelMessageWithSource, Data: &discordgo.InteractionResponseData{Content: msg, Flags: discordgo.MessageFlagsEphemeral, AllowedMentions: &discordgo.MessageAllowedMentions{}}})
+		b.recordInteractionResponseDelivery(auditCtx, data.Name, "rejected", msg, discordgo.InteractionResponseChannelMessageWithSource, metadata, respondErr)
+		return "rejected", "usage_history_invalid_range"
+	}
+	period = resolvedRange.Label
+	from, now := resolvedRange.From, resolvedRange.To
+	deferredMetadata := map[string]any{"ephemeral": true, "target_user_id": target, "target_scope": usageHistoryAuditScope(target), "period": period, "from": from.Format(time.RFC3339), "to": now.Format(time.RFC3339)}
+	err = ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{Type: discordgo.InteractionResponseDeferredChannelMessageWithSource, Data: &discordgo.InteractionResponseData{Flags: discordgo.MessageFlagsEphemeral}})
 	b.recordInteractionResponseDelivery(auditCtx, data.Name, "deferred", "", discordgo.InteractionResponseDeferredChannelMessageWithSource, deferredMetadata, err)
 	if err != nil {
 		return "error", "usage_history_deferred_response_failed"
-	}
-	now := time.Now().In(b.manager.UsageLocation())
-	from := now.AddDate(0, 0, -30)
-	switch period {
-	case "7d":
-		from = now.AddDate(0, 0, -7)
-	case "this-month":
-		from = time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
-	case "last-month":
-		end := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location())
-		from = end.AddDate(0, -1, 0)
-		now = end.Add(-time.Nanosecond)
 	}
 	token := uuid.NewString()
 	state := &usageHistoryState{RequesterID: requester, TargetID: target, TargetUsername: targetUsername, GuildID: i.GuildID, Period: period, Status: status, Source: source, AllowLegacyUsername: canManageUsage, From: from, To: now, Cursors: []usageHistoryCursor{{}}, Expires: time.Now().Add(15 * time.Minute)}
@@ -106,7 +110,7 @@ func (b *Bot) handleUsageHistory(ds *discordgo.Session, i *discordgo.Interaction
 	if err != nil {
 		content := commandError(err)
 		sent, editErr := ds.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{Content: &content, AllowedMentions: &discordgo.MessageAllowedMentions{}})
-		b.recordCommandResponseDelivery(auditCtx, data.Name, "slash", "error", content, map[string]any{"ephemeral": true, "target_user_id": target, "target_scope": usageHistoryAuditScope(target), "period": period}, sent, editErr)
+		b.recordCommandResponseDelivery(auditCtx, data.Name, "slash", "error", content, map[string]any{"ephemeral": true, "target_user_id": target, "target_scope": usageHistoryAuditScope(target), "period": period, "from": from.Format(time.RFC3339), "to": now.Format(time.RFC3339)}, sent, editErr)
 		return "error", "usage_history_query_failed"
 	}
 	var files []*discordgo.File
@@ -117,7 +121,7 @@ func (b *Bot) handleUsageHistory(ds *discordgo.Session, i *discordgo.Interaction
 		if err != nil {
 			content := commandError(err)
 			sent, editErr := ds.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{Content: &content, AllowedMentions: &discordgo.MessageAllowedMentions{}})
-			b.recordCommandResponseDelivery(auditCtx, "usage-history", "slash", "error", content, map[string]any{"ephemeral": true, "target_user_id": target, "target_scope": usageHistoryAuditScope(target), "period": period, "export": true}, sent, editErr)
+			b.recordCommandResponseDelivery(auditCtx, "usage-history", "slash", "error", content, map[string]any{"ephemeral": true, "target_user_id": target, "target_scope": usageHistoryAuditScope(target), "period": period, "from": from.Format(time.RFC3339), "to": now.Format(time.RFC3339), "export": true}, sent, editErr)
 			return "error", "usage_history_export_failed"
 		}
 		files = []*discordgo.File{{Name: filename, ContentType: "text/csv; charset=utf-8", Reader: bytes.NewReader(data)}}
@@ -130,7 +134,7 @@ func (b *Bot) handleUsageHistory(ds *discordgo.Session, i *discordgo.Interaction
 	}
 	usageHistoryStates.Store(token, state)
 	sent, err := ds.InteractionResponseEdit(i.Interaction, &discordgo.WebhookEdit{Content: &content, Components: &components, Files: files, AllowedMentions: &discordgo.MessageAllowedMentions{}})
-	b.recordCommandResponseDelivery(auditCtx, data.Name, "slash", "sent", content, map[string]any{"ephemeral": true, "target_user_id": target, "target_scope": usageHistoryAuditScope(target), "period": period, "page": 1, "export": exported, "export_truncated": truncated}, sent, err)
+	b.recordCommandResponseDelivery(auditCtx, data.Name, "slash", "sent", content, map[string]any{"ephemeral": true, "target_user_id": target, "target_scope": usageHistoryAuditScope(target), "period": period, "from": from.Format(time.RFC3339), "to": now.Format(time.RFC3339), "page": 1, "export": exported, "export_truncated": truncated}, sent, err)
 	if err != nil {
 		return "error", "usage_history_response_failed"
 	}
@@ -155,6 +159,29 @@ func usageHistoryAuditScope(targetID string) string {
 		return "all_users"
 	}
 	return "user"
+}
+
+func usageHistoryRangeErrorMessage(err error) string {
+	rangeErr, ok := err.(*usagerange.RangeError)
+	if !ok || rangeErr == nil {
+		return L.Get("usage.history.range.error.invalid")
+	}
+	switch rangeErr.Code {
+	case usagerange.ErrInvalidPeriod:
+		return L.Get("usage.history.range.error.invalid_period")
+	case usagerange.ErrPeriodTooLarge:
+		return L.Get("usage.history.range.error.period_too_large")
+	case usagerange.ErrFromRequired:
+		return L.Get("usage.history.range.error.from_required")
+	case usagerange.ErrInvalidFrom:
+		return L.Get("usage.history.range.error.invalid_from")
+	case usagerange.ErrInvalidTo:
+		return L.Get("usage.history.range.error.invalid_to")
+	case usagerange.ErrReversedRange:
+		return L.Get("usage.history.range.error.reversed_range")
+	default:
+		return L.Get("usage.history.range.error.invalid")
+	}
 }
 
 func (b *Bot) renderUsageHistory(ds *discordgo.Session, state *usageHistoryState, token string) (string, []discordgo.MessageComponent, error) {

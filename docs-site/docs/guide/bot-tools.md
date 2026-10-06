@@ -128,7 +128,7 @@ When the `mcp-discord` catalog entry is present, default bot-tools setup also en
 
 `bot_query_usage` is read-only and scoped to the current Discord guild context. Regular members can query only their own usage. Requests for `scope: all` or another `user_id` require Manage Guild, Administrator, or bot GM context.
 
-The response is aggregate JSON for agent conversation: records, active users, credits, USD cost, duration, context usage, status/source/engine buckets, and a small top-user summary. It does not return row-level message IDs or raw usage rows; use `/usage-history export:true` when a manager needs the complete CSV detail. Supported period presets are `7d`, `30d`, `this-month`, and `last-month`; source filters include `all`, `message`, `webhook`, `webshare`, `command`, `cron`, `reminder`, and `monitor`.
+The response is aggregate JSON for agent conversation: records, active users, credits, USD cost, duration, context usage, status/source/engine buckets, and a small top-user summary. It does not return row-level message IDs or raw usage rows; use `/usage-history export:true` when a manager needs the complete CSV detail. `period` accepts relative day counts such as `7d`, `30d`, or `90d`, plus `this-month` and `last-month`; relative day periods are capped at `3650d`. Optional `from`/`to` accept `YYYY-MM-DD`, local datetimes, or RFC3339 in `USAGE_TIMEZONE`, and custom dates override `period`; `to` may only be set with `from`. Source filters include `all`, `message`, `webhook`, `webshare`, `command`, `cron`, `reminder`, and `monitor`.
 
 
 ## Audit Query Tool

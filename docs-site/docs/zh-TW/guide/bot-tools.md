@@ -128,7 +128,7 @@ File egress 採保守設計：
 
 `bot_query_usage` 是 read-only，且限制在目前 Discord guild context。一般成員只能查自己的用量；`scope: all` 或查其他 `user_id` 需要管理伺服器、系統管理員或 bot GM context。
 
-回應是給 agent 對話使用的聚合 JSON：records、active users、credits、USD cost、duration、context usage、status/source/engine buckets，以及小型 top-user summary。它不回傳 row-level message IDs 或原始逐筆用量；管理者需要完整 CSV 明細時請用 `/usage-history export:true`。支援的 period presets 是 `7d`、`30d`、`this-month` 與 `last-month`；source filters 包含 `all`、`message`、`webhook`、`webshare`、`command`、`cron`、`reminder` 與 `monitor`。
+回應是給 agent 對話使用的聚合 JSON：records、active users、credits、USD cost、duration、context usage、status/source/engine buckets，以及小型 top-user summary。它不回傳 row-level message IDs 或原始逐筆用量；管理者需要完整 CSV 明細時請用 `/usage-history export:true`。`period` 支援 `7d`、`30d`、`90d` 這類相對天數，以及 `this-month`、`last-month`；相對天數上限為 `3650d`。可選的 `from`/`to` 支援 `USAGE_TIMEZONE` 內的 `YYYY-MM-DD`、本地日期時間或 RFC3339，自訂日期會覆蓋 `period`；設定 `to` 時必須同時設定 `from`。Source filters 包含 `all`、`message`、`webhook`、`webshare`、`command`、`cron`、`reminder` 與 `monitor`。
 
 
 ## Audit Query Tool

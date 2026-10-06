@@ -65,7 +65,7 @@ Memory、flash memory、steering 與 session cleanup 的操作差異見 [日常�
 | `/mcp manage` | 開啟私密 MCP policy panel，掃描 tools 並管理 allowlist。 |
 | `/audit [limit]` | 私密檢視目前 channel/thread 的 audit events。 |
 | `/usage [user]` | 私密顯示全伺服器今日、本周、本月至今的 agent 用量；engine 有回傳 metering metadata 時會包含 credits 或 USD cost。一般成員預設只看自己；具備管理伺服器或系統管理員權限者可留空查看所有使用者或指定其他成員。 |
-| `/usage-history [user] [period] [status] [source] [export]` | 私密查詢全伺服器用量歷史。Discord 訊息會以聚合摘要呈現，避免報表被逐筆使用者清單淹沒；設定 `export:true` 會附上符合條件的逐筆 CSV，包含可讀 Discord 使用者名稱、ID 與用量 metadata。`period` 可選 `7d`、`30d`、`this-month`、`last-month`；`status` 可選 `all`、`success`、`failed`；`source` 可選 `all`、`message`、`webhook`、`webshare`、`command`、`cron`、`reminder`、`monitor`。一般成員預設看自己；具備管理伺服器或系統管理員權限者可留空查看所有使用者或指定其他成員。 |
+| `/usage-history [user] [period] [from] [to] [status] [source] [export]` | 私密查詢全伺服器用量歷史。Discord 訊息會以聚合摘要呈現，避免報表被逐筆使用者清單淹沒；設定 `export:true` 會附上符合條件的逐筆 CSV，包含可讀 Discord 使用者名稱、ID 與用量 metadata。`period` 支援 `7d`、`30d`、`90d` 這類相對天數，以及 `this-month`、`last-month`；相對天數上限為 `3650d`。`from`/`to` 支援 `YYYY-MM-DD`、本地日期時間或 RFC3339，且會覆蓋 `period`（`to` 只填日期時會包含該本地日整天；設定 `to` 時必須同時設定 `from`）。`status` 可選 `all`、`success`、`failed`；`source` 可選 `all`、`message`、`webhook`、`webshare`、`command`、`cron`、`reminder`、`monitor`。一般成員預設看自己；具備管理伺服器或系統管理員權限者可留空查看所有使用者或指定其他成員。 |
 
 Audit data 請使用 slash `/audit`；usage data 請使用 slash `/usage` 或 `/usage-history`。文字 `!audit` 不回傳 audit rows，文字 `!usage` 只會提示改用 slash，因為 Discord 無法讓這類文字回覆變成 private。
 Bot 管理者包含具備對應 Discord 管理權限的成員，或列在 `BOT_GM_USER_IDS` 的 user ID。設定 GM 白名單後，非管理者仍可能看得到管理型 slash commands，但 bot 會在執行前拒絕。

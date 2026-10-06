@@ -55,7 +55,7 @@ Cron job 會使用 job owner 或設定的 user context。Kiro usage 會加總 `c
 
 `/usage` 預設以私密回覆列出 requester 自己在全伺服器本月的用量。具備管理伺服器或系統管理員權限的成員可列出本月所有有紀錄的使用者，或指定其他成員；超過 Discord 訊息限制時會自動送出額外的 ephemeral 分段。報表會盡可能依 resolved Discord user ID 分組。若舊紀錄只有 username，只有在能明確對應時才會合併到 user row；有歧義的名稱會保留分開，避免誤歸屬。
 
-`/usage-history` 會在 Discord 私密顯示聚合摘要，並支援使用者、期間、狀態、來源與 CSV 匯出 filters。一般成員預設看自己；具備管理伺服器或系統管理員權限者可留空查詢所有使用者或指定其他成員。設定 `export:true` 會產生完整逐筆 CSV；CSV 會包含可讀 Discord 使用者顯示名稱、user IDs/usernames 與 metering metadata。若舊版遷移資料列只有目標 Discord username、沒有 user ID，詳細歷史只會在所選時間窗同時存在該 username 與目標 user ID 的新版綁定、且沒有其他 user ID 共用該 username 時納入 legacy rows。
+`/usage-history` 會在 Discord 私密顯示聚合摘要，並支援使用者、彈性時間範圍、狀態、來源與 CSV 匯出 filters。`period` 支援 `90d` 這類天數以及 `this-month`、`last-month`；相對天數上限為 `3650d`。可選的 `from`/`to` 支援 `USAGE_TIMEZONE` 內的 `YYYY-MM-DD`、本地日期時間或 RFC3339，並會覆蓋 `period`；設定 `to` 時必須同時設定 `from`。一般成員預設看自己；具備管理伺服器或系統管理員權限者可留空查詢所有使用者或指定其他成員。設定 `export:true` 會產生完整逐筆 CSV；CSV 會包含可讀 Discord 使用者顯示名稱、user IDs/usernames 與 metering metadata。若舊版遷移資料列只有目標 Discord username、沒有 user ID，詳細歷史只會在所選時間窗同時存在該 username 與目標 user ID 的新版綁定、且沒有其他 user ID 共用該 username 時納入 legacy rows。
 
 使用 `/usage-history` filter 時，WebShare-originated agent work 會出現在 `webshare` source，usage 仍歸屬於被委派 Discord authority 的 opener。
 
