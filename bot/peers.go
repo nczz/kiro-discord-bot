@@ -477,6 +477,9 @@ func (b *Bot) requiresHumanMention(ds *discordgo.Session, targetID, parentChanne
 				return false, ""
 			}
 			if b.manager.ThreadMentionOnly(targetID, parentChannelID) {
+				if b.manager.HasMentionOnlyOverride(parentChannelID) && b.channelMultiBotMode(ds, targetID, selfID) {
+					return true, "multi_bot_parent_paused"
+				}
 				return true, "thread_inherit"
 			}
 		} else if !b.manager.ThreadModeEnabled(targetID) {

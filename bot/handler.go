@@ -226,11 +226,28 @@ func (s *seenMessages) Mark(id string) bool {
 
 // resolveThreadParent returns the parent channel ID if channelID is a thread, or "" if not.
 func resolveThreadParent(ds *discordgo.Session, channelID string) string {
+	if ds == nil || strings.TrimSpace(channelID) == "" {
+		return ""
+	}
 	threadParentMu.RLock()
 	parent, cached := threadParentCache[channelID]
 	threadParentMu.RUnlock()
 	if cached {
 		return parent
+	}
+
+	if ds.State != nil {
+		if ch, err := ds.State.Channel(channelID); err == nil && ch != nil {
+			if ch.IsThread() {
+				if strings.TrimSpace(ch.ParentID) != "" {
+					cacheThreadParent(channelID, ch.ParentID)
+					return ch.ParentID
+				}
+			} else {
+				cacheThreadParent(channelID, "")
+				return ""
+			}
+		}
 	}
 
 	ch, err := ds.Channel(channelID)
@@ -241,25 +258,44 @@ func resolveThreadParent(ds *discordgo.Session, channelID string) string {
 	parentID := ""
 	if ch.IsThread() {
 		parentID = ch.ParentID
+		if strings.TrimSpace(parentID) == "" {
+			return ""
+		}
 	}
+	cacheThreadParent(channelID, parentID)
+	return parentID
+}
 
+func cacheThreadParent(channelID, parentChannelID string) {
 	threadParentMu.Lock()
+	defer threadParentMu.Unlock()
 	if len(threadParentCache) >= threadParentCacheMax {
 		threadParentCache = make(map[string]string)
 	}
-	threadParentCache[channelID] = parentID
-	threadParentMu.Unlock()
-	return parentID
+	threadParentCache[channelID] = parentChannelID
 }
 
 // registerThreadParent caches a known thread→parent mapping (called when bot creates a thread).
 func registerThreadParent(threadID, parentChannelID string) {
-	threadParentMu.Lock()
-	if len(threadParentCache) >= threadParentCacheMax {
-		threadParentCache = make(map[string]string)
+	if strings.TrimSpace(threadID) == "" || strings.TrimSpace(parentChannelID) == "" {
+		return
 	}
-	threadParentCache[threadID] = parentChannelID
-	threadParentMu.Unlock()
+	cacheThreadParent(threadID, parentChannelID)
+}
+
+func (b *Bot) captureThreadListenMode(ds *discordgo.Session, threadID, parentChannelID string) {
+	if b == nil || b.manager == nil || strings.TrimSpace(threadID) == "" || strings.TrimSpace(parentChannelID) == "" {
+		return
+	}
+	selfID := ""
+	if ds != nil && ds.State != nil && ds.State.User != nil {
+		selfID = ds.State.User.ID
+	}
+	mentionOnly := b.manager.ThreadMentionOnly(threadID, parentChannelID)
+	if selfID != "" {
+		mentionOnly, _ = b.requiresHumanMention(ds, threadID, parentChannelID, selfID)
+	}
+	b.manager.CaptureThreadListenMode(threadID, mentionOnly)
 }
 
 func (b *Bot) statusWithRuntime(s string) string {
@@ -1003,7 +1039,13 @@ func (b *Bot) handleThreadCreate(ds *discordgo.Session, t *discordgo.ThreadCreat
 		return
 	}
 	registerThreadParent(t.ID, t.ParentID)
+	if ds != nil && ds.State != nil {
+		if err := ds.State.ChannelAdd(t.Channel); err != nil {
+			log.Printf("[handler] cache thread %s: %v", t.ID, err)
+		}
+	}
 	b.recordChannelMetadata(ds, t.ID, t.GuildID)
+	b.captureThreadListenMode(ds, t.ID, t.ParentID)
 	b.broadcastWebShareThreadLifecycle(context.Background(), t.Channel, "created")
 }
 

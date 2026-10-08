@@ -379,6 +379,37 @@ Regression expectation:
 
 ## Known Failure Patterns
 
+### Manual Thread Loses Parent Listen Mode
+
+Symptoms:
+
+- `/pause` is active on a parent channel, but an unmentioned message in a manually created thread still triggers the bot.
+- The thread message is handled as a parent-channel message instead of being routed through the thread listen policy.
+- `/doctor` and persisted parent settings show mention-only while the new thread has no creation-time listen snapshot.
+
+First checks:
+
+- `bot/handler.go` `handleThreadCreate`, `resolveThreadParent`, and `handleMessage`.
+- `channel.Manager` thread snapshot and parent pause state.
+- Discord gateway state for the thread and the `ThreadCreate` event's `ParentID`.
+- Whether a resolver failure or an empty `ThreadCreate` parent was cached as a non-thread.
+
+Root cause:
+
+- Manual `ThreadCreate` handling cached only the parent mapping; it did not capture the effective listen mode.
+- Parent resolution used the Discord REST endpoint before checking gateway state. A transient REST failure could return an empty parent, so the message bypassed thread mention gating.
+
+Fix pattern:
+
+- Resolve thread parents from `discordgo.State` first, keep REST as fallback, and never cache an empty parent from an incomplete thread event.
+- Capture the effective parent listen mode exactly once when every thread is created. Preserve that snapshot over later parent `/pause` or `/back` changes.
+- Keep parent pause as a direct mention-only fallback when no snapshot exists; thread-local overrides and snapshots retain precedence.
+
+Regression expectation:
+
+- Tests must cover manually created threads under `/pause`, state-first parent resolution without REST, immutable creation-time snapshots, and old full-listen snapshots surviving later parent mode changes.
+
+
 ### Duplicate Gateway Runtime For One Bot Identity
 
 Symptoms:

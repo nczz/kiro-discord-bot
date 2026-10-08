@@ -2837,7 +2837,7 @@ func (m *Manager) startAgentAndWorkerWithModelFallback(channelID string, allowSt
 	w.SetUsageLimits(m.usageLimits)
 	w.SetAuditSink(m.audit)
 	w.OnThreadCreatedFunc(func(threadID string, mentionOnly bool) {
-		m.SetThreadListenMode(threadID, mentionOnly)
+		m.CaptureThreadListenMode(threadID, mentionOnly)
 	})
 	w.SetHistoryPrefix(historyCtx)
 	w.OnSkillPrefixFunc(func(targetID string) string {
@@ -3722,6 +3722,25 @@ func (m *Manager) SetThreadListenMode(threadID string, mentionOnly bool) {
 	}
 }
 
+// CaptureThreadListenMode records the effective parent mode for a newly created
+// thread. The first capture wins so duplicate gateway events cannot rewrite the
+// thread's creation-time behavior.
+func (m *Manager) CaptureThreadListenMode(threadID string, mentionOnly bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.threadListen[threadID]; ok {
+		return
+	}
+	if mentionOnly {
+		m.threadListen[threadID] = "mention"
+	} else {
+		m.threadListen[threadID] = "full"
+	}
+	if err := m.saveThreadModesLocked(); err != nil {
+		log.Printf("[manager] save thread listen mode for %s: %v", threadID, err)
+	}
+}
+
 func (m *Manager) ThreadListenSnapshot(threadID string) (string, bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -3737,6 +3756,9 @@ func (m *Manager) ThreadMentionOnly(threadID, parentChannelID string) bool {
 	}
 	if paused, ok := m.paused[threadID]; ok {
 		return paused
+	}
+	if paused, ok := m.paused[parentChannelID]; ok && paused {
+		return true
 	}
 	if enabled, ok := m.threadMode[parentChannelID]; ok && !enabled {
 		return true

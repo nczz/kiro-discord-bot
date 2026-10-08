@@ -14,7 +14,7 @@ Listen mode determines when a Discord message becomes agent work. It is the main
 
 ## Thread Behavior
 
-Each task thread can continue as its own agent conversation. A thread keeps the listen mode captured when it was created. Later parent-channel changes do not silently rewrite old thread behavior.
+Each task thread, including one created manually in Discord, keeps the listen mode captured when it was created. Later parent-channel changes do not silently rewrite old thread behavior.
 
 Thread agents are independent from the parent channel agent. Work in one thread does not block the parent channel or another thread.
 

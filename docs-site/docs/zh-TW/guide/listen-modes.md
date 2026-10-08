@@ -14,7 +14,7 @@ Listen mode 決定 Discord 訊息什麼時候會變成 agent 工作。它是避�
 
 ## Thread 行為
 
-每個 task thread 都可以繼續成為獨立 agent conversation。Thread 會保留建立時捕捉的 listen mode；之後 parent channel 的變更不會默默改寫舊 thread。
+每個 task thread（包含在 Discord 中手動建立的 thread）都會保留建立當下捕捉的 listen mode；之後 parent channel 的變更不會默默改寫舊 thread 的行為。
 
 Thread agent 和 parent channel agent 彼此獨立。一個 thread 的工作不會阻塞 parent channel 或其他 thread。
 
