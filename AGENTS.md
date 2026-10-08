@@ -58,6 +58,20 @@ If these sources conflict, stop and report the conflict. Do not invent behavior 
 - For complex reviews or handoffs, follow `.kiro/steering/360-review-handoff.md`.
 - For recurring bugs, rejected approaches, non-goals, or future triggers, update `.kiro/steering/decision-failure-patterns.md`.
 
+## Private deployment operations
+
+- When the user requests an update or deployment of the deployment host group, read the private profile at `$HOME/.config/kiro-discord-bot/deployment-profile.yaml` before researching targets. This file is outside the repository and is the source for private host inventory only.
+- Expand `$HOME` placeholders only in the local execution context; never print resolved private paths in normal user-facing output.
+- The private profile MUST contain deployment metadata, not secrets or executable shell commands. Never copy its contents, host credentials, tokens, `.env` values, raw runtime paths, Discord identities, or raw logs into the repository or normal user-facing output.
+- Re-discover every target through the configured SSH or Incus path before changing anything. Do not infer current versions, services, configuration, or gateway state from an old deployment record.
+- Use a verified GitHub release artifact matching each target architecture. Before stopping a service, create a rollback backup and confirm required configuration files are readable.
+- Preserve existing environment and MCP configuration. Verify artifact checksums, service health, process status, restart count, MCP runtime compatibility, and the one-gateway-per-identity invariant after deployment.
+- Write deployment reports outside the repository, under the private state location configured by the operator. Remove temporary installers and archives after verification; retain rollback backups.
+- Do not modify repository code or documentation, create commits, push, or publish a release as part of a host deployment unless the user explicitly requests those actions.
+- Stop and report before rollout if the private profile is missing or inconsistent, a target is unreachable, an artifact checksum is wrong, configuration cannot be backed up, a service cannot recover, an identity conflict is detected, or a repository change appears necessary.
+
+The private deployment profile is an operational input, not a replacement for this repository's architecture, security, MCP, or release contracts.
+
 ## Verification expectations
 
 - Run verification that matches the changed behavior. Prefer the smallest command or smoke scenario that exercises the real runtime path.
