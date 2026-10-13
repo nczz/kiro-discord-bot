@@ -2088,8 +2088,19 @@ func TestUpdateReminderToolQueuesAuthenticatedThreadScopedUpdate(t *testing.T) {
 		t.Fatalf("ingest queued reminder update: %v", err)
 	}
 	updated, ok := store.Get(job.ID)
-	if !ok || updated.Prompt != "drink more water" || updated.NextRun != nextRun {
+	if !ok || updated.Prompt != "drink more water" {
 		t.Fatalf("MCP-to-scheduler update = %+v ok=%v", updated, ok)
+	}
+	gotNextRun, err := time.Parse(time.RFC3339, updated.NextRun)
+	if err != nil {
+		t.Fatalf("parse updated next run %q: %v", updated.NextRun, err)
+	}
+	wantNextRun, err := time.Parse(time.RFC3339, nextRun)
+	if err != nil {
+		t.Fatalf("parse requested next run %q: %v", nextRun, err)
+	}
+	if !gotNextRun.Equal(wantNextRun) {
+		t.Fatalf("updated next run = %s, want same instant as %s", gotNextRun, wantNextRun)
 	}
 	entries, err = os.ReadDir(filepath.Join(dir, "cron", "pending"))
 	if err != nil || len(entries) != 0 {
