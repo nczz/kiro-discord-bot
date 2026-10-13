@@ -310,17 +310,137 @@ func TestBuildCronCardRendersOneShotReminderWithoutCronControls(t *testing.T) {
 	if !ok {
 		t.Fatalf("component type = %T, want ActionsRow", components[0])
 	}
-	if len(row.Components) != 2 {
-		t.Fatalf("one-shot reminder controls = %+v, want pause/resume plus delete only", row.Components)
+	if len(row.Components) != 3 {
+		t.Fatalf("one-shot reminder controls = %+v, want pause/resume, edit, and delete", row.Components)
 	}
+	seenEdit := false
 	for _, component := range row.Components {
 		button, ok := component.(discordgo.Button)
 		if !ok {
 			t.Fatalf("component type = %T, want Button", component)
 		}
-		if strings.Contains(button.CustomID, "cron_run_") || strings.Contains(button.CustomID, "cron_edit_") {
-			t.Fatalf("one-shot reminder should not expose recurring cron control %q", button.CustomID)
+		if strings.Contains(button.CustomID, "cron_run_") {
+			t.Fatalf("one-shot reminder should not expose run control %q", button.CustomID)
 		}
+		seenEdit = seenEdit || strings.Contains(button.CustomID, "cron_edit_")
+	}
+	if !seenEdit {
+		t.Fatalf("one-shot reminder controls = %+v, want edit button", row.Components)
+	}
+}
+
+func TestOneShotReminderEditOpensReminderModal(t *testing.T) {
+	L.Load("en")
+	store, err := heartbeat.NewCronStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := &heartbeat.CronJob{
+		ID: "reminder-edit", Name: "Drink", ChannelID: "channel-1", GuildID: "guild-1",
+		Prompt: "drink water", Enabled: true, OneShot: true, CreatedByID: "viewer",
+		NextRun: time.Now().Add(time.Hour).Format(time.RFC3339), ScheduleHuman: "+1h",
+	}
+	if err := store.Add(job); err != nil {
+		t.Fatal(err)
+	}
+	rt := &recordingDiscordTransport{}
+	ds := testPeerPermissionSession(t, nil)
+	ds.Client = &http.Client{Transport: rt}
+	b := &Bot{cronStore: store}
+
+	b.handleCronButton(ds, cronButtonInteraction("cron_edit_"+job.ID))
+
+	_, bodies := waitDiscordRequests(t, rt, 1)
+	body := bodies[0]
+	for _, want := range []string{"reminder_edit_modal_" + job.ID, "reminder_name", "reminder_time", "reminder_content"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("reminder edit modal missing %q: %s", want, body)
+		}
+	}
+	if strings.Contains(body, "cron_model") || strings.Contains(body, "cron_schedule") {
+		t.Fatalf("reminder edit modal exposed recurring cron fields: %s", body)
+	}
+}
+
+func TestReminderEditSubmitUsesSharedUpdateService(t *testing.T) {
+	L.Load("en")
+	dir := t.TempDir()
+	store, err := heartbeat.NewCronStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := &heartbeat.CronJob{
+		ID: "reminder-edit", Name: "Old", ChannelID: "channel-1", GuildID: "guild-1",
+		Prompt: "old", Enabled: true, OneShot: true, CreatedByID: "viewer",
+		NextRun: time.Now().Add(time.Hour).Format(time.RFC3339), ScheduleHuman: "+1h",
+	}
+	if err := store.Add(job); err != nil {
+		t.Fatal(err)
+	}
+	rt := &recordingDiscordTransport{}
+	ds := testPeerPermissionSession(t, nil)
+	ds.Client = &http.Client{Transport: rt}
+	task := heartbeat.NewCronTask(store, nil, dir, "UTC", "guild-1", 5)
+	b := &Bot{cronStore: store, cronTask: task, cronTimezone: "UTC"}
+	nextRun := time.Now().Add(2 * time.Hour).UTC().Format(time.RFC3339)
+	interaction := &discordgo.InteractionCreate{Interaction: &discordgo.Interaction{
+		ID: "interaction-reminder-edit", Token: "token-reminder-edit", Type: discordgo.InteractionModalSubmit,
+		GuildID: "guild-1", ChannelID: "channel-1",
+		Member: &discordgo.Member{User: &discordgo.User{ID: "viewer", Username: "Viewer"}},
+		Data: discordgo.ModalSubmitInteractionData{
+			CustomID: "reminder_edit_modal_" + job.ID,
+			Components: []discordgo.MessageComponent{
+				&discordgo.ActionsRow{Components: []discordgo.MessageComponent{&discordgo.TextInput{CustomID: "reminder_name", Value: "New"}}},
+				&discordgo.ActionsRow{Components: []discordgo.MessageComponent{&discordgo.TextInput{CustomID: "reminder_time", Value: nextRun}}},
+				&discordgo.ActionsRow{Components: []discordgo.MessageComponent{&discordgo.TextInput{CustomID: "reminder_content", Value: "new content"}}},
+			},
+		},
+	}}
+
+	b.handleReminderEditSubmit(ds, interaction, job.ID)
+
+	_, bodies := waitDiscordRequests(t, rt, 1)
+	if body := bodies[0]; !strings.Contains(body, `"type":7`) || !strings.Contains(body, "Reminder updated") || !strings.Contains(body, "new content") || !strings.Contains(body, "cron_edit_reminder-edit") {
+		t.Fatalf("modal submit did not refresh the reminder card in place: %s", body)
+	}
+	got, ok := store.Get(job.ID)
+	if !ok || got.Name != "New" || got.Prompt != "new content" || got.NextRun != nextRun {
+		t.Fatalf("updated reminder = %+v ok=%v", got, ok)
+	}
+}
+
+func TestOneShotReminderPauseUsesAuthenticatedUpdateService(t *testing.T) {
+	L.Load("en")
+	dir := t.TempDir()
+	store, err := heartbeat.NewCronStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := &heartbeat.CronJob{
+		ID: "reminder-pause", Name: "Drink", ChannelID: "channel-1", GuildID: "guild-1",
+		Prompt: "drink water", Enabled: true, OneShot: true, CreatedByID: "viewer",
+		NextRun: time.Now().Add(time.Hour).Format(time.RFC3339),
+	}
+	if err := store.Add(job); err != nil {
+		t.Fatal(err)
+	}
+	rt := &recordingDiscordTransport{}
+	ds := testPeerPermissionSession(t, nil)
+	ds.Client = &http.Client{Transport: rt}
+	b := &Bot{
+		cronStore: store,
+		cronTask:  heartbeat.NewCronTask(store, nil, dir, "UTC", "guild-1", 5),
+	}
+
+	b.handleCronButton(ds, cronButtonInteraction("cron_pause_"+job.ID))
+
+	_, bodies := waitDiscordRequests(t, rt, 1)
+	updated, ok := store.Get(job.ID)
+	if !ok || updated.Enabled {
+		t.Fatalf("paused reminder = %+v ok=%v", updated, ok)
+	}
+	if body := bodies[0]; !strings.Contains(body, `"type":7`) || !strings.Contains(body, "Paused") {
+		t.Fatalf("pause did not refresh the reminder card: %s", body)
 	}
 }
 
@@ -388,14 +508,12 @@ func cronButtonInteraction(customID string) *discordgo.InteractionCreate {
 	}}
 }
 
-func TestOneShotCronActionUnsupportedBlocksStaleRunEditButtons(t *testing.T) {
+func TestOneShotCronActionUnsupportedOnlyBlocksRun(t *testing.T) {
 	oneShot := &heartbeat.CronJob{OneShot: true}
-	for _, action := range []string{"run", "edit"} {
-		if !oneShotCronActionUnsupported(oneShot, action) {
-			t.Fatalf("one-shot action %q should be blocked", action)
-		}
+	if !oneShotCronActionUnsupported(oneShot, "run") {
+		t.Fatal("one-shot run should be blocked")
 	}
-	for _, action := range []string{"pause", "resume", "delete"} {
+	for _, action := range []string{"edit", "pause", "resume", "delete"} {
 		if oneShotCronActionUnsupported(oneShot, action) {
 			t.Fatalf("one-shot action %q should remain allowed", action)
 		}

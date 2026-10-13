@@ -21,6 +21,7 @@ On first channel setup, these safe tools are enabled by default:
 | `bot_create_cron` | Write, non-destructive | Queue creation of a scheduled task. |
 | `bot_update_cron` | Write, non-destructive, idempotent | Queue changes to an existing recurring cron job: name, schedule, prompt, or enabled state. |
 | `bot_create_reminder` | Write, non-destructive | Queue a one-time reminder delivered by the bot scheduler. |
+| `bot_update_reminder` | Write, non-destructive, idempotent | Queue changes to a pending one-time reminder: name, delivery time, content, enabled state, or mentioned user. |
 | `bot_create_monitor` | Write, non-destructive | Queue creation of a background monitor that checks silently and only notifies when its condition matches. |
 | `bot_update_monitor` | Write, non-destructive, idempotent | Queue changes to an existing monitor: name, schedule, check prompt, notify condition, or enabled state. |
 | `bot_query_channel_history` | Read | Search or page through stored history for the current channel or thread context. |
@@ -68,11 +69,11 @@ Monitor tools are additionally manager-gated: `bot_list_monitor`, `bot_create_mo
 
 `bot-tools` sessions are bound to the current channel or thread target. Calls that try to operate on a different channel fail with a channel-scope error.
 
-Thread IDs are normalized to the parent channel for recurring cron management where the runtime stores scheduled work at channel scope. One-time reminders keep the current delivery target, so a reminder created from a task thread is delivered back to that thread.
+Thread IDs are normalized to the parent channel for recurring cron management where the runtime stores scheduled work at channel scope. One-time reminders keep the exact current delivery target: a reminder created from a task thread is delivered to that thread, is listed only in that target, and can be updated only from that target by its creator or a channel manager. `bot_create_reminder` records the authenticated Discord requester as creator; creator identity cannot be supplied by tool arguments.
 
 Persistent memory is parent-channel scoped. `bot_memory_add` is default-enabled only for explicit "remember this" requests, rejects secret-like text, writes through the pending bot-side queue, and records an audit event before the main bot applies it. `bot_memory_remove` and `bot_memory_clear` are not default-enabled.
 
-Use `bot_create_reminder` for one-time reminders such as "in 10 minutes", "tomorrow at 09:00", "2026-08-13 14:25", or "8/13 14:25". Use `bot_create_cron` only for recurring jobs that should visibly run every time. Use `bot_create_monitor` for recurring background checks that must produce no public Discord message unless the separate `notify_when` condition matches.
+Use `bot_create_reminder` for one-time reminders such as "in 10 minutes", "tomorrow at 09:00", "2026-08-13 14:25", or "8/13 14:25". Use `bot_update_reminder` to change a still-pending reminder. Updates are queued and normally applied by the scheduler within 60 seconds; a reminder that has started running cannot be updated. After a one-time reminder finishes, the scheduler removes it from storage and `/cron-list`. Use `bot_create_cron` only for recurring jobs that should visibly run every time. Use `bot_create_monitor` for recurring background checks that must produce no public Discord message unless the separate `notify_when` condition matches.
 
 ## A2A Bot Tools
 

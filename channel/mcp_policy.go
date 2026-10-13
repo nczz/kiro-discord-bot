@@ -778,13 +778,14 @@ func normalizeLegacyDefaultBotToolsPolicy(p MCPChannelPolicy) MCPChannelPolicy {
 		},
 	}
 	legacyDefaults = append(legacyDefaults,
+		removeStringSet(append([]string(nil), botmcp.DefaultSafeToolNamesForA2A(false)...), []string{botmcp.ToolUpdateReminder}),
+		removeStringSet(append([]string(nil), botmcp.DefaultSafeToolNamesForA2A(true)...), []string{botmcp.ToolUpdateReminder}),
 		removeStringSet(append([]string(nil), botmcp.DefaultSafeToolNamesForA2A(false)...), monitorBotToolNames()),
 		removeStringSet(append([]string(nil), botmcp.DefaultSafeToolNamesForA2A(true)...), monitorBotToolNames()),
 	)
-	// Previous safe defaults gained one-time reminders, update_cron, and the
-	// short-lived base64 image egress tool over time. Treat only actual
-	// historical default sets as managed defaults, so custom partial allowlists
-	// are not broadened into channel-history content access.
+	// Previous safe defaults gained one-time reminders, cron/reminder updates,
+	// and image/history tools over time. Treat only actual historical default
+	// sets as managed defaults, so custom partial allowlists are not broadened.
 	for i := range len(legacyDefaults) {
 		for _, extras := range [][]string{
 			{"bot_create_reminder"},

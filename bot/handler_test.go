@@ -3331,16 +3331,16 @@ func TestCronTruncateDoesNotSplitUTF8(t *testing.T) {
 	}
 }
 
-func TestBuildPromptDocumentsCronOwnerChannelScope(t *testing.T) {
+func TestBuildPromptDocumentsCronAndReminderScope(t *testing.T) {
 	got := buildPromptThread("create cron", nil, "channel-1", "thread-1", "guild-1", "alice", "")
-	if !strings.Contains(got, "For cron management tools, use channel_id as the owning parent channel ID") {
-		t.Fatalf("prompt missing cron owner scope guidance:\n%s", got)
+	if !strings.Contains(got, "For recurring cron management tools, use channel_id as the owning parent channel ID") || !strings.Contains(got, "One-time reminders are delivery-target scoped") {
+		t.Fatalf("prompt missing cron/reminder scope guidance:\n%s", got)
 	}
 	if !strings.Contains(got, "For one-time reminders, use bot_create_reminder") || !strings.Contains(got, "For visible recurring schedules, use bot_create_cron") || !strings.Contains(got, "do not degrade it to tomorrow") {
 		t.Fatalf("prompt missing reminder/cron tool guidance:\n%s", got)
 	}
-	if !strings.Contains(got, "inspection-only requests") || !strings.Contains(got, "stop without calling update tools") || !strings.Contains(got, "then use bot_update_cron or bot_update_monitor") || !strings.Contains(got, "enabled=false") || !strings.Contains(got, "deletion requires bot_delete_cron or bot_delete_monitor") {
-		t.Fatalf("prompt missing safe recurring update guidance:\n%s", got)
+	if !strings.Contains(got, "inspection-only requests") || !strings.Contains(got, "stop without calling update tools") || !strings.Contains(got, "bot_update_cron, bot_update_reminder, or bot_update_monitor") || !strings.Contains(got, "queued, not yet applied") || !strings.Contains(got, "enabled=false") {
+		t.Fatalf("prompt missing safe update guidance:\n%s", got)
 	}
 	if !strings.Contains(got, "channel_id=channel-1 thread_id=thread-1") {
 		t.Fatalf("prompt missing channel/thread context:\n%s", got)

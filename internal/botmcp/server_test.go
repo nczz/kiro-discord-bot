@@ -153,8 +153,8 @@ func TestDefaultSafeToolNamesExcludeDestructiveTools(t *testing.T) {
 	if !seen[ToolCreateReminder] {
 		t.Fatalf("one-time reminder tool should be default-enabled to avoid agent-side scheduling bypasses: %+v", tools)
 	}
-	if !seen[ToolUpdateCron] {
-		t.Fatalf("safe non-destructive update tool should be default-enabled: %+v", tools)
+	if !seen[ToolUpdateCron] || !seen[ToolUpdateReminder] {
+		t.Fatalf("safe non-destructive update tools should be default-enabled: %+v", tools)
 	}
 	if !seen[ToolListMonitor] || !seen[ToolCreateMonitor] || !seen[ToolUpdateMonitor] {
 		t.Fatalf("monitor list/create/update tools should be default-enabled: %+v", tools)
@@ -460,6 +460,7 @@ func TestBotToolsWriteToolsRejectMonitorDisabledState(t *testing.T) {
 		{ToolCreateCron, map[string]any{"name": "Daily", "schedule": "0 9 * * *", "prompt": "check", "channel_id": "channel-1", "guild_id": "guild-1", "created_by": "alice"}},
 		{ToolCreateReminder, map[string]any{"time": "tomorrow 09:00", "content": "ping", "channel_id": "channel-1", "guild_id": "guild-1", "created_by": "alice"}},
 		{ToolUpdateCron, map[string]any{"job_id": "cron-1", "channel_id": "channel-1", "enabled": false}},
+		{ToolUpdateReminder, map[string]any{"job_id": "reminder-1", "channel_id": "channel-1", "content": "updated"}},
 		{ToolA2ATrustPeer, map[string]any{"guild_id": "guild-1", "channel_id": "channel-1", "requested_by": "alice", "requested_by_id": "user-1", "target_agent": "peer-1"}},
 		{ToolSkillUsageRecord, map[string]any{"skill_id": "skill-1", "version": "1"}},
 		{ToolSkillCreate, map[string]any{"name": "Skill", "content": "# Skill"}},
@@ -1153,7 +1154,7 @@ func TestTimeToolsDocumentTimezoneAndStructuredRangeUse(t *testing.T) {
 func TestUpdateCronToolDocumentsSafePartialUpdateContract(t *testing.T) {
 	t.Setenv("CRON_TIMEZONE", "Asia/Taipei")
 	tool := writeTool(ToolUpdateCron, cronpolicy.UpdateToolDescription("Asia/Taipei"), false)
-	for _, want := range []string{"bot_list_cron", "enabled=false", "bot_delete_cron", "One-time reminders cannot be updated", "Asia/Taipei"} {
+	for _, want := range []string{"bot_list_cron", "enabled=false", "bot_delete_cron", "bot_update_reminder", "Asia/Taipei"} {
 		if !strings.Contains(tool.Description, want) {
 			t.Fatalf("description missing %q: %s", want, tool.Description)
 		}
@@ -1171,13 +1172,36 @@ func TestUpdateCronToolDocumentsSafePartialUpdateContract(t *testing.T) {
 	}
 }
 
+func TestUpdateReminderToolDocumentsScopedPartialUpdateContract(t *testing.T) {
+	t.Setenv("CRON_TIMEZONE", "Asia/Taipei")
+	tool := writeTool(ToolUpdateReminder, cronpolicy.ReminderUpdateToolDescription("Asia/Taipei"), false)
+	for _, want := range []string{"bot_list_cron", "creator or a channel manager", "queued", "Asia/Taipei"} {
+		if !strings.Contains(tool.Description, want) {
+			t.Fatalf("description missing %q: %s", want, tool.Description)
+		}
+	}
+	if tool.Annotations.DestructiveHint == nil || *tool.Annotations.DestructiveHint {
+		t.Fatal("reminder update must not be destructive")
+	}
+	if tool.Annotations.IdempotentHint == nil || !*tool.Annotations.IdempotentHint {
+		t.Fatal("reminder update must be idempotent")
+	}
+	for _, field := range []string{"job_id", "channel_id", "name", "time", "content", "enabled", "mention_user_id"} {
+		if _, ok := tool.InputSchema.Properties[field]; !ok {
+			t.Fatalf("missing reminder update schema field %s", field)
+		}
+	}
+}
+
 func TestCreateReminderToolDocumentsOneTimeTimezone(t *testing.T) {
 	t.Setenv("CRON_TIMEZONE", "Asia/Taipei")
 
 	tool := writeTool(ToolCreateReminder, cronpolicy.ReminderToolDescription(cronpolicy.TimezoneName("Asia/Taipei")), false)
 
-	if !strings.Contains(tool.Description, "one-time") || !strings.Contains(tool.Description, "Asia/Taipei") || !strings.Contains(tool.Description, "bot_create_cron") {
-		t.Fatalf("reminder description should distinguish one-time reminders from recurring cron: %q", tool.Description)
+	for _, want := range []string{"one-time", "Asia/Taipei", "bot_create_cron", "authenticated local Discord requester", "Queue"} {
+		if !strings.Contains(tool.Description, want) {
+			t.Fatalf("reminder description missing %q: %q", want, tool.Description)
+		}
 	}
 	timeProp, ok := tool.InputSchema.Properties["time"].(map[string]any)
 	if !ok {
@@ -1195,8 +1219,10 @@ func TestCreateReminderToolDocumentsOneTimeTimezone(t *testing.T) {
 	if !strings.Contains(mentionDesc, "verified Discord user ID") {
 		t.Fatalf("mention_user_id description should require verified IDs: %q", mentionDesc)
 	}
-	if _, ok := tool.InputSchema.Properties["created_by_id"].(map[string]any); !ok {
-		t.Fatalf("created_by_id schema missing: %+v", tool.InputSchema.Properties["created_by_id"])
+	for _, field := range []string{"created_by", "created_by_id"} {
+		if _, ok := tool.InputSchema.Properties[field]; ok {
+			t.Fatalf("reminder creator field %s must come from authenticated Discord context: %+v", field, tool.InputSchema.Properties)
+		}
 	}
 }
 
@@ -1959,6 +1985,185 @@ func TestWritePendingCreateReminderTargetsCurrentThread(t *testing.T) {
 	}
 }
 
+func TestCreateThenUpdateReminderUsesAuthenticatedOwnerEndToEnd(t *testing.T) {
+	dir := t.TempDir()
+	statePath := filepath.Join(dir, "target.json")
+	if err := os.WriteFile(statePath, []byte(`{"target_channel_id":"thread-1","requester_id":"user-1","requester_name":"alice"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("DATA_DIR", dir)
+	t.Setenv("BOT_TOOLS_CHANNEL_ID", "channel-1")
+	t.Setenv("BOT_TOOLS_TARGET_CHANNEL_ID", "thread-1")
+	t.Setenv("BOT_TOOLS_GUILD_ID", "guild-1")
+	t.Setenv("BOT_TOOLS_TARGET_STATE_PATH", statePath)
+	t.Setenv("CRON_TIMEZONE", "Asia/Taipei")
+	client := initializedTestClient(t, NewServer())
+	nextRun := time.Now().Add(2 * time.Hour).Format(time.RFC3339)
+
+	result := callTestTool(t, client, ToolCreateReminder, map[string]any{
+		"name": "Drink", "time": nextRun, "content": "drink water",
+		"channel_id": "thread-1", "guild_id": "guild-1",
+	})
+	if result.IsError || !strings.Contains(callToolText(t, result), "queued for creation") {
+		t.Fatalf("create reminder result = error:%v text:%q", result.IsError, callToolText(t, result))
+	}
+	store, err := heartbeat.NewCronStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	task := heartbeat.NewCronTask(store, nil, dir, "Asia/Taipei", "guild-1", 5)
+	if err := task.Run(); err != nil {
+		t.Fatal(err)
+	}
+	jobs := store.All()
+	if len(jobs) != 1 || jobs[0].CreatedByID != "user-1" || jobs[0].CreatedBy != "alice" || jobs[0].ChannelID != "thread-1" {
+		t.Fatalf("created reminder did not preserve authenticated owner and target: %+v", jobs)
+	}
+
+	result = callTestTool(t, client, ToolUpdateReminder, map[string]any{
+		"job_id": jobs[0].ID, "channel_id": "thread-1", "content": "drink more water",
+	})
+	if result.IsError {
+		t.Fatalf("owner update reminder failed: %s", callToolText(t, result))
+	}
+	if err := task.Run(); err != nil {
+		t.Fatal(err)
+	}
+	updated, ok := store.Get(jobs[0].ID)
+	if !ok || updated.Prompt != "drink more water" {
+		t.Fatalf("updated reminder = %+v ok=%v", updated, ok)
+	}
+}
+
+func TestUpdateReminderToolQueuesAuthenticatedThreadScopedUpdate(t *testing.T) {
+	dir := t.TempDir()
+	store, err := heartbeat.NewCronStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := &heartbeat.CronJob{
+		ID: "reminder-1", Name: "Drink", ChannelID: "thread-1", GuildID: "guild-1",
+		Prompt: "drink water", Enabled: true, OneShot: true, CreatedByID: "user-1",
+		NextRun: time.Now().Add(time.Hour).Format(time.RFC3339), ScheduleHuman: "+1h",
+	}
+	if err := store.Add(job); err != nil {
+		t.Fatal(err)
+	}
+	statePath := filepath.Join(dir, "target.json")
+	if err := os.WriteFile(statePath, []byte(`{"target_channel_id":"thread-1","requester_id":"user-1","requester_name":"alice"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("DATA_DIR", dir)
+	t.Setenv("BOT_TOOLS_CHANNEL_ID", "channel-1")
+	t.Setenv("BOT_TOOLS_TARGET_CHANNEL_ID", "thread-1")
+	t.Setenv("BOT_TOOLS_TARGET_STATE_PATH", statePath)
+	t.Setenv("CRON_TIMEZONE", "Asia/Taipei")
+
+	client := initializedTestClient(t, NewServer())
+	nextRun := time.Now().Add(2 * time.Hour).Format(time.RFC3339)
+	result := callTestTool(t, client, ToolUpdateReminder, map[string]any{
+		"job_id": job.ID, "channel_id": "thread-1", "time": nextRun, "content": "drink more water",
+	})
+	if result.IsError {
+		t.Fatalf("update reminder failed: %s", callToolText(t, result))
+	}
+	entries, err := os.ReadDir(filepath.Join(dir, "cron", "pending"))
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("pending entries = %+v err=%v, want one", entries, err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "cron", "pending", entries[0].Name()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var action heartbeat.PendingAction
+	if err := json.Unmarshal(raw, &action); err != nil {
+		t.Fatal(err)
+	}
+	if action.Action != "update_reminder" || action.JobID != job.ID || action.ChannelID != "thread-1" || action.ActorID != "user-1" || action.ReminderUpdate == nil || action.ReminderUpdate.Prompt == nil || *action.ReminderUpdate.Prompt != "drink more water" {
+		t.Fatalf("unexpected pending reminder update: %+v", action)
+	}
+
+	task := heartbeat.NewCronTask(store, nil, dir, "Asia/Taipei", "guild-1", 5)
+	if err := task.Run(); err != nil {
+		t.Fatalf("ingest queued reminder update: %v", err)
+	}
+	updated, ok := store.Get(job.ID)
+	if !ok || updated.Prompt != "drink more water" || updated.NextRun != nextRun {
+		t.Fatalf("MCP-to-scheduler update = %+v ok=%v", updated, ok)
+	}
+	entries, err = os.ReadDir(filepath.Join(dir, "cron", "pending"))
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("pending entries after scheduler ingest = %+v err=%v, want none", entries, err)
+	}
+}
+
+func TestUpdateReminderToolRequiresCreatorOrChannelManager(t *testing.T) {
+	dir := t.TempDir()
+	store, err := heartbeat.NewCronStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := &heartbeat.CronJob{
+		ID: "reminder-1", Name: "Drink", ChannelID: "channel-1", GuildID: "guild-1",
+		Prompt: "drink water", Enabled: true, OneShot: true, CreatedByID: "user-1",
+		NextRun: time.Now().Add(time.Hour).Format(time.RFC3339),
+	}
+	if err := store.Add(job); err != nil {
+		t.Fatal(err)
+	}
+	statePath := filepath.Join(dir, "target.json")
+	if err := os.WriteFile(statePath, []byte(`{"target_channel_id":"channel-1","requester_id":"user-2"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("DATA_DIR", dir)
+	t.Setenv("BOT_TOOLS_CHANNEL_ID", "channel-1")
+	t.Setenv("BOT_TOOLS_TARGET_CHANNEL_ID", "channel-1")
+	t.Setenv("BOT_TOOLS_TARGET_STATE_PATH", statePath)
+	client := initializedTestClient(t, NewServer())
+	args := map[string]any{"job_id": job.ID, "channel_id": "channel-1", "content": "updated"}
+
+	result := callTestTool(t, client, ToolUpdateReminder, args)
+	if !result.IsError || !strings.Contains(callToolText(t, result), "creator or a channel manager") {
+		t.Fatalf("non-owner update result = error:%v text:%q", result.IsError, callToolText(t, result))
+	}
+	if entries, err := os.ReadDir(filepath.Join(dir, "cron", "pending")); err == nil && len(entries) != 0 {
+		t.Fatalf("unauthorized update wrote pending entries: %+v", entries)
+	} else if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(statePath, []byte(`{"target_channel_id":"channel-1","requester_id":"user-2","can_manage_channel":true}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	result = callTestTool(t, client, ToolUpdateReminder, args)
+	if result.IsError {
+		t.Fatalf("manager update denied: %s", callToolText(t, result))
+	}
+}
+
+func TestListCronJobsUsesParentForRecurringAndExactTargetForReminders(t *testing.T) {
+	dir := t.TempDir()
+	cronDir := filepath.Join(dir, "cron")
+	if err := os.MkdirAll(cronDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	data := `{
+		"cron": {"id":"cron","name":"Report","channel_id":"channel-1","schedule":"0 9 * * *","schedule_human":"daily","prompt":"run","enabled":true},
+		"thread-reminder": {"id":"thread-reminder","name":"Thread","channel_id":"thread-1","schedule_human":"+1h","prompt":"thread","enabled":true,"one_shot":true},
+		"parent-reminder": {"id":"parent-reminder","name":"Parent","channel_id":"channel-1","schedule_human":"+2h","prompt":"parent","enabled":true,"one_shot":true}
+	}`
+	if err := os.WriteFile(filepath.Join(cronDir, "cron.json"), []byte(data), 0644); err != nil {
+		t.Fatal(err)
+	}
+	jobs, err := listCronJobs(dir, "channel-1", "thread-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(jobs) != 2 || jobs[0].ID != "cron" || jobs[0].OneShot || jobs[1].ID != "thread-reminder" || !jobs[1].OneShot || jobs[1].ScheduleHuman != "+1h" {
+		t.Fatalf("scoped jobs = %+v, want parent cron plus exact thread reminder", jobs)
+	}
+}
+
 func TestListCronJobsFiltersByChannel(t *testing.T) {
 	dir := t.TempDir()
 	cronDir := filepath.Join(dir, "cron")
@@ -1973,7 +2178,7 @@ func TestListCronJobsFiltersByChannel(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	jobs, err := listCronJobs(dir, "ch-1")
+	jobs, err := listCronJobs(dir, "ch-1", "ch-1")
 	if err != nil {
 		t.Fatalf("listCronJobs: %v", err)
 	}
@@ -1982,7 +2187,7 @@ func TestListCronJobsFiltersByChannel(t *testing.T) {
 	}
 
 	// Empty channel returns nil.
-	jobs, _ = listCronJobs(dir, "ch-nonexist")
+	jobs, _ = listCronJobs(dir, "ch-nonexist", "ch-nonexist")
 	if len(jobs) != 0 {
 		t.Fatalf("expected empty, got %+v", jobs)
 	}

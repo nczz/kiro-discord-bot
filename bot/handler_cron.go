@@ -191,6 +191,67 @@ func (b *Bot) handleCronEditSubmit(ds *discordgo.Session, i *discordgo.Interacti
 		job.Name, job.Schedule, heartbeat.DescribeSchedule(job.Schedule), truncate(job.Prompt, 200)))
 }
 
+// handleReminderEditSubmit processes the one-time reminder edit modal.
+func (b *Bot) handleReminderEditSubmit(ds *discordgo.Session, i *discordgo.InteractionCreate, jobID string) {
+	job, ok := b.cronStore.Get(jobID)
+	if !ok {
+		respondInteraction(ds, i, L.Get("remind.update.not_found"))
+		return
+	}
+	fields := modalFields(i.ModalSubmitData())
+	name, timeInput, content := fields["reminder_name"], fields["reminder_time"], fields["reminder_content"]
+	target, err := heartbeat.ParseTime(timeInput, b.cronLocationOrLocal())
+	if err != nil {
+		respondInteraction(ds, i, L.Get("remind.update.invalid_time"))
+		return
+	}
+	nextRun := target.Format(time.RFC3339)
+	updated, err := b.updateReminderFromInteraction(ds, i, job, heartbeat.ReminderUpdate{
+		Name: &name, ScheduleHuman: &timeInput, NextRun: &nextRun, Prompt: &content,
+	})
+	if err != nil {
+		respondInteraction(ds, i, reminderUpdateErrorMessage(err))
+		return
+	}
+	b.updateCronCard(ds, i, updated, L.Getf("remind.updated",
+		updated.Name, target.In(b.cronLocationOrLocal()).Format("2006/01/02 15:04"), truncate(updated.Prompt, 200)))
+}
+
+func (b *Bot) updateReminderFromInteraction(ds *discordgo.Session, i *discordgo.InteractionCreate, job *heartbeat.CronJob, update heartbeat.ReminderUpdate) (*heartbeat.CronJob, error) {
+	if job == nil {
+		return nil, heartbeat.ErrReminderNotFound
+	}
+	userID, _ := interactionUser(i)
+	canManage := false
+	if strings.TrimSpace(job.CreatedByID) == "" || strings.TrimSpace(job.CreatedByID) != userID {
+		canManage = b.userCanManageAuditTarget(ds, userID, job.ChannelID)
+	}
+	return b.cronTask.UpdateReminder(heartbeat.ReminderUpdateRequest{
+		JobID:            job.ID,
+		ChannelID:        i.ChannelID,
+		ActorID:          userID,
+		CanManageChannel: canManage,
+		Update:           update,
+	})
+}
+
+func reminderUpdateErrorMessage(err error) string {
+	switch {
+	case errors.Is(err, heartbeat.ErrReminderNotFound):
+		return L.Get("remind.update.not_found")
+	case errors.Is(err, heartbeat.ErrReminderForbidden), errors.Is(err, heartbeat.ErrReminderUnauthenticated):
+		return L.Get("remind.update.forbidden")
+	case errors.Is(err, heartbeat.ErrReminderRunning):
+		return L.Get("remind.update.running")
+	case errors.Is(err, heartbeat.ErrReminderTimePast):
+		return L.Get("remind.update.time_past")
+	case errors.Is(err, heartbeat.ErrReminderWrongTarget), errors.Is(err, heartbeat.ErrReminderNotOneShot):
+		return L.Get("remind.update.invalid_target")
+	default:
+		return L.Get("remind.update.failed")
+	}
+}
+
 // handleCronList responds to /cron-list with a list of jobs and action buttons.
 func (b *Bot) handleCronList(ds *discordgo.Session, i *discordgo.InteractionCreate, auditCtx cmdCtx) {
 	const command = "cron-list"
@@ -250,12 +311,32 @@ func (b *Bot) handleCronButton(ds *discordgo.Session, i *discordgo.InteractionCr
 
 	switch action {
 	case "pause":
+		if job.OneShot {
+			enabled := false
+			updated, err := b.updateReminderFromInteraction(ds, i, job, heartbeat.ReminderUpdate{Enabled: &enabled})
+			if err != nil {
+				respondInteraction(ds, i, reminderUpdateErrorMessage(err))
+				return
+			}
+			b.updateCronCard(ds, i, updated, L.Getf("cron.paused", updated.Name))
+			return
+		}
 		job.Enabled = false
 		_ = b.cronStore.Update(job)
 		b.updateCronCard(ds, i, job, L.Getf("cron.paused", job.Name))
 	case "resume":
 		if (!job.OneShot || job.UseAgent) && !b.manager.ChannelInitialized(job.ChannelID) {
 			respondInteraction(ds, i, L.Getf("setup.required.command", "/cron"))
+			return
+		}
+		if job.OneShot {
+			enabled := true
+			updated, err := b.updateReminderFromInteraction(ds, i, job, heartbeat.ReminderUpdate{Enabled: &enabled})
+			if err != nil {
+				respondInteraction(ds, i, reminderUpdateErrorMessage(err))
+				return
+			}
+			b.updateCronCard(ds, i, updated, L.Getf("cron.resumed", updated.Name))
 			return
 		}
 		job.Enabled = true
@@ -283,6 +364,45 @@ func (b *Bot) handleCronButton(ds *discordgo.Session, i *discordgo.InteractionCr
 			log.Printf("[interaction] cron delete respond failed: %v", err)
 		}
 	case "edit":
+		if job.OneShot {
+			userID, _ := interactionUser(i)
+			canManage := false
+			creatorID := strings.TrimSpace(job.CreatedByID)
+			if creatorID == "" || creatorID != userID {
+				canManage = b.userCanManageAuditTarget(ds, userID, job.ChannelID)
+			}
+			if !canManage && (creatorID == "" || creatorID != userID) {
+				respondInteraction(ds, i, L.Get("remind.update.forbidden"))
+				return
+			}
+			timeValue := job.ScheduleHuman
+			if strings.TrimSpace(timeValue) == "" {
+				if target, err := time.Parse(time.RFC3339, job.NextRun); err == nil {
+					timeValue = target.In(b.cronLocationOrLocal()).Format("2006-01-02 15:04")
+				}
+			}
+			if err := ds.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseModal,
+				Data: &discordgo.InteractionResponseData{
+					CustomID: "reminder_edit_modal_" + jobID,
+					Title:    L.Get("remind.modal.title_edit"),
+					Components: []discordgo.MessageComponent{
+						discordgo.ActionsRow{Components: []discordgo.MessageComponent{
+							discordgo.TextInput{CustomID: "reminder_name", Label: L.Get("cron.modal.name"), Style: discordgo.TextInputShort, Value: job.Name, Required: true, MaxLength: 100},
+						}},
+						discordgo.ActionsRow{Components: []discordgo.MessageComponent{
+							discordgo.TextInput{CustomID: "reminder_time", Label: L.Get("remind.modal.time"), Style: discordgo.TextInputShort, Value: timeValue, Required: true, MaxLength: 100},
+						}},
+						discordgo.ActionsRow{Components: []discordgo.MessageComponent{
+							discordgo.TextInput{CustomID: "reminder_content", Label: L.Get("remind.modal.content"), Style: discordgo.TextInputParagraph, Value: job.Prompt, Required: true, MaxLength: 2000},
+						}},
+					},
+				},
+			}); err != nil {
+				log.Printf("[interaction] reminder edit modal respond failed: %v", err)
+			}
+			return
+		}
 		if !b.manager.ChannelInitialized(job.ChannelID) {
 			respondInteraction(ds, i, L.Getf("setup.required.command", "/cron"))
 			return
@@ -294,44 +414,16 @@ func (b *Bot) handleCronButton(ds *discordgo.Session, i *discordgo.InteractionCr
 				Title:    L.Get("cron.modal.title_edit"),
 				Components: []discordgo.MessageComponent{
 					discordgo.ActionsRow{Components: []discordgo.MessageComponent{
-						discordgo.TextInput{
-							CustomID:  "cron_name",
-							Label:     L.Get("cron.modal.name"),
-							Style:     discordgo.TextInputShort,
-							Value:     job.Name,
-							Required:  true,
-							MaxLength: 100,
-						},
+						discordgo.TextInput{CustomID: "cron_name", Label: L.Get("cron.modal.name"), Style: discordgo.TextInputShort, Value: job.Name, Required: true, MaxLength: 100},
 					}},
 					discordgo.ActionsRow{Components: []discordgo.MessageComponent{
-						discordgo.TextInput{
-							CustomID:  "cron_schedule",
-							Label:     L.Get("cron.modal.schedule"),
-							Style:     discordgo.TextInputShort,
-							Value:     job.ScheduleHuman,
-							Required:  true,
-							MaxLength: 100,
-						},
+						discordgo.TextInput{CustomID: "cron_schedule", Label: L.Get("cron.modal.schedule"), Style: discordgo.TextInputShort, Value: job.ScheduleHuman, Required: true, MaxLength: 100},
 					}},
 					discordgo.ActionsRow{Components: []discordgo.MessageComponent{
-						discordgo.TextInput{
-							CustomID:  "cron_prompt",
-							Label:     L.Get("cron.modal.prompt"),
-							Style:     discordgo.TextInputParagraph,
-							Value:     job.Prompt,
-							Required:  true,
-							MaxLength: 2000,
-						},
+						discordgo.TextInput{CustomID: "cron_prompt", Label: L.Get("cron.modal.prompt"), Style: discordgo.TextInputParagraph, Value: job.Prompt, Required: true, MaxLength: 2000},
 					}},
 					discordgo.ActionsRow{Components: []discordgo.MessageComponent{
-						discordgo.TextInput{
-							CustomID:  "cron_model",
-							Label:     L.Get("cron.modal.model"),
-							Style:     discordgo.TextInputShort,
-							Value:     job.Model,
-							Required:  false,
-							MaxLength: 100,
-						},
+						discordgo.TextInput{CustomID: "cron_model", Label: L.Get("cron.modal.model"), Style: discordgo.TextInputShort, Value: job.Model, Required: false, MaxLength: 100},
 					}},
 				},
 			},
@@ -342,7 +434,7 @@ func (b *Bot) handleCronButton(ds *discordgo.Session, i *discordgo.InteractionCr
 }
 
 func oneShotCronActionUnsupported(job *heartbeat.CronJob, action string) bool {
-	return job != nil && job.OneShot && (action == "run" || action == "edit")
+	return job != nil && job.OneShot && action == "run"
 }
 
 func (b *Bot) cronLocationOrLocal() *time.Location {
@@ -395,7 +487,11 @@ func buildCronCard(job *heartbeat.CronJob, loc *time.Location) (string, []discor
 			Label: L.Get("cron.btn.resume"), Style: discordgo.SuccessButton, CustomID: "cron_resume_" + job.ID,
 		})
 	}
-	if !job.OneShot {
+	if job.OneShot {
+		buttons = append(buttons,
+			discordgo.Button{Label: L.Get("cron.btn.edit"), Style: discordgo.SecondaryButton, CustomID: "cron_edit_" + job.ID},
+		)
+	} else {
 		buttons = append(buttons,
 			discordgo.Button{Label: L.Get("cron.btn.run"), Style: discordgo.PrimaryButton, CustomID: "cron_run_" + job.ID},
 			discordgo.Button{Label: L.Get("cron.btn.edit"), Style: discordgo.SecondaryButton, CustomID: "cron_edit_" + job.ID},

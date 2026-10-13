@@ -21,6 +21,7 @@
 | `bot_create_cron` | Write, non-destructive | 排入建立 scheduled task 的請求。 |
 | `bot_update_cron` | Write, non-destructive, idempotent | 排入修改既有 recurring cron job 的 name、schedule、prompt 或 enabled state。 |
 | `bot_create_reminder` | Write, non-destructive | 排入一次性提醒，交由 bot scheduler 到期發送。 |
+| `bot_update_reminder` | Write, non-destructive, idempotent | 排入修改尚未執行的一次性 reminder：name、delivery time、content、enabled state 或 mentioned user。 |
 | `bot_create_monitor` | Write, non-destructive | 排入建立背景監控的請求；它會靜默檢查，只在條件命中時通知。 |
 | `bot_update_monitor` | Write, non-destructive, idempotent | 排入修改既有 monitor 的 name、schedule、check prompt、notify condition 或 enabled state。 |
 | `bot_query_channel_history` | Read | 搜尋或分頁讀取目前 channel/thread context 的已儲存歷史。 |
@@ -68,11 +69,11 @@ Monitor tools 還有 manager gate：即使 channel policy 已啟用工具，`bot
 
 `bot-tools` session 會綁定目前 channel 或 thread target。工具呼叫若嘗試操作其他 channel，會回傳 channel-scope error。
 
-Recurring cron 管理在 runtime 中是 channel scope；thread ID 會依需要正規化成 parent channel。一次性 reminder 會保留目前 delivery target，因此在 task thread 中建立的提醒會回到該 thread。
+Recurring cron 管理在 runtime 中是 channel scope；thread ID 會依需要正規化成 parent channel。一次性 reminder 會保留精確的目前 delivery target：在 task thread 中建立的提醒會送回該 thread，只會列在同一 target，且只有建立者或 channel manager 能從該 target 更新。`bot_create_reminder` 會把已驗證的 Discord requester 記為建立者；tool arguments 不能自行指定 creator identity。
 
 Persistent memory 是 parent-channel scope。`bot_memory_add` 只在使用者明確說「記住」時預設可用，會拒絕看似 secret 的文字，透過 pending bot-side queue 寫入，並在 main bot 套用前先記錄 audit event。`bot_memory_remove` 與 `bot_memory_clear` 預設不啟用。
 
-「10 分鐘後提醒我」、「明天 09:00 提醒某人」、「2026-08-13 14:25」、「8/13 14:25」這類一次性提醒應使用 `bot_create_reminder`。每次執行都應公開可見的每天、每週或週期性自動化才使用 `bot_create_cron`。週期性背景檢查、且只有另一個 `notify_when` 條件命中才應公開發訊時，使用 `bot_create_monitor`。
+「10 分鐘後提醒我」、「明天 09:00 提醒某人」、「2026-08-13 14:25」、「8/13 14:25」這類一次性提醒應使用 `bot_create_reminder`。需要修改尚未執行的提醒時使用 `bot_update_reminder`；更新會先排入 queue，通常由 scheduler 在 60 秒內套用，已開始執行的提醒不能再更新。一次性提醒執行完成後，scheduler 會將它從 storage 與 `/cron-list` 移除。每次執行都應公開可見的每天、每週或週期性自動化才使用 `bot_create_cron`。週期性背景檢查、且只有另一個 `notify_when` 條件命中才應公開發訊時，使用 `bot_create_monitor`。
 
 ## A2A Bot Tools
 

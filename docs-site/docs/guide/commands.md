@@ -108,14 +108,14 @@ Expert policy changes are intentionally kept out of the normal `/a2a` slash surf
 | --- | --- |
 | `/cron` | Create a recurring scheduled task through a form. |
 | `/cron-prompt <description>` | Create a scheduled task from natural language. |
-| `/cron-list` | List scheduled tasks with management buttons. |
+| `/cron-list` | List scheduled tasks with pause/resume/edit/delete controls; one-time reminders can be edited before execution. |
 | `/cron-run <name>` | Run a scheduled task manually. |
 | `/monitor-prompt <description>` | Create a background monitor from natural language. |
 | `/monitor-list` | List background monitors with pause/resume/run/edit/delete buttons. |
 | `/monitor-run <name>` | Run a monitor check manually. It still only posts publicly if the condition matches. |
 | `/remind <time> <content>` | Create a one-time reminder that tags the requester when due. |
 
-Scheduling commands must be run in the parent channel. Cron agents use the channel's current CWD at execution time. Monitor checks also use the current CWD, but a false monitor condition creates no public Discord artifact: no thread, no parent link, no progress, and no final message.
+Create and manage recurring cron jobs and monitors in the parent channel. `/remind` and `/cron-list` may be used in a thread for one-time reminders delivered to that exact thread. Cron agents use the channel's current CWD at execution time. Monitor checks also use the current CWD, but a false monitor condition creates no public Discord artifact: no thread, no parent link, no progress, and no final message.
 
 Monitor slash commands (`/monitor-prompt`, `/monitor-list`, `/monitor-run`, and monitor management buttons) require Manage Channels permission for the target channel.
 

@@ -377,6 +377,30 @@ Regression expectation:
 
 - Tests must prove healthy resource signals allow a start, unknown signals fall back to CPU-derived capacity, constrained capacity reclaims idle agents without evicting active work, explicit thread caps auto-close inactive thread agents before refusal, refusal messages list working threads, and `AGENT_CAPACITY_MODE=off` bypasses only the dynamic resource gate.
 
+### One-Time Reminder Updates Use The Scheduler-Owned Mutation Path
+
+Decision:
+
+- `heartbeat.CronTask.UpdateReminder` is the single mutation path for pending one-time reminders. It serializes updates with due-job selection, rejects a reminder that is already running, validates a future `next_run` when enabled, and persists through `CronStore`.
+- `bot_create_reminder` derives creator identity from authenticated local Discord context; tool arguments cannot self-assert ownership. `bot_update_reminder` is a default-enabled, non-destructive, idempotent bot-tool. It requires the exact reminder delivery target and either creator ownership or Manage Channels permission. Create and update MCP calls write pending actions; the maintenance loop applies them before scanning due jobs.
+- `/cron-list` exposes reminder pause/resume and editing through the same scheduler-owned service instead of mutating the store directly. Thread reminders remain exact-thread scoped; recurring cron jobs remain parent-channel scoped.
+- A one-time reminder is terminal after any execution attempt. The existing scheduler completion path removes it from storage, so completed reminders do not remain in `/cron-list`.
+
+Context:
+
+- Delete-and-recreate loses identity and creates an avoidable gap where no reminder exists. Direct store writes race the scheduler's due scan and can execute stale reminder data.
+- MCP requests and Discord component interactions need one authorization and race boundary rather than separate implementations.
+
+Rejected alternatives:
+
+- Adding only a delete tool and teaching the agent to recreate reminders is rejected because it is not atomic and changes reminder identity.
+- Letting MCP or bot handlers edit `cron.json` directly is rejected because `heartbeat` owns scheduler lifecycle and execution state.
+- Keeping completed one-time reminders disabled in the list is rejected because they are terminal events, not recurring job history.
+
+Regression expectation:
+
+- Tests must cover immutable-field preservation, past-time rejection, exact-target and creator/manager authorization, running-update rejection, pending-action ingestion before due selection, `/cron-list` edit controls, default-policy migration, and removal after one-shot execution.
+
 ## Known Failure Patterns
 
 ### Manual Thread Loses Parent Listen Mode

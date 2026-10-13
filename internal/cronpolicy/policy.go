@@ -31,7 +31,7 @@ func CreateToolDescription(tz string) string {
 
 // UpdateToolDescription returns the bot_update_cron tool description.
 func UpdateToolDescription(tz string) string {
-	return fmt.Sprintf("Update or disable an existing recurring cron job without deleting it. First call bot_list_cron to obtain the exact job_id and current values. Send only fields the user asked to change; omitted fields remain unchanged. Set enabled=false to disable while preserving the job, or enabled=true to resume it. For deletion use bot_delete_cron, never this tool. One-time reminders cannot be updated; delete and recreate them instead. Changing schedule or resuming computes the next future run and does not backfill missed runs. %s", SchedulePolicy(tz))
+	return fmt.Sprintf("Update or disable an existing recurring cron job without deleting it. First call bot_list_cron to obtain the exact job_id and current values. Send only fields the user asked to change; omitted fields remain unchanged. Set enabled=false to disable while preserving the job, or enabled=true to resume it. For deletion use bot_delete_cron, never this tool. For one-time reminders use bot_update_reminder. Changing schedule or resuming computes the next future run and does not backfill missed runs. %s", SchedulePolicy(tz))
 }
 
 // ScheduleFieldDescription returns the JSON schema description for cron fields.
@@ -53,7 +53,13 @@ func MonitorUpdateToolDescription(tz string) string {
 // ReminderToolDescription returns the bot_create_reminder tool description.
 func ReminderToolDescription(tz string) string {
 	tz = TimezoneName(tz)
-	return fmt.Sprintf("Create a one-time Discord reminder delivered by the bot scheduler. Use for one-time reminders such as 'in 10 minutes', 'two hours later', 'tomorrow 09:00', '2026-08-13 14:25', or '8/13 14:25'. If the user gives a specific date, convert it to an explicit date/time in the bot cron timezone %s before calling this tool; do not degrade a dated request to 'tomorrow'. Do not use this for recurring schedules; use bot_create_cron for daily, weekly, or periodic tasks.", tz)
+	return fmt.Sprintf("Queue a one-time Discord reminder for the bot scheduler. Use for one-time reminders such as 'in 10 minutes', 'two hours later', 'tomorrow 09:00', '2026-08-13 14:25', or '8/13 14:25'. This requires authenticated local Discord requester context; the bot records that requester as creator, so do not supply creator identity. If the user gives a specific date, convert it to an explicit date/time in the bot cron timezone %s before calling this tool; do not degrade a dated request to 'tomorrow'. Do not use this for recurring schedules; use bot_create_cron for daily, weekly, or periodic tasks.", tz)
+}
+
+// ReminderUpdateToolDescription returns the bot_update_reminder tool description.
+func ReminderUpdateToolDescription(tz string) string {
+	tz = TimezoneName(tz)
+	return fmt.Sprintf("Update, pause, or resume an existing one-time reminder without deleting and recreating it. First call bot_list_cron to obtain the exact one-shot job_id and current values. Send only fields the user asked to change; omitted fields remain unchanged. The reminder must belong to the current Discord channel or thread and can only be changed by its creator or a channel manager. Set enabled=false to pause it. Resuming requires a future reminder time. Updates are queued and must not be reported as applied until the scheduler processes them. Interpret time in the bot cron timezone %s.", tz)
 }
 
 // ReminderTimeFieldDescription returns the JSON schema description for one-time reminder time fields.

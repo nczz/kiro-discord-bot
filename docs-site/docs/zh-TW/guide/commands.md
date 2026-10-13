@@ -108,14 +108,14 @@ Audit rows、audit prompt investigations 與 usage attribution 的行為見 [Aud
 | --- | --- |
 | `/cron` | 透過表單建立 recurring scheduled task。 |
 | `/cron-prompt <description>` | 用自然語言建立 scheduled task。 |
-| `/cron-list` | 列出 scheduled tasks 與管理按鈕。 |
+| `/cron-list` | 列出 scheduled tasks 與 pause/resume/edit/delete controls；一次性 reminder 可在執行前編輯。 |
 | `/cron-run <name>` | 手動執行 scheduled task。 |
 | `/monitor-prompt <description>` | 用自然語言建立背景監控。 |
 | `/monitor-list` | 列出背景監控與 pause/resume/run/edit/delete 按鈕。 |
 | `/monitor-run <name>` | 手動執行監控檢查；仍然只有條件命中時才公開發訊。 |
 | `/remind <time> <content>` | 建立一次性 reminder，到期時 tag requester。 |
 
-排程指令必須在 parent channel 使用。Cron agent 執行時使用該頻道當下 CWD。Monitor check 也使用目前 CWD，但條件未命中時不會產生任何公開 Discord artifact：沒有 thread、沒有 parent link、沒有 progress、沒有 final message。
+Recurring cron job 與 monitor 必須在 parent channel 建立及管理。`/remind` 與 `/cron-list` 可在 thread 中用於投遞到該 exact thread 的一次性 reminder。Cron agent 執行時使用該頻道當下 CWD。Monitor check 也使用目前 CWD，但條件未命中時不會產生任何公開 Discord artifact：沒有 thread、沒有 parent link、沒有 progress、沒有 final message。
 
 Monitor slash commands（`/monitor-prompt`、`/monitor-list`、`/monitor-run` 與 monitor 管理按鈕）要求 requester 對目標頻道具備 Manage Channels 權限。
 

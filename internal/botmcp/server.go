@@ -52,6 +52,7 @@ const (
 	ToolCreateCron          = "bot_create_cron"
 	ToolUpdateCron          = "bot_update_cron"
 	ToolCreateReminder      = "bot_create_reminder"
+	ToolUpdateReminder      = "bot_update_reminder"
 	ToolListCron            = "bot_list_cron"
 	ToolDeleteCron          = "bot_delete_cron"
 	ToolCreateMonitor       = "bot_create_monitor"
@@ -91,6 +92,7 @@ func DefaultSafeToolNamesForA2A(a2aEnabled bool) []string {
 		ToolCreateCron,
 		ToolUpdateCron,
 		ToolCreateReminder,
+		ToolUpdateReminder,
 		ToolListMonitor,
 		ToolCreateMonitor,
 		ToolUpdateMonitor,
@@ -481,6 +483,10 @@ func NewServerWithOptions(opts ServerOptions) *server.MCPServer {
 			if botToolsWriteDisabled() {
 				return botToolsWriteDisabledResult(), nil
 			}
+			actor, err := authenticatedReminderCreateActor()
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
 			name := strings.TrimSpace(req.GetString("name", ""))
 			timeInput, _ := req.RequireString("time")
 			content, _ := req.RequireString("content")
@@ -489,9 +495,10 @@ func NewServerWithOptions(opts ServerOptions) *server.MCPServer {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			targetChannelID := deliveryChannelID(channelID)
-			guildID, _ := req.RequireString("guild_id")
-			createdBy, _ := req.RequireString("created_by")
-			createdByID := strings.TrimSpace(req.GetString("created_by_id", ""))
+			guildID, err := boundGuildID(req.GetString("guild_id", ""))
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
 			mentionUserID := strings.TrimSpace(req.GetString("mention_user_id", ""))
 			if err := validateMentionUserID(mentionUserID); err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
@@ -511,9 +518,9 @@ func NewServerWithOptions(opts ServerOptions) *server.MCPServer {
 					ScheduleHuman: strings.TrimSpace(timeInput),
 					Prompt:        content,
 					ChannelID:     targetChannelID,
-					GuildID:       strings.TrimSpace(guildID),
-					CreatedBy:     strings.TrimSpace(createdBy),
-					CreatedByID:   createdByID,
+					GuildID:       guildID,
+					CreatedBy:     firstNonEmpty(actor.RequesterName, actor.RequesterID),
+					CreatedByID:   actor.RequesterID,
 					NextRun:       target.Format(time.RFC3339),
 					MentionID:     mentionUserID,
 					OneShot:       true,
@@ -525,7 +532,96 @@ func NewServerWithOptions(opts ServerOptions) *server.MCPServer {
 			if err := writePending(dataDir(), action); err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
-			return mcp.NewToolResultText(fmt.Sprintf("One-time reminder %q created for %s. It will activate within 60 seconds.", name, target.In(cronLocation(cronTZ)).Format("2006/01/02 15:04"))), nil
+			return mcp.NewToolResultText(fmt.Sprintf("One-time reminder %q queued for creation at %s. The scheduler will apply it within 60 seconds.", name, target.In(cronLocation(cronTZ)).Format("2006/01/02 15:04"))), nil
+		},
+	)
+	s.AddTool(
+		writeTool(ToolUpdateReminder, cronpolicy.ReminderUpdateToolDescription(cronTZ), false),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			if botToolsWriteDisabled() {
+				return botToolsWriteDisabledResult(), nil
+			}
+			actor, err := authenticatedReminderActor()
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			jobID, _ := req.RequireString("job_id")
+			channelID, _ := req.RequireString("channel_id")
+			if err := validateBoundChannel(channelID); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			targetChannelID := deliveryChannelID(channelID)
+			job, err := readCronJob(dataDir(), strings.TrimSpace(jobID))
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			if err := authorizeReminderUpdate(job, targetChannelID, actor); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+
+			update := &heartbeat.ReminderUpdate{}
+			args := req.GetArguments()
+			if value, ok := args["name"]; ok {
+				v, ok := value.(string)
+				if !ok {
+					return mcp.NewToolResultError("name must be a string"), nil
+				}
+				update.Name = &v
+			}
+			if value, ok := args["time"]; ok {
+				v, ok := value.(string)
+				if !ok {
+					return mcp.NewToolResultError("time must be a string"), nil
+				}
+				target, err := parseReminderTime(v, cronTZ)
+				if err != nil {
+					return mcp.NewToolResultError(err.Error()), nil
+				}
+				nextRun := target.Format(time.RFC3339)
+				update.ScheduleHuman = &v
+				update.NextRun = &nextRun
+			}
+			if value, ok := args["content"]; ok {
+				v, ok := value.(string)
+				if !ok {
+					return mcp.NewToolResultError("content must be a string"), nil
+				}
+				update.Prompt = &v
+			}
+			if value, ok := args["enabled"]; ok {
+				v, ok := value.(bool)
+				if !ok {
+					return mcp.NewToolResultError("enabled must be a boolean"), nil
+				}
+				update.Enabled = &v
+			}
+			if value, ok := args["mention_user_id"]; ok {
+				v, ok := value.(string)
+				if !ok {
+					return mcp.NewToolResultError("mention_user_id must be a string"), nil
+				}
+				if strings.TrimSpace(v) != "" {
+					if err := validateMentionUserID(v); err != nil {
+						return mcp.NewToolResultError(err.Error()), nil
+					}
+				}
+				update.MentionID = &v
+			}
+			if err := heartbeat.ApplyReminderUpdate(job, *update, time.Now().In(cronLocation(cronTZ))); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			action := pendingAction{
+				Action:           "update_reminder",
+				JobID:            strings.TrimSpace(jobID),
+				ChannelID:        targetChannelID,
+				ReminderUpdate:   update,
+				ActorID:          strings.TrimSpace(actor.RequesterID),
+				CanManageChannel: actor.CanManageChannel,
+			}
+			if err := writePending(dataDir(), action); err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
+			}
+			return mcp.NewToolResultText(fmt.Sprintf("One-time reminder %q queued for update. The scheduler will apply it within 60 seconds.", strings.TrimSpace(jobID))), nil
 		},
 	)
 	s.AddTool(
@@ -581,8 +677,8 @@ func NewServerWithOptions(opts ServerOptions) *server.MCPServer {
 	)
 	s.AddTool(
 		mcp.NewTool(ToolListCron,
-			mcp.WithDescription("List scheduled cron jobs for a channel"),
-			mcp.WithString("channel_id", mcp.Required(), mcp.Description("Discord channel ID from context; thread IDs are normalized to the owning parent channel when bot-tools is bound to a channel")),
+			mcp.WithDescription("List recurring cron jobs owned by the bound parent channel and one-time reminders delivered to the current Discord channel or thread"),
+			mcp.WithString("channel_id", mcp.Required(), mcp.Description("Discord channel or thread ID from context")),
 			mcp.WithReadOnlyHintAnnotation(true),
 			mcp.WithDestructiveHintAnnotation(false),
 			mcp.WithIdempotentHintAnnotation(true),
@@ -594,7 +690,7 @@ func NewServerWithOptions(opts ServerOptions) *server.MCPServer {
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
-			jobs, err := listCronJobs(dataDir(), ownerChannelID)
+			jobs, err := listCronJobs(dataDir(), ownerChannelID, deliveryChannelID(channelID))
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
@@ -848,7 +944,7 @@ func writeTool(name, description string, destructive bool) mcp.Tool {
 		mcp.WithOpenWorldHintAnnotation(false),
 	)
 
-	if name == ToolUpdateCron || name == ToolUpdateMonitor {
+	if name == ToolUpdateCron || name == ToolUpdateReminder || name == ToolUpdateMonitor {
 		mcp.WithIdempotentHintAnnotation(true)(&t)
 	}
 	switch name {
@@ -899,9 +995,20 @@ func writeTool(name, description string, destructive bool) mcp.Tool {
 			mcp.WithString("content", mcp.Required(), mcp.Description("Reminder message content delivered once by the bot scheduler")),
 			mcp.WithString("channel_id", mcp.Required(), mcp.Description("Discord channel or thread ID from context. In a thread, the current bot-tools delivery target is used so the reminder is delivered to that thread.")),
 			mcp.WithString("guild_id", mcp.Required(), mcp.Description("Discord guild ID from context")),
-			mcp.WithString("created_by", mcp.Description("Username of the requester")),
-			mcp.WithString("created_by_id", mcp.Description("Optional Discord user ID of the requester when available in context")),
 			mcp.WithString("mention_user_id", mcp.Description("Optional verified Discord user ID to mention when the reminder fires. Use only a user ID that appears in the Discord mention references or bot peers provided in context.")),
+		} {
+			opt(&t)
+		}
+	case ToolUpdateReminder:
+		cronTZ := cronpolicy.TimezoneName(os.Getenv("CRON_TIMEZONE"))
+		for _, opt := range []mcp.ToolOption{
+			mcp.WithString("job_id", mcp.Required(), mcp.Description("Existing one-time reminder ID returned by bot_list_cron")),
+			mcp.WithString("channel_id", mcp.Required(), mcp.Description("Current Discord channel or thread ID; the reminder must be delivered to this exact target")),
+			mcp.WithString("name", mcp.Description("Optional non-empty replacement name. Omit to keep the current name.")),
+			mcp.WithString("time", mcp.Description(cronpolicy.ReminderTimeFieldDescription(cronTZ)+" Omit to keep the current reminder time.")),
+			mcp.WithString("content", mcp.Description("Optional non-empty replacement reminder content. Omit to keep the current content.")),
+			mcp.WithBoolean("enabled", mcp.Description("Set false to pause or true to resume. Resuming requires the resulting reminder time to be in the future.")),
+			mcp.WithString("mention_user_id", mcp.Description("Optional verified Discord user ID to mention, or an explicit empty string to clear the mention. Omit to keep the current recipient.")),
 		} {
 			opt(&t)
 		}
@@ -1800,6 +1907,49 @@ func auditToolTargetID(requested string) (string, error) {
 	return requested, nil
 }
 
+func authenticatedReminderCreateActor() (targetState, error) {
+	return authenticatedReminderActorFor("reminder creation")
+}
+
+func authenticatedReminderActor() (targetState, error) {
+	return authenticatedReminderActorFor("reminder update")
+}
+
+func authenticatedReminderActorFor(action string) (targetState, error) {
+	state, ok := currentTargetState()
+	if !ok || strings.TrimSpace(state.RequesterID) == "" {
+		return targetState{}, fmt.Errorf("%s requires authenticated Discord request context", action)
+	}
+	if state.RemoteA2A {
+		return targetState{}, fmt.Errorf("%s requires a local Discord request context", action)
+	}
+	if strings.TrimSpace(os.Getenv("BOT_TOOLS_CHANNEL_ID")) == "" {
+		return targetState{}, fmt.Errorf("%s requires a bound Discord channel", action)
+	}
+	return state, nil
+}
+
+func authorizeReminderUpdate(job *heartbeat.CronJob, targetChannelID string, actor targetState) error {
+	if job == nil {
+		return heartbeat.ErrReminderNotFound
+	}
+	if !job.OneShot {
+		return heartbeat.ErrReminderNotOneShot
+	}
+	if strings.TrimSpace(job.ChannelID) != strings.TrimSpace(targetChannelID) {
+		return heartbeat.ErrReminderWrongTarget
+	}
+	actorID := strings.TrimSpace(actor.RequesterID)
+	if actorID == "" {
+		return heartbeat.ErrReminderUnauthenticated
+	}
+	creatorID := strings.TrimSpace(job.CreatedByID)
+	if !actor.CanManageChannel && (creatorID == "" || creatorID != actorID) {
+		return heartbeat.ErrReminderForbidden
+	}
+	return nil
+}
+
 func authenticatedMonitorActor() (targetState, error) {
 	return authenticatedMonitorActorFor("monitor mutation tools")
 }
@@ -2197,17 +2347,28 @@ type pendingJob struct {
 }
 
 type pendingAction struct {
-	Action    string                `json:"action"` // "create", "create_reminder", "update", or "delete"
-	Job       *pendingJob           `json:"job,omitempty"`
-	JobID     string                `json:"job_id,omitempty"`
-	ChannelID string                `json:"channel_id,omitempty"`
-	Update    *heartbeat.CronUpdate `json:"update,omitempty"`
+	Action           string                    `json:"action"` // "create", "create_reminder", "update", "update_reminder", or "delete"
+	Job              *pendingJob               `json:"job,omitempty"`
+	JobID            string                    `json:"job_id,omitempty"`
+	ChannelID        string                    `json:"channel_id,omitempty"`
+	Update           *heartbeat.CronUpdate     `json:"update,omitempty"`
+	ReminderUpdate   *heartbeat.ReminderUpdate `json:"reminder_update,omitempty"`
+	ActorID          string                    `json:"actor_id,omitempty"`
+	CanManageChannel bool                      `json:"can_manage_channel,omitempty"`
 }
 
 func writePending(root string, action pendingAction) error {
 	if err := validatePendingAction(action); err != nil {
 		return err
 	}
+	if err := writePendingFile(root, action); err != nil {
+		log.Printf("[bot-tools] write cron pending failed: %v", err)
+		return fmt.Errorf("scheduled job change could not be queued; check bot logs")
+	}
+	return nil
+}
+
+func writePendingFile(root string, action pendingAction) error {
 	dir := filepath.Join(root, "cron", "pending")
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return fmt.Errorf("create pending dir: %w", err)
@@ -2216,16 +2377,26 @@ func writePending(root string, action pendingAction) error {
 	if err != nil {
 		return err
 	}
-	f, err := os.CreateTemp(dir, "*.json")
+	f, err := os.CreateTemp(dir, fmt.Sprintf("%020d-*.tmp", time.Now().UnixNano()))
 	if err != nil {
 		return err
 	}
+	tmp := f.Name()
 	if _, err := f.Write(raw); err != nil {
 		f.Close()
-		os.Remove(f.Name())
+		os.Remove(tmp)
 		return err
 	}
-	return f.Close()
+	if err := f.Close(); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	finalPath := strings.TrimSuffix(tmp, ".tmp") + ".json"
+	if err := os.Rename(tmp, finalPath); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return nil
 }
 
 func writeMonitorPending(root string, action heartbeat.MonitorPendingAction) error {
@@ -2371,6 +2542,16 @@ func validatePendingAction(action pendingAction) error {
 		if err := heartbeat.ValidateCronUpdate(*action.Update); err != nil {
 			return err
 		}
+	case "update_reminder":
+		if strings.TrimSpace(action.JobID) == "" || strings.TrimSpace(action.ChannelID) == "" || strings.TrimSpace(action.ActorID) == "" {
+			return fmt.Errorf("update_reminder action requires job_id, channel_id, and authenticated actor_id")
+		}
+		if action.ReminderUpdate == nil {
+			return fmt.Errorf("update_reminder action requires at least one update field")
+		}
+		if err := heartbeat.ValidateReminderUpdate(*action.ReminderUpdate); err != nil {
+			return err
+		}
 	default:
 		return fmt.Errorf("unknown action %q", action.Action)
 	}
@@ -2401,46 +2582,74 @@ func reminderName(content string) string {
 	return "Reminder: " + string(rs)
 }
 
-type cronJobEntry struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	Schedule string `json:"schedule"`
-	Prompt   string `json:"prompt"`
-	Enabled  bool   `json:"enabled"`
-	LastRun  string `json:"last_run,omitempty"`
-	NextRun  string `json:"next_run,omitempty"`
+func readCronJob(root, jobID string) (*heartbeat.CronJob, error) {
+	data, err := os.ReadFile(filepath.Join(root, "cron", "cron.json"))
+	if os.IsNotExist(err) {
+		return nil, heartbeat.ErrReminderNotFound
+	}
+	if err != nil {
+		log.Printf("[bot-tools] read scheduled jobs failed: %v", err)
+		return nil, fmt.Errorf("scheduled jobs could not be read; check bot logs")
+	}
+	var jobs map[string]*heartbeat.CronJob
+	if err := json.Unmarshal(data, &jobs); err != nil {
+		log.Printf("[bot-tools] parse scheduled jobs failed: %v", err)
+		return nil, fmt.Errorf("scheduled jobs could not be read; check bot logs")
+	}
+	job, ok := jobs[strings.TrimSpace(jobID)]
+	if !ok || job == nil {
+		return nil, heartbeat.ErrReminderNotFound
+	}
+	copy := *job
+	return &copy, nil
 }
 
-func listCronJobs(root, channelID string) ([]cronJobEntry, error) {
+type cronJobEntry struct {
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	Schedule      string `json:"schedule,omitempty"`
+	ScheduleHuman string `json:"schedule_human,omitempty"`
+	Prompt        string `json:"prompt"`
+	Enabled       bool   `json:"enabled"`
+	OneShot       bool   `json:"one_shot"`
+	LastRun       string `json:"last_run,omitempty"`
+	NextRun       string `json:"next_run,omitempty"`
+}
+
+func listCronJobs(root, ownerChannelID, targetChannelID string) ([]cronJobEntry, error) {
 	path := filepath.Join(root, "cron", "cron.json")
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, err
+		log.Printf("[bot-tools] list scheduled jobs failed: %v", err)
+		return nil, fmt.Errorf("scheduled jobs could not be listed; check bot logs")
 	}
 	var jobs map[string]struct {
-		ID        string `json:"id"`
-		Name      string `json:"name"`
-		ChannelID string `json:"channel_id"`
-		Schedule  string `json:"schedule"`
-		Prompt    string `json:"prompt"`
-		Enabled   bool   `json:"enabled"`
-		LastRun   string `json:"last_run"`
-		NextRun   string `json:"next_run"`
+		ID            string `json:"id"`
+		Name          string `json:"name"`
+		ChannelID     string `json:"channel_id"`
+		Schedule      string `json:"schedule"`
+		ScheduleHuman string `json:"schedule_human"`
+		Prompt        string `json:"prompt"`
+		Enabled       bool   `json:"enabled"`
+		OneShot       bool   `json:"one_shot"`
+		LastRun       string `json:"last_run"`
+		NextRun       string `json:"next_run"`
 	}
 	if err := json.Unmarshal(data, &jobs); err != nil {
-		return nil, err
+		log.Printf("[bot-tools] parse scheduled jobs for list failed: %v", err)
+		return nil, fmt.Errorf("scheduled jobs could not be listed; check bot logs")
 	}
 	var out []cronJobEntry
 	for _, j := range jobs {
-		if j.ChannelID != channelID {
+		if (j.OneShot && j.ChannelID != targetChannelID) || (!j.OneShot && j.ChannelID != ownerChannelID) {
 			continue
 		}
 		out = append(out, cronJobEntry{
-			ID: j.ID, Name: j.Name, Schedule: j.Schedule,
-			Prompt: j.Prompt, Enabled: j.Enabled,
+			ID: j.ID, Name: j.Name, Schedule: j.Schedule, ScheduleHuman: j.ScheduleHuman,
+			Prompt: j.Prompt, Enabled: j.Enabled, OneShot: j.OneShot,
 			LastRun: j.LastRun, NextRun: j.NextRun,
 		})
 	}

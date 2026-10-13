@@ -594,7 +594,7 @@ func TestManagerEnableDefaultBotToolsUsesSafeAllowlist(t *testing.T) {
 	if !p.Enabled || p.AllowAllTools || p.ReadOnly || p.AllowDestructive {
 		t.Fatalf("default bot-tools policy is not safe-write allowlist: %+v", p)
 	}
-	if tools := strings.Join(p.EffectiveTools(), ","); strings.Contains(tools, "bot_delete_cron") || strings.Contains(tools, "bot_delete_monitor") || strings.Contains(tools, "bot_send_message") || strings.Contains(tools, "bot_query_audit") || strings.Contains(tools, "bot_send_image_base64") || !strings.Contains(tools, "bot_send_file") || !strings.Contains(tools, "bot_send_image_url") || !strings.Contains(tools, "bot_query_channel_history") || !strings.Contains(tools, "bot_create_cron") || !strings.Contains(tools, "bot_update_cron") || !strings.Contains(tools, "bot_create_reminder") || !strings.Contains(tools, "bot_list_monitor") || !strings.Contains(tools, "bot_create_monitor") || !strings.Contains(tools, "bot_update_monitor") {
+	if tools := strings.Join(p.EffectiveTools(), ","); strings.Contains(tools, "bot_delete_cron") || strings.Contains(tools, "bot_delete_monitor") || strings.Contains(tools, "bot_send_message") || strings.Contains(tools, "bot_query_audit") || strings.Contains(tools, "bot_send_image_base64") || !strings.Contains(tools, "bot_send_file") || !strings.Contains(tools, "bot_send_image_url") || !strings.Contains(tools, "bot_query_channel_history") || !strings.Contains(tools, "bot_create_cron") || !strings.Contains(tools, "bot_update_cron") || !strings.Contains(tools, "bot_create_reminder") || !strings.Contains(tools, "bot_update_reminder") || !strings.Contains(tools, "bot_list_monitor") || !strings.Contains(tools, "bot_create_monitor") || !strings.Contains(tools, "bot_update_monitor") {
 		t.Fatalf("unexpected default tools: %q", tools)
 	}
 }
@@ -949,6 +949,20 @@ func TestImmediatePreviousFullA2ASafeDefaultBotToolsPolicyAddsMonitorTools(t *te
 	}
 }
 
+func TestImmediatePreviousSafeDefaultBotToolsPolicyAddsReminderUpdate(t *testing.T) {
+	for _, a2aEnabled := range []bool{false, true} {
+		p := defaultMCPPolicy("guild-1", "channel-1", "bot-tools")
+		p.Enabled, p.Preset, p.ReadOnly = true, "safe-write", false
+		p.AllowAllTools, p.AllowDestructive = false, false
+		p.AllowedTools = removeStringSet(append([]string(nil), botmcp.DefaultSafeToolNamesForA2A(a2aEnabled)...), []string{botmcp.ToolUpdateReminder})
+
+		got := normalizeLegacyDefaultBotToolsPolicy(p)
+		if !sameStringSet(got.EffectiveTools(), botmcp.DefaultSafeToolNamesForA2A(a2aEnabled)) {
+			t.Fatalf("a2a=%v previous safe default = %+v, want %+v", a2aEnabled, got.EffectiveTools(), botmcp.DefaultSafeToolNamesForA2A(a2aEnabled))
+		}
+	}
+}
+
 func TestCustomPartialBotToolsPolicyWithImageDoesNotGainHistoryTool(t *testing.T) {
 	p := defaultMCPPolicy("guild-1", "channel-1", "bot-tools")
 	p.Enabled = true
@@ -962,7 +976,7 @@ func TestCustomPartialBotToolsPolicyWithImageDoesNotGainHistoryTool(t *testing.T
 	if containsString(got.EffectiveTools(), "bot_query_channel_history") {
 		t.Fatalf("custom partial allowlist gained channel history query tool: %+v", got.EffectiveTools())
 	}
-	if containsString(got.EffectiveTools(), "bot_update_cron") || containsString(got.EffectiveTools(), "bot_create_reminder") || containsString(got.EffectiveTools(), "bot_send_image_url") {
+	if containsString(got.EffectiveTools(), "bot_update_cron") || containsString(got.EffectiveTools(), "bot_update_reminder") || containsString(got.EffectiveTools(), "bot_create_reminder") || containsString(got.EffectiveTools(), "bot_send_image_url") {
 		t.Fatalf("custom partial allowlist gained unrelated default tools: %+v", got.EffectiveTools())
 	}
 }

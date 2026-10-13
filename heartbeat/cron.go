@@ -45,14 +45,15 @@ type CronDeps interface {
 
 // CronTask checks and executes due cron jobs.
 type CronTask struct {
-	store    *CronStore
-	deps     CronDeps
-	dataDir  string
-	location *time.Location
-	parser   cron.Parser
-	running  sync.Map // job ID → bool
-	guildID  string
-	timeout  time.Duration
+	store      *CronStore
+	deps       CronDeps
+	dataDir    string
+	location   *time.Location
+	parser     cron.Parser
+	running    sync.Map // job ID → bool
+	mutationMu sync.Mutex
+	guildID    string
+	timeout    time.Duration
 }
 
 func NewCronTask(store *CronStore, deps CronDeps, dataDir string, tz string, guildID string, timeoutMin int) *CronTask {
@@ -83,7 +84,7 @@ func (c *CronTask) ShouldRun(_ time.Time) bool {
 
 func (c *CronTask) Run() error {
 	// Ingest pending actions from MCP bot-tools.
-	if created := c.store.IngestPending(); len(created) > 0 {
+	if created := c.store.IngestPending(c.UpdateReminder); len(created) > 0 {
 		for _, id := range created {
 			if job, ok := c.store.Get(id); ok {
 				c.RecalcNextRun(job)
@@ -92,20 +93,23 @@ func (c *CronTask) Run() error {
 	}
 
 	now := time.Now().In(c.location)
-	for _, job := range c.store.All() {
-		if !job.Enabled && !job.RunOnce {
-			continue
-		}
-		if c.guildID != "" && job.GuildID != c.guildID {
+	for _, candidate := range c.store.All() {
+		c.mutationMu.Lock()
+		job, ok := c.store.Get(candidate.ID)
+		if !ok || (!job.Enabled && !job.RunOnce) || (c.guildID != "" && job.GuildID != c.guildID) {
+			c.mutationMu.Unlock()
 			continue
 		}
 		if _, loaded := c.running.LoadOrStore(job.ID, true); loaded {
+			c.mutationMu.Unlock()
 			continue
 		}
 		if !c.isDue(job, now) {
 			c.running.Delete(job.ID)
+			c.mutationMu.Unlock()
 			continue
 		}
+		c.mutationMu.Unlock()
 		go c.execute(job, now)
 	}
 	return nil
@@ -113,15 +117,29 @@ func (c *CronTask) Run() error {
 
 // RunNow triggers immediate execution of a job by ID. Safe to call concurrently.
 func (c *CronTask) RunNow(jobID string) {
+	c.mutationMu.Lock()
 	job, ok := c.store.Get(jobID)
 	if !ok {
+		c.mutationMu.Unlock()
 		return
 	}
 	if _, loaded := c.running.LoadOrStore(job.ID, true); loaded {
+		c.mutationMu.Unlock()
 		log.Printf("[cron] run-now ignored job %s (%s): already running", job.ID, job.Name)
-		return // already running
+		return
 	}
+	c.mutationMu.Unlock()
 	go c.execute(job, time.Now().In(c.location))
+}
+
+// UpdateReminder updates a pending one-time reminder without racing execution.
+func (c *CronTask) UpdateReminder(req ReminderUpdateRequest) (*CronJob, error) {
+	c.mutationMu.Lock()
+	defer c.mutationMu.Unlock()
+	if _, running := c.running.Load(strings.TrimSpace(req.JobID)); running {
+		return nil, ErrReminderRunning
+	}
+	return c.store.updateReminder(req, time.Now().In(c.location))
 }
 
 func (c *CronTask) isDue(job *CronJob, now time.Time) bool {
@@ -319,6 +337,7 @@ func (c *CronTask) finishJob(job *CronJob, after time.Time) {
 	if job.OneShot {
 		if err := c.store.Remove(job.ID); err != nil {
 			log.Printf("[cron] remove one-shot %s: %v", job.ID, err)
+			return
 		}
 		log.Printf("[cron] one-shot job %s (%s) completed and removed", job.ID, job.Name)
 		return

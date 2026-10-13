@@ -12,7 +12,7 @@
 | 查看或管理排程 | `/cron-list` 或 `/monitor-list` |
 | 立刻跑一次 | `/cron-run <name>` 或 `/monitor-run <name>` |
 
-Scheduling commands 請在 parent channel 執行，不要在任務 thread 裡執行。
+Recurring cron job 與 monitor 請在 parent channel 建立及管理。`/remind` 可以建立 thread-targeted 一次性 reminder；之後必須在同一個 thread 使用 `/cron-list` 管理。
 
 ## 背景監控
 
@@ -53,17 +53,20 @@ Scheduling commands 請在 parent channel 執行，不要在任務 thread 裡執
 /remind 30 分鐘後 檢查部署狀態
 ```
 
-啟用 `agent` 時，到期會請 agent 工作；否則 bot 只送出提醒文字。
+啟用 `agent` 時，到期會請 agent 工作；否則 bot 只送出提醒文字。不論走哪一種執行路徑，完成後一次性 reminder 都會從 storage 移除，也不再出現在 `/cron-list`。
+
+`/cron-list` 會為尚未執行的一次性 reminder 顯示 pause/resume、edit 與 delete controls。Pause/resume 與 edit 都會使用 scheduler 的 guarded update path；edit 可以修改 name、未來 delivery time 與 content。只有 reminder 建立者或 channel manager 能更新；thread reminder 必須從同一個 exact thread 管理。
 
 ## 進階：MCP 建立的排程
 
 Agent 只有在 channel policy 允許對應 bot-tools 時才能管理排程。Monitor bot-tools 另外要求已驗證 requester 對目標頻道具備 Discord Manage Channels 權限：
 
-- `bot_create_reminder`：一次性提醒，例如「10 分鐘後」或「明天 09:00」。
-- `bot_create_cron`：每次都應公開貼結果的 recurring job。
-- `bot_create_monitor`：只有 `notify_when` 命中才公開發訊的 recurring background check。
+- `bot_create_reminder`：建立一次性 reminder，例如「10 分鐘後」或「明天 09:00」。
+- `bot_update_reminder`：修改尚未執行 reminder 的 name、未來 delivery time、content、enabled state 或 mentioned user。呼叫只會先排入更新；scheduler 通常在 60 秒內套用。
+- `bot_create_cron`：建立每次都應公開貼結果的 recurring job。
+- `bot_create_monitor`：建立只有 `notify_when` 命中才公開發訊的 recurring background check。
 
-Create、update、delete 都會先寫成 pending action，再由 bot maintenance loop 套用到 slash commands 共用的 channel-scoped store。
+Create、update、delete 都會先寫成 pending action，再由 bot maintenance loop 套用到 slash commands 共用的 channel-scoped store。若已驗證 requester 不是 reminder 建立者或 channel manager、delivery target 不同，或 reminder 已開始執行，更新會被拒絕。
 
 靜默 monitor check 期間，bot-tools write actions 會被停用。Agent 可以讀取已授權內容，但不能排入 Discord egress、cron/reminder 變更、monitor 變更或 persistent memory write；bot 只會在解析 monitor JSON result 後自行決定是否通知。
 

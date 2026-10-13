@@ -3,6 +3,7 @@ package heartbeat
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -496,6 +497,33 @@ func TestCronExecuteOneShotReminderUsesMentionNotification(t *testing.T) {
 	}
 }
 
+func TestCronExecuteAgentOneShotReminderRemovesCompletedJob(t *testing.T) {
+	store, err := NewCronStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	deps := &fakeCronDeps{}
+	task := NewCronTask(store, deps, t.TempDir(), "Asia/Taipei", "guild-1", 5)
+	now := time.Now().In(task.location)
+	job := &CronJob{
+		ID: "agent-reminder-1", Name: "Check release", ChannelID: "channel-1", GuildID: "guild-1",
+		Prompt: "check release", Enabled: true, OneShot: true, UseAgent: true,
+		CreatedByID: "user-1", NextRun: now.Format(time.RFC3339),
+	}
+	if err := store.Add(job); err != nil {
+		t.Fatal(err)
+	}
+
+	task.execute(job, now)
+
+	if deps.startCalls != 1 {
+		t.Fatalf("agent reminder start calls = %d, want 1", deps.startCalls)
+	}
+	if _, ok := store.Get(job.ID); ok {
+		t.Fatal("completed agent one-shot reminder should be removed")
+	}
+}
+
 func TestCronBuildPromptDisplaysHistoryInCronTimezone(t *testing.T) {
 	store, err := NewCronStore(t.TempDir())
 	if err != nil {
@@ -724,7 +752,7 @@ func TestCronStoreIngestPendingValidatesAndCreatesJobs(t *testing.T) {
 		},
 	})
 
-	created := store.IngestPending()
+	created := store.IngestPending(nil)
 	if len(created) != 1 {
 		t.Fatalf("created = %+v, want one job", created)
 	}
@@ -767,7 +795,7 @@ func TestCronStoreIngestPendingCreatesOneShotReminder(t *testing.T) {
 		},
 	})
 
-	created := store.IngestPending()
+	created := store.IngestPending(nil)
 	if len(created) != 1 {
 		t.Fatalf("created = %+v, want one reminder", created)
 	}
@@ -811,7 +839,7 @@ func TestCronStoreIngestPendingDeleteRequiresMatchingChannel(t *testing.T) {
 		JobID:     "job-1",
 		ChannelID: "channel-2",
 	})
-	store.IngestPending()
+	store.IngestPending(nil)
 	if _, ok := store.Get("job-1"); !ok {
 		t.Fatal("job was deleted from the wrong channel")
 	}
@@ -821,7 +849,7 @@ func TestCronStoreIngestPendingDeleteRequiresMatchingChannel(t *testing.T) {
 		JobID:     "job-1",
 		ChannelID: "channel-1",
 	})
-	store.IngestPending()
+	store.IngestPending(nil)
 	if _, ok := store.Get("job-1"); ok {
 		t.Fatal("job was not deleted from the owning channel")
 	}
@@ -895,15 +923,158 @@ func TestCronStoreIngestPendingUpdatesOnlyOwningRecurringJob(t *testing.T) {
 	}
 	disabled, newPrompt := false, "Run safely"
 	writePendingAction(t, filepath.Join(pendingDir, "wrong.json"), PendingAction{Action: "update", JobID: "job-1", ChannelID: "channel-2", Update: &CronUpdate{Enabled: &disabled}})
-	store.IngestPending()
+	store.IngestPending(nil)
 	if got, _ := store.Get("job-1"); !got.Enabled {
 		t.Fatal("cross-channel update disabled job")
 	}
 	writePendingAction(t, filepath.Join(pendingDir, "right.json"), PendingAction{Action: "update", JobID: "job-1", ChannelID: "channel-1", Update: &CronUpdate{Enabled: &disabled, Prompt: &newPrompt}})
-	store.IngestPending()
+	store.IngestPending(nil)
 	got, ok := store.Get("job-1")
 	if !ok || got.Enabled || got.Prompt != newPrompt {
 		t.Fatalf("unexpected updated job: %+v", got)
+	}
+}
+
+func TestApplyReminderUpdatePreservesImmutableFields(t *testing.T) {
+	now := time.Now()
+	oldRun := now.Add(time.Hour).Format(time.RFC3339)
+	newRun := now.Add(2 * time.Hour).Format(time.RFC3339)
+	job := &CronJob{
+		ID: "reminder-1", Name: "Old", ChannelID: "thread-1", GuildID: "guild-1",
+		Prompt: "old content", Enabled: true, OneShot: true, MentionID: "user-1",
+		CreatedByID: "user-1", UseAgent: true, NextRun: oldRun, ScheduleHuman: "+1h",
+	}
+	name, scheduleHuman, content, mention := "New", "+2h", "new content", "user-2"
+	if err := ApplyReminderUpdate(job, ReminderUpdate{
+		Name: &name, ScheduleHuman: &scheduleHuman, NextRun: &newRun, Prompt: &content, MentionID: &mention,
+	}, now); err != nil {
+		t.Fatalf("ApplyReminderUpdate: %v", err)
+	}
+	if job.Name != name || job.ScheduleHuman != scheduleHuman || job.NextRun != newRun || job.Prompt != content || job.MentionID != mention {
+		t.Fatalf("mutable fields not updated: %+v", job)
+	}
+	if job.ID != "reminder-1" || job.ChannelID != "thread-1" || job.GuildID != "guild-1" || job.CreatedByID != "user-1" || !job.UseAgent {
+		t.Fatalf("immutable fields changed: %+v", job)
+	}
+}
+
+func TestApplyReminderUpdateRejectsPastEnabledReminder(t *testing.T) {
+	now := time.Now()
+	job := &CronJob{OneShot: true, Enabled: true, NextRun: now.Add(time.Hour).Format(time.RFC3339)}
+	past := now.Add(-time.Minute).Format(time.RFC3339)
+	human := "one minute ago"
+	err := ApplyReminderUpdate(job, ReminderUpdate{ScheduleHuman: &human, NextRun: &past}, now)
+	if !errors.Is(err, ErrReminderTimePast) {
+		t.Fatalf("error = %v, want ErrReminderTimePast", err)
+	}
+}
+
+func TestCronTaskUpdateReminderEnforcesOwnerTargetAndRunning(t *testing.T) {
+	store, err := NewCronStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := &CronJob{
+		ID: "reminder-1", Name: "Reminder", ChannelID: "thread-1", GuildID: "guild-1",
+		Prompt: "old", Enabled: true, OneShot: true, CreatedByID: "user-1",
+		NextRun: time.Now().Add(time.Hour).Format(time.RFC3339),
+	}
+	if err := store.Add(job); err != nil {
+		t.Fatal(err)
+	}
+	task := NewCronTask(store, &fakeCronDeps{}, t.TempDir(), "Asia/Taipei", "guild-1", 5)
+	content := "new"
+	base := ReminderUpdateRequest{JobID: job.ID, ChannelID: "thread-1", ActorID: "user-2", Update: ReminderUpdate{Prompt: &content}}
+	if _, err := task.UpdateReminder(base); !errors.Is(err, ErrReminderForbidden) {
+		t.Fatalf("non-owner error = %v, want ErrReminderForbidden", err)
+	}
+	base.CanManageChannel = true
+	if _, err := task.UpdateReminder(base); err != nil {
+		t.Fatalf("manager update: %v", err)
+	}
+	base.ChannelID = "channel-1"
+	if _, err := task.UpdateReminder(base); !errors.Is(err, ErrReminderWrongTarget) {
+		t.Fatalf("wrong-target error = %v, want ErrReminderWrongTarget", err)
+	}
+	base.ChannelID = "thread-1"
+	task.running.Store(job.ID, true)
+	defer task.running.Delete(job.ID)
+	if _, err := task.UpdateReminder(base); !errors.Is(err, ErrReminderRunning) {
+		t.Fatalf("running error = %v, want ErrReminderRunning", err)
+	}
+}
+
+func TestCronTaskRunIngestsReminderUpdateBeforeDueScan(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewCronStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := &CronJob{
+		ID: "reminder-1", Name: "Reminder", ChannelID: "thread-1", GuildID: "guild-1",
+		Prompt: "old", Enabled: true, OneShot: true, CreatedByID: "user-1",
+		NextRun: time.Now().Add(time.Hour).Format(time.RFC3339),
+	}
+	if err := store.Add(job); err != nil {
+		t.Fatal(err)
+	}
+	content := "updated"
+	nextRun := time.Now().Add(2 * time.Hour).Format(time.RFC3339)
+	human := "+2h"
+	pendingDir := filepath.Join(dir, "cron", "pending")
+	if err := os.MkdirAll(pendingDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	writePendingAction(t, filepath.Join(pendingDir, "update-reminder.json"), PendingAction{
+		Action: "update_reminder", JobID: job.ID, ChannelID: "thread-1", ActorID: "user-1",
+		ReminderUpdate: &ReminderUpdate{Prompt: &content, ScheduleHuman: &human, NextRun: &nextRun},
+	})
+	task := NewCronTask(store, &fakeCronDeps{}, dir, "Asia/Taipei", "guild-1", 5)
+	if err := task.Run(); err != nil {
+		t.Fatal(err)
+	}
+	got, ok := store.Get(job.ID)
+	if !ok || got.Prompt != content || got.NextRun != nextRun || got.ScheduleHuman != human {
+		t.Fatalf("pending reminder update not applied: %+v ok=%v", got, ok)
+	}
+}
+
+func TestCronStoreIngestPendingRetainsReminderUpdateAfterPersistenceFailure(t *testing.T) {
+	dir := t.TempDir()
+	store, err := NewCronStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := &CronJob{
+		ID: "reminder-1", Name: "Reminder", ChannelID: "thread-1", GuildID: "guild-1",
+		Prompt: "old", Enabled: true, OneShot: true, CreatedByID: "user-1",
+		NextRun: time.Now().Add(time.Hour).Format(time.RFC3339),
+	}
+	if err := store.Add(job); err != nil {
+		t.Fatal(err)
+	}
+	pendingDir := filepath.Join(dir, "cron", "pending")
+	if err := os.MkdirAll(pendingDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	content := "updated"
+	pendingPath := filepath.Join(pendingDir, "update-reminder.json")
+	writePendingAction(t, pendingPath, PendingAction{
+		Action: "update_reminder", JobID: job.ID, ChannelID: "thread-1", ActorID: "user-1",
+		ReminderUpdate: &ReminderUpdate{Prompt: &content},
+	})
+	if err := os.Mkdir(filepath.Join(dir, "cron", "cron.json.tmp"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	task := NewCronTask(store, &fakeCronDeps{}, dir, "Asia/Taipei", "guild-1", 5)
+
+	store.IngestPending(task.UpdateReminder)
+
+	if _, err := os.Stat(pendingPath); err != nil {
+		t.Fatalf("transiently failed reminder update should remain queued: %v", err)
+	}
+	if got, ok := store.Get(job.ID); !ok || got.Prompt != "old" {
+		t.Fatalf("failed reminder update was not rolled back: %+v ok=%v", got, ok)
 	}
 }
 

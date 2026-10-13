@@ -12,7 +12,7 @@ Scheduling is channel-scoped automation. Use it for work with a clear owner and 
 | Review or manage scheduled work | `/cron-list` or `/monitor-list` |
 | Run a job immediately | `/cron-run <name>` or `/monitor-run <name>` |
 
-Run scheduling commands in the parent channel, not inside a task thread.
+Create and manage recurring cron jobs and monitors in the parent channel. `/remind` may create a thread-targeted one-time reminder, and `/cron-list` must be used in that same thread to manage it.
 
 ## Background monitors
 
@@ -53,17 +53,20 @@ Use `/remind` for one future delivery:
 /remind +30m Check the deployment
 ```
 
-If `agent` is enabled, the reminder asks the agent to work when due. Otherwise the bot sends the reminder text.
+If `agent` is enabled, the reminder asks the agent to work when due. Otherwise the bot sends the reminder text. After either execution path finishes, the one-time reminder is removed from storage and no longer appears in `/cron-list`.
+
+`/cron-list` shows pending one-time reminders with pause/resume, edit, and delete controls. Pause/resume and edit use the scheduler's guarded update path; editing can change the name, future delivery time, and content. Only the reminder creator or a channel manager can update it, and a thread reminder must be managed from that exact thread.
 
 ## Advanced: MCP-created jobs
 
 Agents can manage schedules through bot-tools only when the channel policy allows those tools. Monitor bot-tools also require an authenticated requester with Discord Manage Channels permission for the target channel:
 
-- `bot_create_reminder`: one-time reminders such as "in 10 minutes" or "tomorrow 09:00".
-- `bot_create_cron`: recurring jobs that should visibly post every run.
-- `bot_create_monitor`: recurring background checks that must stay silent unless `notify_when` matches.
+- `bot_create_reminder`: create a one-time reminder such as "in 10 minutes" or "tomorrow 09:00".
+- `bot_update_reminder`: update a still-pending one-time reminder's name, future delivery time, content, enabled state, or mentioned user. The call queues the update; the scheduler normally applies it within 60 seconds.
+- `bot_create_cron`: create a recurring job that should visibly post every run.
+- `bot_create_monitor`: create a recurring background check that must stay silent unless `notify_when` matches.
 
-Create, update, and delete operations are written as pending actions. The bot's maintenance loop applies them to the same channel-scoped stores used by slash commands.
+Create, update, and delete operations are written as pending actions. The bot's maintenance loop applies them to the same channel-scoped stores used by slash commands. A reminder update is rejected if the authenticated requester is neither its creator nor a channel manager, if the delivery target differs, or if execution has already started.
 
 During a silent monitor check, bot-tools write actions are disabled. The agent can read allowed context, but it cannot queue Discord egress, cron/reminder changes, monitor changes, or persistent memory writes; the bot alone decides whether to notify after parsing the monitor JSON result.
 
