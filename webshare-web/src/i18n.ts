@@ -62,7 +62,12 @@ type MessageKey =
   | "threadCreateHint"
   | "systemAuthor"
   | "botAuthor"
-  | "agentAuthor"
+  | "agentStatus"
+  | "agentQueued"
+  | "agentRunning"
+  | "agentComplete"
+  | "agentInterrupted"
+  | "agentFailed"
   | "uploadAccepted"
   | "threadCreated"
   | "threadSelected"
@@ -176,7 +181,12 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     attachFiles: "Attach files",
     systemAuthor: "WebShare",
     botAuthor: "KDB Bot",
-    agentAuthor: "KDB Agent",
+    agentStatus: "Agent status",
+    agentQueued: "Agent queued",
+    agentRunning: "Agent running",
+    agentComplete: "Agent completed",
+    agentInterrupted: "Agent interrupted",
+    agentFailed: "Agent failed",
     uploadAccepted: "upload accepted",
     threadCreated: "Thread created",
     threadSelected: "Thread selected",
@@ -289,7 +299,12 @@ const messages: Record<Locale, Record<MessageKey, string>> = {
     attachFiles: "附加檔案",
     systemAuthor: "WebShare",
     botAuthor: "KDB Bot",
-    agentAuthor: "KDB Agent",
+    agentStatus: "Agent 狀態",
+    agentQueued: "Agent 已排入佇列",
+    agentRunning: "Agent 執行中",
+    agentComplete: "Agent 已完成",
+    agentInterrupted: "Agent 已中斷",
+    agentFailed: "Agent 執行失敗",
     uploadAccepted: "已接受上傳",
     threadCreated: "已建立討論串",
     threadSelected: "已選擇討論串",

@@ -65,6 +65,8 @@ Write-capable WebShare 可執行：
 
 Browser 不會取得任意 Discord channels、raw local paths 或 direct ACP sessions 的權限。每個 action 都會重新檢查 opener 的 Discord access 與 channel management state。如果 opener 失去存取或管理權限，新的 actions 會被拒絕，share 會進入 degraded 或 revoked 狀態。
 
+Agent lifecycle events 只用來驅動 browser 的 queued/running 狀態。最終答案以 Discord bot reply 為準，再 mirror 回 WebShare，因此 browser 只會顯示同一份 canonical bot message，不會另外出現 `KDB Agent` 複本。若 Discord delivery 失敗，WebShare 會顯示送達錯誤，不會顯示看似成功的 fallback answer。
+
 WebShare command bridge 會維持在 delegated target 操作範圍內：browser-originated bot commands 只允許 `cron-list`、`cron-run`、`remind`、`usage-history`，以及 shared target 常用 runtime controls：`status`、`cancel`、`interrupt`、`restart`、`reset`、`compact`、`clear`。`restart` 只在 browser target 是 parent channel 時可用，thread target 不提供。Path、session、setup、MCP、model、engine，以及巢狀 WebShare 指令仍不會在 browser 內提供。
 
 

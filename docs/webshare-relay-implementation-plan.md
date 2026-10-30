@@ -892,14 +892,15 @@ Deliverables:
 
 - `send_agent_prompt` action.
 - `Source="webshare"` jobs.
-- web event stream for queue/running/final/error.
-- thread-safe no-MessageID path.
+- web lifecycle event stream for queue/running/complete/error; final answer content comes only from the canonical Discord `channel_event` / `thread_event`.
+- thread delivery reuses the worker's Discord reply; its lifecycle callback never sends a second answer.
 
 Verification:
 
 - focused `channel` tests for webshare enqueue.
 - worker path test proving no fake Discord message id.
 - audit event test.
+- parent-channel, thread, and long-answer regression tests proving WebShare does not render a second `KDB Agent` answer.
 
 ### Milestone 5 — Command parity
 

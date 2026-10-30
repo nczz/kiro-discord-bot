@@ -156,6 +156,37 @@ Verification:
 
 - Regression coverage must prove opener lockout on Discord prompt/command paths, permission recheck on every web action, no fake Discord event injection, explicit `AllowedMentions`, target-scoped attachment fetch, encrypted relay frame routing, host auth outside query strings, no secret/link/path leakage in logs/audit, and unchanged `/webhook mode` behavior.
 
+### WebShare Agent Final Uses The Discord Bot Message As The Canonical Answer
+
+Decision:
+
+- WebShare `agent_event` frames carry lifecycle only (`queued`, `running`, `complete`, `interrupted`, `error`). Final answer content is delivered once through the normal Discord bot reply and mirrored back as a `channel_event` or `thread_event`.
+
+Context:
+
+- The original WebShare path emitted the same final text directly as a `KDB Agent` event and also sent it through Discord. The live mirror then returned the Discord bot message, so the browser rendered two answers even though only one agent job ran.
+- WebShare-owned prompt webhooks already stop at the bot-authored message guard; weakening that guard or changing prompt routing would solve the wrong problem.
+
+Rejected alternatives:
+
+- Filtering bot-authored live events is rejected because it would hide the canonical Discord result and unrelated bot messages that belong in the live target mirror.
+- Content/time-based browser deduplication is rejected because equal text can be legitimate and long Discord replies are split into multiple canonical messages.
+- Keeping a direct content-bearing agent fallback is rejected because it can display a successful-looking answer when Discord delivery failed.
+
+Current scope:
+
+- Parent-channel replies use the existing long Discord reply helper; thread replies remain owned by the worker. A successful lifecycle completion contains no answer content.
+- Discord delivery failure emits a localized WebShare error and does not emit a fallback answer.
+- The browser shows queued/running lifecycle as status, not as a chat author named `KDB Agent`.
+
+Future trigger:
+
+- If WebShare must remain authoritative while the Discord gateway is unavailable, add message-ID-correlated delivery acknowledgements from the Discord send helpers. Do not restore a second uncorrelated answer stream.
+
+Verification:
+
+- Regression coverage must include parent channels, threads, long split replies, delivery failure, lifecycle presentation, and the existing no-webhook-reentry guard.
+
 ## Current Safe Egress Decisions
 
 ### Document Files Are Extracted To Text, Not Rewritten In Original Format

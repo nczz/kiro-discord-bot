@@ -1035,6 +1035,8 @@
   "webshare.attachment_ref_invalid": "Attachment reference is invalid or expired.",
   "webshare.attachment_scope": "Attachment is outside the shared target scope.",
   "webshare.attachment_fetch_failed": "Attachment could not be fetched.",
+  "webshare.prompt_record_failed": "WebShare could not create the Discord prompt message.",
+  "webshare.reply_failed": "WebShare could not deliver the agent reply to Discord.",
   "webshare.empty_prompt": "Message is empty after the bot mention.",
   "webshare.webhook_permission_missing": "❌ WebShare needs the bot to have Discord Manage Webhooks permission in this channel. Grant Manage Webhooks to the bot role, then restart or run `/webshare stop` and `/webshare start` again."
 }

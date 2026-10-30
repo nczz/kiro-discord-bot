@@ -356,7 +356,6 @@ input:focus, textarea:focus, select:focus, button:focus-visible, .upload-icon:fo
   font-weight: 800;
   overflow: hidden;
 }
-.avatar.agent { background: var(--accent); }
 .avatar.discord, .avatar.user { background: #3ba55d; }
 .message-actions {
   display: flex;

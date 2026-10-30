@@ -1,3 +1,4 @@
+import { activeAgentLifecycle, classifyAgentLifecycle } from "./agent-lifecycle.js";
 import { continueAcceptedUpload, downloadURL, queueUploads, selectedAttachmentRefs } from "./attachments.js";
 import { deriveSessionKeys, openJSON, parseJoinFragment, sealJSON, writeTokenProof } from "./crypto.js";
 import { clear, el, formatBytes } from "./dom.js";
@@ -43,6 +44,7 @@ const state = {
     pendingAttachmentDownloads: new Set(),
     messages: [],
     error: undefined,
+    agentActivity: undefined,
     seenMessageIDs: new Set(),
     clientPeerID: randomClientPeerID(),
     terminalReason: undefined,
@@ -180,7 +182,7 @@ function applyServerEvent(event) {
             applyThreadEvent(event.event);
             break;
         case "agent_event":
-            pushMessage("agent", t(state.locale, "agentAuthor"), event.event.content ?? event.event.status, { timestamp: event.event.timestamp, mentions: event.event.mentions });
+            handleAgentEvent(event.event);
             break;
         case "command_result":
             pushMessage("command", t(state.locale, "botAuthor"), event.content || event.status);
@@ -203,6 +205,7 @@ function applyServerEvent(event) {
             break;
         case "error": {
             state.pendingAttachmentDownloads.clear();
+            state.agentActivity = undefined;
             const message = `${event.reasonCode ?? event.code ?? "error"}: ${event.content ?? event.messageKey ?? ""}`;
             setError(message);
             pushMessage("error", t(state.locale, "systemAuthor"), message);
@@ -210,6 +213,7 @@ function applyServerEvent(event) {
         }
         case "bye": {
             state.terminalReason = event.reasonCode;
+            state.agentActivity = undefined;
             const message = terminalMessage(event.reasonCode);
             setError(message);
             pushMessage("system", t(state.locale, "systemAuthor"), message);
@@ -218,6 +222,32 @@ function applyServerEvent(event) {
         }
     }
     persistRoomHistory();
+}
+function handleAgentEvent(event) {
+    const lifecycle = classifyAgentLifecycle(event.status);
+    state.agentActivity = activeAgentLifecycle(lifecycle);
+    switch (lifecycle) {
+        case "queued":
+            state.liveAnnouncement = `${t(state.locale, "agentStatus")}: ${t(state.locale, "agentQueued")}`;
+            return;
+        case "running":
+            state.liveAnnouncement = `${t(state.locale, "agentStatus")}: ${t(state.locale, "agentRunning")}`;
+            return;
+        case "complete":
+            state.liveAnnouncement = t(state.locale, "agentComplete");
+            return;
+        case "interrupted":
+            pushMessage("system", t(state.locale, "systemAuthor"), t(state.locale, "agentInterrupted"), { timestamp: event.timestamp });
+            return;
+        case "error": {
+            const message = t(state.locale, "agentFailed");
+            setError(message);
+            pushMessage("error", t(state.locale, "systemAuthor"), message, { timestamp: event.timestamp });
+            return;
+        }
+        case "unknown":
+            state.liveAnnouncement = `${t(state.locale, "agentStatus")}: ${event.status}`;
+    }
 }
 function handleUploadState(event) {
     if (event.status === "accepted") {
@@ -384,7 +414,11 @@ function chatHeader() {
         setLocale(state.locale);
         render();
     });
-    const actions = [threadMenuButton(), statusPill(), locale, ...safetyControls()];
+    const actions = [threadMenuButton()];
+    const activity = agentActivityPill();
+    if (activity)
+        actions.push(activity);
+    actions.push(statusPill(), locale, ...safetyControls());
     if (thread) {
         const back = el("button", { className: "back-button", text: t(state.locale, "backToChannel") });
         back.type = "button";
@@ -1021,6 +1055,17 @@ function statusPill() {
     const label = state.terminalReason ? `${t(state.locale, "connectionStatus")}: ${terminalMessage(state.terminalReason)}` : `${t(state.locale, "connectionStatus")}: ${t(state.locale, state.status)}`;
     return el("div", { className: "status-pill", attrs: { role: "status", "aria-live": "polite", title: state.statusDetail ?? "" }, children: [el("span", { className: `status-dot ${state.status}` }), el("span", { text: label })] });
 }
+function agentActivityPill() {
+    if (!state.agentActivity)
+        return undefined;
+    const label = state.agentActivity === "running" ? t(state.locale, "agentRunning") : t(state.locale, "agentQueued");
+    const dot = state.agentActivity === "running" ? "connected" : "connecting";
+    return el("div", {
+        className: "status-pill",
+        attrs: { "aria-label": label, title: label },
+        children: [el("span", { className: `status-dot ${dot}` }), el("span", { text: label })],
+    });
+}
 function shouldDisplayDiscordMessage(messageID) {
     if (!messageID)
         return true;
@@ -1411,7 +1456,7 @@ function isThreadView(value) {
     return typeof thread.id === "string" && typeof thread.name === "string";
 }
 function isMessageKind(value) {
-    return value === "discord" || value === "agent" || value === "command" || value === "system" || value === "upload" || value === "attachment" || value === "error";
+    return value === "discord" || value === "command" || value === "system" || value === "upload" || value === "attachment" || value === "error";
 }
 function markdownMessageContent(message) {
     const root = el("div", { className: "message-content markdown-content" });

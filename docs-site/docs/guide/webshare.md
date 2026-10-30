@@ -65,6 +65,8 @@ A write-capable WebShare can:
 
 The browser does not gain access to arbitrary Discord channels, raw local paths, or direct ACP sessions. Each action rechecks the opener's Discord access and channel management state. If the opener loses access or management authority, new actions are rejected and the share becomes degraded or revoked.
 
+Agent lifecycle events drive only the browser's queued/running status. The final answer is the Discord bot reply mirrored back into WebShare, so the browser shows the same canonical bot message once instead of a separate `KDB Agent` copy. If Discord delivery fails, WebShare shows a delivery error rather than a successful-looking fallback answer.
+
 The WebShare command bridge is intentionally scoped to delegated target operations. Browser-originated bot commands are limited to `cron-list`, `cron-run`, `remind`, `usage-history`, plus common runtime controls for the shared target: `status`, `cancel`, `interrupt`, `restart`, `reset`, `compact`, and `clear`. `restart` is available only while the browser targets the parent channel, not a thread. Path, session, setup, MCP, model, engine, and nested WebShare commands remain unavailable from the browser.
 
 

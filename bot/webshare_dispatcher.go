@@ -49,7 +49,10 @@ type webshareWebhookCredential struct {
 	Token string
 }
 
-var errWebShareWebhookPermission = errors.New("webshare webhook permission missing")
+var (
+	errWebShareWebhookPermission = errors.New("webshare webhook permission missing")
+	errWebSharePromptRecord      = errors.New("webshare prompt record missing Discord message")
+)
 
 // HandleWebShareAction is the bot-side dispatcher for decrypted browser actions.
 // It never fabricates Discord events: it reuses the stored share/opener identity,
@@ -376,38 +379,26 @@ func (b *Bot) websharePrompt(ctx context.Context, share webshare.Share, action w
 	threadTarget := parentID != "" || (share.TargetType == webshare.TargetThread && targetID == share.TargetID)
 	sent, attachmentViews, err := b.webshareSendPromptRecord(ctx, share, action, targetID, parentID, refs)
 	if err != nil {
+		if errors.Is(err, errWebSharePromptRecord) {
+			return webshare.ServerEvent{Type: "error", Status: "error", ReasonCode: "discord_send_failed", Content: L.Get("webshare.prompt_record_failed")}
+		}
 		return webshareWebhookFailureEvent("discord_send_failed", err)
 	}
-	messageID := ""
-	if sent != nil {
-		messageID = sent.ID
-		body, _ := b.websharePromptRecordBody(share, action.Text, refs)
-		recordRefs := append([]discordmention.Ref(nil), refs...)
-		if ref, ok := b.webshareBotMentionRef(share); ok {
-			recordRefs = append(recordRefs, ref)
-		}
-		record := map[string]any{"eventID": webshareEventID("webshare-prompt", sent.ID), "timestamp": webshareDiscordTimestamp(sent), "messageID": sent.ID, "author": map[string]any{"id": share.OpenerUserID, "displayName": webshareDisplayName(share), "username": share.OpenerUsername}, "content": body, "mentions": webshareMentionsFromRefs(recordRefs)}
-		if len(attachmentViews) > 0 {
-			record["attachments"] = attachmentViews
-		}
-		b.sendWebShareHostEvent(share.ShareID, webshareMessageEventForTarget(share, targetID, parentID, record))
+	messageID := sent.ID
+	body, _ := b.websharePromptRecordBody(share, action.Text, refs)
+	recordRefs := append([]discordmention.Ref(nil), refs...)
+	if ref, ok := b.webshareBotMentionRef(share); ok {
+		recordRefs = append(recordRefs, ref)
 	}
+	record := map[string]any{"eventID": webshareEventID("webshare-prompt", sent.ID), "timestamp": webshareDiscordTimestamp(sent), "messageID": sent.ID, "author": map[string]any{"id": share.OpenerUserID, "displayName": webshareDisplayName(share), "username": share.OpenerUsername}, "content": body, "mentions": webshareMentionsFromRefs(recordRefs)}
+	if len(attachmentViews) > 0 {
+		record["attachments"] = attachmentViews
+	}
+	b.sendWebShareHostEvent(share.ShareID, webshareMessageEventForTarget(share, targetID, parentID, record))
 	selfID := b.webshareSelfID()
 	promptRefs := appendMentionRefs(refs, webshareUserMentionRefs(b.peerMentionRefs(selfID))...)
 	prompt := buildPromptThreadWithMentions(action.Text, localPaths, websharePromptParent(share, targetID, parentID), websharePromptThread(share, targetID, parentID), share.GuildID, share.OpenerUsername, share.OpenerUserID, b.peerPromptContext(selfID), promptRefs)
-	final := func(content string) {
-		redacted := secrets.RedactEnv(content)
-		b.recordWebShareAudit(share, "webshare_agent_result", share.OpenerUserID, action.DisplayName, targetID, true, "", map[string]any{"bytes": len(redacted)})
-		finalEvent := webshare.ServerEvent{Type: "agent_event", Status: "ok", Event: map[string]any{"eventID": webshareEventID("agent-final", targetID), "timestamp": time.Now().UTC().Format(time.RFC3339Nano), "status": "complete", "content": redacted, "mentions": webshareMentionsFromRefs(promptRefs)}}
-		if !b.sendWebShareHostEvent(share.ShareID, finalEvent) {
-			b.recordWebShareAudit(share, webshare.EventActionRejected, share.OpenerUserID, action.DisplayName, targetID, false, "webshare_final_mirror_failed", map[string]any{"message_id": messageID})
-		}
-		if messageID != "" && !threadTarget {
-			if err := channel.SendLongReplyWithMentions(b.discord, targetID, messageID, content, promptRefs); err != nil {
-				b.recordWebShareAudit(share, webshare.EventActionRejected, share.OpenerUserID, action.DisplayName, targetID, false, "webshare_final_reply_failed", map[string]any{"message_id": messageID, "error": err.Error()})
-			}
-		}
-	}
+	final := b.webshareFinalReply(share, action, targetID, messageID, threadTarget, promptRefs)
 	if threadTarget {
 		if err := b.manager.WebShareEnqueueThread(b.discord, channel.WebSharePrompt{GuildID: share.GuildID, ParentChannelID: websharePromptParent(share, targetID, parentID), ThreadID: targetID, MessageID: messageID, Prompt: prompt, UserID: share.OpenerUserID, Username: share.OpenerUsername, Attachments: localPaths, MentionRefs: promptRefs, FinalReply: final}); err != nil {
 			return webshareEnqueueFailureEvent()
@@ -418,6 +409,26 @@ func (b *Bot) websharePrompt(ctx context.Context, share webshare.Share, action w
 		}
 	}
 	return webshare.ServerEvent{Type: "agent_event", Status: "queued", Event: map[string]any{"eventID": webshareEventID("agent-queued", targetID), "timestamp": time.Now().UTC().Format(time.RFC3339Nano), "status": "queued"}}
+}
+
+func (b *Bot) webshareFinalReply(share webshare.Share, action webshare.ClientAction, targetID, messageID string, threadTarget bool, promptRefs []discordmention.Ref) func(string) {
+	return func(content string) {
+		b.recordWebShareAudit(share, "webshare_agent_result", share.OpenerUserID, action.DisplayName, targetID, true, "", map[string]any{"bytes": len(content)})
+		if !threadTarget {
+			if err := channel.SendLongReplyWithMentions(b.discord, targetID, messageID, content, promptRefs); err != nil {
+				b.recordWebShareAudit(share, webshare.EventActionRejected, share.OpenerUserID, action.DisplayName, targetID, false, "webshare_final_reply_failed", map[string]any{"message_id": messageID, "error": err.Error()})
+				failure := webshare.ServerEvent{Type: "error", Status: "error", ReasonCode: "discord_reply_failed", Content: L.Get("webshare.reply_failed")}
+				if !b.sendWebShareHostEvent(share.ShareID, failure) {
+					b.recordWebShareAudit(share, webshare.EventActionRejected, share.OpenerUserID, action.DisplayName, targetID, false, "webshare_final_error_mirror_failed", map[string]any{"message_id": messageID})
+				}
+				return
+			}
+		}
+		complete := webshare.ServerEvent{Type: "agent_event", Status: "ok", Event: map[string]any{"eventID": webshareEventID("agent-final", targetID), "timestamp": time.Now().UTC().Format(time.RFC3339Nano), "status": "complete"}}
+		if !b.sendWebShareHostEvent(share.ShareID, complete) {
+			b.recordWebShareAudit(share, webshare.EventActionRejected, share.OpenerUserID, action.DisplayName, targetID, false, "webshare_final_mirror_failed", map[string]any{"message_id": messageID})
+		}
+	}
 }
 
 func websharePromptParent(share webshare.Share, targetID, parentID string) string {
@@ -528,6 +539,9 @@ func (b *Bot) webshareSendPromptRecord(ctx context.Context, share webshare.Share
 	sent, err := b.webshareWebhookExecute(share, targetID, parentID, body, allowed, files)
 	if err != nil {
 		return nil, nil, err
+	}
+	if sent == nil || strings.TrimSpace(sent.ID) == "" {
+		return nil, nil, errWebSharePromptRecord
 	}
 	b.recordWebShareAudit(share, "webshare_agent_prompt", share.OpenerUserID, action.DisplayName, targetID, true, "", map[string]any{"message_id": sent.ID, "mentioned_users": len(allowed.Users), "attachment_count": len(files), "transport": "webhook"})
 	return sent, attachmentViews, nil

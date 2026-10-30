@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -19,6 +21,18 @@ import (
 	L "github.com/nczz/kiro-discord-bot/locale"
 	"github.com/nczz/kiro-discord-bot/webshare"
 )
+
+type emptyDiscordMessageTransport struct{}
+
+func (emptyDiscordMessageTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Status:     "200 OK",
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(`{}`)),
+		Request:    req,
+	}, nil
+}
 
 func TestWebShareCommandRegistrationPermissionsAndPrivacy(t *testing.T) {
 	L.Load("en")
@@ -550,6 +564,111 @@ func TestWebSharePromptRecordContentMentionsBotAndStripsTrigger(t *testing.T) {
 	}
 	if len(allowed.Users) != 1 || allowed.Users[0] != "999999999999999999" {
 		t.Fatalf("allowed users = %+v", allowed.Users)
+	}
+}
+
+func TestWebSharePromptRecordRejectsMissingDiscordMessage(t *testing.T) {
+	ds := webshareAuthoritySession(t)
+	ds.Client = &http.Client{Transport: emptyDiscordMessageTransport{}}
+	b := &Bot{
+		discord:                  ds,
+		webshareWebhookByChannel: map[string]webshareWebhookCredential{"channel-1": {ID: "webshare-hook-1", Token: "webshare-token-1"}},
+		webshareWebhookIDs:       map[string]bool{"webshare-hook-1": true},
+	}
+	share := webshare.Share{ShareID: "ws-1", GuildID: "guild-1", TargetID: "channel-1", OpenerUserID: "viewer", OpenerUsername: "Viewer", Capabilities: webshare.WriteCapabilities()}
+
+	sent, _, err := b.webshareSendPromptRecord(context.Background(), share, webshare.ClientAction{Text: "hello"}, share.TargetID, "", nil)
+	if sent != nil || !errors.Is(err, errWebSharePromptRecord) {
+		t.Fatalf("prompt record sent=%+v err=%v, want missing-message error", sent, err)
+	}
+	L.Load("en")
+	got := b.websharePrompt(context.Background(), share, webshare.ClientAction{Text: "hello"}, share.TargetID, "")
+	if got.Type != "error" || got.Status != "error" || got.ReasonCode != "discord_send_failed" || got.Content != L.Get("webshare.prompt_record_failed") {
+		t.Fatalf("missing prompt record event = %+v", got)
+	}
+}
+
+func TestWebShareChannelFinalUsesDiscordAsOnlyVisibleAnswer(t *testing.T) {
+	L.Load("en")
+	store, share := newTestWebShareStoreAndShare(t)
+	b, events := newTestWebShareBroadcastBot(t, store, share, 2)
+	rt := &recordingDiscordTransport{}
+	b.discord.Client = &http.Client{Transport: rt}
+
+	answer := strings.Repeat("x", 4000)
+	b.webshareFinalReply(share, webshare.ClientAction{DisplayName: "browser"}, share.TargetID, "prompt-message-1", false, nil)(answer)
+
+	event := <-events
+	payload, ok := event.Event.(map[string]any)
+	if !ok || event.Type != "agent_event" || payload["status"] != "complete" {
+		t.Fatalf("completion event = %+v payload=%#v", event, payload)
+	}
+	if _, exists := payload["content"]; exists {
+		t.Fatalf("completion event exposed a second answer: %#v", payload)
+	}
+	if _, exists := payload["mentions"]; exists {
+		t.Fatalf("completion event exposed answer mention metadata: %#v", payload)
+	}
+
+	paths, bodies := rt.Snapshot()
+	var messagePosts int
+	for i, path := range paths {
+		if path != "POST /api/v9/channels/"+share.TargetID+"/messages" {
+			continue
+		}
+		messagePosts++
+		if !strings.Contains(bodies[i], `"message_reference"`) || !strings.Contains(bodies[i], `"message_id":"prompt-message-1"`) {
+			t.Fatalf("Discord reply part missing prompt reference: %s", bodies[i])
+		}
+	}
+	if messagePosts != 3 {
+		t.Fatalf("Discord reply parts = %d, want 3 for long answer; paths=%v", messagePosts, paths)
+	}
+
+	b.broadcastWebShareDiscordMessage(context.Background(), &discordgo.MessageCreate{Message: &discordgo.Message{
+		ID: "bot-answer-1", ChannelID: share.TargetID, GuildID: share.GuildID, Content: "canonical bot answer",
+		Author: &discordgo.User{ID: b.discord.State.User.ID, Username: "bot", Bot: true},
+	}}, "")
+	mirrored := <-events
+	mirroredPayload, ok := mirrored.Event.(map[string]any)
+	if !ok || mirrored.Type != "channel_event" || mirroredPayload["messageID"] != "bot-answer-1" || mirroredPayload["content"] != "canonical bot answer" {
+		t.Fatalf("canonical Discord event = %+v payload=%#v", mirrored, mirroredPayload)
+	}
+}
+
+func TestWebShareThreadFinalEmitsLifecycleWithoutSecondAnswer(t *testing.T) {
+	L.Load("en")
+	store, share := newTestWebShareStoreAndShare(t)
+	b, events := newTestWebShareBroadcastBot(t, store, share, 1)
+	rt := &recordingDiscordTransport{}
+	b.discord.Client = &http.Client{Transport: rt}
+
+	b.webshareFinalReply(share, webshare.ClientAction{}, "thread-1", "prompt-message-1", true, nil)("thread answer already sent by worker")
+
+	event := <-events
+	payload, ok := event.Event.(map[string]any)
+	if !ok || event.Type != "agent_event" || payload["status"] != "complete" {
+		t.Fatalf("completion event = %+v payload=%#v", event, payload)
+	}
+	if _, exists := payload["content"]; exists {
+		t.Fatalf("thread completion event exposed a second answer: %#v", payload)
+	}
+	if paths, _ := rt.Snapshot(); len(paths) != 0 {
+		t.Fatalf("thread completion sent a second Discord answer: %v", paths)
+	}
+}
+
+func TestWebShareChannelFinalReportsDiscordDeliveryFailure(t *testing.T) {
+	L.Load("en")
+	store, share := newTestWebShareStoreAndShare(t)
+	b, events := newTestWebShareBroadcastBot(t, store, share, 1)
+	b.discord = newFailingDiscordSession(t)
+
+	b.webshareFinalReply(share, webshare.ClientAction{}, share.TargetID, "prompt-message-1", false, nil)("answer")
+
+	event := <-events
+	if event.Type != "error" || event.Status != "error" || event.ReasonCode != "discord_reply_failed" || event.Content != L.Get("webshare.reply_failed") {
+		t.Fatalf("delivery failure event = %+v", event)
 	}
 }
 

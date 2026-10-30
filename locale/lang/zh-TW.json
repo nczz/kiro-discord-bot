@@ -1035,6 +1035,8 @@
   "webshare.attachment_ref_invalid": "附件參照無效或已過期。",
   "webshare.attachment_scope": "附件不在共享目標範圍內。",
   "webshare.attachment_fetch_failed": "無法取得附件。",
+  "webshare.prompt_record_failed": "WebShare 無法建立 Discord prompt 訊息。",
+  "webshare.reply_failed": "WebShare 無法將 agent 回覆送達 Discord。",
   "webshare.empty_prompt": "移除 bot mention 後訊息是空的。",
   "webshare.webhook_permission_missing": "❌ WebShare 需要此 bot 在這個頻道具備 Discord「管理 Webhook」權限。請把「管理 Webhook」授予 bot 角色，然後重啟或重新執行 `/webshare stop` 與 `/webshare start`。"
 }

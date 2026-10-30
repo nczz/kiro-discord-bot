@@ -1,3 +1,4 @@
+import { activeAgentLifecycle, classifyAgentLifecycle, type ActiveAgentLifecycleStatus } from "./agent-lifecycle.js";
 import { continueAcceptedUpload, downloadURL, queueUploads, selectedAttachmentRefs, type UploadState } from "./attachments.js";
 import { deriveSessionKeys, openJSON, parseJoinFragment, sealJSON, writeTokenProof, type ParsedJoinLink, type SessionKeys } from "./crypto.js";
 import { clear, el, formatBytes } from "./dom.js";
@@ -5,11 +6,11 @@ import { allowedMentionSelectionForDraft, commandName, displayDiscordMentions, d
 import { parseDiscordMessageReference, suggestedThreadName } from "./threads.js";
 import { chooseLocale, setLocale, t, type Locale } from "./i18n.js";
 import type { MentionPickerState } from "./mentions.js";
-import type { ActorView, AllowedMentionSelection, AttachmentMetadata, AttachmentRef, Capabilities, Capability, ClientAction, MentionView, MessageReferenceView, SanitizedDiscordAttachment, ServerEvent, ShareView, TargetView, ThreadView } from "./protocol.js";
+import type { ActorView, AllowedMentionSelection, AttachmentMetadata, AttachmentRef, Capabilities, Capability, ClientAction, MentionView, MessageReferenceView, SanitizedAgentEvent, SanitizedDiscordAttachment, ServerEvent, ShareView, TargetView, ThreadView } from "./protocol.js";
 import { hasCapability, PROTOCOL_VERSION } from "./protocol.js";
 import { WebShareTransport, type RelayFrame, type TransportStatus } from "./transport.js";
 
-type MessageKind = "discord" | "agent" | "command" | "system" | "upload" | "attachment" | "error";
+type MessageKind = "discord" | "command" | "system" | "upload" | "attachment" | "error";
 type ComposerSuggestionKind = "command" | "bot" | "user";
 
 interface ComposerSuggestion {
@@ -103,6 +104,7 @@ interface AppState {
   messages: ChatMessage[];
   pendingAttachmentDownloads: Set<string>;
   error: string | undefined;
+  agentActivity: ActiveAgentLifecycleStatus | undefined;
   seenMessageIDs: Set<string>;
   clientPeerID: number;
   terminalReason: string | undefined;
@@ -132,6 +134,7 @@ const state: AppState = {
   pendingAttachmentDownloads: new Set(),
   messages: [],
   error: undefined,
+  agentActivity: undefined,
   seenMessageIDs: new Set(),
   clientPeerID: randomClientPeerID(),
   terminalReason: undefined,
@@ -264,7 +267,7 @@ function applyServerEvent(event: ServerEvent): void {
       applyThreadEvent(event.event);
       break;
     case "agent_event":
-      pushMessage("agent", t(state.locale, "agentAuthor"), event.event.content ?? event.event.status, { timestamp: event.event.timestamp, mentions: event.event.mentions });
+      handleAgentEvent(event.event);
       break;
     case "command_result":
       pushMessage("command", t(state.locale, "botAuthor"), event.content || event.status);
@@ -286,6 +289,7 @@ function applyServerEvent(event: ServerEvent): void {
       break;
     case "error": {
       state.pendingAttachmentDownloads.clear();
+      state.agentActivity = undefined;
       const message = `${event.reasonCode ?? event.code ?? "error"}: ${event.content ?? event.messageKey ?? ""}`;
       setError(message);
       pushMessage("error", t(state.locale, "systemAuthor"), message);
@@ -293,6 +297,7 @@ function applyServerEvent(event: ServerEvent): void {
     }
     case "bye": {
       state.terminalReason = event.reasonCode;
+      state.agentActivity = undefined;
       const message = terminalMessage(event.reasonCode);
       setError(message);
       pushMessage("system", t(state.locale, "systemAuthor"), message);
@@ -301,6 +306,33 @@ function applyServerEvent(event: ServerEvent): void {
     }
   }
   persistRoomHistory();
+}
+
+function handleAgentEvent(event: SanitizedAgentEvent): void {
+  const lifecycle = classifyAgentLifecycle(event.status);
+  state.agentActivity = activeAgentLifecycle(lifecycle);
+  switch (lifecycle) {
+    case "queued":
+      state.liveAnnouncement = `${t(state.locale, "agentStatus")}: ${t(state.locale, "agentQueued")}`;
+      return;
+    case "running":
+      state.liveAnnouncement = `${t(state.locale, "agentStatus")}: ${t(state.locale, "agentRunning")}`;
+      return;
+    case "complete":
+      state.liveAnnouncement = t(state.locale, "agentComplete");
+      return;
+    case "interrupted":
+      pushMessage("system", t(state.locale, "systemAuthor"), t(state.locale, "agentInterrupted"), { timestamp: event.timestamp });
+      return;
+    case "error": {
+      const message = t(state.locale, "agentFailed");
+      setError(message);
+      pushMessage("error", t(state.locale, "systemAuthor"), message, { timestamp: event.timestamp });
+      return;
+    }
+    case "unknown":
+      state.liveAnnouncement = `${t(state.locale, "agentStatus")}: ${event.status}`;
+  }
 }
 
 function handleUploadState(event: Extract<ServerEvent, { type: "upload_state" }>): void {
@@ -465,7 +497,10 @@ function chatHeader(): HTMLElement {
     setLocale(state.locale);
     render();
   });
-  const actions = [threadMenuButton(), statusPill(), locale, ...safetyControls()];
+  const actions: HTMLElement[] = [threadMenuButton()];
+  const activity = agentActivityPill();
+  if (activity) actions.push(activity);
+  actions.push(statusPill(), locale, ...safetyControls());
   if (thread) {
     const back = el("button", { className: "back-button", text: t(state.locale, "backToChannel") }) as HTMLButtonElement;
     back.type = "button";
@@ -1098,6 +1133,17 @@ function statusPill(): HTMLElement {
   return el("div", { className: "status-pill", attrs: { role: "status", "aria-live": "polite", title: state.statusDetail ?? "" }, children: [el("span", { className: `status-dot ${state.status}` }), el("span", { text: label })] });
 }
 
+function agentActivityPill(): HTMLElement | undefined {
+  if (!state.agentActivity) return undefined;
+  const label = state.agentActivity === "running" ? t(state.locale, "agentRunning") : t(state.locale, "agentQueued");
+  const dot = state.agentActivity === "running" ? "connected" : "connecting";
+  return el("div", {
+    className: "status-pill",
+    attrs: { "aria-label": label, title: label },
+    children: [el("span", { className: `status-dot ${dot}` }), el("span", { text: label })],
+  });
+}
+
 function shouldDisplayDiscordMessage(messageID: string | undefined): boolean {
   if (!messageID) return true;
   if (state.seenMessageIDs.has(messageID)) return false;
@@ -1476,7 +1522,7 @@ function isThreadView(value: unknown): value is ThreadView {
 }
 
 function isMessageKind(value: unknown): value is MessageKind {
-  return value === "discord" || value === "agent" || value === "command" || value === "system" || value === "upload" || value === "attachment" || value === "error";
+  return value === "discord" || value === "command" || value === "system" || value === "upload" || value === "attachment" || value === "error";
 }
 
 function markdownMessageContent(message: ChatMessage): HTMLElement {

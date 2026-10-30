@@ -143,9 +143,7 @@ export interface SanitizedAgentEvent {
   eventID: string;
   timestamp?: string;
   jobID?: string;
-  status: "queued" | "running" | "final" | "error" | "interrupted" | string;
-  content?: string;
-  mentions?: MentionView[];
+  status: "queued" | "running" | "complete" | "error" | "interrupted" | string;
 }
 export type ClientAction = (
   | { type: "hello"; proto: typeof PROTOCOL_VERSION; displayName: string }
