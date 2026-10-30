@@ -36,6 +36,17 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: webshare-web/package-lock.json
+
+      - name: Install WebShare dependencies
+        working-directory: webshare-web
+        run: npm ci
+
       - name: Run release preflight
         env:
           RUN_DOCKER_BUILD: ${{ github.event_name == 'workflow_dispatch' && inputs.docker_build || 'false' }}
