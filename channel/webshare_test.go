@@ -7,7 +7,12 @@ import (
 )
 
 func TestWebShareChannelJobUsesSourceAndVisibleMessageID(t *testing.T) {
-	job, err := newWebShareChannelJob(WebSharePrompt{GuildID: "guild-1", ChannelID: "channel-1", ThreadID: "thread-1", MessageID: "message-1", Prompt: "hello", UserID: "user-1", Username: "Alice", Attachments: []string{"/tmp/a.txt"}, MentionRefs: []discordmention.Ref{discordmention.UserRef("123456789012345678", "Bob")}, DeliveryMode: DeliveryInline})
+	mentionRef := discordmention.UserRef("123456789012345678", "Bob")
+	revokedRef := discordmention.UserRef("876543210987654321", "ReviewBot")
+	refresh := func() []discordmention.Ref {
+		return []discordmention.Ref{revokedRef}
+	}
+	job, err := newWebShareChannelJob(WebSharePrompt{GuildID: "guild-1", ChannelID: "channel-1", ThreadID: "thread-1", MessageID: "message-1", Prompt: "hello", UserID: "user-1", Username: "Alice", Attachments: []string{"/tmp/a.txt"}, MentionRefs: []discordmention.Ref{mentionRef}, RevokedMentionRefs: []discordmention.Ref{revokedRef}, RefreshRevokedMentionRefs: refresh, DeliveryMode: DeliveryInline})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -19,6 +24,12 @@ func TestWebShareChannelJobUsesSourceAndVisibleMessageID(t *testing.T) {
 	}
 	if job.BotToolsTargetID != "thread-1" || job.DeliveryMode != DeliveryInline {
 		t.Fatalf("target/delivery = %q/%q", job.BotToolsTargetID, job.DeliveryMode)
+	}
+	if len(job.MentionRefs) != 1 || job.MentionRefs[0].ID != mentionRef.ID || len(job.RevokedMentionRefs) != 1 || job.RevokedMentionRefs[0].ID != revokedRef.ID {
+		t.Fatalf("mention refs were not preserved: allowed=%+v revoked=%+v", job.MentionRefs, job.RevokedMentionRefs)
+	}
+	if job.RefreshRevokedMentionRefs == nil || len(job.RefreshRevokedMentionRefs()) != 1 || job.RefreshRevokedMentionRefs()[0].ID != revokedRef.ID {
+		t.Fatal("delivery-time peer revocation refresh was not preserved")
 	}
 	job.Attachments[0] = "changed"
 	if job.Attachments[0] == "/tmp/a.txt" {

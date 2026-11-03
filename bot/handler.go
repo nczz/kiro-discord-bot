@@ -938,25 +938,30 @@ func (b *Bot) enqueueChannelPrompt(ds *discordgo.Session, m *discordgo.MessageCr
 		content = discussion.Block + content
 	}
 	localPaths = append(localPaths, discussion.Attachments...)
-	mentionRefs := appendMentionRefs(mentionRefsForMessage(m, selfID), append(discussion.MentionRefs, b.peerMentionRefs(selfID)...)...)
-	prompt := buildPromptThreadWithMentions(content, localPaths, m.ChannelID, "", m.GuildID, m.Author.Username, m.Author.ID, b.peerPromptContext(selfID), mentionRefs)
+	peerContext := b.peerContextForTarget(ds, m.ChannelID, selfID)
+	mentionRefs := appendMentionRefs(mentionRefsForMessage(m, selfID), append(discussion.MentionRefs, peerContext.mentionRefs...)...)
+	prompt := buildPromptThreadWithMentions(content, localPaths, m.ChannelID, "", m.GuildID, m.Author.Username, m.Author.ID, peerContext.prompt, mentionRefs)
 	deliveryMode := channel.DeliveryThread
 	if !b.manager.ThreadModeEnabled(m.ChannelID) {
 		deliveryMode = channel.DeliveryInline
 	}
 
 	job := &channel.Job{
-		ChannelID:    m.ChannelID,
-		GuildID:      m.GuildID,
-		MessageID:    m.ID,
-		Prompt:       prompt,
-		UserID:       m.Author.ID,
-		Username:     m.Author.Username,
-		Attachments:  localPaths,
-		Transcript:   transcript,
-		Source:       source,
-		DeliveryMode: deliveryMode,
-		MentionRefs:  mentionRefs,
+		ChannelID:          m.ChannelID,
+		GuildID:            m.GuildID,
+		MessageID:          m.ID,
+		Prompt:             prompt,
+		UserID:             m.Author.ID,
+		Username:           m.Author.Username,
+		Attachments:        localPaths,
+		Transcript:         transcript,
+		Source:             source,
+		DeliveryMode:       deliveryMode,
+		MentionRefs:        mentionRefs,
+		RevokedMentionRefs: peerContext.revokedMentionRefs,
+		RefreshRevokedMentionRefs: func() []discordmention.Ref {
+			return b.revokedPeerMentionRefsForTarget(ds, m.ChannelID, selfID)
+		},
 	}
 	job.ThreadMentionOnly, _ = b.requiresHumanMention(ds, m.ChannelID, "", selfID)
 	if err := b.manager.Enqueue(ds, job); err != nil {
@@ -1007,8 +1012,9 @@ func (b *Bot) enqueueThreadPrompt(ds *discordgo.Session, m *discordgo.MessageCre
 		content = discussion.Block + content
 	}
 	localPaths = append(localPaths, discussion.Attachments...)
-	mentionRefs := appendMentionRefs(mentionRefsForMessage(m, threadSelfID), append(discussion.MentionRefs, b.peerMentionRefs(threadSelfID)...)...)
-	prompt := buildPromptThreadWithMentions(content, localPaths, parentChannelID, threadID, m.GuildID, m.Author.Username, m.Author.ID, b.peerPromptContext(threadSelfID), mentionRefs)
+	peerContext := b.peerContextForTarget(ds, threadID, threadSelfID)
+	mentionRefs := appendMentionRefs(mentionRefsForMessage(m, threadSelfID), append(discussion.MentionRefs, peerContext.mentionRefs...)...)
+	prompt := buildPromptThreadWithMentions(content, localPaths, parentChannelID, threadID, m.GuildID, m.Author.Username, m.Author.ID, peerContext.prompt, mentionRefs)
 
 	job := &channel.Job{
 		ChannelID:          threadID,
@@ -1024,6 +1030,10 @@ func (b *Bot) enqueueThreadPrompt(ds *discordgo.Session, m *discordgo.MessageCre
 		Handoff:            handoff,
 		Source:             source,
 		MentionRefs:        mentionRefs,
+		RevokedMentionRefs: peerContext.revokedMentionRefs,
+		RefreshRevokedMentionRefs: func() []discordmention.Ref {
+			return b.revokedPeerMentionRefsForTarget(ds, threadID, threadSelfID)
+		},
 		SkipDiscordContext: true,
 	}
 	if err := b.manager.EnqueueThread(ds, job, parentChannelID); err != nil {

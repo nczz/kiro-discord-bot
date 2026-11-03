@@ -85,7 +85,7 @@ func TestPromptVisibleBodySkipsDiscordMetadataBlocks(t *testing.T) {
 	prompt := `[Discord bot environment] Your responses are automatically forwarded.
 [Discord context] channel_id=1 guild_id=2 user=mxp
 
-[Discord bot peers]
+[Discord bot peers for current target]
 - BuildBot id=111111111111111111 mention_ref=[[discord:user:111111111111111111]]
 - ReviewBot id=333333333333333333 mention_ref=[[discord:user:333333333333333333]]
 [Discord bot handoff rules]
@@ -639,17 +639,76 @@ func TestMentionRequesterInFinalResponseDoesNotDoublePrefix(t *testing.T) {
 
 func TestWorkerRemembersMentionRefsAcrossJobs(t *testing.T) {
 	w := newWorker("channel-1", &fakeWorkerAgent{}, 1, 1, 1, 60, nil, "")
-	first := w.rememberMentionRefs([]discordmention.Ref{discordmention.UserRef("123", "Chun")})
+	first := w.rememberMentionRefs([]discordmention.Ref{discordmention.UserRef("123", "Chun")}, nil)
 	if len(first) != 1 || first[0].ID != "123" {
 		t.Fatalf("first refs = %+v, want user 123", first)
 	}
-	second := w.rememberMentionRefs(nil)
+	second := w.rememberMentionRefs(nil, nil)
 	rendered, allowed := renderDiscordMentions("notify [[discord:user:123]]", second)
 	if !strings.Contains(rendered, "<@123>") {
 		t.Fatalf("remembered ref did not render: %q", rendered)
 	}
 	if allowed == nil || len(allowed.Users) != 1 || allowed.Users[0] != "123" {
 		t.Fatalf("allowed mentions = %+v, want user 123", allowed)
+	}
+}
+
+func TestWorkerRevokesPersistedPeerMentionRefs(t *testing.T) {
+	w := newWorker("channel-1", &fakeWorkerAgent{}, 1, 1, 1, 60, nil, "")
+	human := discordmention.UserRef("123", "Chun")
+	peer := discordmention.UserRef("456", "ReviewBot")
+	peerRole := discordmention.RoleRef("789", "ReviewBot")
+	w.SetMentionRefs([]discordmention.Ref{human, peer, peerRole})
+	var persisted []discordmention.Ref
+	w.OnMentionRefsUpdatedFunc(func(refs []discordmention.Ref) {
+		persisted = append([]discordmention.Ref(nil), refs...)
+	})
+
+	got := w.rememberMentionRefs([]discordmention.Ref{human}, []discordmention.Ref{peer, peerRole})
+	if len(got) != 1 || got[0].ID != human.ID {
+		t.Fatalf("refs after peer revocation = %+v, want only human", got)
+	}
+	if len(persisted) != 1 || persisted[0].ID != human.ID {
+		t.Fatalf("persisted refs after peer revocation = %+v, want only human", persisted)
+	}
+}
+
+func TestJobRefreshesPeerRevocationsBeforeDelivery(t *testing.T) {
+	w := newWorker("channel-1", &fakeWorkerAgent{}, 1, 1, 1, 60, nil, "")
+	human := discordmention.UserRef("123", "Chun")
+	queuedPeer := discordmention.UserRef("456", "QueuedPeer")
+	revokedDuringJob := discordmention.UserRef("789", "RevokedDuringJob")
+	w.SetMentionRefs([]discordmention.Ref{human, queuedPeer, revokedDuringJob})
+	job := &Job{
+		RevokedMentionRefs: []discordmention.Ref{queuedPeer},
+		RefreshRevokedMentionRefs: func() []discordmention.Ref {
+			return []discordmention.Ref{revokedDuringJob}
+		},
+	}
+
+	got := w.rememberMentionRefs(nil, job.currentRevokedMentionRefs())
+	if len(got) != 1 || got[0].ID != human.ID {
+		t.Fatalf("refs after delivery-time refresh = %+v, want only human", got)
+	}
+}
+
+func TestWorkerRejectsRevokedDynamicMentionRef(t *testing.T) {
+	statePath := filepath.Join(t.TempDir(), "target.json")
+	raw := `{"target_channel_id":"thread-1","mention_refs":[{"kind":"user","id":"456","display_name":"ReviewBot","placeholder":"[[discord:user:456]]"}]}` + "\n"
+	if err := os.WriteFile(statePath, []byte(raw), 0644); err != nil {
+		t.Fatalf("write target state: %v", err)
+	}
+	w := newWorker("channel-1", &fakeWorkerAgent{}, 1, 1, 1, 60, nil, "")
+	w.SetBotToolsTargetStatePath(statePath)
+	peer := discordmention.UserRef("456", "ReviewBot")
+
+	refs := w.mentionRefsForDelivery(nil, []discordmention.Ref{peer})
+	rendered, allowed := renderDiscordMentions("notify [[discord:user:456]]", refs)
+	if strings.Contains(rendered, "<@456>") {
+		t.Fatalf("revoked dynamic peer ref rendered: %q", rendered)
+	}
+	if allowed != nil && len(allowed.Users) != 0 {
+		t.Fatalf("revoked dynamic peer remained allowed: %+v", allowed.Users)
 	}
 }
 
@@ -662,7 +721,7 @@ func TestWorkerLoadsDynamicMentionRefsForDelivery(t *testing.T) {
 	w := newWorker("channel-1", &fakeWorkerAgent{}, 1, 1, 1, 60, nil, "")
 	w.SetBotToolsTargetStatePath(statePath)
 
-	refs := w.mentionRefsForDelivery(nil)
+	refs := w.mentionRefsForDelivery(nil, nil)
 	rendered, allowed := renderDiscordMentions("notify [[discord:user:123]]", refs)
 	if !strings.Contains(rendered, "<@123>") {
 		t.Fatalf("dynamic ref did not render: %q", rendered)

@@ -101,3 +101,21 @@ func TestPromptBlockSanitizesDisplayNames(t *testing.T) {
 		t.Fatalf("prompt block = %q, want sanitized display name", block)
 	}
 }
+
+func TestExcludeRemovesMatchingKindAndID(t *testing.T) {
+	refs := []Ref{
+		UserRef("123", "Peer"),
+		RoleRef("123", "PeerRole"),
+		UserRef("456", "Requester"),
+	}
+	filtered := Exclude(refs, []Ref{UserRef("123", "")})
+	if len(filtered) != 2 {
+		t.Fatalf("filtered refs = %+v, want role 123 and user 456", filtered)
+	}
+	if filtered[0].Kind != "role" || filtered[0].ID != "123" {
+		t.Fatalf("first filtered ref = %+v, want role 123", filtered[0])
+	}
+	if filtered[1].Kind != "user" || filtered[1].ID != "456" {
+		t.Fatalf("second filtered ref = %+v, want user 456", filtered[1])
+	}
+}

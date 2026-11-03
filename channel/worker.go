@@ -44,35 +44,37 @@ var errAutoCompactIneffective = errors.New("auto compact ineffective")
 
 // Job represents a single user message to be processed.
 type Job struct {
-	ChannelID              string
-	ParentChannelID        string
-	GuildID                string
-	MessageID              string
-	Prompt                 string
-	Session                *discordgo.Session
-	UserID                 string
-	Username               string
-	Attachments            []string
-	ThreadID               string // non-empty = follow-up in existing thread, skip thread creation
-	Transcript             string // STT transcription result, shown in thread if non-empty
-	Handoff                bool   // true when this job is an accepted cross-bot handoff
-	SkipDiscordContext     bool   // true when the prompt already includes bot-built Discord discussion context
-	Source                 string // message, thread, cron, etc.
-	DeliveryMode           DeliveryMode
-	ThreadMentionOnly      bool // listen snapshot for newly created agent threads
-	BotToolsTargetID       string
-	DisableBotEgress       bool
-	RemoteA2A              bool
-	AllowRemoteMemoryWrite bool
-	A2ADelegationDepth     int
-	A2AResult              chan<- a2a.TaskExecutionResult
-	A2AOriginLabel         string
-	A2ATaskID              a2a.TaskID
-	A2ARevision            int64
-	DisplayCWD             string // cwd prefix to remove from progress-only location displays
-	FinalReply             func(string)
-	MentionRefs            []discordmention.Ref
-	OnThreadReady          func(string)
+	ChannelID                 string
+	ParentChannelID           string
+	GuildID                   string
+	MessageID                 string
+	Prompt                    string
+	Session                   *discordgo.Session
+	UserID                    string
+	Username                  string
+	Attachments               []string
+	ThreadID                  string // non-empty = follow-up in existing thread, skip thread creation
+	Transcript                string // STT transcription result, shown in thread if non-empty
+	Handoff                   bool   // true when this job is an accepted cross-bot handoff
+	SkipDiscordContext        bool   // true when the prompt already includes bot-built Discord discussion context
+	Source                    string // message, thread, cron, etc.
+	DeliveryMode              DeliveryMode
+	ThreadMentionOnly         bool // listen snapshot for newly created agent threads
+	BotToolsTargetID          string
+	DisableBotEgress          bool
+	RemoteA2A                 bool
+	AllowRemoteMemoryWrite    bool
+	A2ADelegationDepth        int
+	A2AResult                 chan<- a2a.TaskExecutionResult
+	A2AOriginLabel            string
+	A2ATaskID                 a2a.TaskID
+	A2ARevision               int64
+	DisplayCWD                string // cwd prefix to remove from progress-only location displays
+	FinalReply                func(string)
+	MentionRefs               []discordmention.Ref
+	RevokedMentionRefs        []discordmention.Ref
+	RefreshRevokedMentionRefs func() []discordmention.Ref
+	OnThreadReady             func(string)
 }
 
 func (job Job) botToolsRequestSource() string {
@@ -579,28 +581,12 @@ func (w *Worker) run() {
 	}
 }
 
-func (w *Worker) rememberMentionRefs(refs []discordmention.Ref) []discordmention.Ref {
+func (w *Worker) rememberMentionRefs(refs, revoked []discordmention.Ref) []discordmention.Ref {
 	if w == nil {
-		return refs
+		return mergeMentionRefs(nil, refs, revoked)
 	}
 	w.mentionMu.Lock()
-
-	seen := make(map[string]bool, len(w.mentionRefs)+len(refs))
-	merged := make([]discordmention.Ref, 0, len(w.mentionRefs)+len(refs))
-	add := func(ref discordmention.Ref) {
-		key := ref.Kind + ":" + ref.ID
-		if ref.Kind == "" || ref.ID == "" || seen[key] {
-			return
-		}
-		seen[key] = true
-		merged = append(merged, ref)
-	}
-	for _, ref := range w.mentionRefs {
-		add(ref)
-	}
-	for _, ref := range refs {
-		add(ref)
-	}
+	merged := mergeMentionRefs(w.mentionRefs, refs, revoked)
 	changed := !sameMentionRefs(w.mentionRefs, merged)
 	w.mentionRefs = append([]discordmention.Ref(nil), merged...)
 	out := append([]discordmention.Ref(nil), merged...)
@@ -609,6 +595,39 @@ func (w *Worker) rememberMentionRefs(refs []discordmention.Ref) []discordmention
 		w.onMentionRefs(out)
 	}
 	return out
+}
+
+func mergeMentionRefs(existing, incoming, revoked []discordmention.Ref) []discordmention.Ref {
+	var revokedKeys map[string]struct{}
+	if len(revoked) > 0 {
+		revokedKeys = make(map[string]struct{}, len(revoked))
+		for _, ref := range revoked {
+			if ref.Kind != "" && ref.ID != "" {
+				revokedKeys[ref.Kind+":"+ref.ID] = struct{}{}
+			}
+		}
+	}
+	seen := make(map[string]struct{}, len(existing)+len(incoming))
+	merged := make([]discordmention.Ref, 0, len(existing)+len(incoming))
+	add := func(ref discordmention.Ref) {
+		key := ref.Kind + ":" + ref.ID
+		_, isRevoked := revokedKeys[key]
+		if ref.Kind == "" || ref.ID == "" || isRevoked {
+			return
+		}
+		if _, exists := seen[key]; exists {
+			return
+		}
+		seen[key] = struct{}{}
+		merged = append(merged, ref)
+	}
+	for _, ref := range existing {
+		add(ref)
+	}
+	for _, ref := range incoming {
+		add(ref)
+	}
+	return merged
 }
 
 func (w *Worker) SetMentionRefs(refs []discordmention.Ref) {
@@ -620,21 +639,38 @@ func (w *Worker) SetMentionRefs(refs []discordmention.Ref) {
 	w.mentionMu.Unlock()
 }
 
-func (w *Worker) mentionRefsForDelivery(refs []discordmention.Ref) []discordmention.Ref {
+func (w *Worker) mentionRefsForDelivery(refs, revoked []discordmention.Ref) []discordmention.Ref {
 	if w == nil {
-		return refs
+		return mergeMentionRefs(nil, refs, revoked)
 	}
 	dynamic, err := readBotToolsTargetMentionRefs(w.botToolsTargetStatePath)
 	if err != nil && !os.IsNotExist(err) {
 		log.Printf("[mention] read dynamic refs channel=%s: %v", w.channelID, err)
 	}
 	if len(dynamic) == 0 {
-		return w.rememberMentionRefs(refs)
+		return w.rememberMentionRefs(refs, revoked)
 	}
 	merged := make([]discordmention.Ref, 0, len(refs)+len(dynamic))
 	merged = append(merged, refs...)
 	merged = append(merged, dynamic...)
-	return w.rememberMentionRefs(merged)
+	return w.rememberMentionRefs(merged, revoked)
+}
+
+func (job *Job) currentRevokedMentionRefs() []discordmention.Ref {
+	if job == nil {
+		return nil
+	}
+	if job.RefreshRevokedMentionRefs == nil {
+		return job.RevokedMentionRefs
+	}
+	refreshed := job.RefreshRevokedMentionRefs()
+	if len(job.RevokedMentionRefs) == 0 {
+		return refreshed
+	}
+	combined := make([]discordmention.Ref, 0, len(job.RevokedMentionRefs)+len(refreshed))
+	combined = append(combined, job.RevokedMentionRefs...)
+	combined = append(combined, refreshed...)
+	return combined
 }
 
 func sameMentionRefs(a, b []discordmention.Ref) bool {
@@ -725,7 +761,7 @@ func formatUsageLimitExceeded(decision UsageLimitDecision) string {
 func (w *Worker) execute(job *Job) {
 	defer w.markJobDequeued(false)
 	if job != nil {
-		job.MentionRefs = w.rememberMentionRefs(job.MentionRefs)
+		job.MentionRefs = w.rememberMentionRefs(job.MentionRefs, job.currentRevokedMentionRefs())
 	}
 	if w.rejectForUsageLimit(job) {
 		w.signalIdle()
@@ -973,7 +1009,7 @@ func (w *Worker) execute(job *Job) {
 			ctxErr := ctx.Err()
 			cancel() // release timeout context
 
-			job.MentionRefs = w.mentionRefsForDelivery(job.MentionRefs)
+			job.MentionRefs = w.mentionRefsForDelivery(job.MentionRefs, job.currentRevokedMentionRefs())
 
 			if askErr != nil {
 				errMsg := askErr.Error()
@@ -1632,7 +1668,7 @@ func (w *Worker) executeInline(job *Job) {
 			if !beginFinish() {
 				return
 			}
-			job.MentionRefs = w.mentionRefsForDelivery(job.MentionRefs)
+			job.MentionRefs = w.mentionRefsForDelivery(job.MentionRefs, job.currentRevokedMentionRefs())
 
 			if askErr != nil {
 				errMsg := askErr.Error()
@@ -2279,7 +2315,7 @@ func (w *Worker) executeFallback(job *Job) {
 	})
 
 	logContent := response
-	job.MentionRefs = w.mentionRefsForDelivery(job.MentionRefs)
+	job.MentionRefs = w.mentionRefsForDelivery(job.MentionRefs, job.currentRevokedMentionRefs())
 
 	if askErr != nil {
 		errMsg := askErr.Error()

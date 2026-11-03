@@ -12,18 +12,20 @@ const WebShareSource = "webshare"
 
 // WebSharePrompt describes browser-originated agent work for a Discord target.
 type WebSharePrompt struct {
-	GuildID         string
-	ChannelID       string
-	ParentChannelID string
-	ThreadID        string
-	MessageID       string
-	Prompt          string
-	UserID          string
-	Username        string
-	Attachments     []string
-	MentionRefs     []discordmention.Ref
-	DeliveryMode    DeliveryMode
-	FinalReply      func(string)
+	GuildID                   string
+	ChannelID                 string
+	ParentChannelID           string
+	ThreadID                  string
+	MessageID                 string
+	Prompt                    string
+	UserID                    string
+	Username                  string
+	Attachments               []string
+	MentionRefs               []discordmention.Ref
+	RevokedMentionRefs        []discordmention.Ref
+	RefreshRevokedMentionRefs func() []discordmention.Ref
+	DeliveryMode              DeliveryMode
+	FinalReply                func(string)
 }
 
 // WebShareEnqueue queues browser-originated work from the Discord-visible
@@ -64,18 +66,20 @@ func newWebShareChannelJob(p WebSharePrompt) (*Job, error) {
 		delivery = DeliveryThread
 	}
 	return &Job{
-		ChannelID:        channelID,
-		GuildID:          strings.TrimSpace(p.GuildID),
-		MessageID:        strings.TrimSpace(p.MessageID),
-		Prompt:           p.Prompt,
-		UserID:           strings.TrimSpace(p.UserID),
-		Username:         strings.TrimSpace(p.Username),
-		Attachments:      append([]string(nil), p.Attachments...),
-		Source:           WebShareSource,
-		DeliveryMode:     delivery,
-		MentionRefs:      append([]discordmention.Ref(nil), p.MentionRefs...),
-		FinalReply:       p.FinalReply,
-		BotToolsTargetID: strings.TrimSpace(p.ThreadID),
+		ChannelID:                 channelID,
+		GuildID:                   strings.TrimSpace(p.GuildID),
+		MessageID:                 strings.TrimSpace(p.MessageID),
+		Prompt:                    p.Prompt,
+		UserID:                    strings.TrimSpace(p.UserID),
+		Username:                  strings.TrimSpace(p.Username),
+		Attachments:               append([]string(nil), p.Attachments...),
+		Source:                    WebShareSource,
+		DeliveryMode:              delivery,
+		MentionRefs:               append([]discordmention.Ref(nil), p.MentionRefs...),
+		RevokedMentionRefs:        append([]discordmention.Ref(nil), p.RevokedMentionRefs...),
+		RefreshRevokedMentionRefs: p.RefreshRevokedMentionRefs,
+		FinalReply:                p.FinalReply,
+		BotToolsTargetID:          strings.TrimSpace(p.ThreadID),
 	}, nil
 }
 
@@ -86,17 +90,19 @@ func newWebShareThreadJob(p WebSharePrompt) (*Job, string, error) {
 		return nil, "", fmt.Errorf("thread id and parent channel id are required")
 	}
 	return &Job{
-		ChannelID:       threadID,
-		ParentChannelID: parentID,
-		GuildID:         strings.TrimSpace(p.GuildID),
-		MessageID:       strings.TrimSpace(p.MessageID),
-		Prompt:          p.Prompt,
-		UserID:          strings.TrimSpace(p.UserID),
-		Username:        strings.TrimSpace(p.Username),
-		Attachments:     append([]string(nil), p.Attachments...),
-		ThreadID:        threadID,
-		Source:          WebShareSource,
-		MentionRefs:     append([]discordmention.Ref(nil), p.MentionRefs...),
-		FinalReply:      p.FinalReply,
+		ChannelID:                 threadID,
+		ParentChannelID:           parentID,
+		GuildID:                   strings.TrimSpace(p.GuildID),
+		MessageID:                 strings.TrimSpace(p.MessageID),
+		Prompt:                    p.Prompt,
+		UserID:                    strings.TrimSpace(p.UserID),
+		Username:                  strings.TrimSpace(p.Username),
+		Attachments:               append([]string(nil), p.Attachments...),
+		ThreadID:                  threadID,
+		Source:                    WebShareSource,
+		MentionRefs:               append([]discordmention.Ref(nil), p.MentionRefs...),
+		RevokedMentionRefs:        append([]discordmention.Ref(nil), p.RevokedMentionRefs...),
+		RefreshRevokedMentionRefs: p.RefreshRevokedMentionRefs,
+		FinalReply:                p.FinalReply,
 	}, parentID, nil
 }

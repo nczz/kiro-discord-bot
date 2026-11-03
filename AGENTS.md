@@ -49,6 +49,7 @@ If these sources conflict, stop and report the conflict. Do not invent behavior 
 - Lifecycle/admin actions require authenticated Discord actor context. An agent or MCP client cannot self-assert guild, channel, actor, target, or project authority through normal tool arguments.
 - Skill installs and imports never grant missing MCP tools and never mutate MCP policy as a side effect.
 - Project/CWD input must flow through `channel.Manager.ValidateCWD` or an established manager/path helper.
+- Guild-wide bot peer discovery is only a catalog. Agent prompt context and mention refs may include a peer only when that peer has effective view and response permissions in the current channel or thread; revoke stale peer refs when permissions change.
 
 ## Collaboration workflow
 

@@ -596,7 +596,7 @@ func TestWebShareChannelFinalUsesDiscordAsOnlyVisibleAnswer(t *testing.T) {
 	b.discord.Client = &http.Client{Transport: rt}
 
 	answer := strings.Repeat("x", 4000)
-	b.webshareFinalReply(share, webshare.ClientAction{DisplayName: "browser"}, share.TargetID, "prompt-message-1", false, nil)(answer)
+	b.webshareFinalReply(share, webshare.ClientAction{DisplayName: "browser"}, share.TargetID, "prompt-message-1", false, nil, nil)(answer)
 
 	event := <-events
 	payload, ok := event.Event.(map[string]any)
@@ -643,7 +643,7 @@ func TestWebShareThreadFinalEmitsLifecycleWithoutSecondAnswer(t *testing.T) {
 	rt := &recordingDiscordTransport{}
 	b.discord.Client = &http.Client{Transport: rt}
 
-	b.webshareFinalReply(share, webshare.ClientAction{}, "thread-1", "prompt-message-1", true, nil)("thread answer already sent by worker")
+	b.webshareFinalReply(share, webshare.ClientAction{}, "thread-1", "prompt-message-1", true, nil, nil)("thread answer already sent by worker")
 
 	event := <-events
 	payload, ok := event.Event.(map[string]any)
@@ -664,7 +664,7 @@ func TestWebShareChannelFinalReportsDiscordDeliveryFailure(t *testing.T) {
 	b, events := newTestWebShareBroadcastBot(t, store, share, 1)
 	b.discord = newFailingDiscordSession(t)
 
-	b.webshareFinalReply(share, webshare.ClientAction{}, share.TargetID, "prompt-message-1", false, nil)("answer")
+	b.webshareFinalReply(share, webshare.ClientAction{}, share.TargetID, "prompt-message-1", false, nil, nil)("answer")
 
 	event := <-events
 	if event.Type != "error" || event.Status != "error" || event.ReasonCode != "discord_reply_failed" || event.Content != L.Get("webshare.reply_failed") {
@@ -672,9 +672,51 @@ func TestWebShareChannelFinalReportsDiscordDeliveryFailure(t *testing.T) {
 	}
 }
 
+func TestWebShareChannelFinalRevokesPeerMentionBeforeDelivery(t *testing.T) {
+	L.Load("en")
+	store, share := newTestWebShareStoreAndShare(t)
+	b, events := newTestWebShareBroadcastBot(t, store, share, 1)
+	rt := &recordingDiscordTransport{}
+	b.discord.Client = &http.Client{Transport: rt}
+	peerRef := discordmention.UserRef("819486221511163904", "ReviewBot")
+
+	b.webshareFinalReply(
+		share,
+		webshare.ClientAction{},
+		share.TargetID,
+		"prompt-message-1",
+		false,
+		[]discordmention.Ref{peerRef},
+		func() []discordmention.Ref { return []discordmention.Ref{peerRef} },
+	)(peerRef.Placeholder + " review complete")
+
+	event := <-events
+	if event.Type != "agent_event" || event.Status != "ok" {
+		t.Fatalf("completion event = %+v", event)
+	}
+	_, bodies := rt.Snapshot()
+	if len(bodies) != 1 {
+		t.Fatalf("Discord reply requests = %d, want 1", len(bodies))
+	}
+	var payload struct {
+		Content         string `json:"content"`
+		AllowedMentions struct {
+			Users []string `json:"users"`
+		} `json:"allowed_mentions"`
+	}
+	if err := json.Unmarshal([]byte(bodies[0]), &payload); err != nil {
+		t.Fatalf("Discord payload JSON: %v\n%s", err, bodies[0])
+	}
+	if strings.Contains(payload.Content, peerRef.ID) || strings.Contains(payload.Content, peerRef.Placeholder) {
+		t.Fatalf("revoked peer leaked in final reply: %q", payload.Content)
+	}
+	if !strings.Contains(payload.Content, "Discord user") || len(payload.AllowedMentions.Users) != 0 {
+		t.Fatalf("final reply content=%q allowed users=%+v, want inert peer reference", payload.Content, payload.AllowedMentions.Users)
+	}
+}
+
 func TestWebSharePeerMentionRefsRenderAgentFinalNames(t *testing.T) {
-	b := &Bot{peers: parseBotPeers("KDB:999999999999999999,ReviewBot:819486221511163904:777777777777777777")}
-	refs := webshareUserMentionRefs(b.peerMentionRefs("999999999999999999"))
+	refs := webshareUserMentionRefs(appendPeerMentionRefs(nil, BotPeer{Name: "ReviewBot", ID: "819486221511163904", RoleID: "777777777777777777"}))
 	content, allowed := discordmention.Render("[[discord:user:819486221511163904]] hi", refs)
 	if content != "<@819486221511163904> hi" {
 		t.Fatalf("rendered peer mention = %q", content)

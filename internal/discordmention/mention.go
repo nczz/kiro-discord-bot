@@ -47,6 +47,26 @@ func RoleRef(id, displayName string) Ref {
 	}
 }
 
+// Exclude removes refs whose kind and ID appear in excluded, preserving order.
+// It returns refs unchanged when excluded is empty; callers must treat both
+// input and output slices as read-only.
+func Exclude(refs, excluded []Ref) []Ref {
+	if len(refs) == 0 || len(excluded) == 0 {
+		return refs
+	}
+	keys := make(map[string]struct{}, len(excluded))
+	for _, ref := range excluded {
+		keys[ref.Kind+"\x00"+ref.ID] = struct{}{}
+	}
+	filtered := make([]Ref, 0, len(refs))
+	for _, ref := range refs {
+		if _, found := keys[ref.Kind+"\x00"+ref.ID]; !found {
+			filtered = append(filtered, ref)
+		}
+	}
+	return filtered
+}
+
 // Render replaces verified placeholders with Discord mention syntax and returns
 // an AllowedMentions object scoped to only the placeholders actually used.
 func Render(content string, refs []Ref) (string, *discordgo.MessageAllowedMentions) {

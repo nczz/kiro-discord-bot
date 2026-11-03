@@ -599,6 +599,7 @@ Symptoms:
 - Bots ask each other follow-up questions instead of completing the user's task.
 - Thread mode changes who responds.
 - Peer discovery logs look correct at startup but behavior differs in a channel or thread.
+- Agent prompt lists guild-wide bots as same-channel `handoff_peer` entries or retains a peer after its target permissions are revoked.
 
 First checks:
 
@@ -607,11 +608,12 @@ First checks:
 - `BOT_PEERS`
 - startup `user_peers` / `role_only_peers` logs
 - channel and thread member visibility
+- prompt mention refs and persisted worker/session mention refs
 - `docs/listen-mode-matrix.md`
 
 Regression expectation:
 
-- Cover direct human mention, bot-only mention, mixed mentions, channel mode, thread mode, and role-only peers. Do not make bot-to-bot coordination a hidden side effect.
+- Guild discovery remains a catalog only. Cover direct human mention, bot-only mention, mixed mentions, channel mode, thread mode, role-only peers, effective target permission denial, permission revocation after a cached check, and stale session/dynamic mention ref removal. A peer without current target view and response permissions must not appear in agent prompt context or render as an allowed mention. Do not make bot-to-bot coordination a hidden side effect.
 
 ### A2A Receiver Consent Versus Sender Delegation
 

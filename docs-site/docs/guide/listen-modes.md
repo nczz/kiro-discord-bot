@@ -22,7 +22,7 @@ Thread agents are independent from the parent channel agent. Work in one thread 
 
 Use real Discord mentions from the Discord UI. Plain text such as `@BuildBot` may not trigger the bot. When multiple peer bot mentions appear at the start of a human message, they are treated as routing metadata and removed from the task text delivered to each mentioned bot.
 
-The bot also provides structured mention references to the agent so final answers can mention known users or peer bots without guessing raw Discord IDs.
+The bot also provides structured mention references to the agent so final answers can mention known users or peer bots without guessing raw Discord IDs. Peer bot references are target-scoped: a bot is available for handoff only when it can effectively view and respond in the current channel or thread. Permission revocation removes stale peer references before delivery.
 
 ## Discord Channel Webhooks
 
@@ -30,9 +30,9 @@ Discord webhook messages are bot-authored and ignored by default. A channel mana
 
 ## Multi-bot Handoff
 
-Peer bots are auto-discovered from guild bot members when the bot starts. `BOT_PEERS` is only needed to override names/roles, add a bot discovery cannot see, or exclude a bot.
+Peer bots are auto-discovered from guild bot members when the bot starts. This guild-wide result is only a catalog: each channel or thread prompt includes a peer only when Discord permissions allow that bot to view and respond in the current target. `BOT_PEERS` is only needed to override names/roles, add a bot discovery cannot see, or exclude a bot.
 
-Bot-authored messages are ignored by default. A peer handoff is accepted only in controlled situations, such as a thread where the target bot is explicitly mentioned and the original task has already completed. This prevents agents from responding to progress updates or partial tool output.
+Bot-authored messages are ignored by default. A peer handoff is accepted only in controlled situations, such as a thread where an eligible target bot is explicitly mentioned and the original task has already completed. This prevents cross-channel peer disclosure and agents responding to progress updates or partial tool output.
 
 ## Debugging Listen Mode
 

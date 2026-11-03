@@ -396,26 +396,34 @@ func (b *Bot) websharePrompt(ctx context.Context, share webshare.Share, action w
 	}
 	b.sendWebShareHostEvent(share.ShareID, webshareMessageEventForTarget(share, targetID, parentID, record))
 	selfID := b.webshareSelfID()
-	promptRefs := appendMentionRefs(refs, webshareUserMentionRefs(b.peerMentionRefs(selfID))...)
-	prompt := buildPromptThreadWithMentions(action.Text, localPaths, websharePromptParent(share, targetID, parentID), websharePromptThread(share, targetID, parentID), share.GuildID, share.OpenerUsername, share.OpenerUserID, b.peerPromptContext(selfID), promptRefs)
-	final := b.webshareFinalReply(share, action, targetID, messageID, threadTarget, promptRefs)
+	peerContext := b.peerContextForTarget(b.discord, targetID, selfID)
+	promptRefs := appendMentionRefs(refs, webshareUserMentionRefs(peerContext.mentionRefs)...)
+	prompt := buildPromptThreadWithMentions(action.Text, localPaths, websharePromptParent(share, targetID, parentID), websharePromptThread(share, targetID, parentID), share.GuildID, share.OpenerUsername, share.OpenerUserID, peerContext.prompt, promptRefs)
+	refreshRevokedMentionRefs := func() []discordmention.Ref {
+		return b.revokedPeerMentionRefsForTarget(b.discord, targetID, selfID)
+	}
+	final := b.webshareFinalReply(share, action, targetID, messageID, threadTarget, promptRefs, refreshRevokedMentionRefs)
 	if threadTarget {
-		if err := b.manager.WebShareEnqueueThread(b.discord, channel.WebSharePrompt{GuildID: share.GuildID, ParentChannelID: websharePromptParent(share, targetID, parentID), ThreadID: targetID, MessageID: messageID, Prompt: prompt, UserID: share.OpenerUserID, Username: share.OpenerUsername, Attachments: localPaths, MentionRefs: promptRefs, FinalReply: final}); err != nil {
+		if err := b.manager.WebShareEnqueueThread(b.discord, channel.WebSharePrompt{GuildID: share.GuildID, ParentChannelID: websharePromptParent(share, targetID, parentID), ThreadID: targetID, MessageID: messageID, Prompt: prompt, UserID: share.OpenerUserID, Username: share.OpenerUsername, Attachments: localPaths, MentionRefs: promptRefs, RevokedMentionRefs: peerContext.revokedMentionRefs, RefreshRevokedMentionRefs: refreshRevokedMentionRefs, FinalReply: final}); err != nil {
 			return webshareEnqueueFailureEvent()
 		}
 	} else {
-		if err := b.manager.WebShareEnqueue(b.discord, channel.WebSharePrompt{GuildID: share.GuildID, ChannelID: share.TargetID, MessageID: messageID, Prompt: prompt, UserID: share.OpenerUserID, Username: share.OpenerUsername, Attachments: localPaths, MentionRefs: promptRefs, DeliveryMode: channel.DeliveryInline, FinalReply: final}); err != nil {
+		if err := b.manager.WebShareEnqueue(b.discord, channel.WebSharePrompt{GuildID: share.GuildID, ChannelID: share.TargetID, MessageID: messageID, Prompt: prompt, UserID: share.OpenerUserID, Username: share.OpenerUsername, Attachments: localPaths, MentionRefs: promptRefs, RevokedMentionRefs: peerContext.revokedMentionRefs, RefreshRevokedMentionRefs: refreshRevokedMentionRefs, DeliveryMode: channel.DeliveryInline, FinalReply: final}); err != nil {
 			return webshareEnqueueFailureEvent()
 		}
 	}
 	return webshare.ServerEvent{Type: "agent_event", Status: "queued", Event: map[string]any{"eventID": webshareEventID("agent-queued", targetID), "timestamp": time.Now().UTC().Format(time.RFC3339Nano), "status": "queued"}}
 }
 
-func (b *Bot) webshareFinalReply(share webshare.Share, action webshare.ClientAction, targetID, messageID string, threadTarget bool, promptRefs []discordmention.Ref) func(string) {
+func (b *Bot) webshareFinalReply(share webshare.Share, action webshare.ClientAction, targetID, messageID string, threadTarget bool, promptRefs []discordmention.Ref, refreshRevokedMentionRefs func() []discordmention.Ref) func(string) {
 	return func(content string) {
 		b.recordWebShareAudit(share, "webshare_agent_result", share.OpenerUserID, action.DisplayName, targetID, true, "", map[string]any{"bytes": len(content)})
 		if !threadTarget {
-			if err := channel.SendLongReplyWithMentions(b.discord, targetID, messageID, content, promptRefs); err != nil {
+			deliveryRefs := promptRefs
+			if refreshRevokedMentionRefs != nil {
+				deliveryRefs = discordmention.Exclude(deliveryRefs, refreshRevokedMentionRefs())
+			}
+			if err := channel.SendLongReplyWithMentions(b.discord, targetID, messageID, content, deliveryRefs); err != nil {
 				b.recordWebShareAudit(share, webshare.EventActionRejected, share.OpenerUserID, action.DisplayName, targetID, false, "webshare_final_reply_failed", map[string]any{"message_id": messageID, "error": err.Error()})
 				failure := webshare.ServerEvent{Type: "error", Status: "error", ReasonCode: "discord_reply_failed", Content: L.Get("webshare.reply_failed")}
 				if !b.sendWebShareHostEvent(share.ShareID, failure) {

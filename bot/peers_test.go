@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/bwmarrin/discordgo"
+	"github.com/nczz/kiro-discord-bot/internal/discordmention"
 )
 
 func TestParseBotPeers(t *testing.T) {
@@ -38,13 +39,93 @@ func TestMultiBotMode(t *testing.T) {
 }
 
 func TestPeerPromptContextSeparatesSelf(t *testing.T) {
-	b := &Bot{peers: parseBotPeers("BuildBot:111111111111111111,ReviewBot:333333333333333333")}
-	got := b.peerPromptContext("111111111111111111")
-	if !containsAll(got, "self=BuildBot", "handoff_peer=ReviewBot", "mention_ref=[[discord:user:333333333333333333]]", "Never mention yourself") {
+	peers := parseBotPeers("BuildBot:111111111111111111,ReviewBot:333333333333333333")
+	got := peerPromptContext(peers, "111111111111111111")
+	if !containsAll(got, "[Discord bot peers for current target]", "self=BuildBot", "handoff_peer=ReviewBot", "mention_ref=[[discord:user:333333333333333333]]", "Never mention yourself") {
 		t.Fatalf("peerPromptContext() missing expected content:\n%s", got)
 	}
 	if strings.Contains(got, "<@") {
 		t.Fatalf("peerPromptContext() should not expose raw mention tokens:\n%s", got)
+	}
+}
+
+func TestPeerContextForTargetFiltersPeersWithoutChannelAccess(t *testing.T) {
+	b := &Bot{peers: parseBotPeers("AlphaBot:bot-1:role-1,BetaBot:bot-2:role-2")}
+	ds := testPeerPermissionSession(t, []*discordgo.PermissionOverwrite{botMemberDenyOverwrite("bot-2")})
+
+	ctx := b.peerContextForTarget(ds, "channel-1", "bot-1")
+	if strings.Contains(ctx.prompt, "BetaBot") || containsMentionRef(ctx.mentionRefs, "user", "bot-2") || containsMentionRef(ctx.mentionRefs, "role", "role-2") {
+		t.Fatalf("inaccessible peer leaked into target context: %+v prompt=%q", ctx.mentionRefs, ctx.prompt)
+	}
+	if !containsMentionRef(ctx.revokedMentionRefs, "user", "bot-2") || !containsMentionRef(ctx.revokedMentionRefs, "role", "role-2") {
+		t.Fatalf("inaccessible peer refs were not revoked: %+v", ctx.revokedMentionRefs)
+	}
+}
+
+func TestPeerContextForTargetIncludesPeerWithEffectiveAccess(t *testing.T) {
+	b := &Bot{peers: parseBotPeers("AlphaBot:bot-1:role-1,BetaBot:bot-2:role-2")}
+	ds := testPeerPermissionSession(t, nil)
+
+	ctx := b.peerContextForTarget(ds, "channel-1", "bot-1")
+	if !containsAll(ctx.prompt, "self=AlphaBot", "handoff_peer=BetaBot") {
+		t.Fatalf("eligible peer missing from target context:\n%s", ctx.prompt)
+	}
+	if !containsMentionRef(ctx.mentionRefs, "user", "bot-2") || !containsMentionRef(ctx.mentionRefs, "role", "role-2") {
+		t.Fatalf("eligible peer refs missing: %+v", ctx.mentionRefs)
+	}
+	if containsMentionRef(ctx.revokedMentionRefs, "user", "bot-2") {
+		t.Fatalf("eligible peer was revoked: %+v", ctx.revokedMentionRefs)
+	}
+}
+
+func TestPeerContextForTargetUsesFreshPermissionsAfterRevocation(t *testing.T) {
+	b := &Bot{peers: parseBotPeers("AlphaBot:bot-1,BetaBot:bot-2")}
+	ds := testPeerPermissionSession(t, nil)
+	if !b.peerCanRespondInTarget(ds, "bot-2", "channel-1") {
+		t.Fatal("expected initial cached permission check to allow peer")
+	}
+	ch, err := ds.State.Channel("channel-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ch.PermissionOverwrites = []*discordgo.PermissionOverwrite{botMemberDenyOverwrite("bot-2")}
+
+	ctx := b.peerContextForTarget(ds, "channel-1", "bot-1")
+	if strings.Contains(ctx.prompt, "BetaBot") || !containsMentionRef(ctx.revokedMentionRefs, "user", "bot-2") {
+		t.Fatalf("fresh target context retained revoked peer: prompt=%q revoked=%+v", ctx.prompt, ctx.revokedMentionRefs)
+	}
+}
+
+func TestPeerContextForThreadUsesThreadReplyPermission(t *testing.T) {
+	b := &Bot{peers: parseBotPeers("AlphaBot:bot-1,BetaBot:bot-2")}
+	ds := testPeerPermissionSession(t, []*discordgo.PermissionOverwrite{botMemberThreadReplyOverwrite("bot-2")})
+
+	ctx := b.peerContextForTarget(ds, "thread-1", "bot-1")
+	if !strings.Contains(ctx.prompt, "handoff_peer=BetaBot") || !containsMentionRef(ctx.mentionRefs, "user", "bot-2") {
+		t.Fatalf("thread-capable peer missing from thread context: prompt=%q refs=%+v", ctx.prompt, ctx.mentionRefs)
+	}
+}
+
+func TestPeerContextForTargetRequiresExplicitRoleOnlyPresence(t *testing.T) {
+	b := &Bot{peers: []BotPeer{
+		{Name: "AlphaBot", ID: "bot-1", RoleID: "role-1"},
+		{Name: "PeerRole", RoleID: "role-2", Manual: true},
+	}}
+	ds := testPeerPermissionSession(t, nil)
+
+	denied := b.peerContextForTarget(ds, "channel-1", "bot-1")
+	if strings.Contains(denied.prompt, "PeerRole") || !containsMentionRef(denied.revokedMentionRefs, "role", "role-2") {
+		t.Fatalf("role-only peer without explicit target presence leaked: prompt=%q revoked=%+v", denied.prompt, denied.revokedMentionRefs)
+	}
+	ch, err := ds.State.Channel("channel-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ch.PermissionOverwrites = []*discordgo.PermissionOverwrite{botRoleAllowOverwrite("role-2")}
+
+	allowed := b.peerContextForTarget(ds, "channel-1", "bot-1")
+	if !strings.Contains(allowed.prompt, "handoff_peer=PeerRole") || !containsMentionRef(allowed.mentionRefs, "role", "role-2") {
+		t.Fatalf("explicit role-only peer missing: prompt=%q refs=%+v", allowed.prompt, allowed.mentionRefs)
 	}
 }
 
@@ -122,6 +203,14 @@ func TestBotRoleIDPrefersManagedNameMatch(t *testing.T) {
 	}
 }
 
+func containsMentionRef(refs []discordmention.Ref, kind, id string) bool {
+	for _, ref := range refs {
+		if ref.Kind == kind && ref.ID == id {
+			return true
+		}
+	}
+	return false
+}
 func containsAll(s string, parts ...string) bool {
 	for _, part := range parts {
 		if !strings.Contains(s, part) {

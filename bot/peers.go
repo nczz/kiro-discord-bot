@@ -296,20 +296,7 @@ func (b *Bot) peerCanRespondInTarget(ds *discordgo.Session, peerID, targetID str
 		}
 		b.peerPermMu.Unlock()
 	}
-	perms, err := ds.UserChannelPermissions(peerID, targetID)
-	if err != nil {
-		log.Printf("[peers] channel permission check failed peer=%s channel=%s: %v", peerID, targetID, err)
-		return false
-	}
-	required := int64(discordgo.PermissionViewChannel | discordgo.PermissionSendMessages)
-	if ch, err := ds.State.Channel(targetID); err == nil && ch != nil && ch.IsThread() {
-		required = int64(discordgo.PermissionViewChannel | discordgo.PermissionSendMessagesInThreads)
-	}
-	canRespond := perms&required == required
-	if !canRespond {
-		channelThreadReply := int64(discordgo.PermissionViewChannel | discordgo.PermissionCreatePublicThreads | discordgo.PermissionSendMessagesInThreads)
-		canRespond = perms&channelThreadReply == channelThreadReply
-	}
+	canRespond := peerCanRespondInTargetFresh(ds, peerID, targetID)
 	if b != nil {
 		b.peerPermMu.Lock()
 		if b.peerPermCache == nil {
@@ -319,6 +306,26 @@ func (b *Bot) peerCanRespondInTarget(ds *discordgo.Session, peerID, targetID str
 		b.peerPermMu.Unlock()
 	}
 	return canRespond
+}
+
+func peerCanRespondInTargetFresh(ds *discordgo.Session, peerID, targetID string) bool {
+	if ds == nil || peerID == "" || targetID == "" {
+		return false
+	}
+	perms, err := ds.UserChannelPermissions(peerID, targetID)
+	if err != nil {
+		log.Printf("[peers] channel permission check failed peer=%s channel=%s: %v", peerID, targetID, err)
+		return false
+	}
+	required := int64(discordgo.PermissionViewChannel | discordgo.PermissionSendMessages)
+	if ch, err := ds.State.Channel(targetID); err == nil && ch != nil && ch.IsThread() {
+		required = int64(discordgo.PermissionViewChannel | discordgo.PermissionSendMessagesInThreads)
+	}
+	if perms&required == required {
+		return true
+	}
+	channelThreadReply := int64(discordgo.PermissionViewChannel | discordgo.PermissionCreatePublicThreads | discordgo.PermissionSendMessagesInThreads)
+	return perms&channelThreadReply == channelThreadReply
 }
 
 func (b *Bot) slashCommandAllowedInTarget(ds *discordgo.Session, targetID string) bool {
@@ -503,13 +510,73 @@ func (b *Bot) requiresHumanMention(ds *discordgo.Session, targetID, parentChanne
 	return true, "multi_bot"
 }
 
-func (b *Bot) peerPromptContext(selfID string) string {
+type targetPeerContext struct {
+	prompt             string
+	mentionRefs        []discordmention.Ref
+	revokedMentionRefs []discordmention.Ref
+}
+
+func (b *Bot) peerContextForTarget(ds *discordgo.Session, targetID, selfID string) targetPeerContext {
 	peers := b.peerSnapshot()
+	if len(peers) == 0 {
+		return targetPeerContext{}
+	}
+	eligible := make([]BotPeer, 0, len(peers))
+	ctx := targetPeerContext{}
+	for _, p := range peers {
+		if p.ID == selfID {
+			eligible = append(eligible, p)
+			if p.RoleID != "" {
+				ctx.mentionRefs = append(ctx.mentionRefs, discordmention.RoleRef(p.RoleID, p.Name))
+			}
+			continue
+		}
+		if b.peerAllowedInTarget(ds, targetID, p) {
+			eligible = append(eligible, p)
+			ctx.mentionRefs = appendPeerMentionRefs(ctx.mentionRefs, p)
+			continue
+		}
+		ctx.revokedMentionRefs = appendPeerMentionRefs(ctx.revokedMentionRefs, p)
+	}
+	ctx.prompt = peerPromptContext(eligible, selfID)
+	return ctx
+}
+
+func (b *Bot) revokedPeerMentionRefsForTarget(ds *discordgo.Session, targetID, selfID string) []discordmention.Ref {
+	var revoked []discordmention.Ref
+	for _, p := range b.peerSnapshot() {
+		if p.ID == selfID || b.peerAllowedInTarget(ds, targetID, p) {
+			continue
+		}
+		revoked = appendPeerMentionRefs(revoked, p)
+	}
+	return revoked
+}
+
+func (b *Bot) peerAllowedInTarget(ds *discordgo.Session, targetID string, peer BotPeer) bool {
+	if peer.ID != "" {
+		return peerCanRespondInTargetFresh(ds, peer.ID, targetID)
+	}
+	_, allowed := b.peerExplicitlyPresentInTarget(ds, peer, targetID)
+	return allowed
+}
+
+func appendPeerMentionRefs(refs []discordmention.Ref, peer BotPeer) []discordmention.Ref {
+	if peer.ID != "" {
+		refs = append(refs, discordmention.UserRef(peer.ID, peer.Name))
+	}
+	if peer.RoleID != "" {
+		refs = append(refs, discordmention.RoleRef(peer.RoleID, peer.Name))
+	}
+	return refs
+}
+
+func peerPromptContext(peers []BotPeer, selfID string) string {
 	if len(peers) == 0 {
 		return ""
 	}
 	var sb strings.Builder
-	sb.WriteString("[Discord bot peers]\n")
+	sb.WriteString("[Discord bot peers for current target]\n")
 	var hasHandoffPeer bool
 	for _, p := range peers {
 		roleText := ""
@@ -539,19 +606,6 @@ func (b *Bot) peerPromptContext(selfID string) string {
 	sb.WriteString("- Never mention yourself for handoff.\n")
 	sb.WriteString("- Do not mention another bot in progress updates, errors, tool output summaries, or casual replies.\n")
 	return sb.String()
-}
-
-func (b *Bot) peerMentionRefs(selfID string) []discordmention.Ref {
-	var refs []discordmention.Ref
-	for _, p := range b.peerSnapshot() {
-		if p.ID != "" && p.ID != selfID {
-			refs = append(refs, discordmention.UserRef(p.ID, p.Name))
-		}
-		if p.RoleID != "" {
-			refs = append(refs, discordmention.RoleRef(p.RoleID, p.Name))
-		}
-	}
-	return refs
 }
 
 func (b *Bot) discoverBotPeers(ds *discordgo.Session, ready *discordgo.Ready) {
