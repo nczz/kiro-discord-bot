@@ -59,7 +59,7 @@ func TestSecondHostRejectedWithClose4009(t *testing.T) {
 		t.Fatalf("first host: %v", err)
 	}
 	defer host.Close()
-	waitForRelayRooms(t, server.URL, 1)
+	waitForRelayStats(t, server.URL, 1, 0)
 
 	second, resp, err := dialRelay(server.URL, "one-host", "host", testHostToken)
 	if err != nil {
@@ -152,6 +152,7 @@ func TestBinaryFramesRouteBetweenGuestAndHost(t *testing.T) {
 		t.Fatalf("second guest: %v", err)
 	}
 	defer secondGuest.Close()
+	waitForRelayStats(t, server.URL, 1, 2)
 
 	broadcast := frame(0, []byte("opaque-broadcast"))
 	if err := host.WriteMessage(websocket.BinaryMessage, broadcast); err != nil {
@@ -259,7 +260,7 @@ func newTestRelay(t *testing.T) *httptest.Server {
 	return httptest.NewServer(relay)
 }
 
-func waitForRelayRooms(t *testing.T, baseURL string, want int) {
+func waitForRelayStats(t *testing.T, baseURL string, wantRooms, wantGuests int) {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
 	var last Stats
@@ -275,15 +276,15 @@ func waitForRelayRooms(t *testing.T, baseURL string, want int) {
 			defer resp.Body.Close()
 			lastErr = json.NewDecoder(resp.Body).Decode(&last)
 		}()
-		if lastErr == nil && last.Rooms == want {
+		if lastErr == nil && last.Rooms == wantRooms && last.Guests == wantGuests {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
 	if lastErr != nil {
-		t.Fatalf("relay rooms did not reach %d: last err=%v", want, lastErr)
+		t.Fatalf("relay stats did not reach rooms=%d guests=%d: last err=%v", wantRooms, wantGuests, lastErr)
 	}
-	t.Fatalf("relay rooms = %d guests=%d, want rooms=%d", last.Rooms, last.Guests, want)
+	t.Fatalf("relay rooms=%d guests=%d, want rooms=%d guests=%d", last.Rooms, last.Guests, wantRooms, wantGuests)
 }
 
 func dialRelay(baseURL, roomID, role, token string) (*websocket.Conn, *http.Response, error) {
