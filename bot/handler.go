@@ -66,49 +66,6 @@ func stripSelfMentions(content, selfID string) string {
 	return strings.TrimSpace(content)
 }
 
-func isBotGeneratedNonResult(content string) bool {
-	content = strings.TrimSpace(strings.ReplaceAll(content, "\u200b", ""))
-	if content == "" {
-		return true
-	}
-	lower := strings.ToLower(content)
-	nonResultPrefixes := []string{
-		"🔄", "⏳", "❌", "⚠️", "💭",
-		"processing", "bot running", "thread queue full", "transport closed",
-	}
-	for _, prefix := range nonResultPrefixes {
-		if strings.HasPrefix(lower, prefix) {
-			return true
-		}
-	}
-	return false
-}
-
-func messageHasReaction(m *discordgo.Message, emoji string) bool {
-	if m == nil {
-		return false
-	}
-	for _, r := range m.Reactions {
-		if r != nil && r.Count > 0 && r.Emoji != nil && r.Emoji.Name == emoji {
-			return true
-		}
-	}
-	return false
-}
-
-func messageReactionState(m *discordgo.Message) string {
-	switch {
-	case messageHasReaction(m, "✅"):
-		return "done"
-	case messageHasReaction(m, "🔄"), messageHasReaction(m, "⏳"):
-		return "running"
-	case messageHasReaction(m, "❌"), messageHasReaction(m, "⚠️"):
-		return "failed"
-	default:
-		return "unknown"
-	}
-}
-
 func ctxForAudit(channelID, targetID string, inThread bool, guildID, userID, username string) cmdCtx {
 	return cmdCtx{
 		channelID: channelID,
@@ -133,40 +90,6 @@ func isKnownBangCommand(name, content string) bool {
 	default:
 		return false
 	}
-}
-
-func (b *Bot) shouldAcceptBotResultMention(ds *discordgo.Session, m *discordgo.MessageCreate, content, selfID, parentChannelID string) bool {
-	if m.Author == nil || !m.Author.Bot || m.Author.ID == selfID {
-		return false
-	}
-	if !b.messageMentionsSelf(m, content, selfID) {
-		log.Printf("[bot-gate] ignored bot msg reason=no_mention source=%s channel=%s msg=%s", m.Author.ID, m.ChannelID, m.ID)
-		return false
-	}
-	if parentChannelID == "" {
-		log.Printf("[bot-gate] ignored bot mention reason=not_thread source=%s channel=%s msg=%s", m.Author.ID, m.ChannelID, m.ID)
-		return false
-	}
-	if isBotGeneratedNonResult(b.stripOwnMentions(content, selfID)) {
-		log.Printf("[bot-gate] ignored bot mention reason=non_result source=%s thread=%s msg=%s", m.Author.ID, m.ChannelID, m.ID)
-		return false
-	}
-
-	origin, err := ds.ChannelMessage(parentChannelID, m.ChannelID)
-	if err != nil {
-		log.Printf("[handler] ignore bot mention: fetch thread origin channel=%s msg=%s: %v", parentChannelID, m.ChannelID, err)
-		return false
-	}
-	switch state := messageReactionState(origin); state {
-	case "done":
-		log.Printf("[bot-gate] accepted bot result mention source=%s thread=%s msg=%s origin=%s", m.Author.ID, m.ChannelID, m.ID, origin.ID)
-		return true
-	case "running", "failed":
-		log.Printf("[bot-gate] ignored bot mention reason=origin_%s source=%s thread=%s msg=%s origin=%s", state, m.Author.ID, m.ChannelID, m.ID, origin.ID)
-	default:
-		log.Printf("[bot-gate] ignored bot mention reason=origin_not_done source=%s thread=%s msg=%s origin=%s", m.Author.ID, m.ChannelID, m.ID, origin.ID)
-	}
-	return false
 }
 
 // threadParentCache caches thread→parent channel mappings to avoid repeated API calls.
@@ -672,7 +595,7 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 		}
 		content = b.stripOwnMentions(content, selfID)
 		if parentChannelID != "" {
-			b.enqueueThreadPrompt(ds, m, content, parentChannelID, false, "webhook")
+			b.enqueueThreadPrompt(ds, m, content, parentChannelID, "webhook")
 			return
 		}
 		b.enqueueChannelPrompt(ds, m, content, selfID, "webhook")
@@ -685,12 +608,9 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 		return
 	}
 
-	handoff := false
 	if m.Author.Bot {
-		handoff = b.shouldAcceptBotResultMention(ds, m, content, selfID, parentChannelID)
-		if !handoff {
-			return
-		}
+		log.Printf("[bot-gate] ignored bot msg reason=bot_authored source=%s channel=%s msg=%s", m.Author.ID, m.ChannelID, m.ID)
+		return
 	}
 
 	if !m.Author.Bot && !isMentioned && b.messageMentionsOtherPeer(m, content, selfID) {
@@ -724,7 +644,7 @@ func (b *Bot) handleMessage(ds *discordgo.Session, m *discordgo.MessageCreate) {
 
 	// Check if message is from a thread — route to thread agent
 	if parentChannelID != "" {
-		b.handleThreadMessage(ds, m, content, parentChannelID, handoff)
+		b.handleThreadMessage(ds, m, content, parentChannelID)
 		return
 	}
 
@@ -972,7 +892,7 @@ func (b *Bot) enqueueChannelPrompt(ds *discordgo.Session, m *discordgo.MessageCr
 	b.markDiscordDiscussionContextDelivered(discussion)
 }
 
-func (b *Bot) enqueueThreadPrompt(ds *discordgo.Session, m *discordgo.MessageCreate, content, parentChannelID string, handoff bool, source string) {
+func (b *Bot) enqueueThreadPrompt(ds *discordgo.Session, m *discordgo.MessageCreate, content, parentChannelID, source string) {
 	threadID := m.ChannelID
 	if !b.manager.ChannelInitialized(parentChannelID) {
 		b.sendThreadSetupPrompt(ds, m, parentChannelID)
@@ -1006,7 +926,6 @@ func (b *Bot) enqueueThreadPrompt(ds *discordgo.Session, m *discordgo.MessageCre
 		CurrentContent:  content,
 		SelfID:          threadSelfID,
 		SessionKey:      b.manager.ContextSessionKey(threadID, parentChannelID),
-		Handoff:         handoff,
 	})
 	if discussion.Block != "" {
 		content = discussion.Block + content
@@ -1014,6 +933,7 @@ func (b *Bot) enqueueThreadPrompt(ds *discordgo.Session, m *discordgo.MessageCre
 	localPaths = append(localPaths, discussion.Attachments...)
 	peerContext := b.peerContextForTarget(ds, threadID, threadSelfID)
 	mentionRefs := appendMentionRefs(mentionRefsForMessage(m, threadSelfID), append(discussion.MentionRefs, peerContext.mentionRefs...)...)
+	mentionRefs = discordmention.Exclude(mentionRefs, peerContext.revokedMentionRefs)
 	prompt := buildPromptThreadWithMentions(content, localPaths, parentChannelID, threadID, m.GuildID, m.Author.Username, m.Author.ID, peerContext.prompt, mentionRefs)
 
 	job := &channel.Job{
@@ -1027,7 +947,6 @@ func (b *Bot) enqueueThreadPrompt(ds *discordgo.Session, m *discordgo.MessageCre
 		Attachments:        localPaths,
 		ThreadID:           threadID,
 		Transcript:         transcript,
-		Handoff:            handoff,
 		Source:             source,
 		MentionRefs:        mentionRefs,
 		RevokedMentionRefs: peerContext.revokedMentionRefs,
@@ -1104,7 +1023,7 @@ func (b *Bot) handleMessageDelete(ds *discordgo.Session, m *discordgo.MessageDel
 }
 
 // handleThreadMessage handles messages sent inside a thread, routing to a dedicated thread agent.
-func (b *Bot) handleThreadMessage(ds *discordgo.Session, m *discordgo.MessageCreate, content, parentChannelID string, handoff bool) {
+func (b *Bot) handleThreadMessage(ds *discordgo.Session, m *discordgo.MessageCreate, content, parentChannelID string) {
 	threadID := m.ChannelID
 	bangCommand := commandNameFromBang(content)
 	isKnownCommand := isKnownBangCommand(bangCommand, content)
@@ -1271,7 +1190,7 @@ func (b *Bot) handleThreadMessage(ds *discordgo.Session, m *discordgo.MessageCre
 		return
 	}
 
-	b.enqueueThreadPrompt(ds, m, content, parentChannelID, handoff, "thread")
+	b.enqueueThreadPrompt(ds, m, content, parentChannelID, "thread")
 }
 
 func buildSlashCommands() []*discordgo.ApplicationCommand {

@@ -184,7 +184,7 @@ Default setup semantics:
 
 - Stored policy defaults stay safe proxy/delegator.
 - `bot_a2a_trust_peer` is simple receiver consent only: `target_agent` adds one exact runtime to `accept_from_runtimes`, does not widen `accept_skills`, and rejects expert relationship/skill/channel/transcript/result fields.
-- `bot_a2a_delegate` with no `setup_mode` uses stored policy delivery settings; direct human message/thread/slash requests may queue a one-shot task to a discovered non-stale runtime without mutating `delegate_targets`, while cron, remote A2A, and bot-handoff jobs still require persistent outbound policy. Explicit `auto`, `safe`, or `co_present` is required to override delivery per request.
+- `bot_a2a_delegate` with no `setup_mode` uses stored policy delivery settings; direct human message/thread/slash requests may queue a one-shot task to a discovered non-stale runtime without mutating `delegate_targets`, while cron and remote A2A jobs still require persistent outbound policy. Explicit `auto`, `safe`, or `co_present` is required to override delivery per request.
 - Policy/status UX must describe local co-present gates only; remote executor admission and Discord permissions remain separately validated.
 - Retired policy plan/apply/readiness bot-tools must not be registered in the normal MCP surface.
 

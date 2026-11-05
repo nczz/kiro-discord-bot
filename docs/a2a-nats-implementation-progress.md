@@ -937,6 +937,22 @@ Append one subsection per completed phase.
 - Runtime settings touched: none.
 - Rollback boundary: revert this follow-up commit; persistent sender-side `delegate_targets` remains the conservative fallback workflow.
 
+### Discord peer mention ingress removal follow-up
+
+- Status: validation passed; pending commit.
+- Trigger: thread `1567460450621325323` showed two runtimes repeatedly accepting each other's Discord result mention as a fresh agent job after the original A2A task had completed.
+- Decision: bot-authored Discord messages are notification-only and never enter agent job ingress. Cross-runtime delegation, review, comparison, and collaboration use A2A task state exclusively. This supersedes the earlier `bot_handoff` source classification; the historical entry above remains only as a record of the previous contract.
+- Architecture review: terminal prompt wording and `Job.Handoff` mention suppression were rejected because an ACP job with pure `discord_*` tools could still write a bot mention outside ordinary final delivery. Adding a hidden per-job cap to `mcp-discord` would violate its direct Discord REST boundary.
+- Changed surfaces: Discord ingress, peer prompt semantics, obsolete handoff job/context plumbing, regression tests, listen-mode docs, A2A source docs, and steering contracts.
+- Validation:
+  - Focused bot ingress and peer-context regressions passed.
+  - Focused channel context, dynamic mention, and A2A regressions passed.
+  - `go test -count=1 ./...`, `go vet ./...`, and `go build ./...` passed.
+  - `cd docs-site && npm run verify` passed (`62` generated HTML files checked).
+  - `git diff --check` passed.
+- Runtime settings and deployments touched: none.
+- Rollback boundary: revert this follow-up; A2A remains the supported cross-runtime coordination path.
+
 ## Master goal prompt
 
 Use this prompt when starting or resuming the full implementation program:

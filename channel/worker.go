@@ -55,7 +55,6 @@ type Job struct {
 	Attachments               []string
 	ThreadID                  string // non-empty = follow-up in existing thread, skip thread creation
 	Transcript                string // STT transcription result, shown in thread if non-empty
-	Handoff                   bool   // true when this job is an accepted cross-bot handoff
 	SkipDiscordContext        bool   // true when the prompt already includes bot-built Discord discussion context
 	Source                    string // message, thread, cron, etc.
 	DeliveryMode              DeliveryMode
@@ -78,9 +77,6 @@ type Job struct {
 }
 
 func (job Job) botToolsRequestSource() string {
-	if job.Handoff {
-		return "bot_handoff"
-	}
 	return strings.TrimSpace(job.Source)
 }
 

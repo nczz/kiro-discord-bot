@@ -3831,11 +3831,7 @@ func (m *Manager) EnqueueThread(ds *discordgo.Session, job *Job, parentChannelID
 
 	var discordCtx string
 	if !job.SkipDiscordContext {
-		if job.Handoff {
-			discordCtx = m.buildDiscordThreadHandoffContext(ds, job.ThreadID, job.MessageID)
-		} else {
-			discordCtx = m.buildDiscordThreadContext(ds, job.ThreadID, job.MessageID)
-		}
+		discordCtx = m.buildDiscordThreadContext(ds, job.ThreadID, job.MessageID)
 	}
 	if discordCtx != "" {
 		job.Prompt = discordCtx + job.Prompt
@@ -4457,19 +4453,6 @@ func (m *Manager) buildDiscordThreadContext(ds *discordgo.Session, threadID, cur
 		return ""
 	}
 	return formatDiscordThreadContext("[Recent Discord thread context]", messages, currentMessageID, messageLimit, 1500, 80000)
-}
-
-func (m *Manager) buildDiscordThreadHandoffContext(ds *discordgo.Session, threadID, currentMessageID string) string {
-	if ds == nil || threadID == "" {
-		return ""
-	}
-	const messageLimit = 100
-	messages, err := ds.ChannelMessages(threadID, messageLimit, "", "", "")
-	if err != nil {
-		log.Printf("[manager] fetch handoff thread history thread=%s: %v", threadID, err)
-		return ""
-	}
-	return formatDiscordThreadContext("[Cross-bot handoff context]\nA peer bot explicitly handed this thread to this bot. Use this transcript to understand the task, prior decisions, files, results, and remaining work before acting.", messages, currentMessageID, messageLimit, 3000, 120000)
 }
 
 func formatDiscordThreadContext(header string, messages []*discordgo.Message, currentMessageID string, maxMessages, maxMessageChars, maxTotalChars int) string {

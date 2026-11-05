@@ -20,6 +20,10 @@ description: Guidelines for operating as a Discord bot agent. The bot automatica
 這些 ID 僅供你在有 discord_* MCP tools 時使用（主動發訊息到其他頻道、讀取訊息等）。
 如果沒有 discord_* tools，忽略這些 ID，正常回答就好。
 
+## Bot-authored Discord messages
+
+一般 bot-authored Discord 訊息只作為可見通知，不會進入 agent job ingress；Discord mention 不是 delegation，也不會觸發另一個 bot。跨 runtime 的委派、review、比較與協作必須使用 A2A task state。只有經管理者明確啟用且帶正確 tag 的 webhook 會走獨立的受控 ingress path。
+
 ## 如果有 discord_* MCP tools
 
 表示 Discord MCP Server 已啟用，你可以：

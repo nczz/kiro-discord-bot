@@ -577,7 +577,7 @@ func peerPromptContext(peers []BotPeer, selfID string) string {
 	}
 	var sb strings.Builder
 	sb.WriteString("[Discord bot peers for current target]\n")
-	var hasHandoffPeer bool
+	var hasPeer bool
 	for _, p := range peers {
 		roleText := ""
 		if p.RoleID != "" {
@@ -591,19 +591,20 @@ func peerPromptContext(peers []BotPeer, selfID string) string {
 			sb.WriteString(fmt.Sprintf("- self=%s id=%s%s%s\n", p.Name, p.ID, selfRef, roleText))
 			continue
 		}
-		hasHandoffPeer = true
+		hasPeer = true
 		if p.ID == "" {
-			sb.WriteString(fmt.Sprintf("- handoff_peer=%s%s\n", p.Name, roleText))
+			sb.WriteString(fmt.Sprintf("- peer_bot=%s%s\n", p.Name, roleText))
 			continue
 		}
-		sb.WriteString(fmt.Sprintf("- handoff_peer=%s id=%s mention_ref=%s%s\n", p.Name, p.ID, discordmention.UserRef(p.ID, p.Name).Placeholder, roleText))
+		sb.WriteString(fmt.Sprintf("- peer_bot=%s id=%s mention_ref=%s%s\n", p.Name, p.ID, discordmention.UserRef(p.ID, p.Name).Placeholder, roleText))
 	}
-	sb.WriteString("[Discord bot handoff rules]\n")
-	if hasHandoffPeer {
-		sb.WriteString("- Use handoff_peer mention_ref placeholders exactly when explicitly asked to hand off, review, compare, or collaborate with another bot.\n")
-		sb.WriteString("- Put handoff_peer mention_ref placeholders only in final result messages, after your own work is complete.\n")
+	sb.WriteString("[Discord bot peer notification rules]\n")
+	if hasPeer {
+		sb.WriteString("- peer_bot mention_ref placeholders are only for an explicit user-requested visible notification. A Discord mention does not delegate work or trigger that bot.\n")
+		sb.WriteString("- Use A2A tools for cross-runtime delegation, review, comparison, or collaboration.\n")
+		sb.WriteString("- Put peer_bot mention_ref placeholders only in final result messages, after your own work is complete.\n")
 	}
-	sb.WriteString("- Never mention yourself for handoff.\n")
+	sb.WriteString("- Never mention yourself.\n")
 	sb.WriteString("- Do not mention another bot in progress updates, errors, tool output summaries, or casual replies.\n")
 	return sb.String()
 }

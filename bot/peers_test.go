@@ -41,7 +41,7 @@ func TestMultiBotMode(t *testing.T) {
 func TestPeerPromptContextSeparatesSelf(t *testing.T) {
 	peers := parseBotPeers("BuildBot:111111111111111111,ReviewBot:333333333333333333")
 	got := peerPromptContext(peers, "111111111111111111")
-	if !containsAll(got, "[Discord bot peers for current target]", "self=BuildBot", "handoff_peer=ReviewBot", "mention_ref=[[discord:user:333333333333333333]]", "Never mention yourself") {
+	if !containsAll(got, "[Discord bot peers for current target]", "self=BuildBot", "peer_bot=ReviewBot", "mention_ref=[[discord:user:333333333333333333]]", "A Discord mention does not delegate work", "Use A2A tools", "Never mention yourself") {
 		t.Fatalf("peerPromptContext() missing expected content:\n%s", got)
 	}
 	if strings.Contains(got, "<@") {
@@ -67,7 +67,7 @@ func TestPeerContextForTargetIncludesPeerWithEffectiveAccess(t *testing.T) {
 	ds := testPeerPermissionSession(t, nil)
 
 	ctx := b.peerContextForTarget(ds, "channel-1", "bot-1")
-	if !containsAll(ctx.prompt, "self=AlphaBot", "handoff_peer=BetaBot") {
+	if !containsAll(ctx.prompt, "self=AlphaBot", "peer_bot=BetaBot") {
 		t.Fatalf("eligible peer missing from target context:\n%s", ctx.prompt)
 	}
 	if !containsMentionRef(ctx.mentionRefs, "user", "bot-2") || !containsMentionRef(ctx.mentionRefs, "role", "role-2") {
@@ -101,7 +101,7 @@ func TestPeerContextForThreadUsesThreadReplyPermission(t *testing.T) {
 	ds := testPeerPermissionSession(t, []*discordgo.PermissionOverwrite{botMemberThreadReplyOverwrite("bot-2")})
 
 	ctx := b.peerContextForTarget(ds, "thread-1", "bot-1")
-	if !strings.Contains(ctx.prompt, "handoff_peer=BetaBot") || !containsMentionRef(ctx.mentionRefs, "user", "bot-2") {
+	if !strings.Contains(ctx.prompt, "peer_bot=BetaBot") || !containsMentionRef(ctx.mentionRefs, "user", "bot-2") {
 		t.Fatalf("thread-capable peer missing from thread context: prompt=%q refs=%+v", ctx.prompt, ctx.mentionRefs)
 	}
 }
@@ -124,7 +124,7 @@ func TestPeerContextForTargetRequiresExplicitRoleOnlyPresence(t *testing.T) {
 	ch.PermissionOverwrites = []*discordgo.PermissionOverwrite{botRoleAllowOverwrite("role-2")}
 
 	allowed := b.peerContextForTarget(ds, "channel-1", "bot-1")
-	if !strings.Contains(allowed.prompt, "handoff_peer=PeerRole") || !containsMentionRef(allowed.mentionRefs, "role", "role-2") {
+	if !strings.Contains(allowed.prompt, "peer_bot=PeerRole") || !containsMentionRef(allowed.mentionRefs, "role", "role-2") {
 		t.Fatalf("explicit role-only peer missing: prompt=%q refs=%+v", allowed.prompt, allowed.mentionRefs)
 	}
 }

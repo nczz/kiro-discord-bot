@@ -83,7 +83,7 @@ Persistent memory 是 parent-channel scope。`bot_memory_add` 只在使用者明
 
 針對「允許 X 委派」這類 receiver-side consent，使用 `bot_a2a_trust_peer`，且只帶 `target_agent`。它會針對 exact runtime 套用 immediate inbound allowlist consent。這個高階工具不再接受 relationship、skill、channel reference、result visibility 或 transcript fields。
 
-Sender-side delegation 一般使用 `bot_a2a_delegate`，只帶 `target_agent` 與 `message`。Persistent 或 scheduled delegation 必須由目前 channel 的 outbound `delegate_targets` policy 授權。直接人類訊息、thread 訊息或 `/a2a ask` 可以對已 discovery、非 stale 的 runtime 排入一次性 task，不會修改 `delegate_targets`；cron、remote A2A 與 bot-handoff jobs 仍在沒有 persistent policy 時 fail closed。省略或未宣告的 skill 預設為一般 `task` 能力。同一個 Discord channel/thread 代表對話協作，不同 channel 代表 receiver 在自己的 channel/thread 工作並把結果回傳。成功呼叫只代表 task 已 durable queued，不代表 accepted 或 completed。回報成功前，使用 `bot_a2a_task_status` 搭配 `local_id`、`task_id` 或 `message_id` 查權威狀態。
+Sender-side delegation 一般使用 `bot_a2a_delegate`，只帶 `target_agent` 與 `message`。Persistent 或 scheduled delegation 必須由目前 channel 的 outbound `delegate_targets` policy 授權。直接人類訊息、thread 訊息或 `/a2a ask` 可以對已 discovery、非 stale 的 runtime 排入一次性 task，不會修改 `delegate_targets`；cron 與 remote A2A jobs 仍在沒有 persistent policy 時 fail closed。省略或未宣告的 skill 預設為一般 `task` 能力。同一個 Discord channel/thread 代表對話協作，不同 channel 代表 receiver 在自己的 channel/thread 工作並把結果回傳。成功呼叫只代表 task 已 durable queued，不代表 accepted 或 completed。回報成功前，使用 `bot_a2a_task_status` 搭配 `local_id`、`task_id` 或 `message_id` 查權威狀態。
 
 Continuation 場景中，只有 task 在 `TASK_STATE_INPUT_REQUIRED` 時使用 `bot_a2a_input_reply`；只有 task 在 `TASK_STATE_AUTH_REQUIRED` 時使用 `bot_a2a_auth_reply`。一般操作不要直接檢查或編輯 `data/a2a/*.sqlite`。
 

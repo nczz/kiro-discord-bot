@@ -29,7 +29,6 @@ type discordDiscussionContextOptions struct {
 	CurrentContent  string
 	SelfID          string
 	SessionKey      string
-	Handoff         bool
 }
 
 type discordDiscussionContextResult struct {
@@ -316,9 +315,6 @@ func (b *Bot) discordContextCandidates(ds *discordgo.Session, m *discordgo.Messa
 	limit := 20
 	if opts.ThreadID != "" {
 		limit = 30
-	}
-	if opts.Handoff {
-		limit = 100
 	}
 	channelID := m.ChannelID
 	beforeID := m.ID

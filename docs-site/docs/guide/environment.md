@@ -163,7 +163,7 @@ Use the matching relay-side `RELAY_HOST_TOKEN_FILE` or `RELAY_HOST_TOKEN`. The p
 | `THREAD_AGENT_MAX` | `0` | Legacy thread-agent hard cap. `0` means no fixed count; the bot uses dynamic CPU/memory agent capacity instead. When this cap is set and full, the bot closes inactive thread agents automatically before refusing; if only working agents remain, the error lists those threads to wait for. |
 | `THREAD_AGENT_IDLE_SEC` | `900` | Idle timeout for thread agents. |
 | `CHANNEL_AGENT_IDLE_SEC` | `0` | Idle timeout for channel agents. `0` disables channel-agent idle shutdown. |
-| `BOT_PEERS` | empty | Comma-separated bot peer hints for multi-bot mention and handoff behavior. |
+| `BOT_PEERS` | empty | Comma-separated bot peer hints for multi-bot routing and visible notification references. Discord peer mentions do not delegate work; use A2A tasks. |
 
 ## Time, Usage, and Maintenance
 

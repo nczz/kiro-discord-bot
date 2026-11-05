@@ -22,17 +22,17 @@ Thread agents are independent from the parent channel agent. Work in one thread 
 
 Use real Discord mentions from the Discord UI. Plain text such as `@BuildBot` may not trigger the bot. When multiple peer bot mentions appear at the start of a human message, they are treated as routing metadata and removed from the task text delivered to each mentioned bot.
 
-The bot also provides structured mention references to the agent so final answers can mention known users or peer bots without guessing raw Discord IDs. Peer bot references are target-scoped: a bot is available for handoff only when it can effectively view and respond in the current channel or thread. Permission revocation removes stale peer references before delivery.
+The bot also provides structured mention references to the agent so final answers can mention known users or peer bots without guessing raw Discord IDs. Peer bot references are target-scoped: a bot is available for an explicitly human-requested visible notification only when it can effectively view and respond in the current channel or thread. Permission revocation removes stale peer references before delivery. A peer mention does not delegate work or trigger that bot.
 
 ## Discord Channel Webhooks
 
 Discord webhook messages are bot-authored and ignored by default. A channel manager can run `/webhook mode:on` to allow tagged webhook prompts for that parent channel. Even when enabled, the webhook content must start with a real mention of this bot, such as `<@BOT_ID>`; run `/webhook mode:status` in the channel to see the exact tag. Webhook messages never execute bang/slash administration commands; accepted webhook content is treated only as agent prompt text.
 
-## Multi-bot Handoff
+## Multi-bot Coordination
 
 Peer bots are auto-discovered from guild bot members when the bot starts. This guild-wide result is only a catalog: each channel or thread prompt includes a peer only when Discord permissions allow that bot to view and respond in the current target. `BOT_PEERS` is only needed to override names/roles, add a bot discovery cannot see, or exclude a bot.
 
-Bot-authored messages are ignored by default. A peer handoff is accepted only in controlled situations, such as a thread where an eligible target bot is explicitly mentioned and the original task has already completed. This prevents cross-channel peer disclosure and agents responding to progress updates or partial tool output.
+Bot-authored Discord messages are never accepted as agent jobs, even when a known peer mentions this bot in a completed thread. Peer mentions are visible notifications only. Use A2A tasks for cross-runtime delegation, review, comparison, or collaboration; A2A owns admission policy, durable task state, deduplication, quotas, and audit. Tagged webhook prompts remain a separate path and must be explicitly enabled with `/webhook mode:on`.
 
 ## Debugging Listen Mode
 

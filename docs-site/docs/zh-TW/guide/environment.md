@@ -164,7 +164,7 @@ WEBSHARE_HOST_TOKEN_FILE=/etc/kdb-webshare/host-token
 | `THREAD_AGENT_MAX` | `0` | Legacy thread agent hard cap。`0` 表示不設定固定數量，改用主機 CPU/記憶體的動態 agent 容量判斷。若設定此上限且已滿，bot 會先自動關閉 inactive thread agents；若剩下的都正在工作，錯誤訊息會列出需要等待的 threads。 |
 | `THREAD_AGENT_IDLE_SEC` | `900` | Thread agent 閒置 timeout 秒數。 |
 | `CHANNEL_AGENT_IDLE_SEC` | `0` | Channel agent 閒置 timeout 秒數。`0` 表示停用。 |
-| `BOT_PEERS` | 空 | 多 bot mention 與 handoff 的逗號分隔 peer hints。 |
+| `BOT_PEERS` | 空 | 多 bot routing 與可見通知 reference 的逗號分隔 peer hints。Discord peer mention 不會委派工作；跨 runtime 工作請使用 A2A task。 |
 
 ## 時區、用量與維護
 

@@ -22,17 +22,17 @@ Thread agent 和 parent channel agent 彼此獨立。一個 thread 的工作不�
 
 請使用 Discord UI 產生的真正 mention。像 `@BuildBot` 這種純文字不一定會觸發 bot。當 human message 開頭有多個 peer bot mention，這些 leading mentions 會被視為 routing metadata，並從送給各 bot 的 task text 移除。
 
-bot 也會提供結構化 mention references 給 agent，讓 final answer 可以 mention 已驗證的使用者或 peer bot，不需要猜 raw Discord ID。Peer bot reference 會依 target 限定：只有能有效查看並回應目前 channel 或 thread 的 bot 才能作為 handoff 對象；權限撤銷後，delivery 前會移除 stale peer references。
+bot 也會提供結構化 mention references 給 agent，讓 final answer 可以 mention 已驗證的使用者或 peer bot，不需要猜 raw Discord ID。Peer bot reference 會依 target 限定：只有能有效查看並回應目前 channel 或 thread 的 bot，才可在使用者明確要求時收到可見通知；權限撤銷後，delivery 前會移除 stale peer references。Peer mention 不會委派工作，也不會觸發該 bot。
 
 ## Discord Channel Webhooks
 
 Discord webhook 訊息屬於 bot-authored，預設會被忽略。頻道管理者可在 parent channel 執行 `/webhook mode:on`，允許該頻道的 tagged webhook prompt。即使開啟，webhook 內容仍必須以這個 bot 的真正 mention 開頭，例如 `<@BOT_ID>`；在頻道內執行 `/webhook mode:status` 可看到實際 tag。Webhook 訊息不會執行 bang/slash 管理指令；被接受的 webhook 內容只會當作 agent prompt text。
 
-## Multi-bot Handoff
+## Multi-bot 協作
 
 Peer bots 會在 bot 啟動時從 guild bot members 自動發現。這份 guild-wide 結果只是一份 catalog；每個 channel 或 thread prompt 只會包含 Discord 權限允許查看並回應目前 target 的 peer。`BOT_PEERS` 只用於覆蓋名稱/role、加入 discovery 看不到的 bot，或排除某個 bot。
 
-Bot-authored messages 預設會被忽略。Peer handoff 只在受控情境接受，例如符合 target 權限的 bot 在 thread 中被明確 mention，且原始任務已完成。這可避免跨頻道 peer 資訊曝光，也避免 agent 回應進度更新或半成品 tool output。
+Bot-authored Discord 訊息一律不會成為 agent job，即使來源是已知 peer、在已完成的 thread 中明確 mention 這個 bot。Peer mention 只代表可見通知。跨 runtime 的委派、review、比較或協作必須使用 A2A task；admission policy、durable task state、deduplication、quota 與 audit 都由 A2A 負責。Tagged webhook prompt 是獨立路徑，仍必須由管理者透過 `/webhook mode:on` 明確啟用。
 
 ## Debug Listen Mode
 

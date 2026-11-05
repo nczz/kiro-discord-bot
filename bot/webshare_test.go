@@ -1112,7 +1112,7 @@ func TestWebShareBroadcastIncludesFriendlyMentionMetadata(t *testing.T) {
 	}
 }
 
-func TestWebShareBroadcastsOtherBotMessagesWithoutAgentHandoff(t *testing.T) {
+func TestWebShareBroadcastsOtherBotMessagesWithoutAgentIngress(t *testing.T) {
 	store, share := newTestWebShareStoreAndShare(t)
 	ds := webshareAuthoritySession(t)
 	ch := make(chan webshare.ServerEvent, 1)

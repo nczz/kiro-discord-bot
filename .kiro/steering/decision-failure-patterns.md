@@ -105,7 +105,7 @@ Context:
 Rejected alternatives:
 
 - Accepting every webhook message in a listening channel was rejected because CI/Zapier/n8n-style webhooks can be noisy and unauthenticated beyond possession of the URL.
-- Reusing bot-to-bot handoff for normal channel webhooks was rejected because handoff is intentionally restricted to controlled thread result flow.
+- Reusing ordinary bot-authored Discord messages for webhook ingress was rejected because all non-webhook bot messages are notification-only and never become agent jobs.
 - Letting webhook text execute `!` or slash-style administration commands was rejected because a webhook is not an authenticated Discord actor.
 
 Current scope:
@@ -599,7 +599,7 @@ Symptoms:
 - Bots ask each other follow-up questions instead of completing the user's task.
 - Thread mode changes who responds.
 - Peer discovery logs look correct at startup but behavior differs in a channel or thread.
-- Agent prompt lists guild-wide bots as same-channel `handoff_peer` entries or retains a peer after its target permissions are revoked.
+- Agent prompt lists guild-wide bots as same-channel `peer_bot` entries or retains a peer after its target permissions are revoked.
 
 First checks:
 
@@ -615,6 +615,33 @@ Regression expectation:
 
 - Guild discovery remains a catalog only. Cover direct human mention, bot-only mention, mixed mentions, channel mode, thread mode, role-only peers, effective target permission denial, permission revocation after a cached check, and stale session/dynamic mention ref removal. A peer without current target view and response permissions must not appear in agent prompt context or render as an allowed mention. Do not make bot-to-bot coordination a hidden side effect.
 
+#### Discord Bot Mentions Are Notification-Only; A2A Owns Delegation
+
+Decision:
+
+- Bot-authored Discord messages never enter agent job ingress, regardless of thread state, mentions, reactions, peer catalog membership, or target permissions. Explicitly enabled tagged webhooks remain a separate, earlier-gated ingress path.
+- Peer mention references are only for an explicitly human-requested visible notification. A Discord mention does not delegate work or trigger the peer. Cross-runtime delegation, review, comparison, and collaboration must use A2A task state, policy, audit, deduplication, and quotas.
+
+Context:
+
+- In thread `1567460450621325323`, an A2A delegation had already completed, then each runtime accepted the other bot's Discord result mention as a fresh job.
+- Both agents repeatedly wrote acknowledgements such as "No reply" or "ending the loop", but each final answer still rendered an allowed mention to the other bot. The completed thread origin kept the result gate open, producing an unbounded ping-pong loop.
+- Prompt wording and enqueue-time peer revocation were not safety boundaries. Worker-time suppression could close ordinary final delivery, but the ACP job could still use exposed pure `discord_*` MCP tools to resolve and send a bot mention.
+- Adding a hidden per-job authorization cap to `mcp-discord` was rejected because that server intentionally preserves pure Discord REST semantics. Accepting bot-authored Discord jobs therefore could not provide an end-to-end non-recursion guarantee without violating an existing architecture boundary.
+
+Rejected alternatives:
+
+- Content filters for "No reply", punctuation, empty acknowledgements, or loop-related wording were rejected because arbitrary model text can still mention a peer.
+- Cooldowns, per-thread counters, duplicate-text detection, and hop metadata were rejected because they delay or hide the loop while preserving a second, weaker coordination protocol.
+- Known-peer checks, completed-origin checks, terminal prompt instructions, and `Job.Handoff` mention suppression were rejected because direct Discord MCP writes remain an independent egress path.
+- Removing or weakening pure `discord_*` tools was rejected; A2A already owns authenticated, policy-gated cross-runtime work.
+
+Regression expectation:
+
+- A bot-authored message that mentions this bot in a completed thread must cause no origin lookup, reaction, queue entry, ACP turn, bot-tools target-state write, or Discord reply.
+- Tagged webhook ingress must remain separately gated before the generic bot-authored guard. Human messages and A2A tasks must retain their existing paths.
+- No `Job.Handoff`, `bot_handoff` source, or bot-result acceptance gate may recreate Discord mentions as a delegation protocol.
+
 ### A2A Receiver Consent Versus Sender Delegation
 
 Symptoms:
@@ -625,14 +652,13 @@ Symptoms:
 
 First checks:
 
-- Receiver channel policy `accept_from_runtimes`: admission consent only.
-- Sender channel policy `delegate_targets`: durable outbound authorization for scheduled, cron, remote A2A, bot-handoff, or recurring delegation.
-- Bot-tools target state `source` and `remote_a2a`: direct `message`, `thread`, and slash `/a2a ask` may use an ephemeral one-shot runtime target; `cron`, `bot_handoff`, and `remote_a2a` must fail closed without persistent `delegate_targets`.
+- Sender channel policy `delegate_targets`: durable outbound authorization for scheduled, cron, remote A2A, or recurring delegation.
+- Bot-tools target state `source` and `remote_a2a`: direct `message`, `thread`, and slash `/a2a ask` may use an ephemeral one-shot runtime target; `cron` and `remote_a2a` must fail closed without persistent `delegate_targets`.
 - Audit metadata `authorization_mode` and `persistent_delegate_target` on `a2a_task_send_requested`.
 
 Regression expectation:
 
-- Cover direct human one-shot delegation without mutating `delegate_targets`, plus cron/remote/bot-handoff rejection without persistent outbound policy.
+- Cover direct human one-shot delegation without mutating `delegate_targets`, plus cron/remote rejection without persistent outbound policy.
 
 ### Release Artifact Or Runtime Version Mismatch
 

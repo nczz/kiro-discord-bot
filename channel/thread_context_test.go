@@ -7,7 +7,7 @@ import (
 	"github.com/bwmarrin/discordgo"
 )
 
-func TestFormatDiscordThreadContextForHandoff(t *testing.T) {
+func TestFormatDiscordThreadContext(t *testing.T) {
 	messages := []*discordgo.Message{
 		{
 			ID:      "current",
@@ -29,10 +29,10 @@ func TestFormatDiscordThreadContextForHandoff(t *testing.T) {
 		},
 	}
 
-	got := formatDiscordThreadContext("[Cross-bot handoff context]", messages, "current", 100, 3000, 120000)
+	got := formatDiscordThreadContext("[Recent Discord thread context]", messages, "current", 30, 1500, 80000)
 
-	if !strings.Contains(got, "[Cross-bot handoff context]") {
-		t.Fatalf("missing handoff header:\n%s", got)
+	if !strings.Contains(got, "[Recent Discord thread context]") {
+		t.Fatalf("missing thread context header:\n%s", got)
 	}
 	if strings.Contains(got, "please take over") {
 		t.Fatalf("current trigger message should not be duplicated:\n%s", got)

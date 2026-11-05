@@ -10,6 +10,7 @@ The canonical listen-mode documentation now lives on the static documentation si
 - `/back` restores full-listen mode and new parent-channel task threads.
 - Multi-bot channels can automatically switch to mention-only to avoid bot-to-bot loops.
 - Guild-wide peer discovery is only a catalog; agent prompts and mention refs include a peer only when it can view and respond in the current channel or thread.
+- Bot-authored Discord messages never enter agent job ingress. Peer mentions are visible notifications only; cross-runtime delegation and collaboration use A2A tasks.
 - Thread agents, including manually created task threads, keep the listen behavior captured when the thread was created.
 - Discord channel webhooks are ignored unless `/webhook mode:on` is set for the parent channel; even then, the webhook content must start with the bot's real mention shown by `/webhook mode:status`.
 - Run `/doctor` in the target channel or thread to inspect the effective behavior.

@@ -88,8 +88,8 @@ func TestPromptVisibleBodySkipsDiscordMetadataBlocks(t *testing.T) {
 [Discord bot peers for current target]
 - BuildBot id=111111111111111111 mention_ref=[[discord:user:111111111111111111]]
 - ReviewBot id=333333333333333333 mention_ref=[[discord:user:333333333333333333]]
-[Discord bot handoff rules]
-- Use handoff_peer mention_ref placeholders exactly.
+[Discord bot peer notification rules]
+- Use A2A tools for cross-runtime delegation.
 
 請幫我 review 這段內容`
 

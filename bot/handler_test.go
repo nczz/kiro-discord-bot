@@ -991,7 +991,7 @@ func TestStripLeadingPeerMentions(t *testing.T) {
 			want:    "hi",
 		},
 		{
-			name:    "preserves non-leading handoff mention",
+			name:    "preserves non-leading peer notification mention",
 			content: "please ask <@bot-2> to review",
 			want:    "please ask <@bot-2> to review",
 		},
@@ -1085,36 +1085,30 @@ func TestHumanMessageAddressesSelfUsesStructuredMentions(t *testing.T) {
 	}
 }
 
-func TestIsBotGeneratedNonResult(t *testing.T) {
-	tests := []struct {
-		content string
-		want    bool
-	}{
-		{content: "🔄 處理中...", want: true},
-		{content: "\u200b", want: true},
-		{content: "thread queue full", want: true},
-		{content: "transport closed", want: true},
-		{content: "這是完成後的分析結果，請 review", want: false},
+func TestBotAuthoredThreadMentionNeverEntersAgentIngress(t *testing.T) {
+	rt := &recordingDiscordTransport{}
+	ds := testPeerPermissionSession(t, nil)
+	ds.Client = &http.Client{Transport: rt}
+	b := &Bot{
+		guildID:             "guild-1",
+		manager:             channel.NewManager(channel.ManagerConfig{}),
+		peers:               parseBotPeers("SelfBot:bot-1,PeerBot:bot-2"),
+		seen:                newSeenMessages(),
+		setupPromptCooldown: newSetupPromptCooldown(nil),
 	}
-	for _, tt := range tests {
-		if got := isBotGeneratedNonResult(tt.content); got != tt.want {
-			t.Fatalf("isBotGeneratedNonResult(%q) = %v, want %v", tt.content, got, tt.want)
-		}
-	}
-}
+	defer b.seen.Stop()
 
-func TestMessageHasReaction(t *testing.T) {
-	msg := &discordgo.Message{Reactions: []*discordgo.MessageReactions{
-		{Count: 1, Emoji: &discordgo.Emoji{Name: "✅"}},
-	}}
-	if !messageHasReaction(msg, "✅") {
-		t.Fatal("expected done reaction to match")
-	}
-	if messageHasReaction(msg, "🔄") {
-		t.Fatal("did not expect processing reaction to match")
-	}
-	if got := messageReactionState(msg); got != "done" {
-		t.Fatalf("messageReactionState() = %q, want done", got)
+	b.handleMessage(ds, &discordgo.MessageCreate{Message: &discordgo.Message{
+		ID:        "peer-result-1",
+		ChannelID: "thread-1",
+		GuildID:   "guild-1",
+		Content:   "<@bot-1> completed result",
+		Author:    &discordgo.User{ID: "bot-2", Username: "PeerBot", Bot: true},
+		Mentions:  []*discordgo.User{{ID: "bot-1", Username: "SelfBot", Bot: true}},
+	}})
+
+	if paths, _ := rt.Snapshot(); len(paths) != 0 {
+		t.Fatalf("bot-authored mention reached Discord lookup or agent routing: %v", paths)
 	}
 }
 
