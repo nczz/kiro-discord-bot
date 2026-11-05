@@ -898,7 +898,7 @@ $JS.API.CONSUMER.DELETE.KV_A2A_PEERS.>
 
 3. Document response/inbox rule: production must avoid blanket `_INBOX.>` unless account isolation already enforces tenant boundaries; request/reply discovery fallback and JetStream API calls must use narrow reply inbox permissions or a separate bucket-admin credential that is not used for task publish.
 4. Document authenticated-principal binding: NATS credential identity maps to one allowed `AgentID`; inbound subject `from` and `Envelope.From` must equal that identity, and subject `to` must match `Envelope.To` where present.
-5. Document negative ACL smokes: a credential for `adam-n200` cannot publish `a2a.v1.task.eve-local.adam-n200.<messageId>`, cannot write `$KV.A2A_PEERS.eve-local`, and cannot subscribe to another agent's narrow task inbox; positive smoke proves it can write `$KV.A2A_PEERS.adam-n200` and watch `$KV.A2A_PEERS.>`.
+5. Document negative ACL smokes with defined roles: a credential for `delegator-bot` cannot publish `a2a.v1.task.executor-bot.delegator-bot.<messageId>`, write `$KV.A2A_PEERS.executor-bot`, or subscribe to the executor's narrow task inbox; positive smoke proves it can write `$KV.A2A_PEERS.delegator-bot` and watch `$KV.A2A_PEERS.>`.
 6. Document credential lifecycle: manual issue, rotation, revocation, and compromised peer removal.
 7. Document startup/shutdown ordering and drain behavior.
 8. Document rollout gates: local two-bot smoke, same-channel co-present smoke, cross-server proxy smoke, NATS restart smoke, credential revocation smoke.

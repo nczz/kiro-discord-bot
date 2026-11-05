@@ -88,6 +88,7 @@ docs/release.md  → release and deployment safety checklist
 - **i18n format string 的動態內容不得裸接內部字串**：當 locale format string 含 `%s` 且其值來自 Go error、技術名詞或程式內部狀態時，必須經過 reason map 或等效翻譯機制，將已知的內部字串映射為對應 locale key；未知值才 fallback 顯示 redacted 原始內容。不允許直接把英文 error message 嵌入中文 i18n 模板造成語言混搭。
 - **重大決策不可只留在對話中**：當修復方向被放棄、架構邊界被確認、已知限制被接受、或 runtime 事故暴露可重複模式時，必須同步更新 `.kiro/steering/decision-failure-patterns.md`，留下決策、取捨、非目標、未來觸發條件與 regression expectation。
 - **Steering 文件必須跟著專案演進**：新增 package、共用 helper、架構層、runtime 模式、部署目標、MCP tool 類型、已知限制或事故模式時，必須重新檢查 `.kiro/steering/` 是否仍反映當前真實架構。若 steering 文件彼此描述衝突，先決定 source of truth 並修正 drift，再宣告可提交或發布。
+- **版控文件必須以角色敘事並去識別**：事故、部署 smoke、範例與進度紀錄進入版控前，必須移除真實 host alias、bot/account 名稱、private channel/project label、Discord snowflake、local runtime path 與 private topology。首次出現時用行為關係定義角色（例如 delegator、executor、originating channel、receiving channel、credential owner），同一紀錄保持角色一致；不得用無法讓公開讀者理解的隨意專有名詞、未定義 A/B 或 opaque placeholder 取代。
 
 ## Collaboration（協作方式）
 
@@ -134,6 +135,7 @@ docs/release.md  → release and deployment safety checklist
 - [ ] `docs/release.md` + `scripts/release-preflight.sh`：發布門檻或部署流程改變時同步
 - [ ] `.github/workflows/preflight.yml`：preflight 腳本或 CI 門檻改變時同步
 - [ ] Steering drift scan：新增 package/helper/runtime path/deployment target/MCP tool category/known limitation 時，確認 `.kiro/steering/` 的 source of truth 沒有互相衝突
+- [ ] 文件去識別：tracked incident/example 已移除環境名稱與 private IDs，角色在首次出現時有明確定義，且公開讀者不需私有脈絡即可理解因果、決策與驗證
 - [ ] 新增 env var 完整路徑：`config.go` → `ManagerConfig` / `BotConfig`（若影響 runtime）→ `main.go` → `channel/doctor_env.go` (envSpecs) → `locale/lang/en.json` + `zh-TW.json` (doctor.env.desc.*) → README.md → `.env.example`
 - [ ] 新增 Discord MCP-only env var：`cmd/mcp-discord` → README → `.env.example` → `INSTALL_MCP.md`
 - [ ] `docs/listen-mode-matrix.md`：修改 pause/back/thread-mode/requiresHumanMention 邏輯時同步

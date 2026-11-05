@@ -22,6 +22,7 @@ If these sources conflict, stop and report the conflict. Do not invent behavior 
 - Keep decisions out of chat-only memory. Update steering or design docs when architecture direction, non-goals, known limitations, or regression expectations change.
 - Never weaken security, audit, redaction, `AllowedMentions`, MCP policy, CWD validation, or safe egress to improve UX.
 - Never expose raw bot runtime state paths such as `DATA_DIR/ch-*`, `sessions.json`, `policy.sqlite`, or audit DB paths in normal user-facing output.
+- Version-controlled documentation and examples must de-identify environment-specific evidence. Do not commit real host aliases, bot/account names, private channel or project labels, Discord snowflakes, private topology, or local runtime paths. Describe actors with role terms defined at first use—such as delegator, executor, originating channel, and receiving channel—and preserve exact public commands, code symbols, and repository identifiers when they are relevant.
 - A Discord bot token/identity must have exactly one gateway runtime online. Dual-engine means one bot process selects Kiro or OMP per `Session.Engine`; never run separate Kiro and OMP bot processes with the same token.
 - Default user communication is Traditional Chinese unless the user asks otherwise. Commit messages use English conventional commits.
 
@@ -58,6 +59,7 @@ If these sources conflict, stop and report the conflict. Do not invent behavior 
 - Preserve user work. Treat unrelated dirty files as user changes unless explicitly told otherwise.
 - For complex reviews or handoffs, follow `.kiro/steering/360-review-handoff.md`.
 - For recurring bugs, rejected approaches, non-goals, or future triggers, update `.kiro/steering/decision-failure-patterns.md`.
+- Before committing documentation, replace operational names and IDs with defined role-based terms. Arbitrary proper names, unexplained A/B labels, and placeholders whose role a public reader cannot infer are not acceptable anonymization.
 
 ## Private deployment operations
 

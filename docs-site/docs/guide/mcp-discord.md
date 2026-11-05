@@ -46,7 +46,7 @@ Add an entry to `~/.kiro/settings/mcp.json` or the file pointed to by `KIRO_MCP_
 }
 ```
 
-For multi-bot local development, make sure the `.env` is the same bot identity you are testing. If the visible Discord bot is M5Bot but the catalog command loads ChunBot's token, Discord permission changes for M5Bot will not fix MCP `403 Missing Access` errors.
+For multi-bot local development, make sure the `.env` belongs to the bot identity under test. If Discord shows the bot under test but the catalog command loads credentials for a different bot, changing permissions for the visible bot will not fix MCP `403 Missing Access` errors.
 
 ## Direct Discord MCP Guards
 

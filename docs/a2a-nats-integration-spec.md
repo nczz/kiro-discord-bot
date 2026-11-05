@@ -32,12 +32,12 @@ Discord bot + guild + channel/thread + A2A policy = runtime agent
 NATS AgentID = runtime_agent_id
 ```
 
-同一個 bot process 可發布多個 runtime cards，例如：
+同一個 bot process 可發布多個 runtime cards。以下以角色命名：`delegator-bot` 表示發起範例 task 的委派方，`executor-bot` 表示接收並執行 task 的執行方；角色會隨 task 方向改變。
 
 ```text
-remote-bot-erp-support
-remote-bot-backend
-m5bot-main
+delegator-bot-main
+executor-bot-code-review
+executor-bot-backend
 ```
 
 `A2A_AGENT_ID` 只作 bot/process base identity 與 runtime ID namespace。Task/control/event/card/heartbeat subjects 使用 runtime ID。`channel_ref` 是 runtime alias/display/migration metadata，不是主要路由 key。
@@ -243,13 +243,13 @@ runtime_agent_id = <bot_prefix>-<public_channel_alias_slug>
 runtime_agent_id = <bot_prefix>-rt-<short_hash(guild_id + channel_id + thread_id + alias)>
 ```
 
-例：
+角色式範例：
 
 ```text
-remote-bot-erp-support
-remote-bot-backend
-m5bot-kiro-discord-bot
-m5bot-rt-4f8a9c01
+delegator-bot-main
+delegator-bot-rt-4f8a9c01
+executor-bot-code-review
+executor-bot-backend
 ```
 
 限制：
@@ -388,7 +388,7 @@ a2a.announce
 - cancel 無 executor identity。
 - per-task status/result subjects 鼓勵大量 one-off subscription。
 - `pool` 容易被多 durable consumer 重複消費。
-- `a2a.task.adam-n200-*` 類 substring wildcard 在 NATS 無效。
+- NATS 不支援 `a2a.task.<runtime-prefix>-*` 這類 substring wildcard；`<runtime-prefix>` 表示任一角色已明確定義的 runtime ID prefix。
 
 ## 6. JetStream topology
 
@@ -1240,15 +1240,15 @@ A2A is too complex for users to operate primarily through slash commands。The p
 
 First-run setup uses a **manager-only button wizard**。Natural language may start the wizard, but only a user with Discord ManageChannels may confirm policy changes。
 
-Examples users should be able to type：
+The examples use `requester-runtime` for the runtime that originates review tasks and `review-executor` for the runtime that exposes and executes review skills:
 
 ```text
 幫我看看有哪些遠端 agent 可以協作。
-把這個頻道開成 A2A backend-review，允許 eve-agent 委派 code-review 給我。
-以後這個頻道可以委派 security-review 給 eve-agent，但附件只允許文字和 PNG。
-請 eve-agent 幫我 review 上面這段錯誤 log。
+在 review-executor 的接收頻道：把這個頻道開成 A2A backend-review，允許 requester-runtime 委派 code-review 給我。
+在 requester-runtime 的發起頻道：以後這個頻道可以委派 security-review 給 review-executor，但附件只允許文字和 PNG。
+在 requester-runtime 的發起頻道：請 review-executor 幫我 review 上面這段錯誤 log。
 這個任務取消。
-如果 eve-agent 也在這個頻道，讓大家看得到兩個 bot 的協作進度。
+如果 review-executor 也在這個頻道，讓大家看得到委派方與執行方的協作進度。
 ```
 
 The local agent translates these requests into structured bot-tools calls。The tool layer, not the LLM, enforces Discord permissions, channel scope, A2A policy, confirmation, and audit。
@@ -1601,21 +1601,20 @@ Scenarios：
 
 ### 22.3 Manual smoke test
 
-Local：
+本 smoke 使用兩個角色：`requester-bot` 接收人類請求並委派工作；`review-bot` 暴露 review skills 並執行委派。角色只描述這次測試流程。
 
 ```bash
 nats-server -js -c ./dev/nats.conf
-A2A_AGENT_ID=adam-local NATS_URL=nats://127.0.0.1:4222 ./kiro-discord-bot
-A2A_AGENT_ID=eve-local NATS_URL=nats://127.0.0.1:4222 ./kiro-discord-bot
+A2A_AGENT_ID=requester-bot NATS_URL=nats://127.0.0.1:4222 ./kiro-discord-bot
+A2A_AGENT_ID=review-bot NATS_URL=nats://127.0.0.1:4222 ./kiro-discord-bot
 ```
 
 Discord natural language：
 
 ```text
-幫我看看有哪些遠端 agent 可以協作。
-把這個頻道開成 backend，暴露 code-review，允許 eve-local 委派給我。
-允許這個頻道把 security-review 委派給 eve-local，附件只准文字和 PNG。
-請 eve-local 用 security-review 看這段小 snippet。
+在 review-bot 的接收頻道：把這個頻道開成 backend，暴露 code-review，允許 requester-bot 委派給我。
+在 requester-bot 的發起頻道：允許這個頻道把 security-review 委派給 review-bot，附件只准文字和 PNG。
+在 requester-bot 的發起頻道：請 review-bot 用 security-review 看這段小 snippet。
 顯示剛剛那個 A2A 任務的狀態。
 取消剛剛那個 A2A 任務。
 ```

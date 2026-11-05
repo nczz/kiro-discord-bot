@@ -46,6 +46,8 @@ Sender 端委派也維持高階語意：執行 `/a2a ask peer_agent:<來自 /a2a
 | `A2A_AGENT_ID` | 穩定的 bot/process base identity。用於 runtime ID namespace 與 credential ownership；runtime mode 中不是主要 routing identity。 |
 | Runtime agent | 可 expose skills 並接收 delegated work 的 Discord channel 或 thread runtime。 |
 | `runtime_agent_id` | 單一 runtime agent 的穩定 NATS-visible identity。用於 task/control/event/card/heartbeat subjects。 |
+| 委派方（Delegator） | 驗證 outbound policy 並發起某一項 A2A task 的 runtime。這是 per-task role，不是永久 bot identity。 |
+| 執行方（Executor） | 接收並執行該 A2A task，再發布 status/result events 的 runtime。同一個 runtime 在其他 task 中也可能是委派方。 |
 | `channel_ref` | Subject-safe public channel runtime alias。用於 display、migration metadata 與 skill context。 |
 | AgentCard | Runtime peer 的公開 sanitized 描述，包含 supported binding、skills 與 display metadata。 |
 | AgentSkill | Runtime expose 的能力，例如 `task` 或更細的 skill ID。 |
@@ -71,10 +73,10 @@ Sender 端委派也維持高階語意：執行 `/a2a ask peer_agent:<來自 /a2a
 
 ### Bot Base Identity
 
-`A2A_AGENT_ID` 代表 bot process 與 credential owner：
+`A2A_AGENT_ID` 代表 bot process 與 credential owner。本指南以 `delegator-bot` 表示發起範例 task 的委派方 bot：
 
 ```env
-A2A_AGENT_ID=adam-n200
+A2A_AGENT_ID=delegator-bot
 ```
 
 它必須穩定且 subject-safe。它會用來產生 runtime IDs，並在 audit/doctor 中顯示 bot host identity。Runtime mode 中，它本身不是 user-facing peer route。
@@ -93,13 +95,13 @@ runtime_agent_id = <bot-prefix>-<public-channel-alias-slug>
 runtime_agent_id = <bot-prefix>-rt-<short-hash>
 ```
 
-範例：
+以下角色式範例以 `delegator-bot` 表示 task 發起方，以 `executor-bot` 表示接收並執行 task 的 peer：
 
 ```text
-remote-bot-erp-support
-remote-bot-backend
-m5bot-main
-m5bot-rt-4f8a9c01
+delegator-bot-main
+delegator-bot-rt-4f8a9c01
+executor-bot-code-review
+executor-bot-backend
 ```
 
 Runtime IDs 必須在 restart 後保持穩定。不得包含 PID、boot timestamp、random suffix、raw Discord snowflake、private host path 或 secret material。

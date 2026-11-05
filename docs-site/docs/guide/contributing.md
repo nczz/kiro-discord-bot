@@ -75,6 +75,13 @@ When an implementation uses subagents, the parent agent owns the shared contract
 - Record durable audit before reporting mutation success. If install, restore, rollback, or policy changes fail after partial work, fix the transaction instead of papering over the symptom.
 - Prefer natural-language UX for channel agents. Slash and text commands are fallback/admin shortcuts and must call the same internal services as bot-tools where applicable.
 
+### Documentation records and examples
+
+- De-identify operational evidence before committing it. Remove real host aliases, bot/account names, private channel or project labels, Discord guild/channel/thread/message/user IDs, local runtime paths, and private topology.
+- Name actors by their role in the behavior and define each role at first use—for example, **delegator**, **executor**, **originating channel**, **receiving channel**, **credential owner**, or **bot under test**. Keep those roles stable within the record and state when they may reverse.
+- Do not replace private names with arbitrary proper names, unexplained A/B labels, or opaque placeholders. A public reader must be able to understand the causal sequence, decision, rejected alternatives, and verification without private environment context.
+- Keep exact public commands, code symbols, configuration keys, release tags, and repository commit IDs when they are relevant. Use typed placeholders such as `<message-id>` only when the identifier's shape matters; otherwise omit it.
+
 ## Static Site
 
 The canonical docs live under `docs-site/docs/`. Do not make README or INSTALL files the long-form source of truth. They should stay short and point to the site.

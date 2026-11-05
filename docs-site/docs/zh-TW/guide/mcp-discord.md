@@ -46,7 +46,7 @@ bot-managed runtime session 的 MCP 可見性仍由 channel policy 控制。
 }
 ```
 
-本機多 bot 開發時，請確認 `.env` 是你正在測試的 bot 身分。如果畫面上是 M5Bot，但 catalog command 載入 ChunBot token，替 M5Bot 開 Discord 權限也無法修正 MCP `403 Missing Access`。
+本機多 bot 開發時，請確認 `.env` 屬於目前受測的 bot 身分。如果 Discord 畫面顯示的是受測 bot，但 catalog command 載入另一個 bot 的 credentials，調整畫面上 bot 的 Discord 權限也無法修正 MCP `403 Missing Access`。
 
 ## Direct Discord MCP Guards
 

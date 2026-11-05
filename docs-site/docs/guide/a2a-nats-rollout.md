@@ -20,17 +20,17 @@ Start a local server using the repository example:
 nats-server -c dev/nats.conf
 ```
 
-Use unique stable logical IDs per bot:
+Use unique stable logical IDs per bot. The examples use task-specific roles: `delegator-bot` originates the test task and `executor-bot` is the separate peer that receives it. The same bot may hold the opposite role for another task.
 
 ```bash
 NATS_URL=nats://127.0.0.1:4222 \
-A2A_AGENT_ID=adam-n200 \
-A2A_AGENT_NAME=Adam \
+A2A_AGENT_ID=delegator-bot \
+A2A_AGENT_NAME="Example delegator" \
 A2A_PRODUCTION_SECURITY=false \
 ./kiro-discord-bot
 ```
 
-A second bot must use a different `A2A_AGENT_ID`, Discord bot token, `DATA_DIR`, and Discord channel/guild binding.
+The executor bot must use a different `A2A_AGENT_ID`, Discord bot token, `DATA_DIR`, and Discord channel/guild binding.
 
 ## Production environment block
 
@@ -41,8 +41,8 @@ NATS_URL=tls://nats.example.internal:4222
 NATS_CREDS_FILE=
 NATS_TOKEN=<internal-shared-token-or-empty-when-using-creds>
 NATS_TLS_CA_FILE=/etc/kiro-discord-bot/nats/ca.pem
-A2A_AGENT_ID=adam-n200
-A2A_AGENT_NAME=Adam production bot
+A2A_AGENT_ID=delegator-bot
+A2A_AGENT_NAME="Example delegator"
 A2A_AGENT_DESCRIPTION=Public capability summary only; no paths, hosts, tokens, or user data.
 A2A_TASK_TIMEOUT_SEC=3600
 A2A_MAX_DELEGATION_DEPTH=1
@@ -113,15 +113,15 @@ Response/inbox rule: production must avoid blanket `_INBOX.>` unless account iso
 
 ## Negative ACL smokes
 
-Run these before exposing production channels. A credential for `adam-n200` must fail to:
+Run these before exposing production channels. A credential for `delegator-bot` must fail to:
 
-1. Publish `a2a.v1.task.eve-local.adam-n200.<messageId>`.
-2. Write `$KV.A2A_PEERS.eve-local`.
-3. Subscribe to another agent's narrow task inbox, such as `a2a.v1.task.*.eve-local.>`.
+1. Publish `a2a.v1.task.executor-bot.delegator-bot.<messageId>` because that would impersonate the executor as the message source.
+2. Write `$KV.A2A_PEERS.executor-bot`.
+3. Subscribe to another agent's narrow task inbox, such as `a2a.v1.task.*.executor-bot.>`.
 
 Positive smokes for the same credential must prove it can:
 
-1. Publish its own card or heartbeat to `$KV.A2A_PEERS.adam-n200` or `a2a.v1.heartbeat.adam-n200.>`.
+1. Publish its own card or heartbeat to `$KV.A2A_PEERS.delegator-bot` or `a2a.v1.heartbeat.delegator-bot.>`.
 2. Subscribe/watch `$KV.A2A_PEERS.>` for peer discovery.
 3. Subscribe to its own task/control/event inboxes.
 

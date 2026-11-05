@@ -64,6 +64,7 @@ Ask these before accepting any change:
 9. What would make this change unsafe to release, and has that failure mode been tested or explicitly ruled out?
 10. Are there any generated files, local runtime binaries, backups, or secrets accidentally included in the worktree?
 11. Is this a recurring failure or architecture decision that should update `decision-failure-patterns.md`?
+12. Does every version-controlled incident record or example remove environment-specific names and IDs, define each actor by role at first use, and remain understandable without private operational context?
 
 ## Severity Standard
 
@@ -136,6 +137,7 @@ Stop and fix before calling work ready when any of these are true:
 - Tests pass only because they exercise a private helper while the real runtime path remains untested.
 - A release/deploy claim lacks artifact identity, service metadata, startup log, or `/doctor`/runtime evidence.
 - Secrets, runtime data, local binaries, backup files, or generated artifacts are staged or left as unreviewed noise.
+- A tracked document contains a real host alias, bot/account name, private channel/project label, Discord snowflake, local runtime path, private topology, or an unexplained replacement name copied from operational evidence.
 - A failing validation is waved away without a concrete explanation of why it is irrelevant.
 
 ## Documentation Alignment
@@ -162,6 +164,9 @@ Documentation quality bar:
 - Mark current limitations clearly instead of implying unsupported behavior exists.
 - Record rejected shortcuts, non-goals, and future trigger conditions for architecture decisions.
 - Keep English and Traditional Chinese locale keys aligned.
+- De-identify operational evidence before it enters version control. Remove real host aliases, bot/account names, private channel/project labels, Discord snowflakes, local runtime paths, and private topology; keep exact public commands, code symbols, release tags, and repository commit IDs when they are necessary evidence.
+- Define actors by their relationship to the behavior at first use, for example `delegator runtime`, `executor runtime`, `originating channel`, `receiving channel`, `credential owner`, or `bot under test`. Keep each role stable within the record and state when roles may reverse.
+- Do not anonymize with arbitrary proper names, unexplained A/B labels, or opaque placeholders. A public reader must be able to recover the causal sequence, decision, rejected alternatives, and verification without access to the private environment.
 
 ## Steering Evolution Rule
 

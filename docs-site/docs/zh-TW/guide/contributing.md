@@ -75,6 +75,13 @@ Repo root 的 `AGENTS.md` 是 agent 第一個應讀的文件。它摘要跨 Kiro
 - 回報 mutation success 前必須先記錄 durable audit。Install、restore、rollback 或 policy changes 若有 partial failure，要修 transaction，不要只遮住症狀。
 - Channel agent UX 優先自然語言。Slash 與 text commands 是 fallback/admin shortcuts，適用時必須呼叫與 bot-tools 相同的 internal services。
 
+### 文件紀錄與範例
+
+- Operational evidence 進入版控前必須去識別。移除真實 host aliases、bot/account 名稱、private channel 或 project labels、Discord guild/channel/thread/message/user IDs、local runtime paths 與 private topology。
+- 依行為中的關係命名 actor，並在首次出現時定義角色，例如**委派方**、**執行方**、**發起頻道**、**接收頻道**、**credential owner**或**受測 bot**。同一份紀錄內保持角色一致；角色可能互換時要明說。
+- 不得用隨意專有名詞、未解釋的 A/B 標籤或 opaque placeholders 取代 private names。公開讀者不依賴私有環境脈絡，也必須能理解因果順序、決策、拒絕方案與驗證。
+- 相關的公開 commands、code symbols、configuration keys、release tags 與 repository commit IDs 應保持精確。只有 identifier 格式本身有意義時才使用 `<message-id>` 這類 typed placeholder，否則直接省略。
+
 ## Static Site
 
 Canonical docs 位於 `docs-site/docs/`。不要讓 README 或 INSTALL files 成為長篇 source of truth；它們應保持精簡並導向靜態站。

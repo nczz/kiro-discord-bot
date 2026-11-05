@@ -7,7 +7,7 @@ Separate the two common failure paths:
 - `bot-tools` may reject cross-channel sends by design when the current session is not allowed to target that channel.
 - `mcp-discord` returning Discord `403 Missing Access` means the Discord token used by the MCP server cannot see or act in the target channel.
 
-For local multi-bot setups, verify the MCP catalog command sources the `.env` for the expected bot identity. If the visible Discord bot is M5Bot but the MCP server loads ChunBot's token, channel permissions for M5Bot will not help.
+For local multi-bot setups, verify that the MCP catalog command sources the `.env` for the bot identity under test. If the visible bot and the credential-owning bot differ, changing permissions for the visible bot will not fix the credential owner's Discord `403 Missing Access`.
 
 ## MCP Scan Says No Route to Host
 

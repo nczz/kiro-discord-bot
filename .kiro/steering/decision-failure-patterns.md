@@ -624,7 +624,7 @@ Decision:
 
 Context:
 
-- In thread `1567460450621325323`, an A2A delegation had already completed, then each runtime accepted the other bot's Discord result mention as a fresh job.
+- For this incident, the delegator runtime is the bot/channel runtime that initiated the original A2A task, and the executor runtime is the peer that handled it. In a production Discord thread, the task had already completed when both runtimes began accepting the other bot's Discord result mention as a fresh job.
 - Both agents repeatedly wrote acknowledgements such as "No reply" or "ending the loop", but each final answer still rendered an allowed mention to the other bot. The completed thread origin kept the result gate open, producing an unbounded ping-pong loop.
 - Prompt wording and enqueue-time peer revocation were not safety boundaries. Worker-time suppression could close ordinary final delivery, but the ACP job could still use exposed pure `discord_*` MCP tools to resolve and send a bot mention.
 - Adding a hidden per-job authorization cap to `mcp-discord` was rejected because that server intentionally preserves pure Discord REST semantics. Accepting bot-authored Discord jobs therefore could not provide an end-to-end non-recursion guarantee without violating an existing architecture boundary.

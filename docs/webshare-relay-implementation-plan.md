@@ -785,7 +785,7 @@ Required metadata:
   "allowed": true,
   "reason_code": "",
   "relay_origin": "https://relay.example",
-  "token_fingerprint": "sha256:abcd1234",
+  "token_fingerprint": "sha256:<fingerprint>",
   "attachment_count": 1,
   "byte_count": 12345
 }

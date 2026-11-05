@@ -7,7 +7,7 @@
 - `bot-tools` 可能因為目前 session 不允許目標 channel，而設計性拒絕跨頻道送訊息。
 - `mcp-discord` 回 Discord `403 Missing Access`，代表 MCP server 使用的 Discord token 看不到或不能操作目標頻道。
 
-本機多 bot 設定時，請確認 MCP catalog command source 的 `.env` 是預期 bot 身分。如果畫面上是 M5Bot，但 MCP server 載入 ChunBot token，替 M5Bot 開頻道權限也不會解決 403。
+本機多 bot 設定時，請確認 MCP catalog command 載入受測 bot 身分的 `.env`。如果畫面上的 bot 與 credentials 所屬 bot 不同，調整畫面上 bot 的權限不會修正 credential owner 的 Discord `403 Missing Access`。
 
 ## MCP Scan 顯示 No Route to Host
 

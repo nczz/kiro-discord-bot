@@ -20,18 +20,18 @@ Start a local server using the repository example:
 nats-server -c dev/nats.conf
 ```
 
-Use unique stable bot base IDs per bot process. Runtime peers are derived from enabled channel/thread policies:
+Use unique stable bot base IDs per bot process. The examples use task-specific roles: `delegator-bot` originates the test task and `executor-bot` is the separate peer that receives and runs it. The same bot may hold the opposite role for another task. Runtime peers are derived from enabled channel/thread policies:
 
 ```bash
 NATS_URL=nats://127.0.0.1:4222 \
-A2A_AGENT_ID=adam-n200 \
+A2A_AGENT_ID=delegator-bot \
 A2A_RUNTIME_ID_MODE=dual \
-A2A_AGENT_NAME=Adam \
+A2A_AGENT_NAME="Example delegator" \
 A2A_PRODUCTION_SECURITY=false \
 ./kiro-discord-bot
 ```
 
-A second bot must use a different `A2A_AGENT_ID`, Discord bot token, `DATA_DIR`, and Discord channel/guild binding. In `dual` mode it may still consume legacy bot-level tasks while publishing runtime cards for discoverable policies.
+The executor bot must use a different `A2A_AGENT_ID`, Discord bot token, `DATA_DIR`, and Discord channel/guild binding. In `dual` mode it may still consume legacy bot-level tasks while publishing runtime cards for discoverable policies.
 
 ## Production environment blocks
 
@@ -45,9 +45,9 @@ NATS_CREDS_FILE=/etc/kiro-discord-bot/nats/bot.creds
 NATS_TOKEN=
 NATS_TLS_CA_FILE=/etc/kiro-discord-bot/nats/ca.pem
 A2A_CONFIRMATION_SECRET=<set-via-secret-manager>
-A2A_AGENT_ID=adam-n200
+A2A_AGENT_ID=delegator-bot
 A2A_RUNTIME_ID_MODE=runtime
-A2A_AGENT_NAME=Adam production bot
+A2A_AGENT_NAME="Example delegator"
 A2A_AGENT_DESCRIPTION=Public capability summary only; no paths, hosts, tokens, or user data.
 A2A_TASK_TIMEOUT_SEC=3600
 A2A_MAX_DELEGATION_DEPTH=1
@@ -72,9 +72,9 @@ NATS_CREDS_FILE=
 NATS_TOKEN=<set-via-secret-manager>
 NATS_TLS_CA_FILE=/etc/kiro-discord-bot/nats/ca.pem
 A2A_CONFIRMATION_SECRET=<set-via-secret-manager>
-A2A_AGENT_ID=adam-n200
+A2A_AGENT_ID=delegator-bot
 A2A_RUNTIME_ID_MODE=runtime
-A2A_AGENT_NAME=Adam internal bot
+A2A_AGENT_NAME="Example executor"
 A2A_AGENT_DESCRIPTION=Public capability summary only; no paths, hosts, tokens, or user data.
 A2A_TASK_TIMEOUT_SEC=3600
 A2A_MAX_DELEGATION_DEPTH=1
@@ -99,7 +99,7 @@ For the internal lightweight profile, document the single-node tradeoff before r
 
 ## Runtime ACL template
 
-Replace `<runtime>` with the exact `runtime_agent_id` bound to this credential or allowed by this bot-process credential, for example `adam-n200-erp-support`. Do not write a single bot-level allowlist that accidentally authorizes all runtimes.
+Replace `<runtime>` with the exact `runtime_agent_id` bound to this credential or allowed by this bot-process credential, for example `executor-bot-code-review`. In this example, that runtime executes a delegated review task. Do not write a single bot-level allowlist that accidentally authorizes all runtimes.
 
 When one bot-process credential owns multiple runtimes, enumerate each exact runtime subject set. Never grant ownership with a broad bot-prefix wildcard such as `<bot-base>.>`.
 ```text
@@ -149,16 +149,16 @@ Response/inbox rule: production must avoid blanket `_INBOX.>` unless account iso
 
 ## Negative ACL smokes
 
-Run these before exposing production channels. A credential for runtime `adam-n200-erp-support` must fail to:
+Run these before exposing production channels. A credential for the example runtime `executor-bot-code-review` must fail to:
 
-1. Publish `a2a.v1.task.eve-local.adam-n200-erp-support.<messageId>`.
-2. Publish `a2a.v1.task.adam-n200-main.eve-local.<messageId>` if `adam-n200-main` is not in that credential's allowed runtime set.
-3. Write `$KV.A2A_PEERS.eve-local`.
-4. Subscribe to another runtime's narrow task inbox, such as `a2a.v1.task.*.eve-local.>`.
+1. Publish `a2a.v1.task.delegator-bot.executor-bot-code-review.<messageId>` because that would impersonate the delegator as the message source.
+2. Publish `a2a.v1.task.executor-bot-main.delegator-bot.<messageId>` if `executor-bot-main` is not in that credential's allowed runtime set.
+3. Write `$KV.A2A_PEERS.delegator-bot`.
+4. Subscribe to another runtime's narrow task inbox, such as `a2a.v1.task.*.delegator-bot.>`.
 
 Positive smokes for the same credential must prove it can:
 
-1. Publish its own runtime card or heartbeat to `$KV.A2A_PEERS.adam-n200-erp-support` or `a2a.v1.heartbeat.adam-n200-erp-support.>`.
+1. Publish its own runtime card or heartbeat to `$KV.A2A_PEERS.executor-bot-code-review` or `a2a.v1.heartbeat.executor-bot-code-review.>`.
 2. Subscribe/watch `$KV.A2A_PEERS.>` for peer discovery.
 3. Subscribe to its own runtime task/control/event inboxes.
 

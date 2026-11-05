@@ -46,6 +46,8 @@ Same Discord guild+channel/thread means conversation collaboration: both sides c
 | `A2A_AGENT_ID` | Stable bot/process base identity. It namespaces runtime IDs and credential ownership; it is not the main routing identity in runtime mode. |
 | Runtime agent | A Discord channel or thread runtime that can expose skills and receive delegated work. |
 | `runtime_agent_id` | Stable NATS-visible identity for one runtime agent. Used in task/control/event/card/heartbeat subjects. |
+| Delegator | Runtime that validates outbound policy and originates a particular A2A task. This is a per-task role, not a permanent bot identity. |
+| Executor | Runtime that admits and runs that A2A task, then publishes status and result events. The same runtime may be a delegator for another task. |
 | `channel_ref` | Subject-safe public alias for the channel runtime. Used for display, migration metadata, and skill context. |
 | AgentCard | Public sanitized description of a runtime peer, its supported binding, skills, and display metadata. |
 | AgentSkill | A capability exposed by a runtime, such as `task` or a more specific skill ID. |
@@ -71,10 +73,10 @@ Same Discord guild+channel/thread means conversation collaboration: both sides c
 
 ### Bot Base Identity
 
-`A2A_AGENT_ID` identifies the bot process and credential owner:
+`A2A_AGENT_ID` identifies the bot process and credential owner. In this guide, `delegator-bot` means the bot that originates the example task:
 
 ```env
-A2A_AGENT_ID=adam-n200
+A2A_AGENT_ID=delegator-bot
 ```
 
 It must be stable and subject-safe. It is used to derive runtime IDs and to display bot host identity in audit/doctor output. In runtime mode it is not the user-facing peer route by itself.
@@ -93,13 +95,13 @@ If the alias is unsafe, too long, private, colliding, or contains raw Discord sn
 runtime_agent_id = <bot-prefix>-rt-<short-hash>
 ```
 
-Examples:
+The role-based examples below use `delegator-bot` for the task originator and `executor-bot` for the peer that receives and runs the task:
 
 ```text
-remote-bot-erp-support
-remote-bot-backend
-m5bot-main
-m5bot-rt-4f8a9c01
+delegator-bot-main
+delegator-bot-rt-4f8a9c01
+executor-bot-code-review
+executor-bot-backend
 ```
 
 Runtime IDs must remain stable across restarts. They must not include PID, boot timestamp, random suffix, raw Discord snowflake, private host path, or secret material.

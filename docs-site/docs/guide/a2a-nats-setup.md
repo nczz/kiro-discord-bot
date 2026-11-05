@@ -121,17 +121,19 @@ NATS_TLS_CA_FILE=/etc/kiro-discord-bot/nats/ca.pem
 
 `NATS_TLS_CA_FILE` validates the NATS server certificate. It is not client authentication by itself. `NATS_TOKEN` is not accepted as the only production credential when `A2A_PRODUCTION_SECURITY=true`.
 
-## Configure Bot A
+## Configure the Delegator Bot
+
+The examples below use task-specific roles. The **delegator bot** receives the human request and publishes the A2A task; the **executor bot** receives and runs that task. The same deployment may hold the opposite role for a different task, so the role names describe this example flow rather than permanent identities.
 
 Use one stable base identity for each bot process. Runtime mode publishes one runtime peer per enabled/discoverable Discord channel or thread policy.
 
-Example internal lightweight `.env` block for Bot A:
+Example internal lightweight `.env` block for the delegator bot:
 
 ```env
-DISCORD_TOKEN=<bot-a-discord-token>
+DISCORD_TOKEN=<delegator-bot-discord-token>
 DISCORD_GUILD_ID=<guild-id>
 DEFAULT_CWD=/projects
-DATA_DIR=/var/lib/kiro-discord-bot/bot-a
+DATA_DIR=/var/lib/kiro-discord-bot/delegator
 
 NATS_URL=tls://nats.example.internal:4222
 NATS_TOKEN=<internal-token>
@@ -139,25 +141,25 @@ NATS_CREDS_FILE=
 NATS_TLS_CA_FILE=/etc/kiro-discord-bot/nats/ca.pem
 
 A2A_CONFIRMATION_SECRET=<random-secret>
-A2A_AGENT_ID=adam-n200
+A2A_AGENT_ID=delegator-bot
 A2A_RUNTIME_ID_MODE=runtime
-A2A_AGENT_NAME=Adam
-A2A_AGENT_DESCRIPTION=General project assistant. No secrets, paths, hosts, or user data.
+A2A_AGENT_NAME="Example delegator"
+A2A_AGENT_DESCRIPTION=Receives requests and delegates example tasks. No secrets, paths, hosts, or user data.
 A2A_PRODUCTION_SECURITY=false
 A2A_REQUIRE_CONFIRMATION_FOR_REMOTE=true
 A2A_AUTO_DELEGATE_ENABLED=false
 A2A_MAX_DELEGATION_DEPTH=1
 ```
 
-## Configure Bot B
+## Configure the Executor Bot
 
-Bot B must use a different Discord token, `DATA_DIR`, and `A2A_AGENT_ID`.
+The executor bot must use a different Discord token, `DATA_DIR`, and `A2A_AGENT_ID`.
 
 ```env
-DISCORD_TOKEN=<bot-b-discord-token>
+DISCORD_TOKEN=<executor-bot-discord-token>
 DISCORD_GUILD_ID=<guild-id-or-other-guild-id>
 DEFAULT_CWD=/projects
-DATA_DIR=/var/lib/kiro-discord-bot/bot-b
+DATA_DIR=/var/lib/kiro-discord-bot/executor
 
 NATS_URL=tls://nats.example.internal:4222
 NATS_TOKEN=<internal-token>
@@ -165,10 +167,10 @@ NATS_CREDS_FILE=
 NATS_TLS_CA_FILE=/etc/kiro-discord-bot/nats/ca.pem
 
 A2A_CONFIRMATION_SECRET=<random-secret>
-A2A_AGENT_ID=eve-local
+A2A_AGENT_ID=executor-bot
 A2A_RUNTIME_ID_MODE=runtime
-A2A_AGENT_NAME=Eve
-A2A_AGENT_DESCRIPTION=Backend review assistant. No secrets, paths, hosts, or user data.
+A2A_AGENT_NAME="Example executor"
+A2A_AGENT_DESCRIPTION=Executes delegated example tasks. No secrets, paths, hosts, or user data.
 A2A_PRODUCTION_SECURITY=false
 A2A_REQUIRE_CONFIRMATION_FOR_REMOTE=true
 A2A_AUTO_DELEGATE_ENABLED=false

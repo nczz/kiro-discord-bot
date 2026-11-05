@@ -121,17 +121,19 @@ NATS_TLS_CA_FILE=/etc/kiro-discord-bot/nats/ca.pem
 
 `NATS_TLS_CA_FILE` 只負責驗證 NATS server certificate，不是 client authentication。當 `A2A_PRODUCTION_SECURITY=true` 時，`NATS_TOKEN` 不能作為唯一 production credential。
 
-## 設定 Bot A
+## 設定委派方 Bot
+
+以下範例使用以任務為準的角色。**委派方 bot** 接收人類請求並發布 A2A task；**執行方 bot** 接收並執行該 task。同一個 deployment 在另一項任務中可能交換角色，因此角色名稱描述的是本範例流程，不是永久身分。
 
 每個 bot process 使用一個穩定 base identity。Runtime mode 會針對每個 enabled/discoverable Discord channel 或 thread policy 發布 runtime peer。
 
-Bot A 的內部輕量 `.env` 範例：
+委派方 bot 的內部輕量 `.env` 範例：
 
 ```env
-DISCORD_TOKEN=<bot-a-discord-token>
+DISCORD_TOKEN=<delegator-bot-discord-token>
 DISCORD_GUILD_ID=<guild-id>
 DEFAULT_CWD=/projects
-DATA_DIR=/var/lib/kiro-discord-bot/bot-a
+DATA_DIR=/var/lib/kiro-discord-bot/delegator
 
 NATS_URL=tls://nats.example.internal:4222
 NATS_TOKEN=<internal-token>
@@ -139,25 +141,25 @@ NATS_CREDS_FILE=
 NATS_TLS_CA_FILE=/etc/kiro-discord-bot/nats/ca.pem
 
 A2A_CONFIRMATION_SECRET=<random-secret>
-A2A_AGENT_ID=adam-n200
+A2A_AGENT_ID=delegator-bot
 A2A_RUNTIME_ID_MODE=runtime
-A2A_AGENT_NAME=Adam
-A2A_AGENT_DESCRIPTION=General project assistant. No secrets, paths, hosts, or user data.
+A2A_AGENT_NAME="Example delegator"
+A2A_AGENT_DESCRIPTION=Receives requests and delegates example tasks. No secrets, paths, hosts, or user data.
 A2A_PRODUCTION_SECURITY=false
 A2A_REQUIRE_CONFIRMATION_FOR_REMOTE=true
 A2A_AUTO_DELEGATE_ENABLED=false
 A2A_MAX_DELEGATION_DEPTH=1
 ```
 
-## 設定 Bot B
+## 設定執行方 Bot
 
-Bot B 必須使用不同的 Discord token、`DATA_DIR` 與 `A2A_AGENT_ID`。
+執行方 bot 必須使用不同的 Discord token、`DATA_DIR` 與 `A2A_AGENT_ID`。
 
 ```env
-DISCORD_TOKEN=<bot-b-discord-token>
+DISCORD_TOKEN=<executor-bot-discord-token>
 DISCORD_GUILD_ID=<guild-id-or-other-guild-id>
 DEFAULT_CWD=/projects
-DATA_DIR=/var/lib/kiro-discord-bot/bot-b
+DATA_DIR=/var/lib/kiro-discord-bot/executor
 
 NATS_URL=tls://nats.example.internal:4222
 NATS_TOKEN=<internal-token>
@@ -165,10 +167,10 @@ NATS_CREDS_FILE=
 NATS_TLS_CA_FILE=/etc/kiro-discord-bot/nats/ca.pem
 
 A2A_CONFIRMATION_SECRET=<random-secret>
-A2A_AGENT_ID=eve-local
+A2A_AGENT_ID=executor-bot
 A2A_RUNTIME_ID_MODE=runtime
-A2A_AGENT_NAME=Eve
-A2A_AGENT_DESCRIPTION=Backend review assistant. No secrets, paths, hosts, or user data.
+A2A_AGENT_NAME="Example executor"
+A2A_AGENT_DESCRIPTION=Executes delegated example tasks. No secrets, paths, hosts, or user data.
 A2A_PRODUCTION_SECURITY=false
 A2A_REQUIRE_CONFIRMATION_FOR_REMOTE=true
 A2A_AUTO_DELEGATE_ENABLED=false
