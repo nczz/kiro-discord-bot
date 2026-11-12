@@ -12,6 +12,12 @@ Listen mode 決定 Discord 訊息什麼時候會變成 agent 工作。它是避�
 
 `/pause` 會把 parent channel 切到 mention-only 並停用新任務 thread。`/back` 會恢復 full-listen 並重新開啟新任務 thread。
 
+## Job Reaction 狀態
+
+Discord 訊息成為 job 後，bot 會在該來源訊息上維持恰好一個進度 reaction；inline reply、新建 task thread 與 thread follow-up 都適用。進度可能在 `🔄`、`💭`、`✨`、`🔁`、`🛠️`、`⚙️`、`🔧`、`📋` 之間輪替；進入 terminal state 時，會用 `✅`、`⚠️` 或 `❌` 取代所有已追蹤的進度 reaction。Remote A2A task ID 不會被當成本地 Discord reaction target。
+
+Delivery failure 可能刻意在 `❌` 旁再加一個診斷提示，例如 `🔒` 表示權限不足、`🌐` 表示 transport/server failure。這種兩個 reaction 的組合是 terminal state，不代表工作仍在執行。每個 job 的 reaction transition 都會序列化；terminal reconciliation 會重試失敗操作，若 Discord 仍拒絕更新則留下 log。
+
 ## Thread 行為
 
 每個 task thread（包含在 Discord 中手動建立的 thread）都會保留建立當下捕捉的 listen mode；之後 parent channel 的變更不會默默改寫舊 thread 的行為。

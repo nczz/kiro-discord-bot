@@ -12,6 +12,12 @@ Listen mode determines when a Discord message becomes agent work. It is the main
 
 `/pause` switches a parent channel to mention-only and disables new task threads. `/back` restores full-listen behavior and turns new task threads back on.
 
+## Job Reaction Status
+
+When a Discord message becomes a job, the bot keeps exactly one progress reaction on that source message. This applies to inline replies, newly created task threads, and thread follow-ups. Progress may rotate through `🔄`, `💭`, `✨`, `🔁`, `🛠️`, `⚙️`, `🔧`, or `📋`; terminal state replaces all tracked progress with `✅`, `⚠️`, or `❌`. Remote A2A task IDs are never treated as local Discord reaction targets.
+
+A delivery failure may intentionally add one diagnostic hint beside `❌`, such as `🔒` for missing permission or `🌐` for a transport/server failure. That two-reaction combination is terminal, not an indication that work is still running. Reaction transitions are serialized per job; failures are retried during terminal reconciliation and logged if Discord still refuses the update.
+
 ## Thread Behavior
 
 Each task thread, including one created manually in Discord, keeps the listen mode captured when it was created. Later parent-channel changes do not silently rewrite old thread behavior.

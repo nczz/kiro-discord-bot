@@ -547,6 +547,28 @@ Regression expectation:
 
 - Test delivered safe egress followed by agent error separately from true undelivered failure. Do not hide real failures just because any tool ran.
 
+### Completed Job Retains Processing Reactions
+
+Symptoms:
+
+- An inline or thread job sends its final response and records `agent_job_completed`, but the source message still shows `🔄`, `🔁`, `💭`, `⚙️`, or another progress reaction beside the terminal reaction.
+- A WebShare prompt gains `⏳` after the worker has already switched to a running reaction.
+- Reaction REST failures leave no evidence, so a missing or stale terminal indicator looks like unfinished agent work.
+
+First checks:
+
+- `channel/reaction.go`: every job must use one serialized reaction state machine; do not issue independent remove/add pairs from callbacks.
+- `channel/worker.go`: inline, thread, fallback, timeout, read-error, cancellation, and delivery-failure paths must share the same per-job state.
+- `channel/manager.go` and `bot/handler.go`: queued-reaction ownership must be established before worker enqueue and rolled back when enqueue fails.
+- `bot_audit_events`: compare `agent_job_completed` or `agent_job_failed` with raw gateway reaction ordering before concluding that the agent is still active.
+
+Regression expectation:
+
+- Runtime-path tests must delay a progress-reaction add across completion and prove that only the terminal reaction remains.
+- Terminal reconciliation must retry transient cleanup, log unresolved REST failures, and reject late callback transitions.
+- Remote A2A jobs must not treat an origin runtime message ID as a local Discord reaction target.
+- Delivery failure may intentionally retain `❌` plus one classified hint reaction; no processing reaction may coexist with that terminal pair.
+
 ### Engine-Scoped Model Leakage
 
 Symptoms:

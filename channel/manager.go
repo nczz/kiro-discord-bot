@@ -1076,11 +1076,17 @@ func (m *Manager) rejectQueuedJobForUsageLimit(ds *discordgo.Session, job *Job, 
 		})
 		return nil
 	}
-	if err := job.sendInlineFinalReply(ds, content); err != nil {
-		log.Printf("[usage-limit] reply failed channel=%s user=%s: %v", job.ChannelID, job.UserID, err)
+	sendErr := job.sendInlineFinalReply(ds, content)
+	if sendErr != nil {
+		log.Printf("[usage-limit] reply failed channel=%s user=%s: %v", job.ChannelID, job.UserID, sendErr)
 	}
 	if ds != nil && strings.TrimSpace(job.MessageID) != "" {
-		swapReaction(ds, job.ChannelID, job.MessageID, "⏳", "❌")
+		reactions := newJobReactionState(ds, job.ChannelID, job.MessageID, job.QueuedReactionAdded, !job.RemoteA2A)
+		if sendErr != nil {
+			markDeliveryFailureReactions(reactions, sendErr)
+		} else {
+			reactions.Final("❌")
+		}
 	}
 	return nil
 }
@@ -1091,6 +1097,15 @@ func (m *Manager) Enqueue(ds *discordgo.Session, job *Job) error {
 		return m.rejectQueuedJobForUsageLimit(ds, job, msg)
 	}
 
+	job.Session = ds
+	addQueuedJobReaction(ds, job)
+	enqueued := false
+	defer func() {
+		if !enqueued {
+			rollbackQueuedJobReaction(ds, job)
+		}
+	}()
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -1099,20 +1114,17 @@ func (m *Manager) Enqueue(ds *discordgo.Session, job *Job) error {
 		return err
 	}
 
-	job.Session = ds
 	if strings.TrimSpace(job.DisplayCWD) == "" {
 		job.DisplayCWD = m.CWDPath(job.ChannelID)
 	}
 	if err := worker.Enqueue(job); err != nil {
 		return fmt.Errorf("queue full (%d jobs pending)", worker.QueueLen())
 	}
+	enqueued = true
 	m.recordJobEnqueued(job, worker.QueueLen(), false)
 	m.channelLastActivity[job.ChannelID] = time.Now()
 
 	qLen := worker.QueueLen()
-	if ds != nil && job.MessageID != "" {
-		_ = ds.MessageReactionAdd(job.ChannelID, job.MessageID, "⏳")
-	}
 	if ds != nil && qLen > 1 && job.DeliveryMode != DeliveryInline {
 		_, _ = sendDiscordText(ds, job.ChannelID, L.Getf("status.queued", qLen), &discordgo.MessageReference{
 			MessageID: job.MessageID,
@@ -3828,7 +3840,6 @@ func (m *Manager) EnqueueThread(ds *discordgo.Session, job *Job, parentChannelID
 	if msg, rejected := m.UsageLimitRejection(job.GuildID, job.UserID); rejected {
 		return m.rejectQueuedJobForUsageLimit(ds, job, msg)
 	}
-
 	var discordCtx string
 	if !job.SkipDiscordContext {
 		discordCtx = m.buildDiscordThreadContext(ds, job.ThreadID, job.MessageID)
@@ -3836,6 +3847,15 @@ func (m *Manager) EnqueueThread(ds *discordgo.Session, job *Job, parentChannelID
 	if discordCtx != "" {
 		job.Prompt = discordCtx + job.Prompt
 	}
+
+	job.Session = ds
+	addQueuedJobReaction(ds, job)
+	enqueued := false
+	defer func() {
+		if !enqueued {
+			rollbackQueuedJobReaction(ds, job)
+		}
+	}()
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -3863,7 +3883,6 @@ func (m *Manager) EnqueueThread(ds *discordgo.Session, job *Job, parentChannelID
 	}
 
 	entry.lastActivity = time.Now()
-	job.Session = ds
 	if strings.TrimSpace(job.DisplayCWD) == "" {
 		if sess, ok := m.getThreadSession(job.ThreadID); ok && strings.TrimSpace(sess.CWD) != "" {
 			job.DisplayCWD = sess.CWD
@@ -3874,11 +3893,8 @@ func (m *Manager) EnqueueThread(ds *discordgo.Session, job *Job, parentChannelID
 	if err := entry.worker.Enqueue(job); err != nil {
 		return fmt.Errorf("thread queue full")
 	}
+	enqueued = true
 	m.recordJobEnqueued(job, entry.worker.QueueLen(), true)
-
-	if ds != nil && job.MessageID != "" {
-		_ = ds.MessageReactionAdd(job.ChannelID, job.MessageID, "⏳")
-	}
 	return nil
 }
 

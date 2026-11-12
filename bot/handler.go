@@ -833,7 +833,12 @@ func (b *Bot) enqueueChannelPrompt(ds *discordgo.Session, m *discordgo.MessageCr
 	}
 
 	// Immediate feedback
-	_ = ds.MessageReactionAdd(m.ChannelID, m.ID, "⏳")
+	queuedReactionAdded := false
+	if err := ds.MessageReactionAdd(m.ChannelID, m.ID, "⏳"); err != nil {
+		log.Printf("[reaction] add queued failed channel=%s msg=%s: %v", m.ChannelID, m.ID, err)
+	} else {
+		queuedReactionAdded = true
+	}
 
 	projectCWD := b.manager.CWDPath(m.ChannelID)
 	localPaths := b.downloadAttachments(projectCWD, m.ID, m.Attachments)
@@ -867,25 +872,25 @@ func (b *Bot) enqueueChannelPrompt(ds *discordgo.Session, m *discordgo.MessageCr
 	}
 
 	job := &channel.Job{
-		ChannelID:          m.ChannelID,
-		GuildID:            m.GuildID,
-		MessageID:          m.ID,
-		Prompt:             prompt,
-		UserID:             m.Author.ID,
-		Username:           m.Author.Username,
-		Attachments:        localPaths,
-		Transcript:         transcript,
-		Source:             source,
-		DeliveryMode:       deliveryMode,
-		MentionRefs:        mentionRefs,
-		RevokedMentionRefs: peerContext.revokedMentionRefs,
+		ChannelID:           m.ChannelID,
+		GuildID:             m.GuildID,
+		MessageID:           m.ID,
+		Prompt:              prompt,
+		UserID:              m.Author.ID,
+		Username:            m.Author.Username,
+		Attachments:         localPaths,
+		Transcript:          transcript,
+		Source:              source,
+		DeliveryMode:        deliveryMode,
+		QueuedReactionAdded: queuedReactionAdded,
+		MentionRefs:         mentionRefs,
+		RevokedMentionRefs:  peerContext.revokedMentionRefs,
 		RefreshRevokedMentionRefs: func() []discordmention.Ref {
 			return b.revokedPeerMentionRefsForTarget(ds, m.ChannelID, selfID)
 		},
 	}
 	job.ThreadMentionOnly, _ = b.requiresHumanMention(ds, m.ChannelID, "", selfID)
 	if err := b.manager.Enqueue(ds, job); err != nil {
-		ds.MessageReactionRemove(m.ChannelID, m.ID, "⏳", "@me")
 		_, _ = sendDiscordText(ds, m.ChannelID, L.Getf("error.generic", err.Error()), nil)
 		return
 	}
@@ -900,7 +905,12 @@ func (b *Bot) enqueueThreadPrompt(ds *discordgo.Session, m *discordgo.MessageCre
 	}
 
 	// Immediate feedback
-	_ = ds.MessageReactionAdd(threadID, m.ID, "⏳")
+	queuedReactionAdded := false
+	if err := ds.MessageReactionAdd(threadID, m.ID, "⏳"); err != nil {
+		log.Printf("[reaction] add queued failed channel=%s msg=%s: %v", threadID, m.ID, err)
+	} else {
+		queuedReactionAdded = true
+	}
 
 	projectCWD := b.manager.TargetCWDPath(threadID, parentChannelID)
 	localPaths := b.downloadAttachments(projectCWD, m.ID, m.Attachments)
@@ -937,26 +947,26 @@ func (b *Bot) enqueueThreadPrompt(ds *discordgo.Session, m *discordgo.MessageCre
 	prompt := buildPromptThreadWithMentions(content, localPaths, parentChannelID, threadID, m.GuildID, m.Author.Username, m.Author.ID, peerContext.prompt, mentionRefs)
 
 	job := &channel.Job{
-		ChannelID:          threadID,
-		ParentChannelID:    parentChannelID,
-		GuildID:            m.GuildID,
-		MessageID:          m.ID,
-		Prompt:             prompt,
-		UserID:             m.Author.ID,
-		Username:           m.Author.Username,
-		Attachments:        localPaths,
-		ThreadID:           threadID,
-		Transcript:         transcript,
-		Source:             source,
-		MentionRefs:        mentionRefs,
-		RevokedMentionRefs: peerContext.revokedMentionRefs,
+		ChannelID:           threadID,
+		ParentChannelID:     parentChannelID,
+		GuildID:             m.GuildID,
+		MessageID:           m.ID,
+		Prompt:              prompt,
+		UserID:              m.Author.ID,
+		Username:            m.Author.Username,
+		Attachments:         localPaths,
+		ThreadID:            threadID,
+		Transcript:          transcript,
+		Source:              source,
+		QueuedReactionAdded: queuedReactionAdded,
+		MentionRefs:         mentionRefs,
+		RevokedMentionRefs:  peerContext.revokedMentionRefs,
 		RefreshRevokedMentionRefs: func() []discordmention.Ref {
 			return b.revokedPeerMentionRefsForTarget(ds, threadID, threadSelfID)
 		},
 		SkipDiscordContext: true,
 	}
 	if err := b.manager.EnqueueThread(ds, job, parentChannelID); err != nil {
-		ds.MessageReactionRemove(threadID, m.ID, "⏳", "@me")
 		_, _ = sendDiscordText(ds, threadID, commandError(err), nil)
 		return
 	}

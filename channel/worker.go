@@ -44,20 +44,23 @@ var errAutoCompactIneffective = errors.New("auto compact ineffective")
 
 // Job represents a single user message to be processed.
 type Job struct {
-	ChannelID                 string
-	ParentChannelID           string
-	GuildID                   string
-	MessageID                 string
-	Prompt                    string
-	Session                   *discordgo.Session
-	UserID                    string
-	Username                  string
-	Attachments               []string
-	ThreadID                  string // non-empty = follow-up in existing thread, skip thread creation
-	Transcript                string // STT transcription result, shown in thread if non-empty
-	SkipDiscordContext        bool   // true when the prompt already includes bot-built Discord discussion context
-	Source                    string // message, thread, cron, etc.
-	DeliveryMode              DeliveryMode
+	ChannelID          string
+	ParentChannelID    string
+	GuildID            string
+	MessageID          string
+	Prompt             string
+	Session            *discordgo.Session
+	UserID             string
+	Username           string
+	Attachments        []string
+	ThreadID           string // non-empty = follow-up in existing thread, skip thread creation
+	Transcript         string // STT transcription result, shown in thread if non-empty
+	SkipDiscordContext bool   // true when the prompt already includes bot-built Discord discussion context
+	Source             string // message, thread, cron, etc.
+	DeliveryMode       DeliveryMode
+	// QueuedReactionAdded is true only after Discord accepted the initial ⏳.
+	// The manager sets it before enqueue so the worker can reconcile that marker.
+	QueuedReactionAdded       bool
 	ThreadMentionOnly         bool // listen snapshot for newly created agent threads
 	BotToolsTargetID          string
 	DisableBotEgress          bool
@@ -736,11 +739,17 @@ func (w *Worker) rejectForUsageLimit(job *Job) bool {
 		})
 		return true
 	}
-	if err := job.sendInlineFinalReply(job.Session, content); err != nil {
-		log.Printf("[usage-limit] reply failed channel=%s user=%s: %v", job.ChannelID, job.UserID, err)
+	sendErr := job.sendInlineFinalReply(job.Session, content)
+	if sendErr != nil {
+		log.Printf("[usage-limit] reply failed channel=%s user=%s: %v", job.ChannelID, job.UserID, sendErr)
 	}
 	if job.Session != nil && strings.TrimSpace(job.MessageID) != "" {
-		swapReaction(job.Session, job.ChannelID, job.MessageID, "⏳", "❌")
+		reactions := newJobReactionState(job.Session, job.ChannelID, job.MessageID, job.QueuedReactionAdded, !job.RemoteA2A)
+		if sendErr != nil {
+			markDeliveryFailureReactions(reactions, sendErr)
+		} else {
+			reactions.Final("❌")
+		}
 	}
 	return true
 }
@@ -785,6 +794,17 @@ func (w *Worker) execute(job *Job) {
 	w.currentJobActive = true
 	w.cancelMu.Unlock()
 	var finishOnce sync.Once
+	var terminalMu sync.Mutex
+	terminalStarted := false
+	beginFinish := func() bool {
+		terminalMu.Lock()
+		defer terminalMu.Unlock()
+		if terminalStarted {
+			return false
+		}
+		terminalStarted = true
+		return true
+	}
 	finishJob := func() {
 		finishOnce.Do(func() {
 			clearBotToolsTargetState(w.botToolsTargetStatePath)
@@ -812,7 +832,8 @@ func (w *Worker) execute(job *Job) {
 		})
 	}
 
-	swapReaction(ds, job.ChannelID, job.MessageID, "⏳", "🔄")
+	reactions := newJobReactionState(ds, job.ChannelID, job.MessageID, job.QueuedReactionAdded, !job.RemoteA2A)
+	reactions.Set("🔄")
 
 	// Determine thread ID: reuse existing or create new
 	var threadID string
@@ -843,7 +864,7 @@ func (w *Worker) execute(job *Job) {
 				return
 			}
 			log.Printf("[worker %s] get/create thread: %v, falling back to sync", w.channelID, err)
-			w.executeFallback(job)
+			w.executeFallback(job, reactions)
 			return
 		}
 		threadID = thread.ID
@@ -906,7 +927,7 @@ func (w *Worker) execute(job *Job) {
 				}
 				SendProcessMessage(ds, threadID, msg)
 			}
-			swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "⚙️")
+			reactions.Set("⚙️")
 			w.auditJobEvent("agent_tool_call", job, threadID, "", map[string]any{
 				"kind":          evt.Kind,
 				"title":         evt.Title,
@@ -919,7 +940,7 @@ func (w *Worker) execute(job *Job) {
 				w.onActivity()
 			}
 			delegateGuard.observeToolResult(evt)
-			swapReaction(ds, job.ChannelID, job.MessageID, "⚙️", "🔄")
+			reactions.Set("🔄")
 			title := toolDisplayTitle(evt)
 			w.auditJobEvent("agent_tool_result", job, threadID, evt.Status, map[string]any{
 				"kind":          evt.Kind,
@@ -1004,6 +1025,9 @@ func (w *Worker) execute(job *Job) {
 			// Capture ctx state BEFORE cancel() — cancel() sets ctx.Err() to Canceled
 			ctxErr := ctx.Err()
 			cancel() // release timeout context
+			if !beginFinish() {
+				return
+			}
 
 			job.MentionRefs = w.mentionRefsForDelivery(job.MentionRefs, job.currentRevokedMentionRefs())
 
@@ -1026,8 +1050,7 @@ func (w *Worker) execute(job *Job) {
 				if suppressGenericKiroErrorAfterEgress(askErr, ctxErr, delivered) {
 					log.Printf("[worker %s] suppressing generic Kiro error after safe egress delivery | user=%s msg=%s delivered=%d",
 						w.channelID, job.Username, job.MessageID, delivered)
-					swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "✅")
-					swapReaction(ds, job.ChannelID, job.MessageID, "⚙️", "✅")
+					reactions.Final("✅")
 					w.auditJobEvent("agent_job_completed", job, threadID, "success", map[string]any{
 						"elapsed_ms":              time.Since(startTime).Milliseconds(),
 						"safe_egress_deliveries":  delivered,
@@ -1043,6 +1066,7 @@ func (w *Worker) execute(job *Job) {
 				if _, sendErr := SendLongThreadWithMentions(ds, threadID, errorWithMetrics, job.MentionRefs); sendErr != nil {
 					log.Printf("[worker %s] thread error reply failed | user=%s msg=%s thread=%s err=%v",
 						w.channelID, job.Username, job.MessageID, threadID, sendErr)
+					markDeliveryFailureReactions(reactions, sendErr)
 				}
 				if job.FinalReply != nil {
 					job.FinalReply(errorWithMetrics)
@@ -1053,8 +1077,7 @@ func (w *Worker) execute(job *Job) {
 					Error:   a2aErrorForInline(ctxErr, errMsg),
 					Metrics: a2aMetrics(w.agent.TurnMetrics(), startTime),
 				})
-				swapReaction(ds, job.ChannelID, job.MessageID, "🔄", emoji)
-				swapReaction(ds, job.ChannelID, job.MessageID, "⚙️", emoji)
+				reactions.Final(emoji)
 				if w.logger != nil {
 					w.logger.Log(w.channelID, ChatEntry{Role: "assistant", Content: errorContent, Model: w.currentModel()})
 				}
@@ -1084,7 +1107,7 @@ func (w *Worker) execute(job *Job) {
 				if sendErr == nil {
 					sendErr = fmt.Errorf("no Discord messages delivered")
 				}
-				reaction := markDeliveryFailureReactions(ds, job.ChannelID, job.MessageID, sendErr, "🔄", "⚙️")
+				reaction := markDeliveryFailureReactions(reactions, sendErr)
 				log.Printf("[worker %s] thread final reply failed | user=%s msg=%s thread=%s reaction=%s err=%v",
 					w.channelID, job.Username, job.MessageID, threadID, reaction, sendErr)
 				w.auditJobEvent("agent_job_failed", job, threadID, "error", map[string]any{
@@ -1106,11 +1129,10 @@ func (w *Worker) execute(job *Job) {
 				return
 			}
 			progress.CompleteSuccess()
-			swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "✅")
+			reactions.Final("✅")
 			if job.FinalReply != nil {
 				job.FinalReply(responseWithMetrics)
 			}
-			swapReaction(ds, job.ChannelID, job.MessageID, "⚙️", "✅")
 			w.auditResponseEvent(job, threadID, "success", response)
 
 			log.Printf("[worker %s] job done | user=%s msg=%s elapsed=%s len=%d",
@@ -1159,6 +1181,9 @@ func (w *Worker) execute(job *Job) {
 	w.agent.OnReadErrorFunc(func(err error) {
 		log.Printf("[worker %s] agent read error | user=%s msg=%s elapsed=%s err=%v",
 			w.channelID, job.Username, job.MessageID, time.Since(startTime).Round(time.Millisecond), err)
+		if !beginFinish() {
+			return
+		}
 		switch w.currentOutputMode() {
 		case OutputModeFolded:
 			if progress.CompleteFailure(err.Error()) {
@@ -1168,9 +1193,8 @@ func (w *Worker) execute(job *Job) {
 		case OutputModeFull:
 			msg := L.Getf("error.agent_read", err)
 			SendProcessMessage(ds, threadID, msg)
-			swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "⚠️")
-			swapReaction(ds, job.ChannelID, job.MessageID, "⚙️", "⚠️")
 		}
+		reactions.Final("⚠️")
 		cancel()
 		finishJob()
 	})
@@ -1178,13 +1202,19 @@ func (w *Worker) execute(job *Job) {
 	if _, err := w.autoCompactIfNeeded(ctx, job, threadID, func(msg string) {
 		SendProcessMessage(ds, threadID, msg)
 	}); err != nil {
+		if !beginFinish() {
+			return
+		}
 		cancel()
-		w.failThreadJobBeforePrompt(ds, job, threadID, err, startTime)
+		w.failThreadJobBeforePrompt(ds, job, threadID, err, startTime, reactions)
 		finishJob()
 		return
 	}
 	if ctx.Err() != nil {
-		finishJob()
+		if beginFinish() {
+			reactions.Final("⚠️")
+			finishJob()
+		}
 		return
 	}
 
@@ -1220,14 +1250,14 @@ func (w *Worker) autoCompactAbortContent() string {
 	return "❌ " + L.Get("context.auto_compact_aborted")
 }
 
-func (w *Worker) failThreadJobBeforePrompt(ds *discordgo.Session, job *Job, threadID string, err error, startTime time.Time) {
+func (w *Worker) failThreadJobBeforePrompt(ds *discordgo.Session, job *Job, threadID string, err error, startTime time.Time, reactions *jobReactionState) {
 	errorContent := w.autoCompactAbortContent()
 	if _, sendErr := SendLongThreadWithMentions(ds, threadID, AppendMetricsFooter(prefixA2ADelegatedFrom(errorContent, job.A2AOriginLabel), MetricsWithElapsed(w.agent.TurnMetrics(), startTime)), job.MentionRefs); sendErr != nil {
 		log.Printf("[worker %s] auto compact abort reply failed | user=%s msg=%s thread=%s err=%v",
 			w.channelID, job.Username, job.MessageID, threadID, sendErr)
+		markDeliveryFailureReactions(reactions, sendErr)
 	}
-	swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "⚠️")
-	swapReaction(ds, job.ChannelID, job.MessageID, "⚙️", "⚠️")
+	reactions.Final("⚠️")
 	w.auditJobEvent("agent_job_failed", job, threadID, "error", map[string]any{
 		"error":              L.Get("context.auto_compact_aborted"),
 		"auto_compact_error": fmt.Sprint(err),
@@ -1243,7 +1273,7 @@ func (w *Worker) failThreadJobBeforePrompt(ds *discordgo.Session, job *Job, thre
 	})
 }
 
-func (w *Worker) failInlineJobBeforePrompt(ds *discordgo.Session, job *Job, err error, startTime time.Time) {
+func (w *Worker) failInlineJobBeforePrompt(ds *discordgo.Session, job *Job, err error, startTime time.Time, reactions *jobReactionState) {
 	errorContent := w.autoCompactAbortContent()
 	job.emitA2AResult(a2a.TaskExecutionResult{
 		State:   a2a.TaskStateFailed,
@@ -1254,6 +1284,7 @@ func (w *Worker) failInlineJobBeforePrompt(ds *discordgo.Session, job *Job, err 
 	if sendErr := job.sendInlineFinalReply(ds, AppendMetricsFooter(errorContent, MetricsWithElapsed(w.agent.TurnMetrics(), startTime))); sendErr != nil {
 		log.Printf("[worker %s] inline auto compact abort reply failed | user=%s msg=%s err=%v",
 			w.channelID, job.Username, job.MessageID, sendErr)
+		markDeliveryFailureReactions(reactions, sendErr)
 	}
 	w.auditJobEvent("agent_job_failed", job, "", "error", map[string]any{
 		"delivery_mode":      DeliveryInline.String(),
@@ -1267,28 +1298,32 @@ func (w *Worker) failInlineJobBeforePrompt(ds *discordgo.Session, job *Job, err 
 	w.recordUsage(job, "", "error", startTime)
 }
 
+var inlineWorkReactions = [...]string{"🔄", "💭", "✨", "🔁"}
+var inlineToolReactions = [...]string{"🛠️", "⚙️", "🔧", "⚙️"}
+
 type inlineReactionPulse struct {
-	ds        *discordgo.Session
-	channelID string
-	messageID string
+	reactions *jobReactionState
 	done      chan struct{}
+	wg        sync.WaitGroup
 	mu        sync.Mutex
 	mode      string
-	current   string
 	stopped   bool
 }
 
-func newInlineReactionPulse(ds *discordgo.Session, channelID, messageID, initial string) *inlineReactionPulse {
-	return &inlineReactionPulse{ds: ds, channelID: channelID, messageID: messageID, done: make(chan struct{}), mode: "work", current: initial}
+func newInlineReactionPulse(reactions *jobReactionState) *inlineReactionPulse {
+	return &inlineReactionPulse{reactions: reactions, done: make(chan struct{}), mode: "work"}
 }
 
 func (p *inlineReactionPulse) Start() {
+	if p == nil || p.reactions == nil || !p.reactions.enabled {
+		return
+	}
 	p.set("🔄")
 	ticker := time.NewTicker(12 * time.Second)
+	p.wg.Add(1)
 	go func() {
+		defer p.wg.Done()
 		defer ticker.Stop()
-		work := []string{"🔄", "💭", "✨", "🔁"}
-		tool := []string{"🛠️", "⚙️", "🔧", "⚙️"}
 		i := 0
 		for {
 			select {
@@ -1298,9 +1333,9 @@ func (p *inlineReactionPulse) Start() {
 				p.mu.Lock()
 				mode := p.mode
 				p.mu.Unlock()
-				seq := work
+				seq := inlineWorkReactions[:]
 				if mode == "tool" {
-					seq = tool
+					seq = inlineToolReactions[:]
 				}
 				p.set(seq[i%len(seq)])
 				i++
@@ -1324,6 +1359,9 @@ func (p *inlineReactionPulse) Work() {
 }
 
 func (p *inlineReactionPulse) Finish(final string) {
+	if p == nil {
+		return
+	}
 	p.mu.Lock()
 	if p.stopped {
 		p.mu.Unlock()
@@ -1332,43 +1370,28 @@ func (p *inlineReactionPulse) Finish(final string) {
 	p.stopped = true
 	p.mu.Unlock()
 	close(p.done)
-	p.setFinal(final)
+	p.wg.Wait()
+	p.reactions.Final(final)
+}
+
+func (p *inlineReactionPulse) AddHint(emoji string) {
+	if p == nil {
+		return
+	}
+	p.reactions.AddHint(emoji)
 }
 
 func (p *inlineReactionPulse) set(next string) {
-	if p == nil || p.ds == nil || next == "" {
+	if p == nil || p.reactions == nil || next == "" {
 		return
 	}
 	p.mu.Lock()
-	if p.stopped {
-		p.mu.Unlock()
-		return
-	}
-	prev := p.current
-	p.current = next
+	stopped := p.stopped
 	p.mu.Unlock()
-	p.replace(prev, next)
-}
-
-func (p *inlineReactionPulse) setFinal(next string) {
-	if p == nil || p.ds == nil || next == "" {
+	if stopped {
 		return
 	}
-	p.mu.Lock()
-	prev := p.current
-	p.current = next
-	p.mu.Unlock()
-	p.replace(prev, next)
-}
-
-func (p *inlineReactionPulse) replace(prev, next string) {
-	if p.messageID == "" {
-		return
-	}
-	if prev != "" && prev != next {
-		_ = p.ds.MessageReactionRemove(p.channelID, p.messageID, prev, "@me")
-	}
-	_ = p.ds.MessageReactionAdd(p.channelID, p.messageID, next)
+	p.reactions.Set(next)
 }
 
 func (job *Job) inlineBotToolsTargetID() string {
@@ -1556,7 +1579,8 @@ func (w *Worker) executeInline(job *Job) {
 	w.currentJobActive = true
 	w.cancelMu.Unlock()
 
-	pulse := newInlineReactionPulse(ds, job.ChannelID, job.MessageID, "⏳")
+	reactions := newJobReactionState(ds, job.ChannelID, job.MessageID, job.QueuedReactionAdded, !job.RemoteA2A)
+	pulse := newInlineReactionPulse(reactions)
 	pulse.Start()
 
 	var finishMu sync.Mutex
@@ -1709,6 +1733,7 @@ func (w *Worker) executeInline(job *Job) {
 				if sendErr := job.sendInlineFinalReply(ds, errorWithMetrics); sendErr != nil {
 					log.Printf("[worker %s] inline error reply failed | user=%s msg=%s err=%v",
 						w.channelID, job.Username, job.MessageID, sendErr)
+					markDeliveryFailureReactions(reactions, sendErr)
 				}
 				if w.logger != nil {
 					w.logger.Log(w.channelID, ChatEntry{Role: "assistant", Content: errorContent, Model: w.currentModel()})
@@ -1758,7 +1783,7 @@ func (w *Worker) executeInline(job *Job) {
 				w.auditResponseEvent(job, "", "error", response)
 				w.recordUsage(job, "", "error", startTime)
 				finishJob("❌")
-				addDeliveryFailureHintReaction(ds, job.ChannelID, job.MessageID, sendErr)
+				pulse.AddHint(deliveryFailureHintReaction(sendErr))
 				return
 			}
 			if !job.suppressInlineDiscordFinal() {
@@ -1813,6 +1838,7 @@ func (w *Worker) executeInline(job *Job) {
 		if sendErr := job.sendInlineFinalReply(ds, errMsg); sendErr != nil {
 			log.Printf("[worker %s] inline read-error reply failed | user=%s msg=%s err=%v",
 				w.channelID, job.Username, job.MessageID, sendErr)
+			markDeliveryFailureReactions(reactions, sendErr)
 		}
 		if w.logger != nil {
 			w.logger.Log(w.channelID, ChatEntry{Role: "assistant", Content: errMsg, Model: w.currentModel()})
@@ -1839,7 +1865,7 @@ func (w *Worker) executeInline(job *Job) {
 			return
 		}
 		cancel()
-		w.failInlineJobBeforePrompt(ds, job, err, startTime)
+		w.failInlineJobBeforePrompt(ds, job, err, startTime, reactions)
 		finishJob("⚠️")
 		return
 	}
@@ -2227,29 +2253,21 @@ func deliveryFailureHintReaction(err error) string {
 	return "🌐"
 }
 
-func addDeliveryFailureHintReaction(ds *discordgo.Session, channelID, messageID string, err error) string {
-	hint := deliveryFailureHintReaction(err)
-	if ds != nil && channelID != "" && messageID != "" && hint != "" {
-		_ = ds.MessageReactionAdd(channelID, messageID, hint)
+func markDeliveryFailureReactions(reactions *jobReactionState, err error) string {
+	if reactions != nil {
+		reactions.Final("❌")
+		reactions.AddHint(deliveryFailureHintReaction(err))
 	}
 	return deliveryFailureReaction(err)
 }
 
-func markDeliveryFailureReactions(ds *discordgo.Session, channelID, messageID string, err error, oldEmojis ...string) string {
-	if ds != nil && channelID != "" && messageID != "" {
-		for _, oldEmoji := range oldEmojis {
-			if oldEmoji != "" && oldEmoji != "❌" {
-				_ = ds.MessageReactionRemove(channelID, messageID, oldEmoji, "@me")
-			}
-		}
-		_ = ds.MessageReactionAdd(channelID, messageID, "❌")
-	}
-	return addDeliveryFailureHintReaction(ds, channelID, messageID, err)
-}
-
 // executeFallback is the old synchronous path used when thread creation fails.
-func (w *Worker) executeFallback(job *Job) {
+func (w *Worker) executeFallback(job *Job, reactions *jobReactionState) {
 	ds := job.Session
+	if reactions == nil {
+		reactions = newJobReactionState(ds, job.ChannelID, job.MessageID, job.QueuedReactionAdded, !job.RemoteA2A)
+	}
+	reactions.Set("🔄")
 	defer func() {
 		clearBotToolsTargetState(w.botToolsTargetStatePath)
 		w.cancelMu.Lock()
@@ -2273,7 +2291,7 @@ func (w *Worker) executeFallback(job *Job) {
 		ChannelID: job.ChannelID,
 	})
 	if err != nil {
-		swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "❌")
+		markDeliveryFailureReactions(reactions, err)
 		return
 	}
 
@@ -2299,7 +2317,7 @@ func (w *Worker) executeFallback(job *Job) {
 		SendProcessMessage(ds, job.ChannelID, msg)
 	})
 	if ctx.Err() != nil {
-		swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "⚠️")
+		reactions.Final("⚠️")
 		return
 	}
 
@@ -2325,7 +2343,7 @@ func (w *Worker) executeFallback(job *Job) {
 		if suppressGenericKiroErrorAfterEgress(askErr, ctx.Err(), delivered) {
 			log.Printf("[worker %s] suppressing fallback generic Kiro error after safe egress delivery | user=%s msg=%s delivered=%d",
 				w.channelID, job.Username, job.MessageID, delivered)
-			swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "✅")
+			reactions.Final("✅")
 			w.auditResponseEvent(job, "", "success", "")
 			w.recordUsage(job, "", "success", startTime)
 			logContent = ""
@@ -2333,8 +2351,9 @@ func (w *Worker) executeFallback(job *Job) {
 			if sendErr := sendLongWithMentions(ds, job.ChannelID, replyMsg.ID, AppendMetricsFooter(logContent, MetricsWithElapsed(w.agent.TurnMetrics(), startTime)), job.MentionRefs); sendErr != nil {
 				log.Printf("[worker %s] fallback error reply failed | user=%s msg=%s err=%v",
 					w.channelID, job.Username, job.MessageID, sendErr)
+				markDeliveryFailureReactions(reactions, sendErr)
 			}
-			swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "❌")
+			reactions.Final("❌")
 			w.auditResponseEvent(job, "", "error", logContent)
 			w.recordUsage(job, "", "error", startTime)
 		}
@@ -2348,14 +2367,14 @@ func (w *Worker) executeFallback(job *Job) {
 		responseWithMetrics := AppendMetricsFooter(response, MetricsWithElapsed(w.agent.TurnMetrics(), startTime))
 		w.drainBeforeFinal(job.ChannelID)
 		if sendErr := sendLongWithMentions(ds, job.ChannelID, replyMsg.ID, responseWithMetrics, job.MentionRefs); sendErr != nil {
-			reaction := markDeliveryFailureReactions(ds, job.ChannelID, job.MessageID, sendErr, "🔄")
+			reaction := markDeliveryFailureReactions(reactions, sendErr)
 			log.Printf("[worker %s] fallback final reply failed | user=%s msg=%s reaction=%s err=%v",
 				w.channelID, job.Username, job.MessageID, reaction, sendErr)
 			w.auditResponseEvent(job, "", "error", response)
 			w.recordUsage(job, "", "error", startTime)
 			return
 		}
-		swapReaction(ds, job.ChannelID, job.MessageID, "🔄", "✅")
+		reactions.Final("✅")
 		w.auditResponseEvent(job, "", "success", response)
 		w.recordUsage(job, "", "success", startTime)
 	}

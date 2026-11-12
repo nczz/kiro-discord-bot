@@ -9,6 +9,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"github.com/bwmarrin/discordgo"
+	"github.com/nczz/kiro-discord-bot/a2a"
 	"github.com/nczz/kiro-discord-bot/acp"
 	"github.com/nczz/kiro-discord-bot/audit"
 	"github.com/nczz/kiro-discord-bot/internal/discordmention"
@@ -421,6 +423,107 @@ func (rt *recordingRoundTripper) Snapshot() ([]string, []string) {
 	reqs := append([]string(nil), rt.requests...)
 	bodies := append([]string(nil), rt.bodies...)
 	return reqs, bodies
+}
+
+type lateReactionRoundTripper struct {
+	mu              sync.Mutex
+	reactions       map[string]bool
+	delayedEmoji    string
+	releaseOnDelete bool
+	started         chan struct{}
+	release         chan struct{}
+	startedOnce     sync.Once
+	releaseOnce     sync.Once
+}
+
+func newLateReactionRoundTripper(delayedEmoji string, releaseOnDelete bool) *lateReactionRoundTripper {
+	return &lateReactionRoundTripper{
+		reactions:       map[string]bool{"⏳": true},
+		delayedEmoji:    delayedEmoji,
+		releaseOnDelete: releaseOnDelete,
+		started:         make(chan struct{}),
+		release:         make(chan struct{}),
+	}
+}
+
+func (rt *lateReactionRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	emoji := reactionEmojiFromRequest(req)
+	if emoji != "" {
+		switch req.Method {
+		case http.MethodPut:
+			if emoji == rt.delayedEmoji {
+				rt.startedOnce.Do(func() { close(rt.started) })
+				select {
+				case <-rt.release:
+				case <-time.After(200 * time.Millisecond):
+				}
+			}
+			rt.mu.Lock()
+			rt.reactions[emoji] = true
+			rt.mu.Unlock()
+			if !rt.releaseOnDelete && emoji == "✅" {
+				rt.releaseOnce.Do(func() { close(rt.release) })
+			}
+		case http.MethodDelete:
+			rt.mu.Lock()
+			delete(rt.reactions, emoji)
+			rt.mu.Unlock()
+			if rt.releaseOnDelete && emoji == rt.delayedEmoji {
+				rt.releaseOnce.Do(func() { close(rt.release) })
+			}
+		}
+		return discordTestResponse(req, http.StatusNoContent, ""), nil
+	}
+
+	if req.Method == http.MethodPost && strings.Contains(req.URL.Path, "/threads") {
+		return discordTestResponse(req, http.StatusOK, `{"id":"thread-1","channel_id":"thread-1","parent_id":"ch1","name":"thread","type":11}`), nil
+	}
+	if req.Method == http.MethodPost && strings.HasSuffix(req.URL.Path, "/messages") {
+		return discordTestResponse(req, http.StatusOK, `{"id":"reply-1","channel_id":"ch1","content":"ok"}`), nil
+	}
+	if req.Method == http.MethodPatch && strings.Contains(req.URL.Path, "/messages/") {
+		return discordTestResponse(req, http.StatusOK, `{"id":"reply-1","channel_id":"ch1","content":"ok"}`), nil
+	}
+	return discordTestResponse(req, http.StatusNoContent, ""), nil
+}
+
+func (rt *lateReactionRoundTripper) Reactions() map[string]bool {
+	rt.mu.Lock()
+	defer rt.mu.Unlock()
+	result := make(map[string]bool, len(rt.reactions))
+	for emoji, present := range rt.reactions {
+		result[emoji] = present
+	}
+	return result
+}
+
+func reactionEmojiFromRequest(req *http.Request) string {
+	const marker = "/reactions/"
+	path := req.URL.EscapedPath()
+	start := strings.Index(path, marker)
+	if start < 0 {
+		return ""
+	}
+	rest := path[start+len(marker):]
+	end := strings.IndexByte(rest, '/')
+	if end < 0 {
+		return ""
+	}
+	emoji, err := url.PathUnescape(rest[:end])
+	if err != nil {
+		return ""
+	}
+	return emoji
+}
+
+func discordTestResponse(req *http.Request, status int, body string) *http.Response {
+	return &http.Response{
+		StatusCode: status,
+		Status:     http.StatusText(status),
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(body)),
+		Request:    req,
+	}
 }
 
 type failingRoundTripper struct{}
@@ -1131,11 +1234,12 @@ func TestWorkerInlineDeliverySendsOnlyFinalReplyAndReplacesQueuedReaction(t *tes
 	w := newWorker("ch1", agent, 1, 30, 1, 1440, nil, "")
 
 	w.executeInline(&Job{
-		ChannelID:    "ch1",
-		MessageID:    "m1",
-		Prompt:       "hello",
-		Session:      ds,
-		DeliveryMode: DeliveryInline,
+		ChannelID:           "ch1",
+		MessageID:           "m1",
+		Prompt:              "hello",
+		Session:             ds,
+		DeliveryMode:        DeliveryInline,
+		QueuedReactionAdded: true,
 	})
 	cb := agent.Callbacks()
 	if cb.OnComplete == nil || cb.OnToolCall == nil {
@@ -1172,6 +1276,56 @@ func TestWorkerInlineDeliverySendsOnlyFinalReplyAndReplacesQueuedReaction(t *tes
 	}
 	if !addedDone {
 		t.Fatalf("expected inline pulse to add final done reaction; requests=%v", reqs)
+	}
+}
+
+func TestWorkerInlineConcurrentReactionFinishesWithOnlyTerminalState(t *testing.T) {
+	L.Load("en")
+	rt := newLateReactionRoundTripper("💭", false)
+	ds := testDiscordSession(rt)
+	agent := &fakeWorkerAgent{}
+	w := newWorker("ch1", agent, 1, 30, 1, 1440, nil, "")
+
+	w.executeInline(&Job{
+		ChannelID:           "ch1",
+		MessageID:           "m1",
+		Prompt:              "hello",
+		Session:             ds,
+		DeliveryMode:        DeliveryInline,
+		QueuedReactionAdded: true,
+	})
+	cb := agent.Callbacks()
+	if cb.OnThought == nil || cb.OnComplete == nil {
+		t.Fatal("expected inline thought and completion callbacks")
+	}
+
+	thoughtDone := make(chan struct{})
+	go func() {
+		cb.OnThought("working")
+		close(thoughtDone)
+	}()
+	select {
+	case <-rt.started:
+	case <-time.After(time.Second):
+		t.Fatal("delayed thought reaction did not start")
+	}
+
+	completeDone := make(chan struct{})
+	go func() {
+		cb.OnComplete("final response", nil)
+		close(completeDone)
+	}()
+	for name, done := range map[string]<-chan struct{}{"thought": thoughtDone, "complete": completeDone} {
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("%s callback did not finish", name)
+		}
+	}
+
+	reactions := rt.Reactions()
+	if len(reactions) != 1 || !reactions["✅"] {
+		t.Fatalf("final reactions = %#v, want only done", reactions)
 	}
 }
 
@@ -1213,6 +1367,42 @@ func TestWorkerInlineDeliveryWithoutMessageIDSendsUnreferencedFinalReply(t *test
 	}
 	if messagePosts != 1 {
 		t.Fatalf("message post count = %d, want 1; requests=%v bodies=%v", messagePosts, reqs, bodies)
+	}
+}
+
+func TestWorkerRemoteA2ADoesNotReactToOriginMessageID(t *testing.T) {
+	L.Load("en")
+	rt := &recordingRoundTripper{}
+	ds := testDiscordSession(rt)
+	agent := &fakeWorkerAgent{}
+	w := newWorker("ch1", agent, 1, 30, 1, 1440, nil, "")
+	results := make(chan a2a.TaskExecutionResult, 1)
+
+	w.executeInline(&Job{
+		ChannelID:    "ch1",
+		MessageID:    "remote-origin-message",
+		Prompt:       "delegated work",
+		Session:      ds,
+		DeliveryMode: DeliveryInline,
+		RemoteA2A:    true,
+		A2AResult:    results,
+	})
+	cb := agent.Callbacks()
+	cb.OnComplete("done", nil)
+
+	reqs, _ := rt.Snapshot()
+	for _, req := range reqs {
+		if strings.Contains(req, "/reactions/") {
+			t.Fatalf("remote A2A job emitted a reaction request: %s", req)
+		}
+	}
+	select {
+	case result := <-results:
+		if result.State != a2a.TaskStateCompleted {
+			t.Fatalf("A2A result state = %s, want completed", result.State)
+		}
+	default:
+		t.Fatal("expected terminal A2A result")
 	}
 }
 
@@ -1414,11 +1604,12 @@ func TestWorkerThreadDeliveryAppendsMetricsToFinalResponse(t *testing.T) {
 	w := newWorker("ch1", agent, 1, 30, 1, 1440, nil, "")
 
 	w.execute(&Job{
-		ChannelID: "ch1",
-		ThreadID:  "thread-1",
-		MessageID: "m1",
-		Prompt:    "hello",
-		Session:   ds,
+		ChannelID:           "ch1",
+		ThreadID:            "thread-1",
+		MessageID:           "m1",
+		Prompt:              "hello",
+		Session:             ds,
+		QueuedReactionAdded: true,
 	})
 	cb := agent.Callbacks()
 	if cb.OnComplete == nil {
@@ -1444,6 +1635,55 @@ func TestWorkerThreadDeliveryAppendsMetricsToFinalResponse(t *testing.T) {
 	}
 	if finalPosts != 1 {
 		t.Fatalf("thread final posts = %d, want 1; requests=%v bodies=%v", finalPosts, reqs, bodies)
+	}
+}
+func TestWorkerThreadConcurrentReactionFinishesWithOnlyTerminalState(t *testing.T) {
+	L.Load("en")
+	rt := newLateReactionRoundTripper("⚙️", true)
+	ds := testDiscordSession(rt)
+	agent := &fakeWorkerAgent{}
+	w := newWorker("ch1", agent, 1, 30, 1, 1440, nil, "")
+
+	w.execute(&Job{
+		ChannelID:           "ch1",
+		ThreadID:            "thread-1",
+		MessageID:           "m1",
+		Prompt:              "hello",
+		Session:             ds,
+		QueuedReactionAdded: true,
+	})
+	cb := agent.Callbacks()
+	if cb.OnToolCall == nil || cb.OnComplete == nil {
+		t.Fatal("expected thread tool and completion callbacks")
+	}
+
+	toolDone := make(chan struct{})
+	go func() {
+		cb.OnToolCall(acp.ToolCallEvent{Kind: "execute", Title: "Running tool"})
+		close(toolDone)
+	}()
+	select {
+	case <-rt.started:
+	case <-time.After(time.Second):
+		t.Fatal("delayed tool reaction did not start")
+	}
+
+	completeDone := make(chan struct{})
+	go func() {
+		cb.OnComplete("final response", nil)
+		close(completeDone)
+	}()
+	for name, done := range map[string]<-chan struct{}{"tool": toolDone, "complete": completeDone} {
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Fatalf("%s callback did not finish", name)
+		}
+	}
+
+	reactions := rt.Reactions()
+	if len(reactions) != 1 || !reactions["✅"] {
+		t.Fatalf("final reactions = %#v, want only done", reactions)
 	}
 }
 
@@ -1726,14 +1966,24 @@ func TestWorkerThreadFoldedProgressReadErrorCompletesCard(t *testing.T) {
 		Session:   ds,
 	})
 	agent.TriggerReadError(errors.New("stream broke"))
+	agent.Callbacks().OnComplete("late response", nil)
 
 	reqs, bodies := rt.Snapshot()
+	var completedCard, warningReaction bool
 	for i, req := range reqs {
 		if req == "PATCH /api/v9/channels/thread-1/messages/reply-1" && strings.Contains(bodies[i], "Failed") && strings.Contains(bodies[i], "stream broke") {
-			return
+			completedCard = true
+		}
+		if strings.HasPrefix(req, "PUT ") && strings.Contains(req, "/reactions/⚠️/@me") {
+			warningReaction = true
+		}
+		if strings.Contains(bodies[i], "late response") || strings.Contains(req, "/reactions/✅/@me") {
+			t.Fatalf("late completion changed a read-error terminal state; req=%s body=%q", req, bodies[i])
 		}
 	}
-	t.Fatalf("missing folded read-error card completion; reqs=%v bodies=%v", reqs, bodies)
+	if !completedCard || !warningReaction {
+		t.Fatalf("completed card=%v warning=%v; reqs=%v bodies=%v", completedCard, warningReaction, reqs, bodies)
+	}
 }
 
 func TestWorkerThreadFoldedProgressReadErrorFallsBackWhenEditFails(t *testing.T) {
@@ -2579,7 +2829,7 @@ func TestWorkerFallbackAppendsMetricsFooter(t *testing.T) {
 		MessageID: "m1",
 		Prompt:    "hello",
 		Session:   ds,
-	})
+	}, nil)
 
 	reqs, bodies := rt.Snapshot()
 	for i, req := range reqs {
@@ -2612,7 +2862,7 @@ func TestWorkerFallbackMentionsVerifiedRequester(t *testing.T) {
 		MentionRefs: []discordmention.Ref{
 			discordmention.UserRef("123456789012345678", "mxp.tw"),
 		},
-	})
+	}, nil)
 
 	reqs, bodies := rt.Snapshot()
 	for i, req := range reqs {
@@ -2656,7 +2906,7 @@ func TestWorkerFallbackEmptyResponseStillAppendsMetricsFooter(t *testing.T) {
 		MessageID: "m1",
 		Prompt:    "hello",
 		Session:   ds,
-	})
+	}, nil)
 
 	reqs, bodies := rt.Snapshot()
 	for i, req := range reqs {
@@ -2689,7 +2939,7 @@ func TestWorkerFallbackErrorAppendsMetricsFooter(t *testing.T) {
 		MessageID: "m1",
 		Prompt:    "hello",
 		Session:   ds,
-	})
+	}, nil)
 
 	reqs, bodies := rt.Snapshot()
 	for i, req := range reqs {
