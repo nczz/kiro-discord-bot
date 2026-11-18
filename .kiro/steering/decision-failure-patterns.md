@@ -64,7 +64,7 @@ These are deliberate boundaries unless a new architecture task changes them:
 Decision:
 
 - `mcp-discord` is a pure Discord REST MCP server. `/mcp manage` / MCP proxy tool exposure is the local grant boundary; Discord bot token permissions and Discord API responses decide guild/channel resource scope and operation success.
-- Remove local `mcp-discord` guild/channel allowlists, read-only env caps, write-tool env caps, destructive env caps, and bot-tools target binding authorization. Keep direct formatting, `AllowedMentions`, upload source denylist, download path root/traversal guard, and optional verified mention refs bridge.
+- Remove local `mcp-discord` guild/channel allowlists, read-only env caps, write-tool env caps, destructive env caps, bot-tools target binding authorization, and target-state mention bridges. Keep direct formatting, inert raw mentions with empty `AllowedMentions`, upload source denylist, and download path root/traversal guard.
 
 Context:
 
@@ -79,9 +79,10 @@ Rejected alternatives:
 
 Current scope:
 
-- `BOT_TOOLS_TARGET_STATE_PATH` may still be injected for local `mcp-discord` only as an optional verified mention refs bridge. Missing state path must not fail mention resolution; corrupt/unwritable state may fail with a clear bridge-state error.
+- `BOT_TOOLS_TARGET_STATE_PATH` is injected only into `bot-tools`. Bot-owned named mention lookup and task-local placeholder grants use `bot_resolve_mentions`; pure administrative lookup uses read-only `discord_search_members`.
 - `bot-tools` remains binding-sensitive and keeps channel/session target binding, authenticated actor context, safe egress queue, redaction/sanitizer, and audit semantics.
-- Direct `discord_*` writes preserve caller payload semantics and do not gain bot safe-egress redaction.
+- Direct `discord_*` writes preserve caller payload semantics and do not gain bot safe-egress redaction or bot-task mention refs.
+- Read tools must preserve the Discord API resource set unless their names and descriptions explicitly declare a narrower query. `discord_list_channels` returns all guild channel types visible to the token; active threads are explicit because Discord's guild-channels endpoint excludes threads. Bounded collection endpoints expose cursor pagination, and `discord_get_user` uses direct Get User with optional guild enrichment rather than a mandatory local membership gate.
 
 Future trigger:
 
@@ -90,7 +91,7 @@ Future trigger:
 
 Verification:
 
-- Regression tests should prove legacy env vars no longer restrict direct helpers, `mcp-discord` injection omits removed env/binding keys, URL `mcp-discord` servers are allowed, mention refs state is optional, and bot-tools binding remains intact.
+- Regression tests should prove legacy env vars no longer restrict direct helpers, all local/temporary `mcp-discord` injection omits bot binding and target-state keys, URL `mcp-discord` servers are allowed, channel/member/reaction inventory remains pageable and complete within the Discord API contract, direct user lookup does not require a guild, `bot_resolve_mentions` owns task-local grants, and bot-tools binding remains intact.
 
 ### Tagged Discord Webhook Prompts Are Explicit Per-Channel Input, Not Bot Handoff
 
@@ -227,12 +228,12 @@ Decision:
 
 Context:
 
-- `discord_*` tools exist for operator-approved direct Discord workflows where the caller intentionally chooses the Discord REST surface under MCP guild/channel/write/destructive policy.
+- `discord_*` tools exist for operator-approved direct Discord workflows where the caller intentionally chooses the Discord REST surface. MCP proxy policy controls tool exposure; Discord token/API permissions control resource access and action success.
 - `bot_*` tools exist for bot-owned safe egress from ordinary agents and remote/A2A delivery. That path remains redacted, queued, audited, and file-sanitized.
 
 Regression expectation:
 
-- Direct Discord MCP tests should prove payload preservation plus policy, split, and `AllowedMentions` guards.
+- Direct Discord MCP tests should prove payload preservation, proxy exposure semantics, Discord permission boundaries, split behavior, and `AllowedMentions` guards.
 - Bot MCP and safe-egress tests should continue proving redaction, sanitizer behavior, queue semantics, audit, and transient-file cleanup.
 
 ### Discord MCP File Upload Has Source Denylist

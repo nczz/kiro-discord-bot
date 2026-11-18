@@ -12,6 +12,7 @@ import (
 )
 
 type botToolsTargetState struct {
+	GuildID               string               `json:"guild_id,omitempty"`
 	TargetChannelID       string               `json:"target_channel_id"`
 	DisableEgress         bool                 `json:"disable_egress,omitempty"`
 	RemoteA2A             bool                 `json:"remote_a2a,omitempty"`
@@ -51,27 +52,27 @@ func botToolsTargetStateID(channelID, targetChannelID string) string {
 	return channelID
 }
 
-func writeBotToolsTargetState(path, targetChannelID string) error {
-	return writeBotToolsTargetStateOptions(path, targetChannelID, false)
+func writeBotToolsTargetState(path, targetChannelID, guildID string) error {
+	return writeBotToolsTargetStateOptions(path, targetChannelID, false, guildID)
 }
 
-func writeBotToolsTargetStateOptions(path, targetChannelID string, disableEgress bool) error {
-	return writeBotToolsTargetStateWithRefs(path, targetChannelID, disableEgress, nil)
+func writeBotToolsTargetStateOptions(path, targetChannelID string, disableEgress bool, guildID string) error {
+	return writeBotToolsTargetStateWithRefs(path, targetChannelID, disableEgress, nil, guildID)
 }
 
-func writeBotToolsTargetStateWithRefs(path, targetChannelID string, disableEgress bool, refs []discordmention.Ref) error {
-	return writeBotToolsTargetStateWithRequester(path, targetChannelID, disableEgress, refs, false, false, "", "", 0, false, false)
+func writeBotToolsTargetStateWithRefs(path, targetChannelID string, disableEgress bool, refs []discordmention.Ref, guildID string) error {
+	return writeBotToolsTargetStateWithRequester(path, targetChannelID, disableEgress, refs, false, false, "", "", 0, false, false, guildID)
 }
 
-func writeBotToolsTargetStateWithPolicy(path, targetChannelID string, disableEgress bool, refs []discordmention.Ref, remoteA2A bool, allowMemoryWrite bool) error {
-	return writeBotToolsTargetStateWithRequester(path, targetChannelID, disableEgress, refs, remoteA2A, allowMemoryWrite, "", "", 0, false, false)
+func writeBotToolsTargetStateWithPolicy(path, targetChannelID string, disableEgress bool, refs []discordmention.Ref, remoteA2A bool, allowMemoryWrite bool, guildID string) error {
+	return writeBotToolsTargetStateWithRequester(path, targetChannelID, disableEgress, refs, remoteA2A, allowMemoryWrite, "", "", 0, false, false, guildID)
 }
 
-func writeBotToolsTargetStateWithRequester(path, targetChannelID string, disableEgress bool, refs []discordmention.Ref, remoteA2A bool, allowMemoryWrite bool, requesterID, requesterName string, delegationDepth int, canManageChannel, canManageGuild bool) error {
-	return writeBotToolsTargetStateWithRequesterSource(path, targetChannelID, disableEgress, refs, remoteA2A, allowMemoryWrite, requesterID, requesterName, delegationDepth, canManageChannel, canManageGuild, "")
+func writeBotToolsTargetStateWithRequester(path, targetChannelID string, disableEgress bool, refs []discordmention.Ref, remoteA2A bool, allowMemoryWrite bool, requesterID, requesterName string, delegationDepth int, canManageChannel, canManageGuild bool, guildID string) error {
+	return writeBotToolsTargetStateWithRequesterSource(path, targetChannelID, disableEgress, refs, remoteA2A, allowMemoryWrite, requesterID, requesterName, delegationDepth, canManageChannel, canManageGuild, "", guildID)
 }
 
-func writeBotToolsTargetStateWithRequesterSource(path, targetChannelID string, disableEgress bool, refs []discordmention.Ref, remoteA2A bool, allowMemoryWrite bool, requesterID, requesterName string, delegationDepth int, canManageChannel, canManageGuild bool, source string) error {
+func writeBotToolsTargetStateWithRequesterSource(path, targetChannelID string, disableEgress bool, refs []discordmention.Ref, remoteA2A bool, allowMemoryWrite bool, requesterID, requesterName string, delegationDepth int, canManageChannel, canManageGuild bool, source, guildID string) error {
 	path = strings.TrimSpace(path)
 	targetChannelID = strings.TrimSpace(targetChannelID)
 	if path == "" || targetChannelID == "" {
@@ -85,6 +86,7 @@ func writeBotToolsTargetStateWithRequesterSource(path, targetChannelID string, d
 		return err
 	}
 	raw, err := json.Marshal(botToolsTargetState{
+		GuildID:               strings.TrimSpace(guildID),
 		TargetChannelID:       targetChannelID,
 		DisableEgress:         disableEgress,
 		RemoteA2A:             remoteA2A,
@@ -95,8 +97,8 @@ func writeBotToolsTargetStateWithRequesterSource(path, targetChannelID string, d
 		Source:                strings.TrimSpace(source),
 		CanManageChannel:      canManageChannel,
 		CanManageGuild:        canManageGuild,
-		AllowedMentionUserIDs: allowedMentionUserIDs(refs),
-		MentionRefs:           cleanMentionRefs(refs),
+		AllowedMentionUserIDs: discordmention.UserIDs(refs),
+		MentionRefs:           discordmention.NormalizeRefs(refs),
 	})
 	if err != nil {
 		return err
@@ -172,47 +174,6 @@ func botToolsPermissionsForTarget(ds *discordgo.Session, userID, targetID string
 	return canManageChannel, canManageGuild, true
 }
 
-func allowedMentionUserIDs(refs []discordmention.Ref) []string {
-	seen := make(map[string]bool)
-	out := make([]string, 0, len(refs))
-	for _, ref := range refs {
-		if ref.Kind != "user" {
-			continue
-		}
-		id := strings.TrimSpace(ref.ID)
-		if id == "" || seen[id] {
-			continue
-		}
-		seen[id] = true
-		out = append(out, id)
-	}
-	return out
-}
-
-func cleanMentionRefs(refs []discordmention.Ref) []discordmention.Ref {
-	seen := make(map[string]bool)
-	out := make([]discordmention.Ref, 0, len(refs))
-	for _, ref := range refs {
-		kind := strings.TrimSpace(ref.Kind)
-		id := strings.TrimSpace(ref.ID)
-		if kind == "" || id == "" {
-			continue
-		}
-		key := kind + ":" + id
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
-		switch kind {
-		case "user":
-			out = append(out, discordmention.UserRef(id, ref.DisplayName))
-		case "role":
-			out = append(out, discordmention.RoleRef(id, ref.DisplayName))
-		}
-	}
-	return out
-}
-
 func readBotToolsTargetMentionRefs(path string) ([]discordmention.Ref, error) {
 	path = strings.TrimSpace(path)
 	if path == "" {
@@ -226,7 +187,7 @@ func readBotToolsTargetMentionRefs(path string) ([]discordmention.Ref, error) {
 	if err := json.Unmarshal(raw, &state); err != nil {
 		return nil, err
 	}
-	return cleanMentionRefs(state.MentionRefs), nil
+	return discordmention.NormalizeRefs(state.MentionRefs), nil
 }
 
 func clearBotToolsTargetState(path string) {
@@ -240,7 +201,7 @@ func clearBotToolsTargetState(path string) {
 // SetBotToolsTargetState binds channel-scoped bot-tools egress to a live target
 // such as an auto-created task thread.
 func (m *Manager) SetBotToolsTargetState(channelID, targetChannelID string) error {
-	return writeBotToolsTargetState(botToolsTargetStatePath(m.dataDir, channelID), targetChannelID)
+	return writeBotToolsTargetState(botToolsTargetStatePath(m.dataDir, channelID), targetChannelID, m.guildID)
 }
 
 // SetBotToolsTargetStateOptions binds bot-tools to a live target with explicit
@@ -259,6 +220,7 @@ func (m *Manager) SetBotToolsTargetStateOptions(channelID, targetChannelID strin
 		false,
 		false,
 		opts.Source,
+		m.guildID,
 	)
 }
 

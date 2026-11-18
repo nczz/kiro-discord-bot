@@ -55,12 +55,11 @@ Configure only the direct Discord MCP guards that still apply locally:
 
 ```env
 MCP_DISCORD_DOWNLOAD_DIR=/tmp/kiro-discord-mcp
-MCP_DISCORD_MEMBER_SCAN_LIMIT=5000
 MCP_DISCORD_UPLOAD_DENY_PATHS=/srv/kiro-private/**
 MCP_DISCORD_UPLOAD_DENY_CASE_INSENSITIVE=
 ```
 
-`mcp-discord` is a pure Discord REST MCP server. `/mcp manage` decides which `discord_*` tools are exposed to the agent; Discord guild/channel access and write success are decided by the bot token and Discord API permissions. A Discord `403 Missing Access` means the token cannot access or act on that resource.
+`mcp-discord` is a pure Discord REST MCP server. `/mcp manage` decides which `discord_*` tools are exposed to the agent; Discord guild/channel access and write success are decided by the bot token and Discord API permissions. It does not consume bot target state. A Discord `403 Missing Access` means the token cannot access or act on that resource. Bot-task named mention grants use the separate default-enabled `bot_resolve_mentions` tool in `bot-tools`. Enable Discord's privileged Server Members Intent for `discord_list_members`, `discord_search_members`, and `bot_resolve_mentions` member lookup.
 
 Then use `/mcp status` and `/mcp manage` in the target Discord channel.
 

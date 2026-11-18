@@ -47,7 +47,7 @@ func TestBotToolsRequesterPermissionsUsesThreadParentFallback(t *testing.T) {
 
 func TestRemoteA2ATargetStateNeverGrantsDiscordManagePermissions(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "target.json")
-	if err := writeBotToolsTargetStateWithRequesterSource(path, "thread-1", false, nil, true, false, "manager", "alice", 1, true, true, "a2a"); err != nil {
+	if err := writeBotToolsTargetStateWithRequesterSource(path, "thread-1", false, nil, true, false, "manager", "alice", 1, true, true, "a2a", "guild-1"); err != nil {
 		t.Fatalf("write target state: %v", err)
 	}
 	raw, err := os.ReadFile(path)
@@ -57,6 +57,9 @@ func TestRemoteA2ATargetStateNeverGrantsDiscordManagePermissions(t *testing.T) {
 	var state botToolsTargetState
 	if err := json.Unmarshal(raw, &state); err != nil {
 		t.Fatalf("parse target state: %v", err)
+	}
+	if state.GuildID != "guild-1" {
+		t.Fatalf("target state guild = %q, want guild-1", state.GuildID)
 	}
 	if !state.RemoteA2A {
 		t.Fatal("remote A2A flag not persisted")

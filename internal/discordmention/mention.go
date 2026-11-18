@@ -47,6 +47,49 @@ func RoleRef(id, displayName string) Ref {
 	}
 }
 
+// NormalizeRefs trims, deduplicates, and reconstructs supported mention refs
+// while preserving their first-seen order.
+func NormalizeRefs(refs []Ref) []Ref {
+	seen := make(map[string]bool, len(refs))
+	out := make([]Ref, 0, len(refs))
+	for _, ref := range refs {
+		kind := strings.TrimSpace(ref.Kind)
+		id := strings.TrimSpace(ref.ID)
+		if id == "" {
+			continue
+		}
+		key := kind + ":" + id
+		if seen[key] {
+			continue
+		}
+		switch kind {
+		case "user":
+			seen[key] = true
+			out = append(out, UserRef(id, ref.DisplayName))
+		case "role":
+			seen[key] = true
+			out = append(out, RoleRef(id, ref.DisplayName))
+		}
+	}
+	return out
+}
+
+// UserIDs returns unique, non-empty user IDs from mention refs in first-seen
+// order. Callers that also persist refs should pass normalized refs.
+func UserIDs(refs []Ref) []string {
+	seen := make(map[string]bool, len(refs))
+	out := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		id := strings.TrimSpace(ref.ID)
+		if strings.TrimSpace(ref.Kind) != "user" || id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	return out
+}
+
 // Exclude removes refs whose kind and ID appear in excluded, preserving order.
 // It returns refs unchanged when excluded is empty; callers must treat both
 // input and output slices as read-only.

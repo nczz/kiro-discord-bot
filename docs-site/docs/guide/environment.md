@@ -138,6 +138,7 @@ Use the matching relay-side `RELAY_HOST_TOKEN_FILE` or `RELAY_HOST_TOKEN`. The p
 | `DATA_DIR` | `./data` | Persistent bot data, channel metadata, sessions, audit DB, usage SQLite DB and migration archives, MCP policy, and bot-managed engine runtime directories. |
 | `BOT_LOCALE` | `en` | Bot response locale. Supported project locales are English and Traditional Chinese. |
 | `BOT_GM_USER_IDS` | empty | Optional comma-separated Discord user IDs with full bot-manager access across channels, A2A management, and usage-limit bypasses. |
+| `BOT_TOOLS_MENTION_MEMBER_SCAN_LIMIT` | `5000` | Maximum guild members scanned once per `bot_resolve_mentions` call as a bounded ambiguity cross-check after fresh per-name Discord member searches. Maximum accepted value is `50000`. |
 
 ## Agent Execution
 
@@ -276,7 +277,7 @@ After changing any A2A variable, restart the bot and run `/doctor`. `/doctor` re
 
 ## Discord MCP Server
 
-These variables configure direct `mcp-discord-server` file/member behavior. `mcp-discord` does not apply local guild/channel/read-only/write/destructive env caps; `/mcp manage` decides which `discord_*` tools are exposed, and Discord API permissions decide which resources the token can access.
+These variables configure direct `mcp-discord-server` file behavior. `mcp-discord` does not apply local guild/channel/read-only/write/destructive env caps or consume bot target state; `/mcp manage` decides which `discord_*` tools are exposed, and Discord API permissions decide which resources the token can access.
 
 | Variable | Default | Purpose |
 | --- | --- | --- |

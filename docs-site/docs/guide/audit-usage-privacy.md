@@ -13,6 +13,9 @@ The recorder stores Discord gateway activity and bot-side events, including mess
 
 Typing events are recorded only when `AUDIT_LOG_RECORD_TYPING=true`.
 
+MCP policy mutations are recorded as `mcp_policy_updated`; system upgrade migrations use `source=migration`. Tool calls observed inside bot-managed agent jobs use generic `agent_tool_call` and `agent_tool_result` events. A standalone external MCP server does not automatically write to this database; see the audit boundary in [Discord MCP](mcp-discord.md#audit-boundary).
+
+
 ## Message Deletion Attribution
 
 Discord gateway `message_delete` events confirm that a message disappeared, but they do not identify the deletion actor. When the bot previously recorded the original message, audit queries can show the original author and, when content retention is enabled and explicitly requested, a short content snippet. That original author is not proof of who deleted the message.

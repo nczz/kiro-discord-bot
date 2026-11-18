@@ -564,6 +564,14 @@ func (s *MCPPolicyStore) CatalogEntry(name string) (MCPCatalogEntry, bool) {
 }
 
 func (s *MCPPolicyStore) GetPolicy(ctx context.Context, guildID, channelID, serverName string) (MCPChannelPolicy, error) {
+	p, err := s.getStoredPolicy(ctx, guildID, channelID, serverName)
+	if err != nil {
+		return p, err
+	}
+	return normalizeLegacyDefaultBotToolsPolicy(p), nil
+}
+
+func (s *MCPPolicyStore) getStoredPolicy(ctx context.Context, guildID, channelID, serverName string) (MCPChannelPolicy, error) {
 	p := defaultMCPPolicy(guildID, channelID, serverName)
 	if s == nil || s.db == nil {
 		return p, nil
@@ -588,7 +596,6 @@ func (s *MCPPolicyStore) GetPolicy(ctx context.Context, guildID, channelID, serv
 	if t, err := time.Parse(time.RFC3339, updatedAt); err == nil {
 		p.UpdatedAt = t
 	}
-	p = normalizeLegacyDefaultBotToolsPolicy(p)
 	return p, nil
 }
 
@@ -681,6 +688,29 @@ func (s *MCPPolicyStore) HasExplicitPolicy(ctx context.Context, guildID, channel
 		return false, nil
 	}
 	return err == nil, err
+}
+
+func (s *MCPPolicyStore) PolicyChannels(ctx context.Context, guildID string) ([]string, error) {
+	if s == nil || s.db == nil {
+		return nil, nil
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT channel_id FROM channel_mcp_policies WHERE guild_id=? ORDER BY channel_id`, guildID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var channels []string
+	for rows.Next() {
+		var channelID string
+		if err := rows.Scan(&channelID); err != nil {
+			return nil, err
+		}
+		channels = append(channels, channelID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return channels, nil
 }
 
 func (s *MCPPolicyStore) EnabledPolicies(ctx context.Context, guildID, channelID string) ([]MCPChannelPolicy, error) {
@@ -801,7 +831,11 @@ func normalizeLegacyDefaultBotToolsPolicy(p MCPChannelPolicy) MCPChannelPolicy {
 	}
 	for _, legacy := range legacyDefaults {
 		if sameStringSet(tools, legacy) {
-			p.AllowedTools = botmcp.DefaultSafeToolNamesForA2A(containsAnyString(legacy, a2aBotToolNames()))
+			defaults := botmcp.DefaultSafeToolNamesForA2A(containsAnyString(legacy, a2aBotToolNames()))
+			if !slices.Contains(tools, botmcp.ToolResolveMentions) {
+				defaults = removeStringSet(defaults, []string{botmcp.ToolResolveMentions})
+			}
+			p.AllowedTools = defaults
 			return p
 		}
 	}
@@ -963,10 +997,6 @@ func (p MCPChannelPolicy) ToACPServer(entry MCPCatalogEntry, proxyCommand string
 			env["BOT_TOOLS_CHANNEL_ID"] = channelID
 			env["BOT_TOOLS_TARGET_CHANNEL_ID"] = strings.TrimSpace(targetChannelID)
 			env["BOT_TOOLS_GUILD_ID"] = guildID
-			if statePath := botToolsTargetStatePath(env["DATA_DIR"], botToolsTargetStateID(channelID, targetChannelID)); statePath != "" {
-				env["BOT_TOOLS_TARGET_STATE_PATH"] = statePath
-			}
-		} else if entry.Name == "mcp-discord" {
 			if statePath := botToolsTargetStatePath(env["DATA_DIR"], botToolsTargetStateID(channelID, targetChannelID)); statePath != "" {
 				env["BOT_TOOLS_TARGET_STATE_PATH"] = statePath
 			}

@@ -139,6 +139,7 @@ WEBSHARE_HOST_TOKEN_FILE=/etc/kdb-webshare/host-token
 | `DATA_DIR` | `./data` | Bot 持久資料、頻道 metadata、sessions、audit DB、usage SQLite DB 與遷移封存檔、MCP policy 與 bot-managed engine runtime directories。 |
 | `BOT_LOCALE` | `en` | Bot 回應語系。專案文件支援英文與繁體中文。 |
 | `BOT_GM_USER_IDS` | 空 | 可選的 Discord user ID 清單（逗號分隔），授予跨頻道、A2A 管理與 usage limit bypass 的完整 bot 管理權限。 |
+| `BOT_TOOLS_MENTION_MEMBER_SCAN_LIMIT` | `5000` | 每次 `bot_resolve_mentions` 呼叫會在逐一執行 fresh Discord member search 後，最多掃描此數量的 guild members，作為 bounded ambiguity cross-check。可接受的最大值為 `50000`。 |
 
 ## Agent 執行
 
@@ -276,7 +277,7 @@ WEBSHARE_HOST_TOKEN_FILE=/etc/kdb-webshare/host-token
 
 ## Discord MCP Server
 
-這些變數設定 direct `mcp-discord-server` 的檔案與 member 行為。`mcp-discord` 不再套用本地 guild/channel/read-only/write/destructive env cap；`/mcp manage` 決定哪些 `discord_*` tools 會暴露給 agent，Discord API 權限決定 token 能存取哪些資源。
+這些變數設定 direct `mcp-discord-server` 的檔案行為。`mcp-discord` 不再套用本地 guild/channel/read-only/write/destructive env cap，也不讀取 bot target state；`/mcp manage` 決定哪些 `discord_*` tools 會暴露給 agent，Discord API 權限決定 token 能存取哪些資源。
 
 | 變數 | 預設 | 用途 |
 | --- | --- | --- |

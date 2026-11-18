@@ -84,25 +84,6 @@ func copyDiscordAttachmentToFile(dst string, body io.Reader, contentLength, maxB
 	return n, nil
 }
 
-func discordUserGuildScope(req mcp.CallToolRequest) (string, error) {
-	guildID := strings.TrimSpace(req.GetString("guild_id", ""))
-	channelID := strings.TrimSpace(req.GetString("channel_id", ""))
-	if channelID != "" && guildID == "" {
-		if dg == nil {
-			return "", fmt.Errorf("discord session is unavailable for channel-scoped user lookup")
-		}
-		ch, err := dg.Channel(channelID)
-		if err != nil {
-			return "", fmt.Errorf("resolve channel guild: %w", err)
-		}
-		guildID = strings.TrimSpace(ch.GuildID)
-	}
-	if guildID == "" {
-		return "", fmt.Errorf("guild_id or channel_id is required for scoped user lookup")
-	}
-	return guildID, nil
-}
-
 func openDiscordUploadFile(filePath string) (*os.File, string, func(), error) {
 	filePath = strings.TrimSpace(filePath)
 	if filePath == "" {
@@ -437,25 +418,20 @@ func main() {
 	// 1. List channels
 	s.AddTool(
 		discordReadTool("discord_list_channels",
-			mcp.WithDescription("List text channels in a guild"),
+			mcp.WithDescription("List every guild channel visible to the Discord bot token; optionally include active threads"),
 			mcp.WithString("guild_id", mcp.Required(), mcp.Description("Guild/server ID")),
+			mcp.WithBoolean("include_active_threads", mcp.Description("Include active threads; archived threads are not included (default false)")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			if err := ensureDiscord(); err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			guildID, _ := req.RequireString("guild_id")
-			channels, err := dg.GuildChannels(guildID)
+			raw, err := discordGuildChannelInventoryJSON(guildID, req.GetBool("include_active_threads", false))
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
-			var lines []string
-			for _, ch := range channels {
-				if ch.Type == discordgo.ChannelTypeGuildText {
-					lines = append(lines, fmt.Sprintf("#%s (%s)", ch.Name, ch.ID))
-				}
-			}
-			return mcp.NewToolResultText(strings.Join(lines, "\n")), nil
+			return mcp.NewToolResultText(raw), nil
 		},
 	)
 
@@ -560,37 +536,29 @@ func main() {
 	// 6. List members
 	s.AddTool(
 		discordReadTool("discord_list_members",
-			mcp.WithDescription("List members of a guild"),
+			mcp.WithDescription("List one cursor-paginated page of members from an explicit guild"),
 			mcp.WithString("guild_id", mcp.Required(), mcp.Description("Guild/server ID")),
-			mcp.WithNumber("limit", mcp.Description("Max members, default 50")),
+			mcp.WithString("after", mcp.Description("Return members after this user ID cursor")),
+			mcp.WithNumber("limit", mcp.Description("Maximum members, default 50, range 1-1000")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			if err := ensureDiscord(); err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			guildID, _ := req.RequireString("guild_id")
-			limit := int(req.GetFloat("limit", 50))
-			members, err := dg.GuildMembers(guildID, "", limit)
+			limit, err := discordPageLimit(req.GetFloat("limit", 50), 1000)
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
-			var lines []string
-			for _, m := range members {
-				nick := ""
-				if m.Nick != "" {
-					nick = fmt.Sprintf(" (%s)", m.Nick)
-				}
-				bot := ""
-				if m.User.Bot {
-					bot = " 🤖"
-				}
-				lines = append(lines, fmt.Sprintf("%s%s [%s]%s", m.User.Username, nick, m.User.ID, bot))
+			raw, err := discordListMembersJSON(guildID, strings.TrimSpace(req.GetString("after", "")), limit)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
 			}
-			return mcp.NewToolResultText(strings.Join(lines, "\n")), nil
+			return mcp.NewToolResultText(raw), nil
 		},
 	)
 
-	registerResolveMentionsTool(s)
+	registerSearchMembersTool(s)
 
 	// 7. Search messages
 	s.AddTool(
@@ -1038,11 +1006,12 @@ func main() {
 	// 20. Get reactions
 	s.AddTool(
 		discordReadTool("discord_get_reactions",
-			mcp.WithDescription("Get users who reacted with a specific emoji on a message"),
+			mcp.WithDescription("Get one cursor-paginated page of users who reacted with a specific emoji"),
 			mcp.WithString("channel_id", mcp.Required(), mcp.Description("Channel ID")),
 			mcp.WithString("message_id", mcp.Required(), mcp.Description("Message ID")),
 			mcp.WithString("emoji", mcp.Required(), mcp.Description("Emoji (unicode or name:id)")),
-			mcp.WithNumber("limit", mcp.Description("Max users to return, default 25")),
+			mcp.WithString("after", mcp.Description("Return reacting users after this user ID cursor")),
+			mcp.WithNumber("limit", mcp.Description("Maximum users, default 25, range 1-100")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			if err := ensureDiscord(); err != nil {
@@ -1051,19 +1020,15 @@ func main() {
 			chID, _ := req.RequireString("channel_id")
 			msgID, _ := req.RequireString("message_id")
 			emoji, _ := req.RequireString("emoji")
-			limit := int(req.GetFloat("limit", 25))
-			users, err := dg.MessageReactions(chID, msgID, emoji, limit, "", "")
+			limit, err := discordPageLimit(req.GetFloat("limit", 25), 100)
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
-			if len(users) == 0 {
-				return mcp.NewToolResultText("No reactions."), nil
+			raw, err := discordReactionPageJSON(chID, msgID, emoji, strings.TrimSpace(req.GetString("after", "")), limit)
+			if err != nil {
+				return mcp.NewToolResultError(err.Error()), nil
 			}
-			var lines []string
-			for _, u := range users {
-				lines = append(lines, fmt.Sprintf("%s (%s)", u.Username, u.ID))
-			}
-			return mcp.NewToolResultText(strings.Join(lines, "\n")), nil
+			return mcp.NewToolResultText(raw), nil
 		},
 	)
 
@@ -1114,33 +1079,25 @@ func main() {
 	// 23. Get user
 	s.AddTool(
 		discordReadTool("discord_get_user",
-			mcp.WithDescription("Get info about a specific user by ID after verifying membership in a Discord guild"),
+			mcp.WithDescription("Get a Discord user directly by ID, with optional guild member enrichment"),
 			mcp.WithString("user_id", mcp.Required(), mcp.Description("User ID")),
-			mcp.WithString("guild_id", mcp.Description("Guild/server ID")),
-			mcp.WithString("channel_id", mcp.Description("Channel ID used to derive the guild when guild_id is omitted.")),
+			mcp.WithString("guild_id", mcp.Description("Optional guild/server ID for member nickname, roles, and join metadata")),
+			mcp.WithString("channel_id", mcp.Description("Optional channel ID used to derive guild_id when guild_id is omitted")),
 		),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			if err := ensureDiscord(); err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
 			userID, _ := req.RequireString("user_id")
-			guildID, err := discordUserGuildScope(req)
+			raw, err := discordUserDetailsJSON(
+				userID,
+				req.GetString("guild_id", ""),
+				req.GetString("channel_id", ""),
+			)
 			if err != nil {
 				return mcp.NewToolResultError(err.Error()), nil
 			}
-			member, err := dg.GuildMember(guildID, userID)
-			if err != nil {
-				return mcp.NewToolResultError(err.Error()), nil
-			}
-			if member == nil || member.User == nil {
-				return mcp.NewToolResultError("user is not a member of the scoped guild"), nil
-			}
-			u := member.User
-			bot := ""
-			if u.Bot {
-				bot = " 🤖"
-			}
-			return mcp.NewToolResultText(fmt.Sprintf("%s#%s (%s)%s", u.Username, u.Discriminator, u.ID, bot)), nil
+			return mcp.NewToolResultText(raw), nil
 		},
 	)
 

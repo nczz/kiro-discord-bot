@@ -145,16 +145,14 @@ func TestMCPPolicyToACPServerKeepsMCPDiscordPure(t *testing.T) {
 		"BOT_TOOLS_CHANNEL_ID",
 		"BOT_TOOLS_TARGET_CHANNEL_ID",
 		"BOT_TOOLS_GUILD_ID",
+		"BOT_TOOLS_TARGET_STATE_PATH",
 		"MCP_DISCORD_READ_ONLY",
 		"MCP_DISCORD_ALLOWED_WRITE_TOOLS",
 		"MCP_DISCORD_ALLOW_DESTRUCTIVE",
 	} {
 		if _, ok := targetEnv[key]; ok {
-			t.Fatalf("mcp-discord target env includes removed local policy key %s: %+v", key, targetEnv)
+			t.Fatalf("mcp-discord target env includes bot binding or removed local policy key %s: %+v", key, targetEnv)
 		}
-	}
-	if targetEnv["BOT_TOOLS_TARGET_STATE_PATH"] != filepath.Join(entry.Env["DATA_DIR"], "bot-tools-targets", "thread-1.json") {
-		t.Fatalf("mcp-discord target state bridge path = %q", targetEnv["BOT_TOOLS_TARGET_STATE_PATH"])
 	}
 	var allowed []string
 	if err := json.Unmarshal([]byte(cfg.Env["MCP_PROXY_ALLOWED_TOOLS_JSON"]), &allowed); err != nil {
@@ -484,13 +482,10 @@ func TestManagerBuiltinMCPRequiresExplicitPolicy(t *testing.T) {
 	if targetEnv["BOT_TOOLS_TARGET_STATE_PATH"] != filepath.Join(dir, "bot-tools-targets", "channel-1.json") {
 		t.Fatalf("builtin env missing dynamic target state path: %+v", targetEnv)
 	}
-	for _, key := range []string{"BOT_TOOLS_CHANNEL_ID", "BOT_TOOLS_TARGET_CHANNEL_ID", "BOT_TOOLS_GUILD_ID"} {
+	for _, key := range []string{"BOT_TOOLS_CHANNEL_ID", "BOT_TOOLS_TARGET_CHANNEL_ID", "BOT_TOOLS_GUILD_ID", "BOT_TOOLS_TARGET_STATE_PATH"} {
 		if _, ok := discordEnv[key]; ok {
 			t.Fatalf("mcp-discord env includes bot-tools binding key %s: %+v", key, discordEnv)
 		}
-	}
-	if discordEnv["BOT_TOOLS_TARGET_STATE_PATH"] != filepath.Join(dir, "bot-tools-targets", "channel-1.json") {
-		t.Fatalf("mcp-discord env missing mention bridge state path: %+v", discordEnv)
 	}
 	if err := m.SetBotToolsTargetState("channel-1", "thread-1"); err != nil {
 		t.Fatalf("set target state: %v", err)
@@ -526,13 +521,10 @@ func TestManagerBuiltinMCPRequiresExplicitPolicy(t *testing.T) {
 	if tempEnv["BOT_TOOLS_TARGET_STATE_PATH"] != filepath.Join(dir, "bot-tools-targets", "cron-job-1.json") {
 		t.Fatalf("temp target state path = %q, want cron-specific path", tempEnv["BOT_TOOLS_TARGET_STATE_PATH"])
 	}
-	for _, key := range []string{"BOT_TOOLS_CHANNEL_ID", "BOT_TOOLS_TARGET_CHANNEL_ID", "BOT_TOOLS_GUILD_ID"} {
+	for _, key := range []string{"BOT_TOOLS_CHANNEL_ID", "BOT_TOOLS_TARGET_CHANNEL_ID", "BOT_TOOLS_GUILD_ID", "BOT_TOOLS_TARGET_STATE_PATH"} {
 		if _, ok := tempDiscordEnv[key]; ok {
 			t.Fatalf("temp mcp-discord env includes bot-tools binding key %s: %+v", key, tempDiscordEnv)
 		}
-	}
-	if tempDiscordEnv["BOT_TOOLS_TARGET_STATE_PATH"] != filepath.Join(dir, "bot-tools-targets", "cron-job-1.json") {
-		t.Fatalf("temp mcp-discord target state path = %q, want cron-specific mention bridge path", tempDiscordEnv["BOT_TOOLS_TARGET_STATE_PATH"])
 	}
 
 	threadOpts := m.agentOptsForTarget("channel-1", "thread-1")
@@ -558,13 +550,10 @@ func TestManagerBuiltinMCPRequiresExplicitPolicy(t *testing.T) {
 	if threadEnv["BOT_TOOLS_TARGET_STATE_PATH"] != filepath.Join(dir, "bot-tools-targets", "thread-1.json") {
 		t.Fatalf("thread target state path = %q, want target-scoped thread state path", threadEnv["BOT_TOOLS_TARGET_STATE_PATH"])
 	}
-	for _, key := range []string{"BOT_TOOLS_CHANNEL_ID", "BOT_TOOLS_TARGET_CHANNEL_ID", "BOT_TOOLS_GUILD_ID"} {
+	for _, key := range []string{"BOT_TOOLS_CHANNEL_ID", "BOT_TOOLS_TARGET_CHANNEL_ID", "BOT_TOOLS_GUILD_ID", "BOT_TOOLS_TARGET_STATE_PATH"} {
 		if _, ok := threadDiscordEnv[key]; ok {
 			t.Fatalf("thread mcp-discord env includes bot-tools binding key %s: %+v", key, threadDiscordEnv)
 		}
-	}
-	if threadDiscordEnv["BOT_TOOLS_TARGET_STATE_PATH"] != filepath.Join(dir, "bot-tools-targets", "thread-1.json") {
-		t.Fatalf("thread mcp-discord target state path = %q, want target-scoped mention bridge path", threadDiscordEnv["BOT_TOOLS_TARGET_STATE_PATH"])
 	}
 
 	if err := m.SetMCPPolicy("channel-1", "user-1", "bot-tools", false, "full"); err != nil {
@@ -597,9 +586,16 @@ func TestManagerEnableDefaultBotToolsUsesSafeAllowlist(t *testing.T) {
 	if tools := strings.Join(p.EffectiveTools(), ","); strings.Contains(tools, "bot_delete_cron") || strings.Contains(tools, "bot_delete_monitor") || strings.Contains(tools, "bot_send_message") || strings.Contains(tools, "bot_query_audit") || strings.Contains(tools, "bot_send_image_base64") || !strings.Contains(tools, "bot_send_file") || !strings.Contains(tools, "bot_send_image_url") || !strings.Contains(tools, "bot_query_channel_history") || !strings.Contains(tools, "bot_create_cron") || !strings.Contains(tools, "bot_update_cron") || !strings.Contains(tools, "bot_create_reminder") || !strings.Contains(tools, "bot_update_reminder") || !strings.Contains(tools, "bot_list_monitor") || !strings.Contains(tools, "bot_create_monitor") || !strings.Contains(tools, "bot_update_monitor") {
 		t.Fatalf("unexpected default tools: %q", tools)
 	}
+	if !containsString(p.EffectiveTools(), botmcp.ToolResolveMentions) {
+		t.Fatalf("bot-tools-only setup missing %s: %+v", botmcp.ToolResolveMentions, p.EffectiveTools())
+	}
+	servers := m.agentOptsForChannel("channel-1").MCPServers
+	if len(servers) != 1 || servers[0].Name != "bot-tools" {
+		t.Fatalf("bot-tools-only setup injected unexpected MCP servers: %+v", servers)
+	}
 }
 
-func TestManagerEnableDefaultBotToolsEnablesMCPDiscordMentionResolver(t *testing.T) {
+func TestManagerEnableDefaultBotToolsKeepsMentionResolverInBotTools(t *testing.T) {
 	dir := t.TempDir()
 	m := NewManager(ManagerConfig{DataDir: dir, GuildID: "guild-1"})
 	defer m.StopAll()
@@ -609,42 +605,19 @@ func TestManagerEnableDefaultBotToolsEnablesMCPDiscordMentionResolver(t *testing
 	if err := m.EnableDefaultBotTools("channel-1", "user-1"); err != nil {
 		t.Fatalf("enable default bot tools: %v", err)
 	}
-	p, err := m.mcpPolicies.GetPolicy(context.Background(), "guild-1", "channel-1", mcpDiscordServerName)
+	botPolicy, err := m.mcpPolicies.GetPolicy(context.Background(), "guild-1", "channel-1", "bot-tools")
+	if err != nil {
+		t.Fatalf("get bot-tools policy: %v", err)
+	}
+	if !containsString(botPolicy.EffectiveTools(), botmcp.ToolResolveMentions) {
+		t.Fatalf("bot-tools default tools missing %s: %+v", botmcp.ToolResolveMentions, botPolicy.EffectiveTools())
+	}
+	discordPolicy, err := m.mcpPolicies.GetPolicy(context.Background(), "guild-1", "channel-1", mcpDiscordServerName)
 	if err != nil {
 		t.Fatalf("get mcp-discord policy: %v", err)
 	}
-	if !p.Enabled || p.AllowAllTools || p.ReadOnly || p.AllowDestructive || p.Preset != "safe-write" {
-		t.Fatalf("mcp-discord mention policy is not safe-write allowlist: %+v", p)
-	}
-	if tools := p.EffectiveTools(); len(tools) != 1 || tools[0] != mcpDiscordResolveMentionsTool {
-		t.Fatalf("mcp-discord default tools = %+v, want only %s", tools, mcpDiscordResolveMentionsTool)
-	}
-}
-
-func TestManagerDefaultMCPDiscordResolverInjectsTargetStateWithoutCatalogDataDir(t *testing.T) {
-	dir := t.TempDir()
-	m := NewManager(ManagerConfig{DataDir: dir, GuildID: "guild-1"})
-	defer m.StopAll()
-
-	m.RegisterBuiltinMCP("bot-tools", []string{"mcp-bot"}, map[string]string{"DATA_DIR": dir})
-	m.RegisterBuiltinMCP(mcpDiscordServerName, []string{"mcp-discord"}, map[string]string{})
-	if err := m.EnableDefaultBotTools("channel-1", "user-1"); err != nil {
-		t.Fatalf("enable default bot tools: %v", err)
-	}
-	opts := m.agentOptsForChannel("channel-1")
-	var discordEnv map[string]string
-	for _, server := range opts.MCPServers {
-		if server.Name == mcpDiscordServerName {
-			discordEnv = proxyTargetEnv(t, server.Env)
-			break
-		}
-	}
-	if discordEnv == nil {
-		t.Fatalf("mcp-discord resolver was not injected: %+v", opts.MCPServers)
-	}
-	want := filepath.Join(dir, "bot-tools-targets", "channel-1.json")
-	if discordEnv["BOT_TOOLS_TARGET_STATE_PATH"] != want {
-		t.Fatalf("mcp-discord target state path = %q, want %q; env=%+v", discordEnv["BOT_TOOLS_TARGET_STATE_PATH"], want, discordEnv)
+	if discordPolicy.Enabled {
+		t.Fatalf("default bot-tools setup unexpectedly enabled mcp-discord: %+v", discordPolicy)
 	}
 }
 
@@ -665,8 +638,8 @@ func TestManagerEnableDefaultBotToolsPreservesExistingMCPDiscordTools(t *testing
 	if err != nil {
 		t.Fatalf("get mcp-discord policy: %v", err)
 	}
-	if !containsString(p.EffectiveTools(), "discord_read_messages") || !containsString(p.EffectiveTools(), mcpDiscordResolveMentionsTool) {
-		t.Fatalf("mcp-discord default enable did not preserve existing tools and add resolver: %+v", p.EffectiveTools())
+	if tools := p.EffectiveTools(); len(tools) != 1 || tools[0] != "discord_read_messages" {
+		t.Fatalf("default bot-tools setup changed mcp-discord tools: %+v", tools)
 	}
 }
 
@@ -1104,6 +1077,264 @@ func TestManagerEnableDefaultBotToolsOverwritesExistingFullPolicy(t *testing.T) 
 	}
 }
 
+func TestMentionBridgeMigrationMovesResolverIntoBotTools(t *testing.T) {
+	dir := t.TempDir()
+	sink := &recordingAuditSink{}
+	m := NewManager(ManagerConfig{DataDir: dir, GuildID: "guild-1", Audit: sink})
+	defer m.StopAll()
+
+	ctx := context.Background()
+	if err := m.mcpPolicies.SetPolicy(ctx, MCPChannelPolicy{
+		GuildID:      "guild-1",
+		ChannelID:    "channel-1",
+		ServerName:   "bot-tools",
+		Enabled:      true,
+		ReadOnly:     false,
+		AllowedTools: []string{botmcp.ToolCurrentTime},
+		UpdatedBy:    "user-1",
+	}); err != nil {
+		t.Fatalf("seed bot-tools policy: %v", err)
+	}
+	if err := m.mcpPolicies.SetPolicy(ctx, MCPChannelPolicy{
+		GuildID:      "guild-1",
+		ChannelID:    "channel-1",
+		ServerName:   mcpDiscordServerName,
+		Enabled:      true,
+		ReadOnly:     false,
+		Preset:       "safe-write",
+		AllowedTools: []string{retiredDiscordResolveMentions},
+		UpdatedBy:    "user-1",
+	}); err != nil {
+		t.Fatalf("seed mcp-discord policy: %v", err)
+	}
+
+	m.SetBotID("bot-1")
+	discordPolicy, err := m.mcpPolicies.GetPolicy(ctx, "guild-1", "channel-1", mcpDiscordServerName)
+	if err != nil {
+		t.Fatalf("get migrated mcp-discord policy: %v", err)
+	}
+	if discordPolicy.Enabled || !discordPolicy.ReadOnly || len(discordPolicy.AllowedTools) != 0 {
+		t.Fatalf("retired mcp-discord resolver policy remains active: %+v", discordPolicy)
+	}
+	botPolicy, err := m.mcpPolicies.GetPolicy(ctx, "guild-1", "channel-1", "bot-tools")
+	if err != nil {
+		t.Fatalf("get migrated bot-tools policy: %v", err)
+	}
+	if !containsString(botPolicy.AllowedTools, botmcp.ToolCurrentTime) || !containsString(botPolicy.AllowedTools, botmcp.ToolResolveMentions) {
+		t.Fatalf("bot-tools mention resolver migration = %+v", botPolicy.AllowedTools)
+	}
+	applied, err := m.mcpPolicies.MigrationApplied(ctx, mcpMentionBridgeMigrationV2)
+	if err != nil || !applied {
+		t.Fatalf("mention migration applied = %v, %v", applied, err)
+	}
+	events := sink.Snapshot()
+	if len(events) != 2 {
+		t.Fatalf("mention migration audit events = %+v, want two policy updates", events)
+	}
+	for _, event := range events {
+		if event.Type != "mcp_policy_updated" || event.ChannelID != "channel-1" ||
+			event.UserID != "system:migration:"+mcpMentionBridgeMigrationV2 ||
+			event.Source != "migration" || event.Status != "updated" {
+			t.Fatalf("unexpected mention migration audit event: %+v", event)
+		}
+		if event.Metadata["action"] != "mention_bridge_migration" ||
+			event.Metadata["migration_key"] != mcpMentionBridgeMigrationV2 {
+			t.Fatalf("unexpected mention migration audit metadata: %+v", event.Metadata)
+		}
+	}
+	if events[0].Metadata["server_name"] != "bot-tools" ||
+		events[0].Metadata["added_tool"] != botmcp.ToolResolveMentions {
+		t.Fatalf("unexpected bot-tools migration audit metadata: %+v", events[0].Metadata)
+	}
+	if events[1].Metadata["server_name"] != mcpDiscordServerName ||
+		events[1].Metadata["removed_tool"] != retiredDiscordResolveMentions {
+		t.Fatalf("unexpected mcp-discord migration audit metadata: %+v", events[1].Metadata)
+	}
+}
+
+func TestMentionBridgeMigrationMovesResolverFromAllowAllDiscordPolicy(t *testing.T) {
+	dir := t.TempDir()
+	sink := &recordingAuditSink{}
+	m := NewManager(ManagerConfig{DataDir: dir, GuildID: "guild-1", Audit: sink})
+	defer m.StopAll()
+
+	ctx := context.Background()
+	if err := m.mcpPolicies.SetPolicy(ctx, MCPChannelPolicy{
+		GuildID:      "guild-1",
+		ChannelID:    "channel-1",
+		ServerName:   "bot-tools",
+		Enabled:      true,
+		AllowedTools: []string{botmcp.ToolCurrentTime},
+		UpdatedBy:    "user-1",
+	}); err != nil {
+		t.Fatalf("seed bot-tools policy: %v", err)
+	}
+	if err := m.mcpPolicies.SetPolicy(ctx, MCPChannelPolicy{
+		GuildID:          "guild-1",
+		ChannelID:        "channel-1",
+		ServerName:       mcpDiscordServerName,
+		Enabled:          true,
+		AllowAllTools:    true,
+		AllowDestructive: true,
+		Preset:           "full",
+		UpdatedBy:        "user-1",
+	}); err != nil {
+		t.Fatalf("seed full mcp-discord policy: %v", err)
+	}
+
+	m.SetBotID("bot-1")
+
+	botPolicy, err := m.mcpPolicies.getStoredPolicy(ctx, "guild-1", "channel-1", "bot-tools")
+	if err != nil {
+		t.Fatalf("get stored bot-tools policy: %v", err)
+	}
+	if !containsString(botPolicy.AllowedTools, botmcp.ToolResolveMentions) {
+		t.Fatalf("allow-all resolver migration missing bot resolver: %+v", botPolicy.AllowedTools)
+	}
+	discordPolicy, err := m.mcpPolicies.getStoredPolicy(ctx, "guild-1", "channel-1", mcpDiscordServerName)
+	if err != nil {
+		t.Fatalf("get stored mcp-discord policy: %v", err)
+	}
+	if !discordPolicy.Enabled || !discordPolicy.AllowAllTools || discordPolicy.UpdatedBy != "user-1" {
+		t.Fatalf("allow-all mcp-discord policy changed unexpectedly: %+v", discordPolicy)
+	}
+	events := sink.Snapshot()
+	if len(events) != 1 || events[0].Metadata["server_name"] != "bot-tools" ||
+		events[0].Metadata["added_tool"] != botmcp.ToolResolveMentions {
+		t.Fatalf("allow-all resolver migration audit events = %+v", events)
+	}
+}
+
+func TestMentionBridgeMigrationPersistsAndAuditsLegacyDefaultResolver(t *testing.T) {
+	dir := t.TempDir()
+	sink := &recordingAuditSink{}
+	m := NewManager(ManagerConfig{DataDir: dir, GuildID: "guild-1", Audit: sink})
+	defer m.StopAll()
+
+	ctx := context.Background()
+	if err := m.mcpPolicies.SetPolicy(ctx, MCPChannelPolicy{
+		GuildID:    "guild-1",
+		ChannelID:  "channel-1",
+		ServerName: "bot-tools",
+		Enabled:    true,
+		Preset:     "safe-write",
+		AllowedTools: []string{
+			"bot_create_cron",
+			"bot_data_summary",
+			"bot_list_channel_data",
+			"bot_list_cron",
+			"bot_send_file",
+		},
+		UpdatedBy: "user-1",
+	}); err != nil {
+		t.Fatalf("seed legacy bot-tools policy: %v", err)
+	}
+	if err := m.mcpPolicies.SetPolicy(ctx, MCPChannelPolicy{
+		GuildID:      "guild-1",
+		ChannelID:    "channel-1",
+		ServerName:   mcpDiscordServerName,
+		Enabled:      true,
+		AllowedTools: []string{retiredDiscordResolveMentions},
+		UpdatedBy:    "user-1",
+	}); err != nil {
+		t.Fatalf("seed mcp-discord policy: %v", err)
+	}
+
+	m.SetBotID("bot-1")
+
+	stored, err := m.mcpPolicies.getStoredPolicy(ctx, "guild-1", "channel-1", "bot-tools")
+	if err != nil {
+		t.Fatalf("get stored bot-tools policy: %v", err)
+	}
+	if !containsString(stored.AllowedTools, botmcp.ToolResolveMentions) {
+		t.Fatalf("stored bot-tools policy missing migrated resolver: %+v", stored.AllowedTools)
+	}
+	events := sink.Snapshot()
+	if len(events) != 2 || events[0].Metadata["server_name"] != "bot-tools" ||
+		events[0].Metadata["added_tool"] != botmcp.ToolResolveMentions {
+		t.Fatalf("legacy default resolver migration audit events = %+v", events)
+	}
+}
+
+func TestMentionBridgeMigrationDoesNotGrantResolverFromInactiveDiscordPolicy(t *testing.T) {
+	tests := []struct {
+		name     string
+		enabled  bool
+		readOnly bool
+	}{
+		{name: "disabled", enabled: false},
+		{name: "read-only", enabled: true, readOnly: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			sink := &recordingAuditSink{}
+			m := NewManager(ManagerConfig{DataDir: dir, GuildID: "guild-1", Audit: sink})
+			defer m.StopAll()
+
+			ctx := context.Background()
+			if err := m.mcpPolicies.SetPolicy(ctx, MCPChannelPolicy{
+				GuildID:    "guild-1",
+				ChannelID:  "channel-1",
+				ServerName: "bot-tools",
+				Enabled:    true,
+				Preset:     "safe-write",
+				AllowedTools: []string{
+					"bot_create_cron",
+					"bot_data_summary",
+					"bot_list_channel_data",
+					"bot_list_cron",
+					"bot_send_file",
+				},
+				UpdatedBy: "user-1",
+			}); err != nil {
+				t.Fatalf("seed bot-tools policy: %v", err)
+			}
+			if err := m.mcpPolicies.SetPolicy(ctx, MCPChannelPolicy{
+				GuildID:      "guild-1",
+				ChannelID:    "channel-1",
+				ServerName:   mcpDiscordServerName,
+				Enabled:      tt.enabled,
+				ReadOnly:     tt.readOnly,
+				AllowedTools: []string{retiredDiscordResolveMentions},
+				UpdatedBy:    "user-1",
+			}); err != nil {
+				t.Fatalf("seed inactive mcp-discord policy: %v", err)
+			}
+
+			m.SetBotID("bot-1")
+
+			botPolicy, err := m.mcpPolicies.getStoredPolicy(ctx, "guild-1", "channel-1", "bot-tools")
+			if err != nil {
+				t.Fatalf("get stored bot-tools policy: %v", err)
+			}
+			if containsString(botPolicy.AllowedTools, botmcp.ToolResolveMentions) {
+				t.Fatalf("inactive mcp-discord policy granted bot resolver: %+v", botPolicy.AllowedTools)
+			}
+			effectiveBotPolicy, err := m.mcpPolicies.GetPolicy(ctx, "guild-1", "channel-1", "bot-tools")
+			if err != nil {
+				t.Fatalf("get effective bot-tools policy: %v", err)
+			}
+			if containsString(effectiveBotPolicy.AllowedTools, botmcp.ToolResolveMentions) ||
+				containsString(effectiveBotPolicy.EffectiveTools(), botmcp.ToolResolveMentions) {
+				t.Fatalf("inactive mcp-discord policy gained effective bot resolver: %+v", effectiveBotPolicy.AllowedTools)
+			}
+			discordPolicy, err := m.mcpPolicies.getStoredPolicy(ctx, "guild-1", "channel-1", mcpDiscordServerName)
+			if err != nil {
+				t.Fatalf("get stored mcp-discord policy: %v", err)
+			}
+			if containsString(discordPolicy.AllowedTools, retiredDiscordResolveMentions) {
+				t.Fatalf("inactive mcp-discord policy retained retired resolver: %+v", discordPolicy.AllowedTools)
+			}
+			events := sink.Snapshot()
+			if len(events) != 1 || events[0].Metadata["server_name"] != mcpDiscordServerName ||
+				events[0].Metadata["removed_tool"] != retiredDiscordResolveMentions {
+				t.Fatalf("inactive resolver migration audit events = %+v", events)
+			}
+		})
+	}
+}
+
 func TestLegacyMCPMigrationDoesNotEnableFreshInstall(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "mcp.json")
@@ -1133,6 +1364,7 @@ func TestLegacyMCPMigrationDoesNotEnableFreshInstall(t *testing.T) {
 
 func TestLegacyMCPMigrationEnablesCatalogForKnownChannels(t *testing.T) {
 	dir := t.TempDir()
+	sink := &recordingAuditSink{}
 	cfgPath := filepath.Join(dir, "mcp.json")
 	if err := os.WriteFile(cfgPath, []byte(`{"mcpServers":{"legacy-tools":{"command":"/tmp/legacy-mcp"}}}`), 0644); err != nil {
 		t.Fatalf("write config: %v", err)
@@ -1146,7 +1378,7 @@ func TestLegacyMCPMigrationEnablesCatalogForKnownChannels(t *testing.T) {
 		t.Fatalf("write legacy session: %v", err)
 	}
 
-	m := NewManager(ManagerConfig{DataDir: dir, Store: store, GuildID: "guild-1", BotID: "bot-1"})
+	m := NewManager(ManagerConfig{DataDir: dir, Store: store, GuildID: "guild-1", BotID: "bot-1", Audit: sink})
 	defer m.StopAll()
 
 	opts := m.agentOptsForChannel("channel-1")
@@ -1159,6 +1391,26 @@ func TestLegacyMCPMigrationEnablesCatalogForKnownChannels(t *testing.T) {
 	}
 	if !p.Enabled || !p.AllowAllTools || p.UpdatedBy != "system:migration:"+mcpLegacyMigrationV1 {
 		t.Fatalf("unexpected migrated policy: %+v", p)
+	}
+	events := sink.Snapshot()
+	if len(events) != len(m.mcpPolicies.Catalog()) {
+		t.Fatalf("legacy migration audit event count = %d, want one per catalog policy (%d)", len(events), len(m.mcpPolicies.Catalog()))
+	}
+	foundLegacyTools := false
+	for _, event := range events {
+		if event.Type != "mcp_policy_updated" || event.ChannelID != "channel-1" ||
+			event.UserID != "system:migration:"+mcpLegacyMigrationV1 ||
+			event.Source != "migration" || event.Status != "updated" ||
+			event.Metadata["action"] != "legacy_catalog_migration" ||
+			event.Metadata["migration_key"] != mcpLegacyMigrationV1 {
+			t.Fatalf("unexpected legacy migration audit event: %+v", event)
+		}
+		if event.Metadata["server_name"] == "legacy-tools" {
+			foundLegacyTools = true
+		}
+	}
+	if !foundLegacyTools {
+		t.Fatalf("legacy-tools policy audit event missing: %+v", events)
 	}
 
 	if got := m.agentOptsForChannel("new-channel").MCPServers; len(got) != 0 {

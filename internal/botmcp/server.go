@@ -41,6 +41,7 @@ const (
 	ToolListChannelData     = "bot_list_channel_data"
 	ToolCurrentTime         = "bot_current_time"
 	ToolResolveDateRange    = "bot_resolve_date_range"
+	ToolResolveMentions     = "bot_resolve_mentions"
 	ToolSendMessage         = "bot_send_message"
 	ToolSendFile            = "bot_send_file"
 	ToolSendImageURL        = "bot_send_image_url"
@@ -75,6 +76,7 @@ func DefaultSafeToolNamesForA2A(a2aEnabled bool) []string {
 		ToolListChannelData,
 		ToolCurrentTime,
 		ToolResolveDateRange,
+		ToolResolveMentions,
 		ToolListCron,
 		ToolSendFile,
 		ToolSendImageURL,
@@ -928,6 +930,7 @@ func NewServerWithOptions(opts ServerOptions) *server.MCPServer {
 			return mcp.NewToolResultText(string(raw)), nil
 		},
 	)
+	registerResolveMentionsTool(s)
 	if opts.A2AEnabled {
 		registerA2ATools(s)
 	}
@@ -948,6 +951,12 @@ func writeTool(name, description string, destructive bool) mcp.Tool {
 		mcp.WithIdempotentHintAnnotation(true)(&t)
 	}
 	switch name {
+	case ToolResolveMentions:
+		for _, opt := range []mcp.ToolOption{
+			mcp.WithString("names", mcp.Required(), mcp.Description("Comma- or newline-separated display names to resolve; extract names from the request and do not pass Discord IDs or raw mentions")),
+		} {
+			opt(&t)
+		}
 	case ToolSendMessage:
 		for _, opt := range []mcp.ToolOption{
 			mcp.WithString("channel_id", mcp.Required(), mcp.Description("Discord channel ID from context")),
@@ -1624,6 +1633,7 @@ func compactHistorySnippet(s string, maxRunes int) string {
 }
 
 type targetState struct {
+	GuildID               string               `json:"guild_id"`
 	TargetChannelID       string               `json:"target_channel_id"`
 	DisableEgress         bool                 `json:"disable_egress"`
 	RemoteA2A             bool                 `json:"remote_a2a"`

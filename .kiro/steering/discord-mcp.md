@@ -51,7 +51,11 @@ description: Guidelines for operating as a Discord bot agent. The bot automatica
 
 `mcp-discord` 是純 Discord REST MCP server：`/mcp manage` / MCP proxy 只決定暴露哪些 `discord_*` tools，實際 guild/channel resource 範圍與操作成敗由 Discord bot token 與 Discord API 權限決定。若 Discord 回 `403 Missing Access`，回報 token/Discord permission 不足，不要描述為本地 allowlist 或 session binding 限制。
 
-`mcp-discord` 不再支援本地 guild/channel allowlist、read-only env cap、write-tool env cap、destructive env cap 或 bot-tools target binding authorization。`BOT_TOOLS_TARGET_STATE_PATH` 只作為 optional verified mention refs bridge；沒有 state path 時 mention resolve 仍應回傳解析結果。
+`mcp-discord` 不再支援本地 guild/channel allowlist、read-only env cap、write-tool env cap、destructive env cap、bot-tools target binding authorization 或 target-state mention bridge。`BOT_TOOLS_TARGET_STATE_PATH` 只能注入 `bot-tools`；具名 mention 與 task-local placeholder 授權由 `bot_resolve_mentions` 負責，純管理查詢使用 read-only `discord_search_members`。
+
+`discord_list_channels` 必須保留 Discord Get Guild Channels API 回傳的所有 channel types，不可只篩 text channels。`include_active_threads=true` 才另外呼叫 active-threads endpoint；無論哪一種都只能看到 Discord token 具 `VIEW_CHANNEL` 的 resources。
+
+`discord_list_members` 與 `discord_get_reactions` 必須暴露 `after` / `next_after` cursor pagination；`discord_get_user` 必須先走 direct Get User，只有呼叫者明確提供 `guild_id` 或 `channel_id` 時才附加 member metadata。
 
 `discord_download_attachment` 只應用於 Discord attachment/CDN URL；下載到本機後，回報實際儲存路徑即可。
 

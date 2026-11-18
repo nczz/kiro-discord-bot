@@ -119,3 +119,24 @@ func TestExcludeRemovesMatchingKindAndID(t *testing.T) {
 		t.Fatalf("second filtered ref = %+v, want user 456", filtered[1])
 	}
 }
+
+func TestNormalizeRefsAndUserIDsShareTargetStateSemantics(t *testing.T) {
+	refs := []Ref{
+		{Kind: " user ", ID: " 123 ", DisplayName: " Alice ", Placeholder: "untrusted"},
+		UserRef("123", "duplicate"),
+		RoleRef("999", "Ops"),
+		{Kind: "channel", ID: "456"},
+		{Kind: "user"},
+	}
+	normalized := NormalizeRefs(refs)
+	if len(normalized) != 2 {
+		t.Fatalf("normalized refs = %+v, want one user and one role", normalized)
+	}
+	if normalized[0] != UserRef("123", "Alice") || normalized[1] != RoleRef("999", "Ops") {
+		t.Fatalf("normalized refs = %+v", normalized)
+	}
+	userIDs := UserIDs(normalized)
+	if len(userIDs) != 1 || userIDs[0] != "123" {
+		t.Fatalf("user IDs = %+v, want [123]", userIDs)
+	}
+}

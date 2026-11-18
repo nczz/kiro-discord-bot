@@ -64,7 +64,7 @@ omp update
 | OAuth2 scopes | `bot`, `applications.commands` |
 | 基礎權限 | View Channels, Send Messages, Send Messages in Threads, Create Public Threads, Read Message History, Add Reactions, Use Slash Commands |
 | 選用權限 | WebShare 委派身分需要 Manage Webhooks；Manage Threads, Embed Links, Attach Files 依啟用功能決定 |
-| Privileged intents | Message Content Intent |
+| Privileged intents | Message Content Intent；使用 `discord_list_members`、`discord_search_members` 或 `bot_resolve_mentions` member lookup 時，另需 Server Members Intent |
 
 General Information 的 Interactions Endpoint URL 必須保持空白。若設定 URL，Discord slash commands 會送到該 endpoint，而不是 gateway bot，導致 command timeout。
 

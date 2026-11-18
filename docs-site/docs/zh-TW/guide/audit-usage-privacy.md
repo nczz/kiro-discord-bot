@@ -13,6 +13,9 @@ Recorder 會記錄 Discord gateway 活動與 bot-side events，包含 message cr
 
 Typing event 只有在 `AUDIT_LOG_RECORD_TYPING=true` 時才會記錄。
 
+MCP policy 變更會記錄為 `mcp_policy_updated`；系統升級 migration 使用 `source=migration`。Bot-managed agent job 內觀察到的 tool calls 會使用通用 `agent_tool_call` 與 `agent_tool_result` events。獨立的外部 MCP server 不會自動寫入這個 database；詳見 [Discord MCP 的 Audit 邊界](mcp-discord.md#audit-邊界)。
+
+
 ## 訊息刪除歸屬
 
 Discord gateway 的 `message_delete` event 能確認某則訊息消失，但不會指出刪除操作者。若 bot 先前已記錄原訊息，audit query 可以顯示原作者；在內容保留已啟用且查詢明確要求時，也能顯示短內容摘要。原作者不等於刪除者，也不能單獨證明是自刪。

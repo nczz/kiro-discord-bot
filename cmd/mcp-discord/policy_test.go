@@ -15,7 +15,6 @@ import (
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/mark3labs/mcp-go/mcp"
-	"github.com/nczz/kiro-discord-bot/internal/discordmention"
 )
 
 func containsString(items []string, want string) bool {
@@ -112,17 +111,6 @@ func TestDiscordToolAnnotationHelpersClassifyPolicy(t *testing.T) {
 				t.Fatalf("destructiveHint = %v, want %v", tc.tool.Annotations.DestructiveHint, tc.destructive)
 			}
 		})
-	}
-}
-
-func TestDiscordUserGuildScopeUsesExplicitScopeOnly(t *testing.T) {
-	t.Setenv("BOT_TOOLS_GUILD_ID", "guild-1")
-
-	if _, err := discordUserGuildScope(mcp.CallToolRequest{Params: mcp.CallToolParams{Arguments: map[string]any{"user_id": "user-1"}}}); err == nil || !strings.Contains(err.Error(), "guild_id or channel_id") {
-		t.Fatalf("unscoped user lookup error = %v, want scope requirement", err)
-	}
-	if guildID, err := discordUserGuildScope(mcp.CallToolRequest{Params: mcp.CallToolParams{Arguments: map[string]any{"user_id": "user-1", "guild_id": "guild-2"}}}); err != nil || guildID != "guild-2" {
-		t.Fatalf("explicit guild scope = %q, %v; want guild-2 without bot-tools binding restriction", guildID, err)
 	}
 }
 
@@ -357,7 +345,7 @@ func TestSendDiscordMessagePartsPreservesMarkdownHeading(t *testing.T) {
 	}
 }
 
-func TestSendDiscordMessagePartsRendersVerifiedMentionPlaceholders(t *testing.T) {
+func TestSendDiscordMessagePartsDoesNotReadBotTargetStateMentions(t *testing.T) {
 	statePath := filepath.Join(t.TempDir(), "target.json")
 	rawState := `{"mention_refs":[{"kind":"user","id":"123456789012345678","display_name":"mxp.tw","placeholder":"[[discord:user:123456789012345678]]"},{"kind":"role","id":"222222222222222222","display_name":"Ops","placeholder":"[[discord:role:222222222222222222]]"}]}` + "\n"
 	if err := os.WriteFile(statePath, []byte(rawState), 0644); err != nil {
@@ -377,11 +365,6 @@ func TestSendDiscordMessagePartsRendersVerifiedMentionPlaceholders(t *testing.T)
 	if _, err := sendDiscordMessageParts("channel-1", "notify [[discord:user:123456789012345678]] and [[discord:role:222222222222222222]] raw <@999999999999999999>"); err != nil {
 		t.Fatalf("send parts: %v", err)
 	}
-
-	bodies := rt.Bodies()
-	if len(bodies) != 1 {
-		t.Fatalf("sent bodies = %d, want 1: %v", len(bodies), bodies)
-	}
 	var payload struct {
 		Content         string `json:"content"`
 		AllowedMentions struct {
@@ -389,23 +372,16 @@ func TestSendDiscordMessagePartsRendersVerifiedMentionPlaceholders(t *testing.T)
 			Roles []string `json:"roles"`
 		} `json:"allowed_mentions"`
 	}
-	if err := json.Unmarshal([]byte(bodies[0]), &payload); err != nil {
-		t.Fatalf("payload json: %v\n%s", err, bodies[0])
+	if err := json.Unmarshal([]byte(rt.Bodies()[0]), &payload); err != nil {
+		t.Fatalf("payload json: %v", err)
 	}
-	if !strings.Contains(payload.Content, "<@123456789012345678>") {
-		t.Fatalf("content missing rendered verified mention: %q", payload.Content)
+	for _, active := range []string{"<@123456789012345678>", "<@&222222222222222222>", "<@999999999999999999>"} {
+		if strings.Contains(payload.Content, active) {
+			t.Fatalf("mcp-discord activated bot-task mention %q in %q", active, payload.Content)
+		}
 	}
-	if !strings.Contains(payload.Content, "<@&222222222222222222>") {
-		t.Fatalf("content missing rendered verified role mention: %q", payload.Content)
-	}
-	if strings.Contains(payload.Content, "<@999999999999999999>") {
-		t.Fatalf("raw unverified mention stayed active: %q", payload.Content)
-	}
-	if len(payload.AllowedMentions.Users) != 1 || payload.AllowedMentions.Users[0] != "123456789012345678" {
-		t.Fatalf("allowed users = %+v, want verified user mention only", payload.AllowedMentions.Users)
-	}
-	if len(payload.AllowedMentions.Roles) != 1 || payload.AllowedMentions.Roles[0] != "222222222222222222" {
-		t.Fatalf("allowed roles = %+v, want verified role mention only", payload.AllowedMentions.Roles)
+	if len(payload.AllowedMentions.Users) != 0 || len(payload.AllowedMentions.Roles) != 0 {
+		t.Fatalf("mcp-discord inherited bot-task allowed mentions: %+v", payload.AllowedMentions)
 	}
 }
 
@@ -533,118 +509,4 @@ func TestSendDiscordEmbedPartsPreservesMarkdownHeading(t *testing.T) {
 	if got := payload.Embeds[0].Description; got != "# Incident\nbody" {
 		t.Fatalf("direct embed markdown changed: %q", got)
 	}
-}
-
-func TestSplitMentionNamesHandlesNaturalSeparators(t *testing.T) {
-	got := splitMentionNames("Wendy、Cheisy 跟 Wendy\nAlice")
-	want := []string{"Wendy", "Cheisy", "Alice"}
-	if strings.Join(got, "|") != strings.Join(want, "|") {
-		t.Fatalf("names = %#v, want %#v", got, want)
-	}
-}
-
-func TestValidateMentionResolveNamesRejectsRawIDs(t *testing.T) {
-	for _, names := range [][]string{
-		{"123456789012345678"},
-		{"<@123456789012345678>"},
-		{"<@!123456789012345678>"},
-	} {
-		if err := validateMentionResolveNames(names); err == nil {
-			t.Fatalf("validateMentionResolveNames(%+v) accepted raw mention ID", names)
-		}
-	}
-}
-
-func TestValidateMentionResolveNamesAcceptsDisplayNames(t *testing.T) {
-	if err := validateMentionResolveNames([]string{"Wendy Chen", "Cheisy"}); err != nil {
-		t.Fatalf("validate display names: %v", err)
-	}
-}
-
-func TestResolveMentionNameAllowsUniqueFreshPrefix(t *testing.T) {
-	member := &discordgo.Member{Nick: "Wendy Chen", User: &discordgo.User{ID: "123", Username: "wendy", GlobalName: "Wendy Chen"}}
-	got, ambiguous, ok := resolveMentionName("Wendy", "fresh_search_unique", []*discordgo.Member{member})
-	if !ok {
-		t.Fatalf("resolve failed ambiguous=%+v", ambiguous)
-	}
-	if got.UserID != "123" || got.Placeholder != "[[discord:user:123]]" {
-		t.Fatalf("resolved = %+v", got)
-	}
-}
-
-func TestResolveMentionNameReportsAmbiguousMatches(t *testing.T) {
-	members := []*discordgo.Member{
-		{Nick: "Wendy Chen", User: &discordgo.User{ID: "123", Username: "wendychen"}},
-		{Nick: "Wendy Lin", User: &discordgo.User{ID: "456", Username: "wendylin"}},
-	}
-	_, ambiguous, ok := resolveMentionName("Wendy", "fresh_lookup", members)
-	if ok {
-		t.Fatal("ambiguous Wendy resolved unexpectedly")
-	}
-	if ambiguous.Query != "Wendy" || len(ambiguous.Candidates) != 2 {
-		t.Fatalf("ambiguous = %+v", ambiguous)
-	}
-}
-
-func TestAmbiguousMentionCandidatesDoNotExposeReusableUserIDs(t *testing.T) {
-	members := []*discordgo.Member{
-		{Nick: "Wendy Chen", User: &discordgo.User{ID: "123", Username: "wendychen"}},
-		{Nick: "Wendy Lin", User: &discordgo.User{ID: "456", Username: "wendylin"}},
-	}
-	ambiguous := ambiguousForMembers("Wendy", members)
-	raw, err := json.Marshal(ambiguous)
-	if err != nil {
-		t.Fatalf("marshal ambiguous candidates: %v", err)
-	}
-	if strings.Contains(string(raw), "user_id") || strings.Contains(string(raw), "123") || strings.Contains(string(raw), "456") {
-		t.Fatalf("ambiguous candidates leaked reusable user IDs: %s", raw)
-	}
-}
-
-func TestGrantMentionRefsForCurrentJobUpdatesTargetState(t *testing.T) {
-	statePath := filepath.Join(t.TempDir(), "target.json")
-	if err := os.WriteFile(statePath, []byte(`{"target_channel_id":"thread-1","remote_a2a":true,"delegation_depth":2,"requester_id":"user-1","requester_name":"alice","can_manage_channel":true,"can_manage_guild":true,"allowed_mention_user_ids":["old"],"mention_refs":[{"kind":"user","id":"old","display_name":"Old","placeholder":"[[discord:user:old]]"},{"kind":"role","id":"999","display_name":"Ops","placeholder":"[[discord:role:999]]"}]}`+"\n"), 0644); err != nil {
-		t.Fatalf("write state: %v", err)
-	}
-	t.Setenv("BOT_TOOLS_TARGET_STATE_PATH", statePath)
-
-	if err := grantMentionRefsForCurrentJob([]discordmention.Ref{discordmention.UserRef("123", "Wendy")}); err != nil {
-		t.Fatalf("grant mention refs: %v", err)
-	}
-	raw, err := os.ReadFile(statePath)
-	if err != nil {
-		t.Fatalf("read state: %v", err)
-	}
-	var state mentionTargetState
-	if err := json.Unmarshal(raw, &state); err != nil {
-		t.Fatalf("state json: %v\n%s", err, raw)
-	}
-	if !containsString(state.AllowedMentionUserIDs, "old") || !containsString(state.AllowedMentionUserIDs, "123") {
-		t.Fatalf("allowed mention IDs = %+v", state.AllowedMentionUserIDs)
-	}
-	if len(state.MentionRefs) != 3 {
-		t.Fatalf("mention refs = %+v", state.MentionRefs)
-	}
-	if !containsMentionRef(state.MentionRefs, "role", "999") {
-		t.Fatalf("mention refs = %+v, want existing role preserved", state.MentionRefs)
-	}
-	if !state.RemoteA2A || state.DelegationDepth != 2 || state.RequesterID != "user-1" || state.RequesterName != "alice" || !state.CanManageChannel || !state.CanManageGuild {
-		t.Fatalf("security target-state fields were not preserved: %+v", state)
-	}
-}
-
-func TestGrantMentionRefsForCurrentJobNoTargetStatePathIsNoop(t *testing.T) {
-	t.Setenv("BOT_TOOLS_TARGET_STATE_PATH", "")
-	if err := grantMentionRefsForCurrentJob([]discordmention.Ref{discordmention.UserRef("123", "Wendy")}); err != nil {
-		t.Fatalf("grant mention refs without target state: %v", err)
-	}
-}
-
-func containsMentionRef(refs []discordmention.Ref, kind, id string) bool {
-	for _, ref := range refs {
-		if ref.Kind == kind && ref.ID == id {
-			return true
-		}
-	}
-	return false
 }

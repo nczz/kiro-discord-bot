@@ -646,13 +646,11 @@ func (w *Worker) mentionRefsForDelivery(refs, revoked []discordmention.Ref) []di
 	if err != nil && !os.IsNotExist(err) {
 		log.Printf("[mention] read dynamic refs channel=%s: %v", w.channelID, err)
 	}
+	persisted := w.rememberMentionRefs(refs, revoked)
 	if len(dynamic) == 0 {
-		return w.rememberMentionRefs(refs, revoked)
+		return persisted
 	}
-	merged := make([]discordmention.Ref, 0, len(refs)+len(dynamic))
-	merged = append(merged, refs...)
-	merged = append(merged, dynamic...)
-	return w.rememberMentionRefs(merged, revoked)
+	return mergeMentionRefs(persisted, dynamic, revoked)
 }
 
 func (job *Job) currentRevokedMentionRefs() []discordmention.Ref {
@@ -880,7 +878,7 @@ func (w *Worker) execute(job *Job) {
 		job.OnThreadReady(threadID)
 	}
 	canManageChannel, canManageGuild := botToolsRequesterPermissions(job.Session, job.UserID, threadID, w.channelID, w.gmUserIDs)
-	if err := writeBotToolsTargetStateWithRequesterSource(w.botToolsTargetStatePath, threadID, job.DisableBotEgress, job.MentionRefs, job.RemoteA2A, job.AllowRemoteMemoryWrite, job.UserID, job.Username, job.A2ADelegationDepth, canManageChannel, canManageGuild, job.botToolsRequestSource()); err != nil {
+	if err := writeBotToolsTargetStateWithRequesterSource(w.botToolsTargetStatePath, threadID, job.DisableBotEgress, job.MentionRefs, job.RemoteA2A, job.AllowRemoteMemoryWrite, job.UserID, job.Username, job.A2ADelegationDepth, canManageChannel, canManageGuild, job.botToolsRequestSource(), job.GuildID); err != nil {
 		log.Printf("[worker %s] write bot-tools target state: %v", w.channelID, err)
 	}
 
@@ -1621,7 +1619,7 @@ func (w *Worker) executeInline(job *Job) {
 	}
 	targetID := job.inlineBotToolsTargetID()
 	canManageChannel, canManageGuild := botToolsRequesterPermissions(job.Session, job.UserID, targetID, job.ChannelID, w.gmUserIDs)
-	if err := writeBotToolsTargetStateWithRequesterSource(w.botToolsTargetStatePath, targetID, job.DisableBotEgress, job.MentionRefs, job.RemoteA2A, job.AllowRemoteMemoryWrite, job.UserID, job.Username, job.A2ADelegationDepth, canManageChannel, canManageGuild, job.botToolsRequestSource()); err != nil {
+	if err := writeBotToolsTargetStateWithRequesterSource(w.botToolsTargetStatePath, targetID, job.DisableBotEgress, job.MentionRefs, job.RemoteA2A, job.AllowRemoteMemoryWrite, job.UserID, job.Username, job.A2ADelegationDepth, canManageChannel, canManageGuild, job.botToolsRequestSource(), job.GuildID); err != nil {
 		log.Printf("[worker %s] write inline bot-tools target state: %v", w.channelID, err)
 	}
 
@@ -2282,7 +2280,7 @@ func (w *Worker) executeFallback(job *Job, reactions *jobReactionState) {
 		w.signalIdle()
 	}()
 	canManageChannel, canManageGuild := botToolsRequesterPermissions(job.Session, job.UserID, job.ChannelID, "", w.gmUserIDs)
-	if err := writeBotToolsTargetStateWithRequester(w.botToolsTargetStatePath, job.ChannelID, false, job.MentionRefs, false, false, job.UserID, job.Username, 0, canManageChannel, canManageGuild); err != nil {
+	if err := writeBotToolsTargetStateWithRequester(w.botToolsTargetStatePath, job.ChannelID, false, job.MentionRefs, false, false, job.UserID, job.Username, 0, canManageChannel, canManageGuild, job.GuildID); err != nil {
 		log.Printf("[worker %s] write fallback bot-tools target state: %v", w.channelID, err)
 	}
 

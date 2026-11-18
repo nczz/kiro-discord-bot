@@ -6,7 +6,7 @@
 
 ## 預設工具權限
 
-第一次完成頻道設定時，預設會啟用這些安全工具：
+第一次完成頻道設定時，預設會啟用這些安全工具。`bot_a2a_*` 各列只有在 A2A 已設定並啟用時才會加入：
 
 | Tool | 類型 | 用途 |
 | --- | --- | --- |
@@ -14,6 +14,7 @@
 | `bot_list_channel_data` | Read | 列出已知 channel data folders 與 metadata 是否存在，不包含訊息內容。 |
 | `bot_current_time` | Read | 回傳 bot 在 `CRON_TIMEZONE` 下的精確目前日期時間、星期、時段與本週範圍。 |
 | `bot_resolve_date_range` | Read | 用結構化欄位解析 calendar range，避免 agent 自己心算日期。 |
+| `bot_resolve_mentions` | Write, non-destructive, task-scoped | 將成員名稱解析成目前 bot task 最終 Discord delivery 可使用的 verified placeholders。 |
 | `bot_list_cron` | Read | 列出目前頻道的排程任務。 |
 | `bot_list_monitor` | Read | 列出目前頻道的背景監控。 |
 | `bot_send_file` | Write, non-destructive | 將 sanitized file upload 排入 Discord delivery queue。 |
@@ -117,7 +118,7 @@ File egress 採保守設計：
 
 ## Mention Resolution
 
-當 `mcp-discord` catalog entry 存在時，default bot-tools setup 也會替該 server 開啟 `discord_resolve_mentions`。這個 resolver 可以把「Wendy」、「Cheisy」這類名字解析成目前 bot task 可用的 verified `[[discord:user:...]]` placeholders。它會先向 Discord refresh，再 fallback 到 cache，並更新本次任務的 dynamic mention refs；final delivery 仍由 bot 的 `AllowedMentions` guard 控制。Ambiguous 或 missing names 必須請使用者確認。
+Default bot-tools setup 會在 bot-owned MCP server 中啟用 `bot_resolve_mentions`。Resolver 會把「Wendy」這類名字解析成目前 bot task 可用的 verified `[[discord:user:...]]` placeholders。它會逐一執行 fresh Discord member search，再於每次 tool call 執行一次 bounded guild-member scan，以交叉檢查 exact 或 unique matches。它會更新 dynamic mention refs，final delivery 仍受 `AllowedMentions` 保護；ambiguous 或 missing names 必須請使用者確認。`BOT_TOOLS_MENTION_MEMBER_SCAN_LIMIT` 可調整預設 5000-member cross-check bound。獨立的 `discord_search_members` 只供 administrative read-only lookup，絕不授予 bot-task mentions。
 
 ## Channel History Tool
 

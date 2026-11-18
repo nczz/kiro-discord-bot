@@ -6,7 +6,7 @@ This server is separate from external MCP servers listed in the MCP catalog.
 
 ## Default Tool Policy
 
-On first channel setup, these safe tools are enabled by default:
+On first channel setup, these safe tools are enabled by default. The `bot_a2a_*` rows are added only when A2A is configured and enabled:
 
 | Tool | Kind | Purpose |
 | --- | --- | --- |
@@ -14,6 +14,7 @@ On first channel setup, these safe tools are enabled by default:
 | `bot_list_channel_data` | Read | List known channel data folders and metadata presence without message content. |
 | `bot_current_time` | Read | Return the bot's exact current date/time, weekday, day period, and current week in `CRON_TIMEZONE`. |
 | `bot_resolve_date_range` | Read | Resolve structured calendar ranges without agent-side date math. |
+| `bot_resolve_mentions` | Write, non-destructive, task-scoped | Resolve member names into verified placeholders authorized for the current bot task's final Discord delivery. |
 | `bot_list_cron` | Read | List scheduled jobs for the current channel. |
 | `bot_list_monitor` | Read | List background monitors for the current channel. |
 | `bot_send_file` | Write, non-destructive | Queue a sanitized file upload for Discord delivery. |
@@ -117,7 +118,7 @@ Incoming attachment paths are always listed in the agent prompt as a JSON-lines 
 
 ## Mention Resolution
 
-When the `mcp-discord` catalog entry is present, default bot-tools setup also enables `discord_resolve_mentions` for that server. The resolver can turn names such as "Wendy" or "Cheisy" into verified `[[discord:user:...]]` placeholders for the active bot task. It refreshes from Discord before falling back to cache, updates the task's dynamic mention refs, and keeps final delivery under the bot's `AllowedMentions` guard. Ambiguous or missing names require user clarification.
+Default bot-tools setup enables `bot_resolve_mentions` in the bot-owned MCP server. The resolver turns names such as "Wendy" into verified `[[discord:user:...]]` placeholders for the active bot task. It performs fresh per-name Discord member searches, then one bounded guild-member scan per tool call to cross-check exact or unique matches. It updates dynamic mention refs and keeps final delivery under `AllowedMentions`; ambiguous or missing names require clarification. `BOT_TOOLS_MENTION_MEMBER_SCAN_LIMIT` changes the default 5000-member cross-check bound. The separate `discord_search_members` tool is administrative read-only lookup and never grants bot-task mentions.
 
 ## Channel History Tool
 

@@ -352,8 +352,8 @@ func NewManager(cfg ManagerConfig) *Manager {
 		m.mcpPolicies = store
 		m.mcpPolicies.SetDiscoveryProxyCommand(m.mcpProxyCommand)
 		if m.botID != "" {
-			if err := m.applyLegacyMCPMigration(); err != nil {
-				log.Printf("[mcp-policy] legacy migration: %v", err)
+			if err := m.applyMCPMigrations(); err != nil {
+				log.Printf("[mcp-policy] migration: %v", err)
 			}
 		}
 		log.Printf("[mcp-policy] catalog servers=%d", len(store.Catalog()))
@@ -388,8 +388,8 @@ func (m *Manager) SetBotID(botID string) {
 	m.botID = botID
 	m.mu.Unlock()
 	if botID != "" && changed {
-		if err := m.applyLegacyMCPMigration(); err != nil {
-			log.Printf("[mcp-policy] legacy migration: %v", err)
+		if err := m.applyMCPMigrations(); err != nil {
+			log.Printf("[mcp-policy] migration: %v", err)
 		}
 	}
 }
@@ -420,12 +420,20 @@ const (
 	sessionTargetThread           = "thread"
 	interruptGrace                = 5 * time.Second
 	mcpLegacyMigrationV1          = "legacy_catalog_full_enable_v1"
+	mcpMentionBridgeMigrationV2   = "mcp_discord_mention_bridge_to_bot_tools_v2"
 	mcpDiscordServerName          = "mcp-discord"
-	mcpDiscordResolveMentionsTool = "discord_resolve_mentions"
+	retiredDiscordResolveMentions = "discord_resolve_mentions"
 )
 
 func mcpBindingSensitiveServer(name string) bool {
 	return strings.TrimSpace(name) == "bot-tools"
+}
+
+func (m *Manager) applyMCPMigrations() error {
+	if err := m.applyLegacyMCPMigration(); err != nil {
+		return err
+	}
+	return m.applyMentionBridgeMigration()
 }
 
 func (m *Manager) applyLegacyMCPMigration() error {
@@ -444,6 +452,7 @@ func (m *Manager) applyLegacyMCPMigration() error {
 	if applied {
 		return nil
 	}
+	migrationActor := "system:migration:" + mcpLegacyMigrationV1
 	channels := m.legacyMCPMigrationChannels()
 	if len(channels) > 0 && len(catalog) > 0 {
 		enabled := 0
@@ -458,16 +467,99 @@ func (m *Manager) applyLegacyMCPMigration() error {
 				}
 				p := defaultMCPPolicy(m.guildID, channelID, entry.Name).ApplyPreset("full")
 				p.Enabled = true
-				p.UpdatedBy = "system:migration:" + mcpLegacyMigrationV1
+				p.UpdatedBy = migrationActor
 				if err := m.mcpPolicies.SetPolicy(ctx, p); err != nil {
 					return err
 				}
+				m.recordMCPPolicyEvent(channelID, migrationActor, "migration", "updated", p, map[string]any{
+					"action":        "legacy_catalog_migration",
+					"migration_key": mcpLegacyMigrationV1,
+				})
 				enabled++
 			}
 		}
 		log.Printf("[mcp-policy] legacy migration enabled full access for channels=%d servers=%d policies=%d", len(channels), len(catalog), enabled)
 	}
 	return m.mcpPolicies.MarkMigrationApplied(ctx, mcpLegacyMigrationV1, catalog)
+}
+
+func (m *Manager) applyMentionBridgeMigration() error {
+	if m.mcpPolicies == nil {
+		return nil
+	}
+	ctx := context.Background()
+	applied, err := m.mcpPolicies.MigrationApplied(ctx, mcpMentionBridgeMigrationV2)
+	if err != nil {
+		return err
+	}
+	if applied {
+		return nil
+	}
+	channels, err := m.mcpPolicies.PolicyChannels(ctx, m.guildID)
+	if err != nil {
+		return err
+	}
+	migrationActor := "system:migration:" + mcpMentionBridgeMigrationV2
+	for _, channelID := range channels {
+		discordPolicy, err := m.mcpPolicies.GetPolicy(ctx, m.guildID, channelID, mcpDiscordServerName)
+		if err != nil {
+			return err
+		}
+		hadRetiredResolver := false
+		var tools []string
+		for _, toolName := range discordPolicy.AllowedTools {
+			if toolName == retiredDiscordResolveMentions {
+				hadRetiredResolver = true
+				continue
+			}
+			tools = append(tools, toolName)
+		}
+		sourceGrantedResolver := discordPolicy.Enabled && !discordPolicy.ReadOnly &&
+			(discordPolicy.AllowAllTools || hadRetiredResolver)
+		if !hadRetiredResolver && !sourceGrantedResolver {
+			continue
+		}
+		if sourceGrantedResolver {
+			botPolicy, err := m.mcpPolicies.getStoredPolicy(ctx, m.guildID, channelID, "bot-tools")
+			if err != nil {
+				return err
+			}
+			if botPolicy.Enabled && !botPolicy.ReadOnly && !botPolicy.AllowAllTools &&
+				!stringSliceContains(botPolicy.AllowedTools, botmcp.ToolResolveMentions) {
+				botPolicy = normalizeLegacyDefaultBotToolsPolicy(botPolicy)
+				botPolicy.AllowedTools = normalizeStrings(append(botPolicy.AllowedTools, botmcp.ToolResolveMentions))
+				botPolicy.UpdatedBy = migrationActor
+				if err := m.mcpPolicies.SetPolicy(ctx, botPolicy); err != nil {
+					return err
+				}
+				m.recordMCPPolicyEvent(channelID, migrationActor, "migration", "updated", botPolicy, map[string]any{
+					"action":        "mention_bridge_migration",
+					"migration_key": mcpMentionBridgeMigrationV2,
+					"added_tool":    botmcp.ToolResolveMentions,
+				})
+			}
+		}
+		if !hadRetiredResolver {
+			continue
+		}
+
+		discordPolicy.AllowedTools = normalizeStrings(tools)
+		if !discordPolicy.AllowAllTools && len(discordPolicy.AllowedTools) == 0 {
+			discordPolicy.Enabled = false
+			discordPolicy.ReadOnly = true
+			discordPolicy.Preset = ""
+		}
+		discordPolicy.UpdatedBy = migrationActor
+		if err := m.mcpPolicies.SetPolicy(ctx, discordPolicy); err != nil {
+			return err
+		}
+		m.recordMCPPolicyEvent(channelID, migrationActor, "migration", "updated", discordPolicy, map[string]any{
+			"action":        "mention_bridge_migration",
+			"migration_key": mcpMentionBridgeMigrationV2,
+			"removed_tool":  retiredDiscordResolveMentions,
+		})
+	}
+	return m.mcpPolicies.MarkMigrationApplied(ctx, mcpMentionBridgeMigrationV2, m.mcpPolicies.Catalog())
 }
 
 func (m *Manager) legacyMCPMigrationChannels() []string {
@@ -786,7 +878,7 @@ func (m *Manager) agentOptsForTempChannel(name, channelID string) acp.AgentOptio
 		return opts
 	}
 	for i := range opts.MCPServers {
-		if opts.MCPServers[i].Name == "bot-tools" || opts.MCPServers[i].Name == "mcp-discord" {
+		if opts.MCPServers[i].Name == "bot-tools" {
 			var targetEnv map[string]string
 			if err := json.Unmarshal([]byte(opts.MCPServers[i].Env["MCP_PROXY_ENV_JSON"]), &targetEnv); err != nil {
 				log.Printf("[mcp-policy] decode temp %s env: %v", opts.MCPServers[i].Name, err)
@@ -1760,38 +1852,7 @@ func (m *Manager) EnableDefaultBotTools(channelID, userID string) error {
 	if err := m.mcpPolicies.SetPolicy(ctx, p); err != nil {
 		return err
 	}
-	if err := m.enableDefaultMCPDiscordMentions(ctx, channelID, userID); err != nil {
-		return err
-	}
 	m.recordMCPPolicyEvent(channelID, userID, "policy", "updated", p, map[string]any{"action": "default_bot_tools"})
-	return nil
-}
-
-func (m *Manager) enableDefaultMCPDiscordMentions(ctx context.Context, channelID, userID string) error {
-	if _, ok := m.mcpPolicies.CatalogEntry(mcpDiscordServerName); !ok {
-		return nil
-	}
-	p, err := m.mcpPolicies.GetPolicy(ctx, m.guildID, channelID, mcpDiscordServerName)
-	if err != nil {
-		return err
-	}
-	if p.Enabled && p.AllowAllTools && !p.ReadOnly {
-		return nil
-	}
-	p.Enabled = true
-	p.Preset = "safe-write"
-	p.ReadOnly = false
-	p.AllowAllTools = false
-	p.AllowDestructive = false
-	p.AllowedTools = normalizeStrings(append(p.AllowedTools, mcpDiscordResolveMentionsTool))
-	p.UpdatedBy = userID
-	if err := validateMCPPolicyExposesTools(p); err != nil {
-		return err
-	}
-	if err := m.mcpPolicies.SetPolicy(ctx, p); err != nil {
-		return err
-	}
-	m.recordMCPPolicyEvent(channelID, userID, "policy", "updated", p, map[string]any{"action": "default_mcp_discord_mentions"})
 	return nil
 }
 

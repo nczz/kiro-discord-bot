@@ -823,6 +823,10 @@ func TestWorkerLoadsDynamicMentionRefsForDelivery(t *testing.T) {
 	}
 	w := newWorker("channel-1", &fakeWorkerAgent{}, 1, 1, 1, 60, nil, "")
 	w.SetBotToolsTargetStatePath(statePath)
+	var persisted []discordmention.Ref
+	w.OnMentionRefsUpdatedFunc(func(refs []discordmention.Ref) {
+		persisted = append([]discordmention.Ref(nil), refs...)
+	})
 
 	refs := w.mentionRefsForDelivery(nil, nil)
 	rendered, allowed := renderDiscordMentions("notify [[discord:user:123]]", refs)
@@ -831,6 +835,20 @@ func TestWorkerLoadsDynamicMentionRefsForDelivery(t *testing.T) {
 	}
 	if allowed == nil || len(allowed.Users) != 1 || allowed.Users[0] != "123" {
 		t.Fatalf("allowed mentions = %+v, want user 123", allowed)
+	}
+	if len(persisted) != 0 {
+		t.Fatalf("task-local dynamic refs were persisted: %+v", persisted)
+	}
+	if err := os.Remove(statePath); err != nil {
+		t.Fatalf("remove target state: %v", err)
+	}
+	nextRefs := w.mentionRefsForDelivery(nil, nil)
+	nextRendered, nextAllowed := renderDiscordMentions("notify [[discord:user:123]]", nextRefs)
+	if strings.Contains(nextRendered, "<@123>") {
+		t.Fatalf("dynamic ref escaped into next task: %q", nextRendered)
+	}
+	if nextAllowed != nil && len(nextAllowed.Users) != 0 {
+		t.Fatalf("next task retained dynamic mention user: %+v", nextAllowed.Users)
 	}
 }
 
