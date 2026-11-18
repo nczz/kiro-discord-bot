@@ -144,7 +144,7 @@ Use the matching relay-side `RELAY_HOST_TOKEN_FILE` or `RELAY_HOST_TOKEN`. The p
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `ASK_TIMEOUT_SEC` | `3600` | Maximum wait for a single agent request. |
+| `ASK_TIMEOUT_SEC` | `3600` | Maximum duration of one agent request. On expiry, the bot requests ACP cancellation and retains timeout as the terminal reason even if process shutdown later reports a transport error; interrupt/stop escalation remains active until the backend request exits. |
 | `QUEUE_BUFFER_SIZE` | `20` | Per-target job queue buffer. |
 | `STREAM_UPDATE_SEC` | `3` | Minimum streaming update interval. |
 | `MAX_SCANNER_BUFFER_MB` | `64` | Scanner buffer for long Kiro CLI output. |

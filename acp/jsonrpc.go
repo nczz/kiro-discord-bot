@@ -3,6 +3,7 @@ package acp
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -40,6 +41,10 @@ func (e *RPCError) Error() string {
 	return fmt.Sprintf("rpc error %d: %s", e.Code, e.Message)
 }
 
+// ErrTransportClosed reports that the ACP stream ended before a pending
+// request received a response.
+var ErrTransportClosed = errors.New("ACP transport closed")
+
 // Transport handles ndjson JSON-RPC 2.0 over stdio pipes.
 type Transport struct {
 	writer  io.Writer
@@ -50,9 +55,11 @@ type Transport struct {
 	pending   map[int64]chan *rpcResponse
 	pendingMu sync.Mutex
 
-	// done is closed when ReadLoop exits; doneErr holds the reason.
-	done    chan struct{}
-	doneErr error
+	// done is closed exactly once when either the read loop or process watcher
+	// owns transport shutdown. doneErr is immutable after done closes.
+	done      chan struct{}
+	doneErr   error
+	closeOnce sync.Once
 
 	// OnNotification is called for incoming notifications.
 	OnNotification func(method string, params json.RawMessage)
@@ -93,15 +100,14 @@ func (t *Transport) Send(method string, params interface{}) (json.RawMessage, er
 	id := t.nextID.Add(1)
 	ch := make(chan *rpcResponse, 1)
 
-	t.pendingMu.Lock()
-	t.pending[id] = ch
-	t.pendingMu.Unlock()
-
 	data, err := json.Marshal(rpcRequest{JSONRPC: "2.0", ID: id, Method: method, Params: params})
 	if err != nil {
 		return nil, err
 	}
 	data = append(data, '\n')
+	t.pendingMu.Lock()
+	t.pending[id] = ch
+	t.pendingMu.Unlock()
 
 	t.mu.Lock()
 	_, err = t.writer.Write(data)
@@ -220,11 +226,15 @@ func (t *Transport) ReadLoop() error {
 		}
 	}
 
-	err := t.scanner.Err()
-	t.doneErr = err
-	close(t.done)
-	t.failAllPending(err)
-	return err
+	scanErr := t.scanner.Err()
+	reason := error(ErrTransportClosed)
+	if scanErr != nil {
+		reason = fmt.Errorf("%w: %v", ErrTransportClosed, scanErr)
+	}
+	if !t.closeWithError(reason) {
+		return t.closeError()
+	}
+	return scanErr
 }
 
 func defaultRequestResult(method string, params json.RawMessage) interface{} {
@@ -294,18 +304,25 @@ func selectPermissionOption(params json.RawMessage, allow bool) string {
 	return ""
 }
 
-// failAllPending unblocks all pending Send() calls with an error.
-func (t *Transport) failAllPending(reason error) {
-	msg := "transport closed"
-	if reason != nil {
-		msg = reason.Error()
+// closeWithError closes the transport once and unblocks every pending Send.
+// The first shutdown owner defines the cause observed by callers.
+func (t *Transport) closeWithError(reason error) bool {
+	closed := false
+	t.closeOnce.Do(func() {
+		t.doneErr = reason
+		close(t.done)
+		closed = true
+	})
+	return closed
+}
+
+func (t *Transport) closeError() error {
+	select {
+	case <-t.done:
+		return t.doneErr
+	default:
+		return nil
 	}
-	t.pendingMu.Lock()
-	for id, ch := range t.pending {
-		ch <- &rpcResponse{Error: &RPCError{Code: -1, Message: msg}}
-		delete(t.pending, id)
-	}
-	t.pendingMu.Unlock()
 }
 
 func (t *Transport) respond(id int64, result interface{}) {

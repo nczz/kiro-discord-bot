@@ -10,6 +10,23 @@ import (
 	"time"
 )
 
+type lockedBuffer struct {
+	mu sync.Mutex
+	bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.Buffer.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.Buffer.String()
+}
+
 func TestKiroProfileLaunchArgsIncludesFlags(t *testing.T) {
 	args := kiroProfile().launchArgs("claude-sonnet-4.6", AgentOptions{TrustAllTools: true, Agent: "confident"})
 	joined := join(args)
@@ -24,7 +41,7 @@ func TestKiroProfileLaunchArgsIncludesFlags(t *testing.T) {
 }
 
 func TestKiroCancelUsesNotification(t *testing.T) {
-	var out bytes.Buffer
+	var out lockedBuffer
 	tr := NewTransport(strings.NewReader(""), &out, 0)
 	a := &Agent{SessionID: "sid-1", transport: tr, profile: kiroProfile()}
 

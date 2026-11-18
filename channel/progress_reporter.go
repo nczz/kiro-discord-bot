@@ -15,6 +15,7 @@ const foldedProgressEditInterval = 2 * time.Second
 
 type threadProgressReporter struct {
 	mu         sync.Mutex
+	editMu     sync.Mutex
 	mode       OutputMode
 	ds         *discordgo.Session
 	threadID   string
@@ -28,6 +29,7 @@ type threadProgressReporter struct {
 	toolFailed    int
 	latest        string
 	failedReason  string
+	terminal      bool
 }
 
 func newThreadProgressReporter(mode OutputMode, ds *discordgo.Session, threadID, displayCWD string) *threadProgressReporter {
@@ -47,7 +49,9 @@ func (r *threadProgressReporter) Start() {
 		return
 	}
 	if msg != nil {
+		r.mu.Lock()
 		r.messageID = msg.ID
+		r.mu.Unlock()
 	}
 }
 
@@ -56,6 +60,10 @@ func (r *threadProgressReporter) ToolCall(evt acp.ToolCallEvent) {
 		return
 	}
 	r.mu.Lock()
+	if r.terminal {
+		r.mu.Unlock()
+		return
+	}
 	r.toolStarted++
 	r.latest = CompactToolStartMessage(ToolKindIcon(evt.Kind), evt, r.displayCWD)
 	r.mu.Unlock()
@@ -68,6 +76,10 @@ func (r *threadProgressReporter) ToolResult(evt acp.ToolCallEvent) {
 	}
 	title := toolDisplayTitle(evt)
 	r.mu.Lock()
+	if r.terminal {
+		r.mu.Unlock()
+		return
+	}
 	failed := evt.Status == "failed"
 	if failed {
 		r.toolFailed++
@@ -122,6 +134,10 @@ func (r *threadProgressReporter) CompleteFailure(reason string) bool {
 
 func (r *threadProgressReporter) setLatest(latest string) {
 	r.mu.Lock()
+	if r.terminal {
+		r.mu.Unlock()
+		return
+	}
 	r.latest = latest
 	r.mu.Unlock()
 	r.update(false)
@@ -132,6 +148,11 @@ func (r *threadProgressReporter) complete(status, reason string) bool {
 		return true
 	}
 	r.mu.Lock()
+	if r.terminal {
+		r.mu.Unlock()
+		return true
+	}
+	r.terminal = true
 	r.failedReason = reason
 	r.mu.Unlock()
 	return r.updateStatus(status, true)
@@ -143,7 +164,13 @@ func (r *threadProgressReporter) updateStatus(status string, force bool) bool {
 	if r == nil || r.mode != OutputModeFolded {
 		return true
 	}
+	r.editMu.Lock()
+	defer r.editMu.Unlock()
 	r.mu.Lock()
+	if status == "running" && r.terminal {
+		r.mu.Unlock()
+		return true
+	}
 	if r.messageID == "" {
 		r.mu.Unlock()
 		return false
@@ -155,9 +182,10 @@ func (r *threadProgressReporter) updateStatus(status string, force bool) bool {
 	}
 	content := r.renderLocked(status)
 	r.lastEdit = now
+	messageID := r.messageID
 	r.mu.Unlock()
-	if err := editMessageWithMentions(r.ds, r.threadID, r.messageID, content, nil); err != nil {
-		log.Printf("[progress] edit folded progress thread=%s message=%s: %v", r.threadID, r.messageID, err)
+	if err := editMessageWithMentions(r.ds, r.threadID, messageID, content, nil); err != nil {
+		log.Printf("[progress] edit folded progress thread=%s message=%s: %v", r.threadID, messageID, err)
 		return false
 	}
 	return true

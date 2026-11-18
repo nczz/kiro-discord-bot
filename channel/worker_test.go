@@ -247,21 +247,22 @@ func TestBuildPromptContentSkipsACPImagesOverByteLimit(t *testing.T) {
 }
 
 type fakeWorkerAgent struct {
-	mu             sync.Mutex
-	cancelCalls    int
-	interruptCalls int
-	stopCalls      int
-	callbacks      acp.AsyncCallbacks
-	readError      func(error)
-	metrics        acp.TurnMetrics
-	askResponse    string
-	askErr         error
-	stopReason     string
-	currentModel   string
-	contextUsage   float64
-	sessionReuse   string
-	askPrompts     []string
-	asyncContent   []acp.PromptContent
+	mu                sync.Mutex
+	cancelCalls       int
+	interruptCalls    int
+	stopCalls         int
+	abortCalls        int
+	callbacks         acp.AsyncCallbacks
+	metrics           acp.TurnMetrics
+	askResponse       string
+	askErr            error
+	askWaitForContext bool
+	stopReason        string
+	currentModel      string
+	contextUsage      float64
+	sessionReuse      string
+	askPrompts        []string
+	asyncContent      []acp.PromptContent
 }
 
 type recordingAuditSink struct {
@@ -281,10 +282,15 @@ func (s *recordingAuditSink) Snapshot() []audit.BotEvent {
 	return append([]audit.BotEvent(nil), s.events...)
 }
 
-func (f *fakeWorkerAgent) Ask(_ context.Context, prompt string, _ func(string)) (string, error) {
+func (f *fakeWorkerAgent) Ask(ctx context.Context, prompt string, _ func(string)) (string, error) {
 	f.mu.Lock()
 	f.askPrompts = append(f.askPrompts, prompt)
+	waitForContext := f.askWaitForContext
 	f.mu.Unlock()
+	if waitForContext {
+		<-ctx.Done()
+		return "", ctx.Err()
+	}
 	return f.askResponse, f.askErr
 }
 
@@ -322,6 +328,12 @@ func (f *fakeWorkerAgent) Stop() {
 	f.mu.Unlock()
 }
 
+func (f *fakeWorkerAgent) Abort() {
+	f.mu.Lock()
+	f.abortCalls++
+	f.mu.Unlock()
+}
+
 func (f *fakeWorkerAgent) ContextUsage() float64 { return f.contextUsage }
 
 func (f *fakeWorkerAgent) TurnMetrics() acp.TurnMetrics { return f.metrics }
@@ -334,12 +346,6 @@ func (f *fakeWorkerAgent) StopReason() string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.stopReason
-}
-
-func (f *fakeWorkerAgent) OnReadErrorFunc(fn func(error)) {
-	f.mu.Lock()
-	f.readError = fn
-	f.mu.Unlock()
 }
 
 func (f *fakeWorkerAgent) RecentStderr() string { return "" }
@@ -362,19 +368,16 @@ func (f *fakeWorkerAgent) StopCalls() int {
 	return f.stopCalls
 }
 
+func (f *fakeWorkerAgent) AbortCalls() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.abortCalls
+}
+
 func (f *fakeWorkerAgent) Callbacks() acp.AsyncCallbacks {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.callbacks
-}
-
-func (f *fakeWorkerAgent) TriggerReadError(err error) {
-	f.mu.Lock()
-	fn := f.readError
-	f.mu.Unlock()
-	if fn != nil {
-		fn(err)
-	}
 }
 
 type recordingRoundTripper struct {
@@ -1968,7 +1971,7 @@ func TestWorkerThreadFoldedProgressEditFailureStillDeliversFinalAndFailure(t *te
 	}
 }
 
-func TestWorkerThreadFoldedProgressReadErrorCompletesCard(t *testing.T) {
+func TestWorkerThreadFoldedProgressTransportErrorCompletesCard(t *testing.T) {
 	L.Load("en")
 	rt := &recordingRoundTripper{}
 	ds := testDiscordSession(rt)
@@ -1983,20 +1986,20 @@ func TestWorkerThreadFoldedProgressReadErrorCompletesCard(t *testing.T) {
 		Prompt:    "hello",
 		Session:   ds,
 	})
-	agent.TriggerReadError(errors.New("stream broke"))
+	agent.Callbacks().OnComplete("", acp.ErrTransportClosed)
 	agent.Callbacks().OnComplete("late response", nil)
 
 	reqs, bodies := rt.Snapshot()
 	var completedCard, warningReaction bool
 	for i, req := range reqs {
-		if req == "PATCH /api/v9/channels/thread-1/messages/reply-1" && strings.Contains(bodies[i], "Failed") && strings.Contains(bodies[i], "stream broke") {
+		if req == "PATCH /api/v9/channels/thread-1/messages/reply-1" && strings.Contains(bodies[i], "Failed") && strings.Contains(bodies[i], "Agent communication was interrupted") {
 			completedCard = true
 		}
 		if strings.HasPrefix(req, "PUT ") && strings.Contains(req, "/reactions/⚠️/@me") {
 			warningReaction = true
 		}
 		if strings.Contains(bodies[i], "late response") || strings.Contains(req, "/reactions/✅/@me") {
-			t.Fatalf("late completion changed a read-error terminal state; req=%s body=%q", req, bodies[i])
+			t.Fatalf("late completion changed a transport-error terminal state; req=%s body=%q", req, bodies[i])
 		}
 	}
 	if !completedCard || !warningReaction {
@@ -2004,7 +2007,72 @@ func TestWorkerThreadFoldedProgressReadErrorCompletesCard(t *testing.T) {
 	}
 }
 
-func TestWorkerThreadFoldedProgressReadErrorFallsBackWhenEditFails(t *testing.T) {
+func TestWorkerThreadTimeoutRemainsTerminalReasonAfterTransportError(t *testing.T) {
+	L.Load("en")
+	rt := &recordingRoundTripper{}
+	ds := testDiscordSession(rt)
+	agent := &fakeWorkerAgent{}
+	sink := &recordingAuditSink{}
+	w := newWorker("ch1", agent, 1, 1, 1, 1440, nil, "")
+	w.escalationGrace = time.Minute
+	w.SetAuditSink(sink)
+	w.OnOutputModeFunc(func() OutputMode { return OutputModeFolded })
+
+	w.execute(&Job{
+		ChannelID: "ch1",
+		ThreadID:  "thread-1",
+		MessageID: "m1",
+		Prompt:    "hello",
+		Session:   ds,
+	})
+
+	deadline := time.Now().Add(2 * time.Second)
+	for agent.CancelCalls() == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if agent.CancelCalls() != 1 {
+		t.Fatalf("cancel calls = %d, want 1", agent.CancelCalls())
+	}
+	agent.Callbacks().OnComplete("", os.ErrClosed)
+	agent.Callbacks().OnToolCall(acp.ToolCallEvent{ToolCallID: "late-tool", Title: "late tool", Kind: "execute"})
+
+	_, bodies := rt.Snapshot()
+	var timeoutCard bool
+	for _, body := range bodies {
+		if strings.Contains(body, "Task timed out (1s), cancelled") {
+			timeoutCard = true
+		}
+		if strings.Contains(body, os.ErrClosed.Error()) {
+			t.Fatalf("secondary transport error replaced the timeout reason: %q", body)
+		}
+		if strings.Contains(body, "late tool") {
+			t.Fatalf("late progress changed the terminal card: %q", body)
+		}
+	}
+	if !timeoutCard {
+		t.Fatalf("missing timeout terminal card; bodies=%v", bodies)
+	}
+
+	var failed, response int
+	for _, evt := range sink.Snapshot() {
+		switch evt.Type {
+		case "agent_job_failed":
+			failed++
+			if evt.Metadata["reason"] != "timeout" {
+				t.Fatalf("terminal reason = %#v, want timeout; event=%+v", evt.Metadata["reason"], evt)
+			}
+		case "agent_response_sent":
+			response++
+		case "agent_tool_call":
+			t.Fatalf("late tool call was audited after terminal state: %+v", evt)
+		}
+	}
+	if failed != 1 || response != 1 {
+		t.Fatalf("terminal audit counts failed=%d response=%d, want 1/1; events=%+v", failed, response, sink.Snapshot())
+	}
+}
+
+func TestWorkerThreadFoldedProgressTransportErrorFallsBackWhenEditFails(t *testing.T) {
 	L.Load("en")
 	rt := &patchFailRoundTripper{}
 	ds := testDiscordSession(rt)
@@ -2019,12 +2087,12 @@ func TestWorkerThreadFoldedProgressReadErrorFallsBackWhenEditFails(t *testing.T)
 		Prompt:    "hello",
 		Session:   ds,
 	})
-	agent.TriggerReadError(errors.New("stream broke"))
+	agent.Callbacks().OnComplete("", acp.ErrTransportClosed)
 
 	reqs, bodies := rt.Snapshot()
 	var fallbackPost, warningReaction bool
 	for i, req := range reqs {
-		if req == "POST /api/v9/channels/thread-1/messages" && strings.Contains(bodies[i], "Agent communication lost") {
+		if req == "POST /api/v9/channels/thread-1/messages" && strings.Contains(bodies[i], L.Get("worker.communication_interrupted")) {
 			fallbackPost = true
 		}
 		if strings.HasPrefix(req, "PUT ") && strings.Contains(req, "/reactions/⚠️/@me") {
@@ -2366,7 +2434,7 @@ func TestWorkerThreadErrorAppendsMetricsFooter(t *testing.T) {
 	t.Fatalf("expected thread error reply; requests=%v bodies=%v", reqs, bodies)
 }
 
-func TestWorkerInlineReadErrorSendsFinalErrorReply(t *testing.T) {
+func TestWorkerInlineTransportErrorSendsFinalErrorReply(t *testing.T) {
 	L.Load("en")
 	rt := &recordingRoundTripper{}
 	ds := testDiscordSession(rt)
@@ -2380,7 +2448,7 @@ func TestWorkerInlineReadErrorSendsFinalErrorReply(t *testing.T) {
 		Session:      ds,
 		DeliveryMode: DeliveryInline,
 	})
-	agent.TriggerReadError(context.Canceled)
+	agent.Callbacks().OnComplete("", acp.ErrTransportClosed)
 
 	reqs, bodies := rt.Snapshot()
 	var messagePosts int
@@ -2398,12 +2466,55 @@ func TestWorkerInlineReadErrorSendsFinalErrorReply(t *testing.T) {
 	if messagePosts != 1 {
 		t.Fatalf("message post count = %d, want 1; requests=%v", messagePosts, reqs)
 	}
-	if !strings.Contains(body, "Agent communication lost") {
-		t.Fatalf("read error body = %q, want agent communication error", body)
+	if !strings.Contains(body, L.Get("worker.communication_interrupted")) {
+		t.Fatalf("read error body = %q, want localized agent communication error", body)
 	}
 	if !addedWarn {
 		t.Fatalf("expected warning reaction; requests=%v", reqs)
 	}
+}
+
+func TestWorkerInlineProcessExitUsesLocalizedReasonAndAudit(t *testing.T) {
+	L.Load("en")
+	rt := &recordingRoundTripper{}
+	ds := testDiscordSession(rt)
+	agent := &fakeWorkerAgent{}
+	sink := &recordingAuditSink{}
+	w := newWorker("ch1", agent, 1, 30, 1, 1440, nil, "")
+	w.SetAuditSink(sink)
+
+	w.executeInline(&Job{
+		ChannelID:    "ch1",
+		MessageID:    "m1",
+		Prompt:       "hello",
+		Session:      ds,
+		DeliveryMode: DeliveryInline,
+	})
+	agent.Callbacks().OnComplete("", acp.ErrAgentProcessExited)
+
+	_, bodies := rt.Snapshot()
+	var localized bool
+	for _, body := range bodies {
+		if strings.Contains(body, L.Get("worker.agent_exited")) {
+			localized = true
+		}
+		if strings.Contains(body, acp.ErrAgentProcessExited.Error()) {
+			t.Fatalf("internal process error leaked into Discord output: %q", body)
+		}
+	}
+	if !localized {
+		t.Fatalf("missing localized process-exit reply; bodies=%v", bodies)
+	}
+
+	for _, evt := range sink.Snapshot() {
+		if evt.Type == "agent_job_failed" {
+			if evt.Metadata["reason"] != "agent_process_exited" {
+				t.Fatalf("terminal reason = %#v, want agent_process_exited; event=%+v", evt.Metadata["reason"], evt)
+			}
+			return
+		}
+	}
+	t.Fatalf("missing agent_job_failed audit event; events=%+v", sink.Snapshot())
 }
 
 func TestMetricsMetadataIncludesCostDurationAndContext(t *testing.T) {
@@ -2971,6 +3082,54 @@ func TestWorkerFallbackErrorAppendsMetricsFooter(t *testing.T) {
 	t.Fatalf("expected fallback error edit request; requests=%v bodies=%v", reqs, bodies)
 }
 
+func TestWorkerFallbackTimeoutAbortsAgentAndAuditsTerminalState(t *testing.T) {
+	L.Load("en")
+	rt := &recordingRoundTripper{}
+	ds := testDiscordSession(rt)
+	agent := &fakeWorkerAgent{askWaitForContext: true}
+	sink := &recordingAuditSink{}
+	w := newWorker("ch1", agent, 1, 1, 1, 1440, nil, "")
+	w.escalationGrace = time.Minute
+	w.SetAuditSink(sink)
+
+	w.executeFallback(&Job{
+		ChannelID: "ch1",
+		MessageID: "m1",
+		Prompt:    "hello",
+		Session:   ds,
+	}, nil)
+
+	if agent.AbortCalls() != 1 {
+		t.Fatalf("abort calls = %d, want 1", agent.AbortCalls())
+	}
+	_, bodies := rt.Snapshot()
+	var timeoutReply bool
+	for _, body := range bodies {
+		if strings.Contains(body, L.Getf("worker.timeout", 1)) {
+			timeoutReply = true
+		}
+	}
+	if !timeoutReply {
+		t.Fatalf("missing fallback timeout reply; bodies=%v", bodies)
+	}
+
+	var failed, response int
+	for _, evt := range sink.Snapshot() {
+		switch evt.Type {
+		case "agent_job_failed":
+			failed++
+			if evt.Metadata["reason"] != "timeout" {
+				t.Fatalf("terminal reason = %#v, want timeout; event=%+v", evt.Metadata["reason"], evt)
+			}
+		case "agent_response_sent":
+			response++
+		}
+	}
+	if failed != 1 || response != 1 {
+		t.Fatalf("terminal audit counts failed=%d response=%d, want 1/1; events=%+v", failed, response, sink.Snapshot())
+	}
+}
+
 func TestWorkerInlineAuditStoresPureResponseWithoutMetricsFooter(t *testing.T) {
 	L.Load("en")
 	rt := &recordingRoundTripper{}
@@ -3209,7 +3368,7 @@ func TestWorkerScheduleInterruptEscalationSendsInterruptAfterGrace(t *testing.T)
 	}
 }
 
-func TestWorkerScheduleInterruptEscalationStopsAgentIfStillActiveAfterInterrupt(t *testing.T) {
+func TestWorkerScheduleInterruptEscalationAbortsAgentIfStillActiveAfterInterrupt(t *testing.T) {
 	agent := &fakeWorkerAgent{}
 	w := newWorker("ch1", agent, 1, 1, 1, 1440, nil, "")
 	w.stopGrace = 5 * time.Millisecond
@@ -3228,24 +3387,24 @@ func TestWorkerScheduleInterruptEscalationStopsAgentIfStillActiveAfterInterrupt(
 
 	deadline := time.After(200 * time.Millisecond)
 	for {
-		if got := agent.StopCalls(); got == 1 {
+		if got := agent.AbortCalls(); got == 1 {
 			if ic := agent.InterruptCalls(); ic != 1 {
-				t.Fatalf("interrupt calls = %d, want 1 before stop", ic)
+				t.Fatalf("interrupt calls = %d, want 1 before abort", ic)
 			}
 			return
 		} else if got > 1 {
-			t.Fatalf("stop calls = %d, want 1", got)
+			t.Fatalf("abort calls = %d, want 1", got)
 		}
 		select {
 		case <-deadline:
-			t.Fatalf("stop calls = %d, want 1", agent.StopCalls())
+			t.Fatalf("abort calls = %d, want 1", agent.AbortCalls())
 		default:
 			time.Sleep(time.Millisecond)
 		}
 	}
 }
 
-func TestWorkerScheduleInterruptEscalationSkipsStopAfterJobClears(t *testing.T) {
+func TestWorkerScheduleInterruptEscalationSkipsAbortAfterJobClears(t *testing.T) {
 	agent := &fakeWorkerAgent{}
 	w := newWorker("ch1", agent, 1, 1, 1, 1440, nil, "")
 	w.stopGrace = 20 * time.Millisecond
@@ -3281,8 +3440,8 @@ func TestWorkerScheduleInterruptEscalationSkipsStopAfterJobClears(t *testing.T) 
 	w.cancelMu.Unlock()
 
 	time.Sleep(50 * time.Millisecond)
-	if got := agent.StopCalls(); got != 0 {
-		t.Fatalf("stop calls = %d, want 0 (job already cleared)", got)
+	if got := agent.AbortCalls(); got != 0 {
+		t.Fatalf("abort calls = %d, want 0 (job already cleared)", got)
 	}
 }
 

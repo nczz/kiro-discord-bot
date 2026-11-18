@@ -145,7 +145,7 @@ WEBSHARE_HOST_TOKEN_FILE=/etc/kdb-webshare/host-token
 
 | 變數 | 預設 | 用途 |
 | --- | --- | --- |
-| `ASK_TIMEOUT_SEC` | `3600` | 單次 agent 請求最長等待秒數。 |
+| `ASK_TIMEOUT_SEC` | `3600` | 單次 agent 請求最長執行秒數。逾時後 bot 會要求 ACP 取消；即使程序關閉後另有 transport error，terminal reason 仍維持逾時。Backend request 結束前仍保留 interrupt/stop escalation。 |
 | `QUEUE_BUFFER_SIZE` | `20` | 每個 target 的 job queue buffer。 |
 | `STREAM_UPDATE_SEC` | `3` | 串流更新最小間隔秒數。 |
 | `MAX_SCANNER_BUFFER_MB` | `64` | 長輸出 scanner buffer。 |

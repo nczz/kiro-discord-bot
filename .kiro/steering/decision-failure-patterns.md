@@ -548,6 +548,30 @@ Regression expectation:
 
 - Test delivered safe egress followed by agent error separately from true undelivered failure. Do not hide real failures just because any tool ran.
 
+
+### Timeout Owns The Terminal Reason Across ACP Shutdown
+
+Decision:
+
+- A job context timeout or explicit cancellation outranks later ACP pipe, transport, or child-process errors when selecting the user-visible terminal reason and audit `reason`.
+- Child-process exit closes the ACP transport exactly once so every pending request completes promptly. The worker keeps cancel/interrupt/stop escalation active and does not release the queue until the backend request has returned or the process has exited.
+- Every started thread, inline, or fallback job records one terminal job event plus response and usage evidence where those stores are configured. Folded progress becomes immutable after its terminal update.
+
+Context:
+
+- A request reached `ASK_TIMEOUT_SEC`, cancellation and process escalation ran, and the child process exited, but the pending ACP request stayed blocked until the stdout read loop later returned a closed-file error. That secondary error replaced the timeout in Discord, and the read-error path omitted terminal job, response, and usage audit events.
+
+Rejected alternatives:
+
+- Increasing `ASK_TIMEOUT_SEC` was rejected because it delays the same lifecycle failure without fixing terminal ownership.
+- Hiding only the closed-file text was rejected because the pending request, incomplete audit trail, and duplicate terminal race would remain.
+- Releasing the worker queue immediately at the deadline was rejected because the backend could still be running; it would disable escalation and allow overlapping work on one agent.
+
+Regression expectation:
+
+- ACP tests must prove process exit unblocks an in-flight asynchronous prompt with `ErrAgentProcessExited` and leaves agent state stopped.
+- Worker tests must prove a timeout followed by a read/process error remains timeout, emits one terminal audit sequence, does not expose the secondary transport cause to Discord, and rejects late completion/progress updates.
+
 ### Completed Job Retains Processing Reactions
 
 Symptoms:

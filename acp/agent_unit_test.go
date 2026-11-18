@@ -4,10 +4,97 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os/exec"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
+
+type notifyingWriter chan struct{}
+
+func (w notifyingWriter) Write(p []byte) (int, error) {
+	select {
+	case w <- struct{}{}:
+	default:
+	}
+	return len(p), nil
+}
+
+func TestAgentProcessExitUnblocksPendingRequest(t *testing.T) {
+	wrote := make(notifyingWriter, 1)
+	transport := NewTransport(strings.NewReader(""), wrote, 0)
+	a := &Agent{
+		Name:      "test",
+		transport: transport,
+		state:     "idle",
+		exited:    make(chan struct{}),
+	}
+
+	result := make(chan error, 1)
+	a.AskAsync("hello", AsyncCallbacks{
+		OnComplete: func(_ string, err error) {
+			result <- err
+		},
+	})
+	select {
+	case <-wrote:
+	case <-time.After(time.Second):
+		t.Fatal("pending request was not written")
+	}
+
+	a.handleProcessExit(errors.New("exit status 1"))
+
+	select {
+	case err := <-result:
+		if !errors.Is(err, ErrAgentProcessExited) {
+			t.Fatalf("pending request error = %v, want ErrAgentProcessExited", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("process exit did not unblock pending request")
+	}
+	select {
+	case <-a.exited:
+	default:
+		t.Fatal("process exit channel was not closed")
+	}
+	a.mu.Lock()
+	state := a.state
+	a.mu.Unlock()
+	if state != "stopped" {
+		t.Fatalf("agent state = %q, want stopped", state)
+	}
+}
+
+func TestAgentAbortRunsUnexpectedExitCallback(t *testing.T) {
+	cmd := exec.Command("sh", "-c", "sleep 30")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start child: %v", err)
+	}
+	a := &Agent{
+		Name:   "abort-test",
+		cmd:    cmd,
+		state:  "working",
+		exited: make(chan struct{}),
+	}
+	exited := make(chan struct{})
+	a.onExit = func() { close(exited) }
+	go func() {
+		a.handleProcessExit(cmd.Wait())
+	}()
+
+	a.Abort()
+
+	select {
+	case <-exited:
+	case <-time.After(time.Second):
+		t.Fatal("Abort did not run unexpected-exit callback")
+	}
+	if got := a.State(); got != "stopped" {
+		t.Fatalf("agent state = %q, want stopped", got)
+	}
+}
 
 func TestAgentModelAndModeHelpers(t *testing.T) {
 	a := &Agent{sessResult: &SessionNewResult{

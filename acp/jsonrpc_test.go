@@ -3,10 +3,21 @@ package acp
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"io"
 	"strings"
 	"testing"
 )
 
+func TestTransportEOFHasStableCloseCause(t *testing.T) {
+	tr := NewTransport(strings.NewReader(""), io.Discard, 0)
+	if err := tr.ReadLoop(); err != nil {
+		t.Fatalf("ReadLoop: %v", err)
+	}
+	if _, err := tr.Send("test/method", nil); !errors.Is(err, ErrTransportClosed) {
+		t.Fatalf("Send error = %v, want ErrTransportClosed", err)
+	}
+}
 func TestTransportServerRequestDefaultDeny(t *testing.T) {
 	var out bytes.Buffer
 	tr := NewTransport(strings.NewReader(`{"jsonrpc":"2.0","id":7,"method":"session/request_permission","params":{"options":[{"optionId":"allow-once","kind":"allow_once"},{"optionId":"reject-once","kind":"reject_once"}]}}`+"\n"), &out, 0)

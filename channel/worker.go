@@ -172,12 +172,12 @@ type workerAgent interface {
 	CancelPrompt()
 	Interrupt() error
 	Stop()
+	Abort()
 	ContextUsage() float64
 	TurnMetrics() acp.TurnMetrics
 	CurrentModelID() string
 	StopReason() string
 	SessionReuseMethod() string
-	OnReadErrorFunc(func(error))
 	RecentStderr() string
 	SupportsImagePrompt() bool
 }
@@ -521,7 +521,7 @@ func (w *Worker) scheduleStopEscalation(jobSeq uint64, grace time.Duration, reas
 			return
 		}
 		log.Printf("[worker %s] %s: still active after interrupt, stopping agent after %s", w.channelID, reason, grace)
-		w.agent.Stop()
+		w.agent.Abort()
 	}()
 }
 
@@ -803,6 +803,11 @@ func (w *Worker) execute(job *Job) {
 		terminalStarted = true
 		return true
 	}
+	isFinishing := func() bool {
+		terminalMu.Lock()
+		defer terminalMu.Unlock()
+		return terminalStarted
+	}
 	finishJob := func() {
 		finishOnce.Do(func() {
 			clearBotToolsTargetState(w.botToolsTargetStatePath)
@@ -901,11 +906,17 @@ func (w *Worker) execute(job *Job) {
 	delegateGuard := a2aDelegateFinalGuard{}
 	callbacks := acp.AsyncCallbacks{
 		OnChunk: func(chunk string) {
+			if isFinishing() {
+				return
+			}
 			if w.onActivity != nil {
 				w.onActivity()
 			}
 		},
 		OnToolCall: func(evt acp.ToolCallEvent) {
+			if isFinishing() {
+				return
+			}
 			if w.onActivity != nil {
 				w.onActivity()
 			}
@@ -934,6 +945,9 @@ func (w *Worker) execute(job *Job) {
 			})
 		},
 		OnToolResult: func(evt acp.ToolCallEvent) {
+			if isFinishing() {
+				return
+			}
 			if w.onActivity != nil {
 				w.onActivity()
 			}
@@ -965,6 +979,9 @@ func (w *Worker) execute(job *Job) {
 			}
 		},
 		OnThought: func(text string) {
+			if isFinishing() {
+				return
+			}
 			if w.onActivity != nil {
 				w.onActivity()
 			}
@@ -983,6 +1000,9 @@ func (w *Worker) execute(job *Job) {
 			SendProcessMessage(ds, threadID, "💭 "+EscapeDiscordMarkdown(text))
 		},
 		OnSubagentUpdate: func(state acp.SubagentState) {
+			if isFinishing() {
+				return
+			}
 			if w.onActivity != nil {
 				w.onActivity()
 			}
@@ -998,6 +1018,9 @@ func (w *Worker) execute(job *Job) {
 			}
 		},
 		OnPlan: func(state acp.PlanState) {
+			if isFinishing() {
+				return
+			}
 			if w.onActivity != nil {
 				w.onActivity()
 			}
@@ -1030,16 +1053,12 @@ func (w *Worker) execute(job *Job) {
 			job.MentionRefs = w.mentionRefsForDelivery(job.MentionRefs, job.currentRevokedMentionRefs())
 
 			if askErr != nil {
-				errMsg := askErr.Error()
-				emoji := "❌"
-				if ctxErr == context.DeadlineExceeded {
-					errMsg = L.Getf("worker.timeout", w.askTimeoutSec)
-					emoji = "⚠️"
-				} else if ctxErr == context.Canceled {
-					errMsg = L.Get("cancel.success")
-					emoji = "⚠️"
-				} else if stderr := w.agent.RecentStderr(); stderr != "" {
-					errMsg += "\n```\n" + stderr + "\n```"
+				failure := w.classifyJobFailure(ctxErr, askErr)
+				errMsg := failure.message
+				if failure.reason == "agent_error" {
+					if stderr := secrets.RedactEnv(w.agent.RecentStderr()); stderr != "" {
+						errMsg += "\n```\n" + stderr + "\n```"
+					}
 				}
 				log.Printf("[worker %s] job error | user=%s msg=%s elapsed=%s ctxErr=%v err=%v",
 					w.channelID, job.Username, job.MessageID, time.Since(startTime).Round(time.Millisecond), ctxErr, askErr)
@@ -1052,7 +1071,7 @@ func (w *Worker) execute(job *Job) {
 					w.auditJobEvent("agent_job_completed", job, threadID, "success", map[string]any{
 						"elapsed_ms":              time.Since(startTime).Milliseconds(),
 						"safe_egress_deliveries":  delivered,
-						"suppressed_agent_error":  askErr.Error(),
+						"suppressed_agent_error":  secrets.RedactEnv(askErr.Error()),
 						"suppressed_error_reason": "safe_egress_delivered",
 					})
 					progress.CompleteSuccess()
@@ -1075,12 +1094,14 @@ func (w *Worker) execute(job *Job) {
 					Error:   a2aErrorForInline(ctxErr, errMsg),
 					Metrics: a2aMetrics(w.agent.TurnMetrics(), startTime),
 				})
-				reactions.Final(emoji)
+				reactions.Final(failure.emoji)
 				if w.logger != nil {
 					w.logger.Log(w.channelID, ChatEntry{Role: "assistant", Content: errorContent, Model: w.currentModel()})
 				}
 				w.auditJobEvent("agent_job_failed", job, threadID, "error", map[string]any{
 					"error":      errMsg,
+					"reason":     failure.reason,
+					"cause":      failure.cause,
 					"ctx_error":  fmt.Sprint(ctxErr),
 					"elapsed_ms": time.Since(startTime).Milliseconds(),
 				})
@@ -1175,28 +1196,6 @@ func (w *Worker) execute(job *Job) {
 		w.scheduleInterruptEscalation(currentJobSeq, w.escalationGrace, "timeout cancel ineffective")
 	}()
 
-	// Watch for ReadLoop errors (e.g. buffer overflow)
-	w.agent.OnReadErrorFunc(func(err error) {
-		log.Printf("[worker %s] agent read error | user=%s msg=%s elapsed=%s err=%v",
-			w.channelID, job.Username, job.MessageID, time.Since(startTime).Round(time.Millisecond), err)
-		if !beginFinish() {
-			return
-		}
-		switch w.currentOutputMode() {
-		case OutputModeFolded:
-			if progress.CompleteFailure(err.Error()) {
-				break
-			}
-			fallthrough
-		case OutputModeFull:
-			msg := L.Getf("error.agent_read", err)
-			SendProcessMessage(ds, threadID, msg)
-		}
-		reactions.Final("⚠️")
-		cancel()
-		finishJob()
-	})
-
 	if _, err := w.autoCompactIfNeeded(ctx, job, threadID, func(msg string) {
 		SendProcessMessage(ds, threadID, msg)
 	}); err != nil {
@@ -1209,10 +1208,7 @@ func (w *Worker) execute(job *Job) {
 		return
 	}
 	if ctx.Err() != nil {
-		if beginFinish() {
-			reactions.Final("⚠️")
-			finishJob()
-		}
+		callbacks.OnComplete("", ctx.Err())
 		return
 	}
 
@@ -1542,19 +1538,73 @@ func a2aStateForStopReason(stopReason string) a2a.TaskState {
 	}
 }
 
+type workerFailure struct {
+	message string
+	reason  string
+	emoji   string
+	cause   string
+}
+
+func (w *Worker) classifyJobFailure(ctxErr, cause error) workerFailure {
+	causeText := ""
+	if cause != nil {
+		causeText = secrets.RedactEnv(cause.Error())
+	}
+	switch {
+	case errors.Is(ctxErr, context.DeadlineExceeded):
+		return workerFailure{
+			message: L.Getf("worker.timeout", w.askTimeoutSec),
+			reason:  "timeout",
+			emoji:   "⚠️",
+			cause:   causeText,
+		}
+	case errors.Is(ctxErr, context.Canceled):
+		return workerFailure{
+			message: L.Get("worker.canceled"),
+			reason:  "canceled",
+			emoji:   "⚠️",
+			cause:   causeText,
+		}
+	case errors.Is(cause, acp.ErrAgentProcessExited):
+		return workerFailure{
+			message: L.Get("worker.agent_exited"),
+			reason:  "agent_process_exited",
+			emoji:   "⚠️",
+			cause:   causeText,
+		}
+	case errors.Is(cause, acp.ErrTransportClosed) || errors.Is(cause, os.ErrClosed):
+		return workerFailure{
+			message: L.Get("worker.communication_interrupted"),
+			reason:  "agent_communication_interrupted",
+			emoji:   "⚠️",
+			cause:   causeText,
+		}
+	default:
+		if causeText == "" {
+			causeText = L.Get("worker.communication_interrupted")
+		}
+		return workerFailure{
+			message: causeText,
+			reason:  "agent_error",
+			emoji:   "❌",
+			cause:   causeText,
+		}
+	}
+}
+
 func a2aErrorForInline(ctxErr error, message string) a2a.TaskError {
 	code := a2a.ErrorInternal
-	switch ctxErr {
-	case context.DeadlineExceeded:
+	switch {
+	case errors.Is(ctxErr, context.DeadlineExceeded):
 		code = a2a.ErrorTimeout
-	case context.Canceled:
+	case errors.Is(ctxErr, context.Canceled):
 		code = a2a.ErrorCode("canceled")
 	}
 	return a2a.TaskError{Code: code, Message: message}
 }
 
 func a2aStateForInlineError(ctxErr error) a2a.TaskState {
-	if ctxErr == context.Canceled {
+	if errors.Is(ctxErr, context.Canceled) {
 		return a2a.TaskStateCanceled
 	}
 	return a2a.TaskStateFailed
@@ -1591,6 +1641,11 @@ func (w *Worker) executeInline(job *Job) {
 		}
 		finished = true
 		return true
+	}
+	isFinishing := func() bool {
+		finishMu.Lock()
+		defer finishMu.Unlock()
+		return finished
 	}
 	finishJob := func(finalEmoji string) {
 		clearBotToolsTargetState(w.botToolsTargetStatePath)
@@ -1632,11 +1687,17 @@ func (w *Worker) executeInline(job *Job) {
 	delegateGuard := a2aDelegateFinalGuard{}
 	callbacks := acp.AsyncCallbacks{
 		OnChunk: func(chunk string) {
+			if isFinishing() {
+				return
+			}
 			if w.onActivity != nil {
 				w.onActivity()
 			}
 		},
 		OnToolCall: func(evt acp.ToolCallEvent) {
+			if isFinishing() {
+				return
+			}
 			if w.onActivity != nil {
 				w.onActivity()
 			}
@@ -1649,6 +1710,9 @@ func (w *Worker) executeInline(job *Job) {
 			})
 		},
 		OnToolResult: func(evt acp.ToolCallEvent) {
+			if isFinishing() {
+				return
+			}
 			if w.onActivity != nil {
 				w.onActivity()
 			}
@@ -1666,12 +1730,18 @@ func (w *Worker) executeInline(job *Job) {
 			pulse.Work()
 		},
 		OnThought: func(text string) {
+			if isFinishing() {
+				return
+			}
 			if w.onActivity != nil {
 				w.onActivity()
 			}
 			pulse.set("💭")
 		},
 		OnPlan: func(state acp.PlanState) {
+			if isFinishing() {
+				return
+			}
 			if w.onActivity != nil {
 				w.onActivity()
 			}
@@ -1689,16 +1759,12 @@ func (w *Worker) executeInline(job *Job) {
 			job.MentionRefs = w.mentionRefsForDelivery(job.MentionRefs, job.currentRevokedMentionRefs())
 
 			if askErr != nil {
-				errMsg := askErr.Error()
-				emoji := "❌"
-				if ctxErr == context.DeadlineExceeded {
-					errMsg = L.Getf("worker.timeout", w.askTimeoutSec)
-					emoji = "⚠️"
-				} else if ctxErr == context.Canceled {
-					errMsg = L.Get("cancel.success")
-					emoji = "⚠️"
-				} else if stderr := w.agent.RecentStderr(); stderr != "" {
-					errMsg += "\n```\n" + stderr + "\n```"
+				failure := w.classifyJobFailure(ctxErr, askErr)
+				errMsg := failure.message
+				if failure.reason == "agent_error" {
+					if stderr := secrets.RedactEnv(w.agent.RecentStderr()); stderr != "" {
+						errMsg += "\n```\n" + stderr + "\n```"
+					}
 				}
 				log.Printf("[worker %s] inline job error | user=%s msg=%s elapsed=%s ctxErr=%v err=%v",
 					w.channelID, job.Username, job.MessageID, time.Since(startTime).Round(time.Millisecond), ctxErr, askErr)
@@ -1715,7 +1781,7 @@ func (w *Worker) executeInline(job *Job) {
 						"delivery_mode":           DeliveryInline.String(),
 						"elapsed_ms":              time.Since(startTime).Milliseconds(),
 						"safe_egress_deliveries":  delivered,
-						"suppressed_agent_error":  askErr.Error(),
+						"suppressed_agent_error":  secrets.RedactEnv(askErr.Error()),
 						"suppressed_error_reason": "safe_egress_delivered",
 					})
 					w.recordUsage(job, "", "success", startTime)
@@ -1739,6 +1805,8 @@ func (w *Worker) executeInline(job *Job) {
 				w.auditJobEvent("agent_job_failed", job, "", "error", map[string]any{
 					"delivery_mode": DeliveryInline.String(),
 					"error":         errMsg,
+					"reason":        failure.reason,
+					"cause":         failure.cause,
 					"ctx_error":     fmt.Sprint(ctxErr),
 					"elapsed_ms":    time.Since(startTime).Milliseconds(),
 				})
@@ -1746,7 +1814,7 @@ func (w *Worker) executeInline(job *Job) {
 					w.auditResponseEvent(job, "", "error", errorContent)
 				}
 				w.recordUsage(job, "", "error", startTime)
-				finishJob(emoji)
+				finishJob(failure.emoji)
 				return
 			}
 
@@ -1817,43 +1885,6 @@ func (w *Worker) executeInline(job *Job) {
 		w.scheduleInterruptEscalation(currentJobSeq, w.escalationGrace, "inline timeout cancel ineffective")
 	}()
 
-	w.agent.OnReadErrorFunc(func(err error) {
-		log.Printf("[worker %s] inline agent read error | user=%s msg=%s elapsed=%s err=%v",
-			w.channelID, job.Username, job.MessageID, time.Since(startTime).Round(time.Millisecond), err)
-		if !beginFinish() {
-			return
-		}
-		errMsg := L.Getf("error.agent_read", err)
-		if !job.DisableBotEgress {
-			w.drainBeforeFinal(targetID)
-		}
-		job.emitA2AResult(a2a.TaskExecutionResult{
-			State:   a2a.TaskStateFailed,
-			Content: errMsg,
-			Error:   a2a.TaskError{Code: a2a.ErrorInternal, Message: errMsg},
-			Metrics: a2aMetrics(w.agent.TurnMetrics(), startTime),
-		})
-		if sendErr := job.sendInlineFinalReply(ds, errMsg); sendErr != nil {
-			log.Printf("[worker %s] inline read-error reply failed | user=%s msg=%s err=%v",
-				w.channelID, job.Username, job.MessageID, sendErr)
-			markDeliveryFailureReactions(reactions, sendErr)
-		}
-		if w.logger != nil {
-			w.logger.Log(w.channelID, ChatEntry{Role: "assistant", Content: errMsg, Model: w.currentModel()})
-		}
-		w.auditJobEvent("agent_job_failed", job, "", "error", map[string]any{
-			"delivery_mode": DeliveryInline.String(),
-			"error":         errMsg,
-			"elapsed_ms":    time.Since(startTime).Milliseconds(),
-		})
-		if !job.suppressInlineDiscordFinal() {
-			w.auditResponseEvent(job, "", "error", errMsg)
-		}
-		w.recordUsage(job, "", "error", startTime)
-		cancel()
-		finishJob("⚠️")
-	})
-
 	if _, err := w.autoCompactIfNeeded(ctx, job, "", func(msg string) {
 		if !job.DisableBotEgress {
 			SendProcessMessage(ds, targetID, msg)
@@ -1868,7 +1899,7 @@ func (w *Worker) executeInline(job *Job) {
 		return
 	}
 	if ctx.Err() != nil {
-		finishJob("⚠️")
+		callbacks.OnComplete("", ctx.Err())
 		return
 	}
 
@@ -2262,6 +2293,7 @@ func markDeliveryFailureReactions(reactions *jobReactionState, err error) string
 // executeFallback is the old synchronous path used when thread creation fails.
 func (w *Worker) executeFallback(job *Job, reactions *jobReactionState) {
 	ds := job.Session
+	startTime := time.Now()
 	if reactions == nil {
 		reactions = newJobReactionState(ds, job.ChannelID, job.MessageID, job.QueuedReactionAdded, !job.RemoteA2A)
 	}
@@ -2289,7 +2321,13 @@ func (w *Worker) executeFallback(job *Job, reactions *jobReactionState) {
 		ChannelID: job.ChannelID,
 	})
 	if err != nil {
-		markDeliveryFailureReactions(reactions, err)
+		reaction := markDeliveryFailureReactions(reactions, err)
+		w.auditJobEvent("agent_job_failed", job, "", "error", map[string]any{
+			"delivery_mode":     "fallback",
+			"delivery_error":    secrets.RedactEnv(err.Error()),
+			"delivery_reaction": reaction,
+			"elapsed_ms":        time.Since(startTime).Milliseconds(),
+		})
 		return
 	}
 
@@ -2311,15 +2349,40 @@ func (w *Worker) executeFallback(job *Job, reactions *jobReactionState) {
 		w.scheduleInterruptEscalation(currentJobSeq, w.escalationGrace, "fallback timeout cancel ineffective")
 	}()
 
-	w.autoCompactIfNeeded(ctx, job, "", func(msg string) {
+	if _, compactErr := w.autoCompactIfNeeded(ctx, job, "", func(msg string) {
 		SendProcessMessage(ds, job.ChannelID, msg)
-	})
-	if ctx.Err() != nil {
+	}); compactErr != nil {
+		errorContent := w.autoCompactAbortContent()
+		_ = sendLongWithMentions(ds, job.ChannelID, replyMsg.ID, errorContent, job.MentionRefs)
 		reactions.Final("⚠️")
+		w.auditJobEvent("agent_job_failed", job, "", "error", map[string]any{
+			"delivery_mode":      "fallback",
+			"reason":             "auto_compact_failed",
+			"auto_compact_error": secrets.RedactEnv(compactErr.Error()),
+			"elapsed_ms":         time.Since(startTime).Milliseconds(),
+		})
+		w.auditResponseEvent(job, "", "error", errorContent)
+		w.recordUsage(job, "", "error", startTime)
+		return
+	}
+	if ctx.Err() != nil {
+		failure := w.classifyJobFailure(ctx.Err(), ctx.Err())
+		errorContent := mentionRequesterInFinalResponse("❌ "+failure.message, job)
+		_ = sendLongWithMentions(ds, job.ChannelID, replyMsg.ID, AppendMetricsFooter(errorContent, MetricsWithElapsed(w.agent.TurnMetrics(), startTime)), job.MentionRefs)
+		reactions.Final(failure.emoji)
+		w.auditJobEvent("agent_job_failed", job, "", "error", map[string]any{
+			"delivery_mode": "fallback",
+			"error":         failure.message,
+			"reason":        failure.reason,
+			"cause":         failure.cause,
+			"ctx_error":     fmt.Sprint(ctx.Err()),
+			"elapsed_ms":    time.Since(startTime).Milliseconds(),
+		})
+		w.auditResponseEvent(job, "", "error", errorContent)
+		w.recordUsage(job, "", "error", startTime)
 		return
 	}
 
-	startTime := time.Now()
 	response, askErr := w.agent.Ask(ctx, job.Prompt, func(chunk string) {
 		if w.onActivity != nil {
 			w.onActivity()
@@ -2330,20 +2393,32 @@ func (w *Worker) executeFallback(job *Job, reactions *jobReactionState) {
 	job.MentionRefs = w.mentionRefsForDelivery(job.MentionRefs, job.currentRevokedMentionRefs())
 
 	if askErr != nil {
-		errMsg := askErr.Error()
-		if ctx.Err() == context.DeadlineExceeded {
-			errMsg = L.Getf("worker.timeout", w.askTimeoutSec)
-		} else if stderr := w.agent.RecentStderr(); stderr != "" {
-			errMsg += "\n```\n" + stderr + "\n```"
+		ctxErr := ctx.Err()
+		if errors.Is(ctxErr, context.DeadlineExceeded) {
+			w.agent.Abort()
+		}
+		failure := w.classifyJobFailure(ctxErr, askErr)
+		errMsg := failure.message
+		if failure.reason == "agent_error" {
+			if stderr := secrets.RedactEnv(w.agent.RecentStderr()); stderr != "" {
+				errMsg += "\n```\n" + stderr + "\n```"
+			}
 		}
 		logContent = mentionRequesterInFinalResponse("❌ "+errMsg, job)
 		delivered := w.drainBeforeFinal(job.ChannelID)
-		if suppressGenericKiroErrorAfterEgress(askErr, ctx.Err(), delivered) {
+		if suppressGenericKiroErrorAfterEgress(askErr, ctxErr, delivered) {
 			log.Printf("[worker %s] suppressing fallback generic Kiro error after safe egress delivery | user=%s msg=%s delivered=%d",
 				w.channelID, job.Username, job.MessageID, delivered)
 			reactions.Final("✅")
 			w.auditResponseEvent(job, "", "success", "")
 			w.recordUsage(job, "", "success", startTime)
+			w.auditJobEvent("agent_job_completed", job, "", "success", map[string]any{
+				"delivery_mode":           "fallback",
+				"elapsed_ms":              time.Since(startTime).Milliseconds(),
+				"safe_egress_deliveries":  delivered,
+				"suppressed_agent_error":  secrets.RedactEnv(askErr.Error()),
+				"suppressed_error_reason": "safe_egress_delivered",
+			})
 			logContent = ""
 		} else {
 			if sendErr := sendLongWithMentions(ds, job.ChannelID, replyMsg.ID, AppendMetricsFooter(logContent, MetricsWithElapsed(w.agent.TurnMetrics(), startTime)), job.MentionRefs); sendErr != nil {
@@ -2351,7 +2426,15 @@ func (w *Worker) executeFallback(job *Job, reactions *jobReactionState) {
 					w.channelID, job.Username, job.MessageID, sendErr)
 				markDeliveryFailureReactions(reactions, sendErr)
 			}
-			reactions.Final("❌")
+			reactions.Final(failure.emoji)
+			w.auditJobEvent("agent_job_failed", job, "", "error", map[string]any{
+				"delivery_mode": "fallback",
+				"error":         errMsg,
+				"reason":        failure.reason,
+				"cause":         failure.cause,
+				"ctx_error":     fmt.Sprint(ctxErr),
+				"elapsed_ms":    time.Since(startTime).Milliseconds(),
+			})
 			w.auditResponseEvent(job, "", "error", logContent)
 			w.recordUsage(job, "", "error", startTime)
 		}
@@ -2370,11 +2453,27 @@ func (w *Worker) executeFallback(job *Job, reactions *jobReactionState) {
 				w.channelID, job.Username, job.MessageID, reaction, sendErr)
 			w.auditResponseEvent(job, "", "error", response)
 			w.recordUsage(job, "", "error", startTime)
+			w.auditJobEvent("agent_job_failed", job, "", "error", map[string]any{
+				"delivery_mode":     "fallback",
+				"delivery_error":    secrets.RedactEnv(sendErr.Error()),
+				"delivery_reaction": reaction,
+				"elapsed_ms":        time.Since(startTime).Milliseconds(),
+				"response_len":      len(response),
+			})
 			return
 		}
 		reactions.Final("✅")
 		w.auditResponseEvent(job, "", "success", response)
 		w.recordUsage(job, "", "success", startTime)
+		completedMeta := map[string]any{
+			"delivery_mode": "fallback",
+			"elapsed_ms":    time.Since(startTime).Milliseconds(),
+			"response_len":  len(response),
+		}
+		if stopReason := w.agent.StopReason(); stopReason != "" {
+			completedMeta["stop_reason"] = stopReason
+		}
+		w.auditJobEvent("agent_job_completed", job, "", "success", completedMeta)
 	}
 
 	if w.logger != nil {

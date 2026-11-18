@@ -17,6 +17,10 @@ import (
 	"time"
 )
 
+// ErrAgentProcessExited reports that the ACP child process ended before a
+// pending protocol request completed.
+var ErrAgentProcessExited = errors.New("agent process exited")
+
 // Agent wraps an ACP child process.
 type Agent struct {
 	Name      string
@@ -37,7 +41,6 @@ type Agent struct {
 	onSubagent   func(SubagentState) // called on _kiro.dev/subagent/list_update
 	onPlan       func(PlanState)     // called on plan/todo sessionUpdate
 	onExit       func()              // called when child process exits unexpectedly
-	onReadError  func(error)         // called when ReadLoop encounters an error
 
 	contextUsage   float64     // latest context usage percentage from metadata
 	turnMetrics    TurnMetrics // per-turn metrics from latest metadata
@@ -60,6 +63,7 @@ type Agent struct {
 	dialect       Dialect        // which ACP backend this agent drives
 	profile       dialectProfile // dialect-specific behavior; set in StartAgent
 	stopOnce      sync.Once
+	abortOnce     sync.Once
 	exited        chan struct{} // closed when child process exits
 	stderrBuf     *ringBuffer   // captures recent stderr from the agent process
 	mcpReady      map[string]struct{}
@@ -195,34 +199,22 @@ func StartAgent(name, binary, cwd, model string, opts AgentOptions) (*Agent, err
 	}
 
 	go func() {
-		if err := a.transport.ReadLoop(); err != nil {
-			log.Printf("[agent:%s] read loop: %v", name, err)
-			a.mu.Lock()
-			cb := a.onReadError
-			a.mu.Unlock()
-			if cb != nil {
-				cb(err)
+		readErr := a.transport.ReadLoop()
+		cause := a.transport.closeError()
+		if errors.Is(cause, ErrTransportClosed) {
+			if readErr != nil {
+				log.Printf("[agent:%s] read loop: %v", name, readErr)
+			} else {
+				log.Printf("[agent:%s] read loop closed before process exit", name)
 			}
+			a.terminateAfterTransportFailure(cause)
 		}
 	}()
 
-	// Watch for unexpected child exit
+	// Watch for child exit and close the transport immediately so pending ACP
+	// requests cannot remain blocked on a pipe that no longer has a process.
 	go func() {
-		a.cmd.Wait()
-		close(a.exited)
-		a.mu.Lock()
-		wasRunning := a.state != "stopped"
-		if wasRunning {
-			a.state = "stopped"
-		}
-		cb := a.onExit
-		a.mu.Unlock()
-		if wasRunning {
-			log.Printf("[agent:%s] process exited unexpectedly", name)
-			if cb != nil {
-				cb()
-			}
-		}
+		a.handleProcessExit(a.cmd.Wait())
 	}()
 
 	// Handshake: initialize
@@ -322,10 +314,80 @@ func StartAgent(name, binary, cwd, model string, opts AgentOptions) (*Agent, err
 		}
 		a.setCurrentModelID(model)
 	}
-	a.state = "idle"
+	a.mu.Lock()
+	if a.state != "stopped" {
+		a.state = "idle"
+	}
+	a.mu.Unlock()
 
 	log.Printf("[agent:%s] session=%s", name, a.SessionID)
 	return a, nil
+}
+
+func (a *Agent) handleProcessExit(waitErr error) {
+	cause := error(ErrAgentProcessExited)
+	if waitErr != nil {
+		cause = fmt.Errorf("%w: %v", ErrAgentProcessExited, waitErr)
+	}
+
+	a.mu.Lock()
+	wasRunning := a.state != "stopped"
+	a.state = "stopped"
+	transport := a.transport
+	exited := a.exited
+	cb := a.onExit
+	a.mu.Unlock()
+
+	if transport != nil {
+		transport.closeWithError(cause)
+	}
+	if exited != nil {
+		close(exited)
+	}
+	if wasRunning {
+		log.Printf("[agent:%s] process exited unexpectedly", a.Name)
+		if cb != nil {
+			cb()
+		}
+	}
+}
+
+func (a *Agent) terminateAfterTransportFailure(cause error) {
+	a.mu.Lock()
+	if a.state == "stopped" || a.cmd == nil || a.cmd.Process == nil {
+		a.mu.Unlock()
+		return
+	}
+	pid := a.cmd.Process.Pid
+	exited := a.exited
+	a.mu.Unlock()
+
+	log.Printf("[agent:%s] terminating pid=%d after transport failure: %v", a.Name, pid, cause)
+	_ = syscall.Kill(-pid, syscall.SIGTERM)
+	go func() {
+		select {
+		case <-exited:
+		case <-time.After(2 * time.Second):
+			log.Printf("[agent:%s] force killing pid=%d after transport failure", a.Name, pid)
+			_ = syscall.Kill(-pid, syscall.SIGKILL)
+		}
+	}()
+}
+
+func (a *Agent) awaitProcessExitAfterTransportError(err error) error {
+	if err == nil || (!errors.Is(err, ErrTransportClosed) && !errors.Is(err, ErrAgentProcessExited)) {
+		return err
+	}
+	a.mu.Lock()
+	exited := a.exited
+	a.mu.Unlock()
+	if exited != nil {
+		<-exited
+	}
+	if errors.Is(err, ErrAgentProcessExited) {
+		return err
+	}
+	return fmt.Errorf("%w: %v", ErrAgentProcessExited, err)
 }
 
 func sessionParams(cwd, sessionID string, servers []MCPServerConfig) map[string]interface{} {
@@ -812,13 +874,6 @@ func (a *Agent) OnSubagentFunc(fn func(SubagentState)) {
 	a.mu.Unlock()
 }
 
-// OnReadErrorFunc sets a callback invoked when the ReadLoop encounters an error (e.g. buffer overflow).
-func (a *Agent) OnReadErrorFunc(fn func(error)) {
-	a.mu.Lock()
-	a.onReadError = fn
-	a.mu.Unlock()
-}
-
 // State returns the current agent state.
 func (a *Agent) State() string {
 	a.mu.Lock()
@@ -1086,7 +1141,9 @@ func (a *Agent) Ask(ctx context.Context, prompt string, onChunk func(string)) (s
 
 	defer func() {
 		a.mu.Lock()
-		a.state = "idle"
+		if a.state != "stopped" {
+			a.state = "idle"
+		}
 		a.onChunk = nil
 		a.onToolUse = nil
 		a.mu.Unlock()
@@ -1109,11 +1166,13 @@ func (a *Agent) Ask(ctx context.Context, prompt string, onChunk func(string)) (s
 	case <-ctx.Done():
 		a.activeProfile().cancel(a)
 		select {
-		case <-ch:
+		case r := <-ch:
+			_ = a.awaitProcessExitAfterTransportError(r.err)
 		case <-time.After(5 * time.Second):
 		}
 		return "", ctx.Err()
 	case r := <-ch:
+		r.err = a.awaitProcessExitAfterTransportError(r.err)
 		if r.err != nil {
 			return "", r.err
 		}
@@ -1144,7 +1203,9 @@ func (a *Agent) Compact(ctx context.Context, onChunk func(string)) (string, erro
 	a.mu.Unlock()
 	defer func() {
 		a.mu.Lock()
-		a.state = "idle"
+		if a.state != "stopped" {
+			a.state = "idle"
+		}
 		a.mu.Unlock()
 	}()
 	if err := a.waitForAsyncCompaction(ctx, snap); err != nil {
@@ -1194,10 +1255,13 @@ func (a *Agent) AskAsyncMulti(content []PromptContent, cb AsyncCallbacks) {
 			"sessionId": a.SessionID,
 			"prompt":    content,
 		})
+		err = a.awaitProcessExitAfterTransportError(err)
 
 		a.mu.Lock()
 		text := a.currentText.String()
-		a.state = "idle"
+		if a.state != "stopped" {
+			a.state = "idle"
+		}
 		a.onChunk = nil
 		a.onToolCall = nil
 		a.onToolResult = nil
@@ -1325,6 +1389,32 @@ func (a *Agent) StopReason() string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return a.lastStopReason
+}
+
+// Abort terminates an unhealthy agent without pre-marking it stopped. The
+// process watcher therefore treats the exit as unexpected and runs OnExit so
+// the manager can remove the unusable worker and recreate it on the next job.
+func (a *Agent) Abort() {
+	a.abortOnce.Do(func() {
+		a.mu.Lock()
+		if a.state == "stopped" || a.cmd == nil || a.cmd.Process == nil {
+			a.mu.Unlock()
+			return
+		}
+		pid := a.cmd.Process.Pid
+		exited := a.exited
+		a.mu.Unlock()
+
+		log.Printf("[agent:%s] aborting unhealthy pid=%d", a.Name, pid)
+		_ = syscall.Kill(-pid, syscall.SIGTERM)
+		select {
+		case <-exited:
+		case <-time.After(2 * time.Second):
+			log.Printf("[agent:%s] force killing unhealthy pid=%d", a.Name, pid)
+			_ = syscall.Kill(-pid, syscall.SIGKILL)
+			<-exited
+		}
+	})
 }
 
 // Stop gracefully stops the agent: SIGTERM → wait 2s → SIGKILL entire process group.
