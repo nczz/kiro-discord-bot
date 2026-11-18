@@ -30,6 +30,9 @@ import (
 // Manager manages per-channel sessions and workers.
 type Manager struct {
 	mu              sync.Mutex
+	stopOnce        sync.Once
+	stopping        bool
+	shutdownGrace   time.Duration
 	workers         map[string]*Worker
 	agents          map[string]*acp.Agent
 	paused          map[string]bool
@@ -54,6 +57,7 @@ type Manager struct {
 	logger          *ChatLogger
 	usage           *UsageStore
 	audit           AuditSink
+	recovery        *jobRecoveryStore
 	botVersion      string
 	guildID         string
 	botID           string
@@ -234,6 +238,7 @@ func NewManager(cfg ManagerConfig) *Manager {
 		threadListen:        make(map[string]string),
 		outputMode:          make(map[string]OutputMode),
 		webhookListen:       make(map[string]bool),
+		shutdownGrace:       20 * time.Second,
 		threadAgents:        make(map[string]*threadAgentEntry),
 		discord:             cfg.DiscordSession,
 		store:               cfg.Store,
@@ -259,6 +264,7 @@ func NewManager(cfg ManagerConfig) *Manager {
 		gmUserIDs:           parseDiscordUserIDSet(cfg.GMUserIDs),
 		usageLimits:         cfg.UsageLimits,
 		dataDir:             cfg.DataDir,
+		recovery:            newJobRecoveryStore(cfg.DataDir),
 		a2aConfig:           cfg.A2A,
 		a2aNode:             cfg.A2ANode,
 		a2aPeers:            cfg.A2APeerStore,
@@ -280,6 +286,9 @@ func NewManager(cfg ManagerConfig) *Manager {
 		trustAllTools:       cfg.TrustAllTools,
 		trustTools:          cfg.TrustTools,
 		agentRuntimeHome:    filepath.Join(cfg.DataDir, "kiro-agent-runtime"),
+	}
+	if m.recovery.loadErr != nil {
+		log.Printf("[recovery] active-job journal unavailable: %v", m.recovery.loadErr)
 	}
 	if exe, err := os.Executable(); err == nil {
 		m.mcpProxyCommand = exe
@@ -1078,21 +1087,95 @@ func (m *Manager) stopChannel(channelID string) {
 	delete(m.channelLastActivity, channelID)
 }
 
-// StopAll stops all active workers and agents. Called during graceful shutdown.
+// StopAll stops accepting work, terminalizes accepted jobs, then stops agents
+// and closes manager-owned stores. Discord and audit stay available until this
+// method returns.
 func (m *Manager) StopAll() {
-	if m.a2aTransport != nil {
-		m.a2aTransport.Stop()
+	if m == nil {
+		return
 	}
+	m.stopOnce.Do(func() {
+		m.stopAll()
+	})
+}
+
+func (m *Manager) stopAll() {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	for chID := range m.agents {
-		m.stopChannel(chID)
+	m.stopping = true
+	workers := make(map[*Worker]struct{}, len(m.workers)+len(m.threadAgents))
+	agents := make(map[*acp.Agent]struct{}, len(m.agents)+len(m.threadAgents))
+	for _, worker := range m.workers {
+		if worker != nil {
+			workers[worker] = struct{}{}
+		}
 	}
-	for threadID, entry := range m.threadAgents {
-		entry.worker.Stop()
-		entry.agent.Stop()
-		delete(m.threadAgents, threadID)
+	for _, agent := range m.agents {
+		if agent != nil {
+			agents[agent] = struct{}{}
+		}
 	}
+	for _, entry := range m.threadAgents {
+		if entry == nil {
+			continue
+		}
+		if entry.worker != nil {
+			workers[entry.worker] = struct{}{}
+		}
+		if entry.agent != nil {
+			agents[entry.agent] = struct{}{}
+		}
+	}
+	m.workers = make(map[string]*Worker)
+	m.agents = make(map[string]*acp.Agent)
+	m.threadAgents = make(map[string]*threadAgentEntry)
+	m.channelLastActivity = make(map[string]time.Time)
+	transport := m.a2aTransport
+	m.mu.Unlock()
+
+	if transport != nil {
+		transport.Stop()
+	}
+	shutdownGrace := m.shutdownGrace
+	if shutdownGrace <= 0 {
+		shutdownGrace = 20 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), shutdownGrace)
+	var workerWG sync.WaitGroup
+	for worker := range workers {
+		workerWG.Add(1)
+		go func(worker *Worker) {
+			defer workerWG.Done()
+			worker.Shutdown(ctx)
+		}(worker)
+	}
+	workersDone := make(chan struct{})
+	go func() {
+		workerWG.Wait()
+		close(workersDone)
+	}()
+	workersComplete := false
+	select {
+	case <-workersDone:
+		workersComplete = true
+	case <-ctx.Done():
+		log.Printf("[manager] worker shutdown deadline reached after %s; preserving recovery journal", shutdownGrace)
+	}
+	cancel()
+
+	var agentWG sync.WaitGroup
+	for agent := range agents {
+		agentWG.Add(1)
+		go func(agent *acp.Agent) {
+			defer agentWG.Done()
+			agent.Stop()
+		}(agent)
+	}
+	agentWG.Wait()
+	if !workersComplete {
+		log.Println("[manager] agents stopped after incomplete worker finalization")
+		return
+	}
+
 	if m.mcpPolicies != nil {
 		_ = m.mcpPolicies.Close()
 	}
@@ -1111,7 +1194,9 @@ func (m *Manager) StopAll() {
 	if m.usage != nil {
 		_ = m.usage.Close()
 	}
-	m.logger.Close()
+	if m.logger != nil {
+		m.logger.Close()
+	}
 	log.Println("[manager] all agents stopped")
 }
 
@@ -1195,12 +1280,20 @@ func (m *Manager) Enqueue(ds *discordgo.Session, job *Job) error {
 	defer func() {
 		if !enqueued {
 			rollbackQueuedJobReaction(ds, job)
+			m.removeQueuedJobRecovery(job)
 		}
 	}()
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.stopping {
+		return errors.New(L.Get("worker.service_draining"))
+	}
 
+	if err := m.persistQueuedJob(job); err != nil {
+		log.Printf("[recovery] reject unsafe enqueue channel=%s message=%s: %v", job.ChannelID, job.MessageID, err)
+		return errors.New(L.Get("worker.queue_unavailable"))
+	}
 	worker, err := m.ensureWorker(job.ChannelID)
 	if err != nil {
 		return err
@@ -2909,6 +3002,7 @@ func (m *Manager) startAgentAndWorkerWithModelFallback(channelID string, allowSt
 	w.SetUsageStore(m.usage)
 	w.SetUsageLimits(m.usageLimits)
 	w.SetAuditSink(m.audit)
+	w.setRecoveryStore(m.recovery)
 	w.OnThreadCreatedFunc(func(threadID string, mentionOnly bool) {
 		m.CaptureThreadListenMode(threadID, mentionOnly)
 	})
@@ -3915,12 +4009,20 @@ func (m *Manager) EnqueueThread(ds *discordgo.Session, job *Job, parentChannelID
 	defer func() {
 		if !enqueued {
 			rollbackQueuedJobReaction(ds, job)
+			m.removeQueuedJobRecovery(job)
 		}
 	}()
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.stopping {
+		return errors.New(L.Get("worker.service_draining"))
+	}
 
+	if err := m.persistQueuedJob(job); err != nil {
+		log.Printf("[recovery] reject unsafe thread enqueue channel=%s thread=%s message=%s: %v", job.ChannelID, job.ThreadID, job.MessageID, err)
+		return errors.New(L.Get("worker.queue_unavailable"))
+	}
 	entry, ok := m.threadAgents[job.ThreadID]
 	if ok && !entry.agent.IsAlive() {
 		// Dead agent — clean up and re-spawn
@@ -4170,6 +4272,7 @@ func (m *Manager) spawnThreadAgent(threadID, parentChannelID string, modelOverri
 	w.SetUsageStore(m.usage)
 	w.SetUsageLimits(m.usageLimits)
 	w.SetAuditSink(m.audit)
+	w.setRecoveryStore(m.recovery)
 	w.SetBotToolsTargetStatePath(botToolsTargetStatePath(m.dataDir, threadID))
 	w.SetGMUserIDs(m.gmUserIDs)
 	w.SetHistoryPrefix(historyCtx)

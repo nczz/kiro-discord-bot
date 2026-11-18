@@ -40,9 +40,25 @@ StartLimitBurst=5
 
 `Type=notify` / `WatchdogSec` 在 systemd host 上屬於可選但建議啟用。Bot 會在 Discord Gateway open 成功後送出 `READY=1`，且只會在 Gateway ready 與 heartbeat ACK 新鮮時送出 `WATCHDOG=1`。啟動後用 `/doctor` 確認 Gateway watchdog 狀態、heartbeat ACK age、reconnect attempts 與 last reconnect error。
 
+### 替換 binary 前先 drain
+
+仍有已接受的 agent 任務正在排隊或執行時，不得停止服務。先載入 service 使用的相同環境，並在 `systemctl stop` 前立即執行 repository gate：
+
+```bash
+set -a
+. ./.env
+set +a
+scripts/deployment-drain-check.sh
+sudo systemctl stop kiro-discord-bot
+```
+
+Exit code `1` 代表仍有已接受的工作，部署必須等到工作進入終態。不得刪除 runtime state 來繞過 gate。收到 `SIGTERM` 後，bot 會停止接受新工作、取消 active work、把 active 與 queued Discord jobs 標記為已中斷、記錄終態 audit events，最後才停止 ACP processes。`TimeoutStopSec` 必須維持 `45s` 或更長，避免 systemd 提前中斷這個順序。
+
+若 process 或 host 在 graceful shutdown 完成前 crash，下一次 Discord Gateway 成功啟動時會把持久化的 progress message 與來源 reaction 標記為已中斷。Bot 不會自動重播 prompt，因為先前的 tool calls 可能已產生 side effects；重試前必須先檢查討論串。
+
 ## Docker
 
-Compose 設定使用 host networking，掛載所選 engine 的 authentication state 與 project roots，並讓 runtime MCP config 和全域 catalog sources 隔離。Catalog servers 仍需透過 `/mcp` 依頻道啟用。
+Compose 設定使用 host networking，掛載所選 engine 的 authentication state 與 project roots，並讓 runtime MCP config 和全域 catalog sources 隔離。Catalog servers 仍需透過 `/mcp` 依頻道啟用。`stop_grace_period` 必須維持 `45s` 或更長，避免 Compose 在 job 終態處理與 recovery state 持久化完成前送出 `SIGKILL`。
 
 ## A2A NATS 部署
 

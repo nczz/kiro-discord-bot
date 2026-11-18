@@ -40,9 +40,25 @@ StartLimitBurst=5
 
 `Type=notify` / `WatchdogSec` is optional but recommended on systemd hosts. The bot sends `READY=1` after Discord Gateway open succeeds and sends `WATCHDOG=1` only while the Gateway is ready and heartbeat ACKs are fresh. Use `/doctor` after startup to confirm the Gateway watchdog status, heartbeat ACK age, reconnect attempts, and last reconnect error.
 
+### Drain Before Replacing the Binary
+
+Do not stop the service while accepted agent jobs are still queued or active. Source the same environment used by the service and run the repository gate immediately before `systemctl stop`:
+
+```bash
+set -a
+. ./.env
+set +a
+scripts/deployment-drain-check.sh
+sudo systemctl stop kiro-discord-bot
+```
+
+Exit code `1` means deployment is blocked until accepted work reaches a terminal state. Do not delete runtime state to bypass the gate. On `SIGTERM`, the bot stops accepting new work, cancels active work, marks active and queued Discord jobs as interrupted, records terminal audit events, and only then stops ACP processes. Keep `TimeoutStopSec=45s` or longer so systemd does not preempt that sequence.
+
+If a process or host crashes before graceful shutdown completes, the next successful Gateway startup marks the persisted progress message and source reaction as interrupted. It does not replay the prompt because earlier tool calls may already have caused side effects. Review the thread before retrying.
+
 ## Docker
 
-The Compose setup uses host networking, mounts the selected engine authentication state and project roots, and keeps runtime MCP config isolated from global catalog sources. Catalog servers still must be enabled per channel through `/mcp`.
+The Compose setup uses host networking, mounts the selected engine authentication state and project roots, and keeps runtime MCP config isolated from global catalog sources. Catalog servers still must be enabled per channel through `/mcp`. Keep `stop_grace_period: 45s` or longer so Compose does not send `SIGKILL` before job terminalization and recovery-state persistence finish.
 
 ## A2A NATS Deployment
 

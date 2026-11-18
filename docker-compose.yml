@@ -46,6 +46,7 @@ services:
       - ${PROJECTS_DIR:-/projects}:/projects
     network_mode: host
     restart: unless-stopped
+    stop_grace_period: 45s
 
 volumes:
   bot-data:

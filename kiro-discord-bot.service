@@ -8,6 +8,7 @@ Type=simple
 WorkingDirectory=/opt/kiro-discord-bot
 EnvironmentFile=/opt/kiro-discord-bot/.env
 ExecStart=/opt/kiro-discord-bot/kiro-discord-bot
+TimeoutStopSec=45s
 Restart=on-failure
 RestartSec=3
 

@@ -107,9 +107,13 @@ func (s *jobReactionState) Set(emoji string) {
 }
 
 func (s *jobReactionState) Final(emoji string) {
-	if err := s.transition(emoji, true); err != nil {
+	if err := s.finalError(emoji); err != nil {
 		s.logError("finalize", emoji, err)
 	}
+}
+
+func (s *jobReactionState) finalError(emoji string) error {
+	return s.transition(emoji, true)
 }
 
 func (s *jobReactionState) AddHint(emoji string) {
@@ -183,6 +187,24 @@ func (s *jobReactionState) logError(action, emoji string, err error) {
 		return
 	}
 	log.Printf("[reaction] %s failed channel=%s msg=%s emoji=%s: %v", action, s.channelID, s.messageID, emoji, err)
+}
+
+func recoveredJobReactionState(ds *discordgo.Session, channelID, messageID string) (*jobReactionState, error) {
+	state := newJobReactionState(ds, channelID, messageID, false, true)
+	if !state.enabled {
+		return state, nil
+	}
+	message, err := ds.ChannelMessage(channelID, messageID)
+	if err != nil {
+		return nil, err
+	}
+	for _, reaction := range message.Reactions {
+		if reaction == nil || !reaction.Me {
+			continue
+		}
+		state.present |= trackedJobReactionBit(reaction.Emoji.Name)
+	}
+	return state, nil
 }
 
 func addQueuedJobReaction(ds *discordgo.Session, job *Job) {

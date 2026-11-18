@@ -824,6 +824,39 @@ Fix pattern:
 - Tests must cover fresh heartbeat no-op, stale ACK reconnect, repeated recovery failure escalation, disabled watchdog no-op, and `/doctor` Gateway status output.
 - Deployment docs must keep a restart policy example beside the default-on Gateway watchdog env vars.
 
+### Deployment Stops Active Agent Work Without A Terminal Discord State
+
+Symptoms:
+
+- A progress card remains in a running state after a service deployment or host restart.
+- Audit history contains `agent_job_started` and tool events but no `agent_job_completed` or `agent_job_failed`.
+- Partial tool side effects remain even though no final agent response was delivered.
+
+Root cause pattern:
+
+- The process stops workers and ACP children before the active callback writes Discord, reaction, usage, and audit terminal state.
+- In-memory progress message ownership is lost on process exit, so a new process cannot identify the stale card.
+
+Fix pattern:
+
+- `channel.Manager` owns shutdown ordering: stop accepting work, terminalize queued and active jobs through `Worker`, then stop ACP processes, then close stores.
+- Persist only the minimum recovery identifiers for accepted jobs. Remove a record only after terminal handling succeeds under the job's Discord-egress policy; retain it for restart reconciliation when required delivery fails.
+- After Discord Gateway startup, reconcile leftover records as interrupted. Never replay the prompt because prior tool calls may already have caused side effects.
+- Gate deployments with `scripts/deployment-drain-check.sh` and give the service manager enough stop time for Discord and audit finalization.
+
+Rejected shortcuts:
+
+- Increasing ACP process kill delay does not create a terminal callback or recover progress ownership.
+- Editing one known stale Discord message does not fix future deployments.
+- Automatically replaying interrupted prompts can duplicate writes, uploads, notifications, or other side effects.
+- Deleting the recovery journal to force a deployment hides accepted work and is not a valid drain.
+
+Regression expectation:
+
+- Graceful shutdown rejects new work, terminalizes active and queued work, reconciles source reactions, and records a reason-coded terminal audit event before agent stop.
+- Process-restart reconciliation terminalizes persisted progress without invoking an agent or replaying a prompt.
+- The recovery journal contains no prompt, attachment, CWD, token, or tool payload and is removed when no accepted jobs remain.
+
 ## Architecture Decision Checklist
 
 Before implementing a structural change, answer:

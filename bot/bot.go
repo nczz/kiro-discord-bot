@@ -302,6 +302,11 @@ func (b *Bot) Start() error {
 	if err := b.discord.Open(); err != nil {
 		return err
 	}
+	if reconciled, err := b.manager.ReconcileInterruptedJobs(b.discord); err != nil {
+		log.Printf("[recovery] startup reconciliation incomplete: reconciled=%d err=%v", reconciled, err)
+	} else if reconciled > 0 {
+		log.Printf("[recovery] terminalized interrupted jobs count=%d", reconciled)
+	}
 	if err := systemdNotify("READY=1"); err != nil {
 		log.Printf("[systemd] notify READY failed: %v", err)
 	}

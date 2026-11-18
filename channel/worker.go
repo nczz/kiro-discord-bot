@@ -121,12 +121,14 @@ type Worker struct {
 	stopGrace                    time.Duration
 	stopCh                       chan struct{}
 	idleCh                       chan struct{} // signaled when agent finishes a task
+	runDone                      chan struct{}
 	stopped                      sync.Once
 	started                      sync.Once
 	logger                       *ChatLogger
 	usage                        *UsageStore
 	usageLimits                  UsageLimitConfig
 	audit                        AuditSink
+	recovery                     *jobRecoveryStore
 	model                        string
 	engine                       string
 	autoCompactPrimed            bool
@@ -135,14 +137,18 @@ type Worker struct {
 	cancelMu sync.Mutex
 	cancelFn context.CancelFunc
 
-	// Current thread info (protected by cancelMu)
+	// Current job state (protected by cancelMu).
 	currentThreadID     string
 	currentJobID        string
 	currentJobSeq       uint64
 	currentJobActive    bool
-	queuedJobs          int
 	currentJobDequeued  bool
+	currentDone         chan struct{}
+	currentTerminal     func()
+	queuedJobs          int
 	pendingInterruptSeq uint64
+	runStarted          bool
+	stopping            bool
 
 	onActivity      func()      // called during work to signal liveness (prevents idle cleanup)
 	onIdle          func() bool // called when a job finishes; true means the worker was stopped
@@ -206,6 +212,7 @@ func newWorkerWithEngine(channelID string, agent workerAgent, bufSize, askTimeou
 		stopGrace:       interruptStopGrace,
 		stopCh:          make(chan struct{}),
 		idleCh:          make(chan struct{}, 1),
+		runDone:         make(chan struct{}),
 		logger:          logger,
 		model:           model,
 		engine:          engine,
@@ -260,6 +267,8 @@ func (w *Worker) SetUsageLimits(cfg UsageLimitConfig) { w.usageLimits = cfg }
 
 func (w *Worker) SetAuditSink(sink AuditSink) { w.audit = sink }
 
+func (w *Worker) setRecoveryStore(store *jobRecoveryStore) { w.recovery = store }
+
 // OnSilentFunc sets a legacy callback that returns whether compact output is active.
 func (w *Worker) OnSilentFunc(fn func() bool) {
 	w.outputMode = func() OutputMode {
@@ -287,17 +296,15 @@ func (w *Worker) SetHistoryPrefix(s string) { w.historyPrefix = s }
 
 func (w *Worker) Enqueue(job *Job) error {
 	w.cancelMu.Lock()
-	w.queuedJobs++
-	w.cancelMu.Unlock()
+	defer w.cancelMu.Unlock()
+	if w.stopping {
+		return fmt.Errorf("worker stopped")
+	}
 	select {
 	case w.queue <- job:
+		w.queuedJobs++
 		return nil
 	default:
-		w.cancelMu.Lock()
-		if w.queuedJobs > 0 {
-			w.queuedJobs--
-		}
-		w.cancelMu.Unlock()
 		return fmt.Errorf("queue full")
 	}
 }
@@ -375,7 +382,10 @@ func (w *Worker) QueueLen() int {
 
 func (w *Worker) Start() {
 	w.started.Do(func() {
-		// Pre-fill idle so first job doesn't wait
+		w.cancelMu.Lock()
+		w.runStarted = true
+		w.cancelMu.Unlock()
+		// Pre-fill idle so first job doesn't wait.
 		select {
 		case w.idleCh <- struct{}{}:
 		default:
@@ -384,9 +394,14 @@ func (w *Worker) Start() {
 	})
 }
 
+// Stop prevents new work and stops the queue loop. Manager shutdown uses
+// Shutdown to also terminalize accepted work before stopping the agent.
 func (w *Worker) Stop() {
 	w.stopped.Do(func() {
+		w.cancelMu.Lock()
+		w.stopping = true
 		close(w.stopCh)
+		w.cancelMu.Unlock()
 	})
 }
 
@@ -410,6 +425,86 @@ func (w *Worker) CancelCurrent() bool {
 		return true
 	}
 	return false
+}
+
+// Shutdown cancels active work, terminalizes every accepted job, and waits for
+// the queue loop to stop. It never stops the ACP process; Manager owns that
+// ordering so Discord and audit terminal state is written first.
+func (w *Worker) Shutdown(ctx context.Context) {
+	if w == nil {
+		return
+	}
+	w.Stop()
+	w.rejectQueuedJobsForShutdown()
+
+	w.cancelMu.Lock()
+	done := w.currentDone
+	terminal := w.currentTerminal
+	w.cancelMu.Unlock()
+	if terminal != nil {
+		terminal()
+	} else {
+		w.CancelCurrent()
+	}
+	if done != nil {
+		select {
+		case <-done:
+		case <-ctx.Done():
+		}
+	}
+
+	w.rejectQueuedJobsForShutdown()
+	w.cancelMu.Lock()
+	runStarted := w.runStarted
+	w.cancelMu.Unlock()
+	if runStarted {
+		select {
+		case <-w.runDone:
+		case <-ctx.Done():
+		}
+	}
+}
+
+func (w *Worker) rejectQueuedJobsForShutdown() {
+	for {
+		select {
+		case job := <-w.queue:
+			w.cancelMu.Lock()
+			if w.queuedJobs > 0 {
+				w.queuedJobs--
+			}
+			w.cancelMu.Unlock()
+			w.rejectJobForShutdown(job)
+		default:
+			return
+		}
+	}
+}
+
+func (w *Worker) rejectJobForShutdown(job *Job) {
+	if job == nil {
+		return
+	}
+	content := "⚠️ " + L.Get("worker.shutdown_queued")
+	job.emitA2AResult(a2a.TaskExecutionResult{
+		State:   a2a.TaskStateCanceled,
+		Content: content,
+		Error:   a2a.TaskError{Code: a2a.ErrorCode("service_shutdown"), Message: L.Get("worker.shutdown_queued")},
+	})
+	sendErr := job.sendInlineFinalReply(job.Session, content)
+	reactions := newJobReactionState(job.Session, job.ChannelID, job.MessageID, job.QueuedReactionAdded, !job.RemoteA2A)
+	if sendErr != nil {
+		log.Printf("[worker %s] queued shutdown reply failed | msg=%s err=%v", w.channelID, job.MessageID, sendErr)
+		markDeliveryFailureReactions(reactions, sendErr)
+	} else {
+		reactions.Final("⚠️")
+		w.clearJobRecovery(job)
+	}
+	w.auditJobEvent("agent_job_rejected", job, job.ThreadID, "canceled", map[string]any{
+		"reason":         "service_shutdown",
+		"previous_state": jobRecoveryQueued,
+	})
+	w.markJobDequeued(false)
 }
 
 func (w *Worker) markJobDequeued(dequeued bool) {
@@ -561,22 +656,84 @@ func (w *Worker) waitIdle() bool {
 }
 
 func (w *Worker) run() {
+	defer close(w.runDone)
 	for {
 		select {
 		case <-w.stopCh:
 			return
 		case job := <-w.queue:
 			w.markJobDequeuedFromQueue()
-			if !w.waitIdle() {
-				w.markJobDequeued(false)
-				return
-			}
-			if w.isStopped() {
-				w.markJobDequeued(false)
+			if !w.waitIdle() || w.isStopped() {
+				w.rejectJobForShutdown(job)
 				return
 			}
 			w.execute(job)
 		}
+	}
+}
+
+func (w *Worker) startCurrentJob(job *Job) {
+	w.cancelMu.Lock()
+	w.currentJobID = job.MessageID
+	w.currentJobSeq++
+	w.currentJobActive = true
+	w.currentDone = make(chan struct{})
+	w.currentTerminal = nil
+	w.cancelMu.Unlock()
+}
+
+func (w *Worker) setCurrentTerminal(fn func()) bool {
+	w.cancelMu.Lock()
+	if w.currentJobActive {
+		w.currentTerminal = fn
+	}
+	stopping := w.stopping
+	w.cancelMu.Unlock()
+	return stopping
+}
+
+func (w *Worker) finishCurrentJob(job *Job) {
+	w.finishCurrentJobState(job, true)
+}
+
+func (w *Worker) finishCurrentJobState(job *Job, clearRecovery bool) {
+	clearBotToolsTargetState(w.botToolsTargetStatePath)
+	if clearRecovery {
+		w.clearJobRecovery(job)
+	}
+	w.cancelMu.Lock()
+	done := w.currentDone
+	w.cancelFn = nil
+	w.currentThreadID = ""
+	w.currentJobID = ""
+	w.currentJobActive = false
+	w.currentDone = nil
+	w.currentTerminal = nil
+	if w.pendingInterruptSeq == w.currentJobSeq {
+		w.pendingInterruptSeq = 0
+	}
+	w.cancelMu.Unlock()
+	if done != nil {
+		close(done)
+	}
+	w.signalIdle()
+}
+
+func (w *Worker) markJobRecoveryActive(job *Job, threadID, progressMessageID string, startedAt time.Time) {
+	if w == nil || w.recovery == nil || job == nil {
+		return
+	}
+	if err := w.recovery.MarkActive(jobRecoveryID(job), threadID, progressMessageID, startedAt); err != nil {
+		log.Printf("[recovery] mark active channel=%s message=%s: %v", job.ChannelID, job.MessageID, err)
+	}
+}
+
+func (w *Worker) clearJobRecovery(job *Job) {
+	if w == nil || w.recovery == nil || job == nil {
+		return
+	}
+	if err := w.recovery.Delete(jobRecoveryID(job)); err != nil {
+		log.Printf("[recovery] clear job channel=%s message=%s: %v", job.ChannelID, job.MessageID, err)
 	}
 }
 
@@ -767,6 +924,7 @@ func (w *Worker) execute(job *Job) {
 		job.MentionRefs = w.rememberMentionRefs(job.MentionRefs, job.currentRevokedMentionRefs())
 	}
 	if w.rejectForUsageLimit(job) {
+		w.clearJobRecovery(job)
 		w.signalIdle()
 		return
 	}
@@ -786,11 +944,7 @@ func (w *Worker) execute(job *Job) {
 	log.Printf("[worker %s] job start | user=%s(%s) msg=%s prompt=%q",
 		w.channelID, job.Username, job.UserID, job.MessageID, promptSummary(job.Prompt, 80))
 
-	w.cancelMu.Lock()
-	w.currentJobID = job.MessageID
-	w.currentJobSeq++
-	w.currentJobActive = true
-	w.cancelMu.Unlock()
+	w.startCurrentJob(job)
 	var finishOnce sync.Once
 	var terminalMu sync.Mutex
 	terminalStarted := false
@@ -808,19 +962,10 @@ func (w *Worker) execute(job *Job) {
 		defer terminalMu.Unlock()
 		return terminalStarted
 	}
+	preserveRecovery := false
 	finishJob := func() {
 		finishOnce.Do(func() {
-			clearBotToolsTargetState(w.botToolsTargetStatePath)
-			w.cancelMu.Lock()
-			w.cancelFn = nil
-			w.currentThreadID = ""
-			w.currentJobID = ""
-			w.currentJobActive = false
-			if w.pendingInterruptSeq == w.currentJobSeq {
-				w.pendingInterruptSeq = 0
-			}
-			w.cancelMu.Unlock()
-			w.signalIdle()
+			w.finishCurrentJobState(job, !preserveRecovery)
 		})
 	}
 
@@ -892,14 +1037,57 @@ func (w *Worker) execute(job *Job) {
 		_, _ = SendLongThread(ds, threadID, L.Get("stt.prefix")+job.Transcript)
 	}
 	progress := newThreadProgressReporter(w.currentOutputMode(), ds, threadID, job.DisplayCWD)
-	progress.Start()
+	w.markJobRecoveryActive(job, threadID, "", startTime)
+	progressMessageID := progress.Start()
+	w.markJobRecoveryActive(job, threadID, progressMessageID, startTime)
 
-	// Setup timeout context as safety net
+	// Setup timeout context as safety net.
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(w.askTimeoutSec)*time.Second)
 	w.cancelMu.Lock()
 	w.cancelFn = cancel
 	currentJobSeq := w.currentJobSeq
 	w.cancelMu.Unlock()
+
+	shutdownTerminal := func() {
+		if !beginFinish() {
+			return
+		}
+		cancel()
+		w.agent.CancelPrompt()
+		reason := L.Get("worker.shutdown_interrupted")
+		content := mentionRequesterInFinalResponse("⚠️ "+reason, job)
+		progressUpdated := progress.CompleteInterrupted(reason)
+		preserveRecovery = progressMessageID != "" && !progressUpdated
+		sentCount, sendErr := SendLongThreadWithMentions(ds, threadID, content, job.MentionRefs)
+		if sendErr != nil || sentCount == 0 {
+			if sendErr == nil {
+				sendErr = fmt.Errorf("no Discord messages delivered")
+			}
+			markDeliveryFailureReactions(reactions, sendErr)
+			log.Printf("[worker %s] shutdown reply failed | msg=%s thread=%s err=%v", w.channelID, job.MessageID, threadID, sendErr)
+		} else {
+			reactions.Final("⚠️")
+			w.auditResponseEvent(job, threadID, "error", content)
+		}
+		w.auditJobEvent("agent_job_failed", job, threadID, "error", map[string]any{
+			"reason":           "service_shutdown",
+			"previous_state":   jobRecoveryActive,
+			"progress_updated": progressUpdated,
+			"elapsed_ms":       time.Since(startTime).Milliseconds(),
+		})
+		w.recordUsage(job, threadID, "error", startTime)
+		job.emitA2AResult(a2a.TaskExecutionResult{
+			State:   a2a.TaskStateCanceled,
+			Content: content,
+			Error:   a2a.TaskError{Code: a2a.ErrorCode("service_shutdown"), Message: reason},
+			Metrics: a2aMetrics(w.agent.TurnMetrics(), startTime),
+		})
+		finishJob()
+	}
+	if w.setCurrentTerminal(shutdownTerminal) {
+		shutdownTerminal()
+		return
+	}
 
 	// Async callbacks — all post to thread
 	lastPlanMessage := ""
@@ -1621,11 +1809,7 @@ func (w *Worker) executeInline(job *Job) {
 	log.Printf("[worker %s] inline job start | user=%s(%s) msg=%s prompt=%q",
 		w.channelID, job.Username, job.UserID, job.MessageID, promptSummary(job.Prompt, 80))
 
-	w.cancelMu.Lock()
-	w.currentJobID = job.MessageID
-	w.currentJobSeq++
-	w.currentJobActive = true
-	w.cancelMu.Unlock()
+	w.startCurrentJob(job)
 
 	reactions := newJobReactionState(ds, job.ChannelID, job.MessageID, job.QueuedReactionAdded, !job.RemoteA2A)
 	pulse := newInlineReactionPulse(reactions)
@@ -1647,19 +1831,10 @@ func (w *Worker) executeInline(job *Job) {
 		defer finishMu.Unlock()
 		return finished
 	}
+	preserveRecovery := false
 	finishJob := func(finalEmoji string) {
-		clearBotToolsTargetState(w.botToolsTargetStatePath)
 		pulse.Finish(finalEmoji)
-		w.cancelMu.Lock()
-		w.cancelFn = nil
-		w.currentThreadID = ""
-		w.currentJobID = ""
-		w.currentJobActive = false
-		if w.pendingInterruptSeq == w.currentJobSeq {
-			w.pendingInterruptSeq = 0
-		}
-		w.cancelMu.Unlock()
-		w.signalIdle()
+		w.finishCurrentJobState(job, !preserveRecovery)
 	}
 
 	if w.logger != nil {
@@ -1678,11 +1853,50 @@ func (w *Worker) executeInline(job *Job) {
 		log.Printf("[worker %s] write inline bot-tools target state: %v", w.channelID, err)
 	}
 
+	w.markJobRecoveryActive(job, job.ThreadID, "", startTime)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(w.askTimeoutSec)*time.Second)
 	w.cancelMu.Lock()
 	w.cancelFn = cancel
 	currentJobSeq := w.currentJobSeq
 	w.cancelMu.Unlock()
+
+	shutdownTerminal := func() {
+		if !beginFinish() {
+			return
+		}
+		cancel()
+		w.agent.CancelPrompt()
+		reason := L.Get("worker.shutdown_interrupted")
+		content := mentionRequesterInFinalResponse("⚠️ "+reason, job)
+		sendErr := job.sendInlineFinalReply(ds, content)
+		finalEmoji := "⚠️"
+		if sendErr != nil {
+			log.Printf("[worker %s] inline shutdown reply failed | msg=%s err=%v", w.channelID, job.MessageID, sendErr)
+			markDeliveryFailureReactions(reactions, sendErr)
+			finalEmoji = "❌"
+			preserveRecovery = true
+		} else if !job.suppressInlineDiscordFinal() {
+			w.auditResponseEvent(job, job.ThreadID, "error", content)
+		}
+		w.auditJobEvent("agent_job_failed", job, job.ThreadID, "error", map[string]any{
+			"delivery_mode":  DeliveryInline.String(),
+			"reason":         "service_shutdown",
+			"previous_state": jobRecoveryActive,
+			"elapsed_ms":     time.Since(startTime).Milliseconds(),
+		})
+		w.recordUsage(job, job.ThreadID, "error", startTime)
+		job.emitA2AResult(a2a.TaskExecutionResult{
+			State:   a2a.TaskStateCanceled,
+			Content: content,
+			Error:   a2a.TaskError{Code: a2a.ErrorCode("service_shutdown"), Message: reason},
+			Metrics: a2aMetrics(w.agent.TurnMetrics(), startTime),
+		})
+		finishJob(finalEmoji)
+	}
+	if w.setCurrentTerminal(shutdownTerminal) {
+		shutdownTerminal()
+		return
+	}
 
 	delegateGuard := a2aDelegateFinalGuard{}
 	callbacks := acp.AsyncCallbacks{
@@ -2298,18 +2512,32 @@ func (w *Worker) executeFallback(job *Job, reactions *jobReactionState) {
 		reactions = newJobReactionState(ds, job.ChannelID, job.MessageID, job.QueuedReactionAdded, !job.RemoteA2A)
 	}
 	reactions.Set("🔄")
-	defer func() {
-		clearBotToolsTargetState(w.botToolsTargetStatePath)
-		w.cancelMu.Lock()
-		w.cancelFn = nil
-		w.currentThreadID = ""
-		w.currentJobID = ""
-		w.currentJobActive = false
-		if w.pendingInterruptSeq == w.currentJobSeq {
-			w.pendingInterruptSeq = 0
+	var finishOnce sync.Once
+	var terminalMu sync.Mutex
+	terminalStarted := false
+	beginFinish := func() bool {
+		terminalMu.Lock()
+		defer terminalMu.Unlock()
+		if terminalStarted {
+			return false
 		}
-		w.cancelMu.Unlock()
-		w.signalIdle()
+		terminalStarted = true
+		return true
+	}
+	preserveRecovery := false
+	normalOwnsFinish := false
+	finishJob := func() {
+		finishOnce.Do(func() {
+			w.finishCurrentJobState(job, !preserveRecovery)
+		})
+	}
+	defer func() {
+		terminalMu.Lock()
+		terminalWasStarted := terminalStarted
+		terminalMu.Unlock()
+		if normalOwnsFinish || !terminalWasStarted {
+			finishJob()
+		}
 	}()
 	canManageChannel, canManageGuild := botToolsRequesterPermissions(job.Session, job.UserID, job.ChannelID, "", w.gmUserIDs)
 	if err := writeBotToolsTargetStateWithRequester(w.botToolsTargetStatePath, job.ChannelID, false, job.MentionRefs, false, false, job.UserID, job.Username, 0, canManageChannel, canManageGuild, job.GuildID); err != nil {
@@ -2331,12 +2559,50 @@ func (w *Worker) executeFallback(job *Job, reactions *jobReactionState) {
 		return
 	}
 
+	w.markJobRecoveryActive(job, "", replyMsg.ID, startTime)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(w.askTimeoutSec)*time.Second)
 	defer cancel()
 	w.cancelMu.Lock()
 	w.cancelFn = cancel
 	currentJobSeq := w.currentJobSeq
 	w.cancelMu.Unlock()
+
+	shutdownTerminal := func() {
+		if !beginFinish() {
+			return
+		}
+		cancel()
+		w.agent.CancelPrompt()
+		reason := L.Get("worker.shutdown_interrupted")
+		content := mentionRequesterInFinalResponse("⚠️ "+reason, job)
+		sendErr := sendLongWithMentions(ds, job.ChannelID, replyMsg.ID, content, job.MentionRefs)
+		if sendErr != nil {
+			preserveRecovery = true
+			log.Printf("[worker %s] fallback shutdown reply failed | msg=%s err=%v", w.channelID, job.MessageID, sendErr)
+			markDeliveryFailureReactions(reactions, sendErr)
+		} else {
+			reactions.Final("⚠️")
+			w.auditResponseEvent(job, "", "error", content)
+		}
+		w.auditJobEvent("agent_job_failed", job, "", "error", map[string]any{
+			"delivery_mode":  "fallback",
+			"reason":         "service_shutdown",
+			"previous_state": jobRecoveryActive,
+			"elapsed_ms":     time.Since(startTime).Milliseconds(),
+		})
+		w.recordUsage(job, "", "error", startTime)
+		job.emitA2AResult(a2a.TaskExecutionResult{
+			State:   a2a.TaskStateCanceled,
+			Content: content,
+			Error:   a2a.TaskError{Code: a2a.ErrorCode("service_shutdown"), Message: reason},
+			Metrics: a2aMetrics(w.agent.TurnMetrics(), startTime),
+		})
+		finishJob()
+	}
+	if w.setCurrentTerminal(shutdownTerminal) {
+		shutdownTerminal()
+		return
+	}
 
 	// Watch for timeout — escalate to interrupt if cancel is ineffective
 	go func() {
@@ -2352,6 +2618,10 @@ func (w *Worker) executeFallback(job *Job, reactions *jobReactionState) {
 	if _, compactErr := w.autoCompactIfNeeded(ctx, job, "", func(msg string) {
 		SendProcessMessage(ds, job.ChannelID, msg)
 	}); compactErr != nil {
+		if !beginFinish() {
+			return
+		}
+		normalOwnsFinish = true
 		errorContent := w.autoCompactAbortContent()
 		_ = sendLongWithMentions(ds, job.ChannelID, replyMsg.ID, errorContent, job.MentionRefs)
 		reactions.Final("⚠️")
@@ -2366,6 +2636,10 @@ func (w *Worker) executeFallback(job *Job, reactions *jobReactionState) {
 		return
 	}
 	if ctx.Err() != nil {
+		if !beginFinish() {
+			return
+		}
+		normalOwnsFinish = true
 		failure := w.classifyJobFailure(ctx.Err(), ctx.Err())
 		errorContent := mentionRequesterInFinalResponse("❌ "+failure.message, job)
 		_ = sendLongWithMentions(ds, job.ChannelID, replyMsg.ID, AppendMetricsFooter(errorContent, MetricsWithElapsed(w.agent.TurnMetrics(), startTime)), job.MentionRefs)
@@ -2388,6 +2662,10 @@ func (w *Worker) executeFallback(job *Job, reactions *jobReactionState) {
 			w.onActivity()
 		}
 	})
+	if !beginFinish() {
+		return
+	}
+	normalOwnsFinish = true
 
 	logContent := response
 	job.MentionRefs = w.mentionRefsForDelivery(job.MentionRefs, job.currentRevokedMentionRefs())

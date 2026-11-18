@@ -36,23 +36,28 @@ func newThreadProgressReporter(mode OutputMode, ds *discordgo.Session, threadID,
 	return &threadProgressReporter{mode: NormalizeOutputMode(mode), ds: ds, threadID: threadID, displayCWD: displayCWD, startedAt: time.Now()}
 }
 
-func (r *threadProgressReporter) Start() {
+func (r *threadProgressReporter) Start() string {
 	if r.mode != OutputModeFolded {
-		SendProcessMessage(r.ds, r.threadID, "🔄 "+L.Get("worker.processing"))
-		return
+		msg, err := SendProcessMessage(r.ds, r.threadID, "🔄 "+L.Get("worker.processing"))
+		if err != nil || msg == nil {
+			return ""
+		}
+		r.mu.Lock()
+		r.messageID = msg.ID
+		r.mu.Unlock()
+		return msg.ID
 	}
 	r.mu.Lock()
 	content := r.renderLocked("running")
 	r.mu.Unlock()
 	msg, err := SendProcessMessage(r.ds, r.threadID, content)
-	if err != nil {
-		return
+	if err != nil || msg == nil {
+		return ""
 	}
-	if msg != nil {
-		r.mu.Lock()
-		r.messageID = msg.ID
-		r.mu.Unlock()
-	}
+	r.mu.Lock()
+	r.messageID = msg.ID
+	r.mu.Unlock()
+	return msg.ID
 }
 
 func (r *threadProgressReporter) ToolCall(evt acp.ToolCallEvent) {
@@ -130,6 +135,30 @@ func (r *threadProgressReporter) CompleteSuccess() bool { return r.complete("suc
 
 func (r *threadProgressReporter) CompleteFailure(reason string) bool {
 	return r.complete("failed", reason)
+}
+
+func (r *threadProgressReporter) CompleteInterrupted(reason string) bool {
+	if r.mode == OutputModeFolded {
+		return r.complete("failed", reason)
+	}
+	r.editMu.Lock()
+	defer r.editMu.Unlock()
+	r.mu.Lock()
+	if r.terminal {
+		r.mu.Unlock()
+		return true
+	}
+	r.terminal = true
+	messageID := r.messageID
+	r.mu.Unlock()
+	if messageID == "" {
+		return false
+	}
+	if err := editMessageWithMentions(r.ds, r.threadID, messageID, "⚠️ "+reason, nil); err != nil {
+		log.Printf("[progress] edit interrupted progress thread=%s message=%s: %v", r.threadID, messageID, err)
+		return false
+	}
+	return true
 }
 
 func (r *threadProgressReporter) setLatest(latest string) {

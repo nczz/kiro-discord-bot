@@ -19,6 +19,7 @@ import (
 	"github.com/nczz/kiro-discord-bot/audit"
 	"github.com/nczz/kiro-discord-bot/internal/botegress"
 	"github.com/nczz/kiro-discord-bot/internal/channelmeta"
+	L "github.com/nczz/kiro-discord-bot/locale"
 )
 
 var _ a2a.Executor = (*Manager)(nil)
@@ -316,6 +317,19 @@ func (m *Manager) RunA2ATask(ctx context.Context, admitted a2a.A2AAdmission) (a2
 func (m *Manager) enqueueA2AJob(job *Job) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.stopping {
+		return errors.New(L.Get("worker.service_draining"))
+	}
+	enqueued := false
+	if err := m.persistQueuedJob(job); err != nil {
+		log.Printf("[recovery] reject unsafe A2A enqueue channel=%s task=%s: %v", job.ChannelID, job.A2ATaskID, err)
+		return errors.New(L.Get("worker.queue_unavailable"))
+	}
+	defer func() {
+		if !enqueued {
+			m.removeQueuedJobRecovery(job)
+		}
+	}()
 	worker, err := m.ensureWorkerForA2A(job.ChannelID)
 	if err != nil {
 		return err
@@ -326,6 +340,7 @@ func (m *Manager) enqueueA2AJob(job *Job) error {
 	if err := worker.Enqueue(job); err != nil {
 		return fmt.Errorf("queue full (%d jobs pending)", worker.QueueLen())
 	}
+	enqueued = true
 	m.recordJobEnqueued(job, worker.QueueLen(), false)
 	m.channelLastActivity[job.ChannelID] = time.Now()
 	return nil
