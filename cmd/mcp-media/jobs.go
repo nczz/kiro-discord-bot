@@ -85,10 +85,11 @@ func (s *MediaJobStore) Start(kind, prompt, model string, timeout time.Duration,
 		return nil, fmt.Errorf("too many active media jobs (max %d)", s.maxActive)
 	}
 	s.jobs[job.ID] = job
+	initial := s.snapshot(job)
 	s.mu.Unlock()
 
 	go s.run(ctx, job.ID, run)
-	return s.snapshot(job), nil
+	return initial, nil
 }
 
 func (s *MediaJobStore) StartAndWait(kind, prompt, model string, timeout, wait time.Duration, run MediaJobRunner) (*MediaJob, error) {
