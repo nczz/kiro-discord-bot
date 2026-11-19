@@ -37,7 +37,7 @@ type Agent struct {
 	onToolUse    func(bool)          // legacy: called with true on tool_use start, false on end
 	onToolCall   func(ToolCallEvent) // called on tool_call notification
 	onToolResult func(ToolCallEvent) // called on tool_call_update notification
-	onThought    func(string)        // called on agent_thought_chunk
+	onThought    func(ThoughtChunk)  // called on agent_thought_chunk
 	onSubagent   func(SubagentState) // called on _kiro.dev/subagent/list_update
 	onPlan       func(PlanState)     // called on plan/todo sessionUpdate
 	onExit       func()              // called when child process exits unexpectedly
@@ -656,6 +656,7 @@ func (a *Agent) handleNotification(method string, params json.RawMessage) {
 	var notif struct {
 		Update struct {
 			SessionUpdate string `json:"sessionUpdate"`
+			MessageID     string `json:"messageId,omitempty"`
 			Content       *struct {
 				Type string `json:"type"`
 				Text string `json:"text"`
@@ -730,7 +731,7 @@ func (a *Agent) handleNotification(method string, params json.RawMessage) {
 		cb := a.onThought
 		a.mu.Unlock()
 		if cb != nil {
-			cb(notif.Update.Content.Text)
+			cb(ThoughtChunk{Text: notif.Update.Content.Text, MessageID: notif.Update.MessageID})
 		}
 
 	case UpdateToolCall:
@@ -859,8 +860,8 @@ func (a *Agent) OnToolResultFunc(fn func(ToolCallEvent)) {
 	a.mu.Unlock()
 }
 
-// OnThoughtFunc sets a callback invoked on agent_thought_chunk notifications.
-func (a *Agent) OnThoughtFunc(fn func(string)) {
+// OnThoughtFunc sets a callback invoked for streamed agent_thought_chunk deltas.
+func (a *Agent) OnThoughtFunc(fn func(ThoughtChunk)) {
 	a.mu.Lock()
 	a.onThought = fn
 	a.mu.Unlock()
@@ -1219,7 +1220,7 @@ type AsyncCallbacks struct {
 	OnChunk          func(string)
 	OnToolCall       func(ToolCallEvent)
 	OnToolResult     func(ToolCallEvent)
-	OnThought        func(string)
+	OnThought        func(ThoughtChunk)
 	OnSubagentUpdate func(SubagentState)
 	OnPlan           func(PlanState)
 	OnComplete       func(response string, err error)

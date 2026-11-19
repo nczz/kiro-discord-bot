@@ -30,6 +30,8 @@
 | `/webhook mode:<status|on|off>` | 查詢或設定帶 bot tag 的 Discord channel webhook 監聽。開啟後，webhook 訊息仍必須以真正的 bot mention（例如 `<@BOT_ID>`）開頭；在頻道內用 `/webhook mode:status` 可看到這個 bot 的實際 tag。 |
 | `/webshare start/stop/status/revoke` | 管理目前 channel 或 thread 的 WebShare browser control link。此連結會在停止或撤銷前，於此 target 委派 opener 的 Discord authority；詳見 [WebShare](webshare.md)。 |
 
+在 `folded` 模式中，ACP 串流傳來的 thought chunks 會重組成有界、持續更新的可讀活動內容，不再把每個片段當成完整文字顯示。進度卡也會顯示距離上次工具活動的時間；若 15 分鐘沒有工具活動，或累積達 100 次工具呼叫，會加入資訊性警告與 `/cancel`、`/interrupt` 操作提示。這些警告不會自動取消任務；未設定逾時上限的任務仍會持續到 agent 完成或操作人員介入。
+
 `/webshare start` 會在 WebShare 已啟用且 requester 可管理 target 時，以 private response 回傳 control/view links。`/webshare stop` 會結束 opener 的 active share，並解除其 Discord-side lockout。`/webshare status` 顯示 active share state。`/webshare revoke` 是 manager 用於連結外洩或 opener 不在場時的 emergency path。WebShare 訊息會明確標示 `via WebShare`；v1 只允許明確選取的 user mentions 與 bot，不允許 roles、`@everyone` 或 `@here`。
 
 ## Model 與 Agent Mode

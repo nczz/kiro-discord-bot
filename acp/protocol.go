@@ -42,6 +42,13 @@ type ToolCallLocation struct {
 	Line *int   `json:"line,omitempty"`
 }
 
+// ThoughtChunk carries one streamed reasoning delta. MessageID groups chunks
+// that belong to the same thought when the ACP agent provides one.
+type ThoughtChunk struct {
+	Text      string
+	MessageID string
+}
+
 // ToolCallEvent carries parsed tool call notification data.
 type ToolCallEvent struct {
 	ToolCallID string

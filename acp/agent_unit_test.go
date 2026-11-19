@@ -466,3 +466,23 @@ func TestParsePlanStateOmpContentStatusFormat(t *testing.T) {
 		t.Fatalf("entry 2: expected pending (done=false, active=false), got %+v", state.Entries[2])
 	}
 }
+
+func TestAgentThoughtChunkPreservesMessageIdentity(t *testing.T) {
+	a := &Agent{}
+	var got ThoughtChunk
+	a.OnThoughtFunc(func(chunk ThoughtChunk) {
+		got = chunk
+	})
+
+	a.handleNotification(NotifUpdate, json.RawMessage(`{
+		"update": {
+			"sessionUpdate": "agent_thought_chunk",
+			"messageId": "thought-1",
+			"content": {"type": "text", "text": "actual con"}
+		}
+	}`))
+
+	if got.Text != "actual con" || got.MessageID != "thought-1" {
+		t.Fatalf("thought chunk = %+v, want text and message identity", got)
+	}
+}

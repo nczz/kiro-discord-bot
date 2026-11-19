@@ -574,6 +574,30 @@ Regression expectation:
 - ACP tests must prove process exit unblocks an in-flight asynchronous prompt with `ErrAgentProcessExited` and leaves agent state stopped.
 - Worker tests must prove a timeout followed by a read/process error remains timeout, emits one terminal audit sequence, does not expose the secondary transport cause to Discord, and rejects late completion/progress updates.
 
+### Unlimited Agent Turn Remains Live But Loses Effective Progress
+
+Symptoms:
+
+- A folded progress card keeps updating, but `Latest` shows isolated word fragments rather than a readable activity description.
+- Tool-call count is unusually high or no tool has run recently, yet the card gives no indication whether the agent is still reasoning or which operator controls are safe.
+
+Decision:
+
+- ACP `agent_thought_chunk` notifications are streamed deltas, not complete messages. Preserve the optional message identity, accumulate deltas in a bounded UTF-8 buffer, and reset that buffer on a new identified thought, tool activity, plan update, or subagent update.
+- Folded cards refresh periodically while a request remains active. They show the latest tool-activity age, warn after 15 minutes without tool activity, warn at 100 tool calls, and point to `/cancel` plus `/interrupt`.
+- These diagnostics never auto-cancel work. An unlimited interactive task remains unlimited until the agent finishes, the user cancels or interrupts it, the service shuts down, or the backend exits.
+
+Rejected alternatives:
+
+- Restoring a default timeout or tool-call budget was rejected because it would silently undo the unlimited-runtime contract and can terminate valid long work.
+- Rendering every thought delta as a complete status was rejected because ACP explicitly streams partial text.
+- Unbounded accumulation was rejected because a long reasoning stream would retain memory indefinitely.
+
+Regression expectation:
+
+- ACP parsing preserves thought text and optional message identity.
+- Folded runtime-path tests prove chunk reconstruction, semantic-boundary reset, bounded valid UTF-8, periodic stale-activity refresh, localized controls, and no automatic terminal transition.
+
 ### Completed Job Retains Processing Reactions
 
 Symptoms:

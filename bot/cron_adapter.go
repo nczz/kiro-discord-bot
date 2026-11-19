@@ -248,10 +248,11 @@ func (a *cronAdapter) AskAgentInThread(ctx context.Context, agent *acp.Agent, jo
 				channel.SendProcessMessage(ds, threadID, channel.FormatToolFailureMessage(evt.Title, evt.RawOutput, 500))
 			}
 		},
-		OnThought: func(text string) {
+		OnThought: func(chunk acp.ThoughtChunk) {
 			if outputMode() != channel.OutputModeFull {
 				return
 			}
+			text := chunk.Text
 			if len(text) > 1900 {
 				text = textutil.TruncateUTF8Bytes(text, 1900) + "…"
 			}

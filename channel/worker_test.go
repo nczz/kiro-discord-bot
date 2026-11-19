@@ -1361,7 +1361,7 @@ func TestWorkerInlineConcurrentReactionFinishesWithOnlyTerminalState(t *testing.
 
 	thoughtDone := make(chan struct{})
 	go func() {
-		cb.OnThought("working")
+		cb.OnThought(acp.ThoughtChunk{Text: "working"})
 		close(thoughtDone)
 	}()
 	select {
@@ -1907,6 +1907,133 @@ func TestWorkerThreadFoldedProgressEditsCardAndPreservesFinalAndAudit(t *testing
 	if !toolCallAudited || !toolResultAudited {
 		t.Fatalf("missing folded tool audit events: call=%v result=%v events=%+v", toolCallAudited, toolResultAudited, sink.Snapshot())
 	}
+}
+
+func TestFoldedProgressReassemblesThoughtChunksAndResetsBoundaries(t *testing.T) {
+	L.Load("en")
+	rt := &recordingRoundTripper{}
+	reporter := newThreadProgressReporter(OutputModeFolded, testDiscordSession(rt), "thread-1", "")
+	if reporter.Start() == "" {
+		t.Fatal("failed to start folded progress")
+	}
+
+	reporter.Thought(acp.ThoughtChunk{MessageID: "thought-1", Text: "actual con"})
+	reporter.mu.Lock()
+	reporter.lastEdit = time.Now().Add(-foldedProgressEditInterval)
+	reporter.mu.Unlock()
+	reporter.Thought(acp.ThoughtChunk{MessageID: "thought-1", Text: "nections"})
+
+	_, bodies := rt.Snapshot()
+	if got := bodies[len(bodies)-1]; !strings.Contains(got, "actual connections") {
+		t.Fatalf("folded progress did not reassemble thought chunks: %q", got)
+	}
+
+	reporter.mu.Lock()
+	reporter.lastEdit = time.Now().Add(-foldedProgressEditInterval)
+	reporter.mu.Unlock()
+	reporter.Thought(acp.ThoughtChunk{MessageID: "thought-2", Text: "fresh thought"})
+	_, bodies = rt.Snapshot()
+	if got := bodies[len(bodies)-1]; !strings.Contains(got, "fresh thought") || strings.Contains(got, "actual connections") {
+		t.Fatalf("new thought message did not reset accumulated text: %q", got)
+	}
+
+	reporter.Plan(acp.PlanState{Entries: []acp.PlanEntry{{Text: "Next step", Active: true}}})
+	reporter.Thought(acp.ThoughtChunk{Text: "after plan"})
+	reporter.ToolCall(acp.ToolCallEvent{ToolCallID: "tool-1", Title: "Inspect state", Kind: "read"})
+	reporter.Thought(acp.ThoughtChunk{Text: "after tool"})
+	reporter.mu.Lock()
+	defer reporter.mu.Unlock()
+	if strings.Contains(reporter.latest, "fresh thought") || strings.Contains(reporter.latest, "after plan") || !strings.Contains(reporter.latest, "after tool") {
+		t.Fatalf("activity boundaries did not reset thought accumulation: %q", reporter.latest)
+	}
+}
+
+func TestFoldedProgressThoughtBufferIsBoundedAndUTF8Safe(t *testing.T) {
+	reporter := &threadProgressReporter{mode: OutputModeFolded, startedAt: time.Now()}
+	reporter.Thought(acp.ThoughtChunk{MessageID: "thought-1", Text: strings.Repeat("界", 3000)})
+
+	reporter.mu.Lock()
+	defer reporter.mu.Unlock()
+	if len(reporter.thoughtBuffer) > foldedThoughtBufferMaxBytes {
+		t.Fatalf("thought buffer bytes = %d, want <= %d", len(reporter.thoughtBuffer), foldedThoughtBufferMaxBytes)
+	}
+	if got := string(reporter.thoughtBuffer); strings.ToValidUTF8(got, "invalid") != got {
+		t.Fatal("thought buffer ended with invalid UTF-8")
+	}
+	if len(reporter.latest) >= 500 {
+		t.Fatalf("latest thought bytes = %d, want a bounded readable status", len(reporter.latest))
+	}
+}
+
+func TestFoldedProgressShowsActivityDiagnosticsWithoutAutoCancel(t *testing.T) {
+	L.Load("en")
+	t.Cleanup(func() { L.Load("en") })
+	now := time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)
+	reporter := &threadProgressReporter{
+		mode:             OutputModeFolded,
+		startedAt:        now.Add(-30 * time.Minute),
+		lastToolActivity: now.Add(-16 * time.Minute),
+		toolStarted:      foldedHighToolCallWarningThreshold,
+	}
+
+	got := reporter.renderLockedAt("running", now)
+	for _, want := range []string{
+		"No tool activity for 16m00s",
+		"High activity: 100 tool calls",
+		"`/cancel`",
+		"`/interrupt`",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("folded diagnostics = %q, missing %q", got, want)
+		}
+	}
+	if reporter.terminal {
+		t.Fatal("activity diagnostics must not transition the task to terminal")
+	}
+
+	reporter.lastToolActivity = now.Add(-2 * time.Minute)
+	reporter.toolStarted = 1
+	got = reporter.renderLockedAt("running", now)
+	if !strings.Contains(got, "Last tool activity: 2m00s ago") {
+		t.Fatalf("folded diagnostics = %q, missing recent tool age", got)
+	}
+	if strings.Contains(got, "`/cancel`") || strings.Contains(got, "`/interrupt`") {
+		t.Fatalf("healthy progress should not show intervention controls: %q", got)
+	}
+
+	L.Load("zh-TW")
+	got = reporter.renderLockedAt("running", now)
+	if !strings.Contains(got, "距上次工具活動：2m00s") {
+		t.Fatalf("localized folded diagnostics = %q, missing translated tool age", got)
+	}
+}
+
+func TestFoldedProgressRefreshSurfacesSilentInactivity(t *testing.T) {
+	L.Load("en")
+	rt := &recordingRoundTripper{}
+	reporter := newThreadProgressReporter(OutputModeFolded, testDiscordSession(rt), "thread-1", "")
+	if reporter.Start() == "" {
+		t.Fatal("failed to start folded progress")
+	}
+	reporter.mu.Lock()
+	reporter.startedAt = time.Now().Add(-foldedNoToolActivityWarningAfter)
+	reporter.mu.Unlock()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	reporter.refreshUntil(ctx, time.Millisecond)
+	defer cancel()
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		reqs, bodies := rt.Snapshot()
+		for i, req := range reqs {
+			if strings.HasPrefix(req, "PATCH ") && strings.Contains(bodies[i], "No tool activity") {
+				return
+			}
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("periodic folded refresh did not surface inactivity warning")
 }
 
 func TestWorkerThreadFoldedProgressCountsToolCallsForEnabledEngines(t *testing.T) {

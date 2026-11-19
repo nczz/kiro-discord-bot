@@ -30,6 +30,8 @@ In a parent channel, `/clear` clears the active agent session and the bot-local 
 | `/webhook mode:<status|on|off>` | Show or set tagged Discord channel webhook listening. When enabled, a webhook message must start with a real bot mention such as `<@BOT_ID>`; use `/webhook mode:status` in the channel to see the exact tag for this bot. |
 | `/webshare start/stop/status/revoke` | Manage a WebShare browser control link for the current channel or thread. The link delegates the opener's Discord authority for this target until stopped or revoked; see [WebShare](webshare.md). |
 
+In `folded` mode, streamed ACP thought chunks are reconstructed into a bounded rolling activity line instead of being shown as isolated fragments. The card also shows the age of the latest tool activity. After 15 minutes without tool activity, or after 100 tool calls, it adds an informational warning and the `/cancel` and `/interrupt` controls. These warnings never cancel work automatically; tasks with an unlimited timeout continue until the agent finishes or an operator intervenes.
+
 `/webshare start` privately returns control and view links when WebShare is enabled and the requester can manage the target. `/webshare stop` ends the opener's active share and clears their Discord-side lockout. `/webshare status` shows the active share state. `/webshare revoke` is the manager emergency path for leaked links or unavailable openers. WebShare messages are visibly marked `via WebShare`; v1 allows only explicitly selected user mentions plus the bot, never roles, `@everyone`, or `@here`.
 
 ## Model and Agent Mode

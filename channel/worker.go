@@ -1050,6 +1050,7 @@ func (w *Worker) execute(job *Job) {
 
 	// A non-positive timeout keeps the request running until completion or explicit cancellation.
 	ctx, cancel := agentRequestContext(w.askTimeoutSec)
+	progress.refreshUntil(ctx, foldedProgressRefreshInterval)
 	w.cancelMu.Lock()
 	w.cancelFn = cancel
 	currentJobSeq := w.currentJobSeq
@@ -1173,7 +1174,7 @@ func (w *Worker) execute(job *Job) {
 				SendProcessMessage(ds, threadID, FormatToolFailureMessage(title, evt.RawOutput, 500))
 			}
 		},
-		OnThought: func(text string) {
+		OnThought: func(chunk acp.ThoughtChunk) {
 			if isFinishing() {
 				return
 			}
@@ -1181,14 +1182,13 @@ func (w *Worker) execute(job *Job) {
 				w.onActivity()
 			}
 			if w.currentOutputMode() == OutputModeFolded {
-				progress.Thought(text)
+				progress.Thought(chunk)
 				return
 			}
 			if w.compactOutput() {
 				return // Compact: skip thoughts
 			}
-			// Accumulate thought chunks — send as a single collapsed block would be ideal,
-			// but Discord doesn't support spoiler streaming. Just prefix with 💭.
+			text := chunk.Text
 			if len(text) > 1900 {
 				text = truncateUTF8(text, 1900) + "…"
 			}
@@ -1950,7 +1950,7 @@ func (w *Worker) executeInline(job *Job) {
 			}
 			pulse.Work()
 		},
-		OnThought: func(text string) {
+		OnThought: func(acp.ThoughtChunk) {
 			if isFinishing() {
 				return
 			}
