@@ -2097,7 +2097,7 @@ func a2aConfigFromEnv() a2a.Config {
 		RuntimeIDMode:                a2a.RuntimeIDMode(os.Getenv("A2A_RUNTIME_ID_MODE")),
 		AgentName:                    os.Getenv("A2A_AGENT_NAME"),
 		AgentDescription:             os.Getenv("A2A_AGENT_DESCRIPTION"),
-		TaskTimeoutSec:               envIntLocal("A2A_TASK_TIMEOUT_SEC", 3600),
+		TaskTimeoutSec:               envIntLocal("A2A_TASK_TIMEOUT_SEC", 0),
 		MaxDelegationDepth:           envIntLocal("A2A_MAX_DELEGATION_DEPTH", 1),
 		AutoDelegateEnabled:          envBoolLocal("A2A_AUTO_DELEGATE_ENABLED", false),
 		RequireConfirmationForRemote: envBoolLocal("A2A_REQUIRE_CONFIRMATION_FOR_REMOTE", true),

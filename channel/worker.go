@@ -219,6 +219,13 @@ func newWorkerWithEngine(channelID string, agent workerAgent, bufSize, askTimeou
 	}
 }
 
+func agentRequestContext(timeoutSec int) (context.Context, context.CancelFunc) {
+	if timeoutSec <= 0 {
+		return context.WithCancel(context.Background())
+	}
+	return context.WithTimeout(context.Background(), time.Duration(timeoutSec)*time.Second)
+}
+
 func (w *Worker) currentModel() string {
 	if w == nil {
 		return ""
@@ -1041,8 +1048,8 @@ func (w *Worker) execute(job *Job) {
 	progressMessageID := progress.Start()
 	w.markJobRecoveryActive(job, threadID, progressMessageID, startTime)
 
-	// Setup timeout context as safety net.
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(w.askTimeoutSec)*time.Second)
+	// A non-positive timeout keeps the request running until completion or explicit cancellation.
+	ctx, cancel := agentRequestContext(w.askTimeoutSec)
 	w.cancelMu.Lock()
 	w.cancelFn = cancel
 	currentJobSeq := w.currentJobSeq
@@ -1854,7 +1861,7 @@ func (w *Worker) executeInline(job *Job) {
 	}
 
 	w.markJobRecoveryActive(job, job.ThreadID, "", startTime)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(w.askTimeoutSec)*time.Second)
+	ctx, cancel := agentRequestContext(w.askTimeoutSec)
 	w.cancelMu.Lock()
 	w.cancelFn = cancel
 	currentJobSeq := w.currentJobSeq
@@ -2560,7 +2567,7 @@ func (w *Worker) executeFallback(job *Job, reactions *jobReactionState) {
 	}
 
 	w.markJobRecoveryActive(job, "", replyMsg.ID, startTime)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(w.askTimeoutSec)*time.Second)
+	ctx, cancel := agentRequestContext(w.askTimeoutSec)
 	defer cancel()
 	w.cancelMu.Lock()
 	w.cancelFn = cancel

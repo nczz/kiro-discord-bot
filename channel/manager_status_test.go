@@ -3,9 +3,24 @@ package channel
 import (
 	"strings"
 	"testing"
+	"time"
 
 	L "github.com/nczz/kiro-discord-bot/locale"
 )
+
+func TestManagerAskTimeoutUsesZeroForUnlimited(t *testing.T) {
+	if got := (*Manager)(nil).AskTimeout(); got != 0 {
+		t.Fatalf("nil manager timeout = %s, want unlimited", got)
+	}
+	m := &Manager{askTimeoutSec: 0}
+	if got := m.AskTimeout(); got != 0 {
+		t.Fatalf("zero timeout = %s, want unlimited", got)
+	}
+	m.askTimeoutSec = 90
+	if got := m.AskTimeout(); got != 90*time.Second {
+		t.Fatalf("configured timeout = %s, want 90s", got)
+	}
+}
 
 func TestThreadStatusUsesThreadSession(t *testing.T) {
 	L.Load("en")

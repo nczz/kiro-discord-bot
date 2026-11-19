@@ -14,6 +14,17 @@ import (
 	"github.com/nczz/kiro-discord-bot/internal/channelmeta"
 )
 
+func TestA2AConfigFromEnvTimeoutDefaultAndOverride(t *testing.T) {
+	t.Setenv("A2A_TASK_TIMEOUT_SEC", "")
+	if got := a2aConfigFromEnv().TaskTimeoutSec; got != 0 {
+		t.Fatalf("default A2A timeout = %d, want unlimited", got)
+	}
+	t.Setenv("A2A_TASK_TIMEOUT_SEC", "1800")
+	if got := a2aConfigFromEnv().TaskTimeoutSec; got != 1800 {
+		t.Fatalf("configured A2A timeout = %d, want 1800", got)
+	}
+}
+
 func runBotMCPEmbeddedNATS(t *testing.T) *natsserver.Server {
 	t.Helper()
 	opts := &natsserver.Options{

@@ -556,6 +556,8 @@ Decision:
 - A job context timeout or explicit cancellation outranks later ACP pipe, transport, or child-process errors when selecting the user-visible terminal reason and audit `reason`.
 - Child-process exit closes the ACP transport exactly once so every pending request completes promptly. The worker keeps cancel/interrupt/stop escalation active and does not release the queue until the backend request has returned or the process has exited.
 - Every started thread, inline, or fallback job records one terminal job event plus response and usage evidence where those stores are configured. Folded progress becomes immutable after its terminal update.
+- `ASK_TIMEOUT_SEC=0` is the default and gives interactive channel, thread, fallback, and audit requests no deadline. A positive value restores the same terminal timeout/cancel/escalation contract. A2A follows the same rule through `A2A_TASK_TIMEOUT_SEC=0`.
+- Unlimited interactive/A2A execution does not weaken lifecycle or resource safety: explicit cancellation, service shutdown, backend exit, usage limits, and the dynamic agent-capacity gate still apply. Scheduled cron/monitor work keeps its separate bounded `CRON_TIMEOUT_MIN` default because repeated background work must not occupy a slot indefinitely without a user waiting on it.
 
 Context:
 
@@ -563,7 +565,7 @@ Context:
 
 Rejected alternatives:
 
-- Increasing `ASK_TIMEOUT_SEC` was rejected because it delays the same lifecycle failure without fixing terminal ownership.
+- Increasing `ASK_TIMEOUT_SEC` was rejected as a fix for this lifecycle bug because it only delays the same failure. The later unlimited-by-default policy is a UX choice made after terminal ownership was corrected, not a substitute for that correction.
 - Hiding only the closed-file text was rejected because the pending request, incomplete audit trail, and duplicate terminal race would remain.
 - Releasing the worker queue immediately at the deadline was rejected because the backend could still be running; it would disable escalation and allow overlapping work on one agent.
 

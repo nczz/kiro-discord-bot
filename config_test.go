@@ -52,3 +52,21 @@ func TestLoadConfigAgentCapacityModeDefaultAndOverride(t *testing.T) {
 		t.Fatalf("AgentCapacityMode = %q, want off", cfg.AgentCapacityMode)
 	}
 }
+
+func TestLoadConfigAgentTimeoutDefaultsUnlimitedAndAllowsOverride(t *testing.T) {
+	t.Setenv("DISCORD_TOKEN", "token")
+	t.Setenv("ASK_TIMEOUT_SEC", "")
+	t.Setenv("A2A_TASK_TIMEOUT_SEC", "")
+
+	cfg := loadConfig()
+	if cfg.AskTimeoutSec != 0 || cfg.A2A.TaskTimeoutSec != 0 {
+		t.Fatalf("timeouts = ask %d, A2A %d; want unlimited defaults", cfg.AskTimeoutSec, cfg.A2A.TaskTimeoutSec)
+	}
+
+	t.Setenv("ASK_TIMEOUT_SEC", "7200")
+	t.Setenv("A2A_TASK_TIMEOUT_SEC", "1800")
+	cfg = loadConfig()
+	if cfg.AskTimeoutSec != 7200 || cfg.A2A.TaskTimeoutSec != 1800 {
+		t.Fatalf("timeouts = ask %d, A2A %d; want configured 7200/1800", cfg.AskTimeoutSec, cfg.A2A.TaskTimeoutSec)
+	}
+}

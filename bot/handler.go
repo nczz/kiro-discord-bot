@@ -891,7 +891,7 @@ func (b *Bot) enqueueChannelPrompt(ds *discordgo.Session, m *discordgo.MessageCr
 	}
 	job.ThreadMentionOnly, _ = b.requiresHumanMention(ds, m.ChannelID, "", selfID)
 	if err := b.manager.Enqueue(ds, job); err != nil {
-		_, _ = sendDiscordText(ds, m.ChannelID, L.Getf("error.generic", err.Error()), nil)
+		_, _ = sendDiscordText(ds, m.ChannelID, commandError(err), nil)
 		return
 	}
 	b.markDiscordDiscussionContextDelivered(discussion)

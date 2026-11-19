@@ -14,16 +14,17 @@ type integrationExecutor struct {
 	tasks   *SQLiteTaskStore
 	agentID AgentID
 
-	mu       sync.Mutex
-	runs     int
-	admitted chan A2AAdmission
-	started  chan A2AAdmission
-	block    chan struct{}
-	result   TaskExecutionResult
+	mu          sync.Mutex
+	runs        int
+	admitted    chan A2AAdmission
+	started     chan A2AAdmission
+	hasDeadline chan bool
+	block       chan struct{}
+	result      TaskExecutionResult
 }
 
 func newIntegrationExecutor(tasks *SQLiteTaskStore, agentID AgentID) *integrationExecutor {
-	return &integrationExecutor{tasks: tasks, agentID: agentID, admitted: make(chan A2AAdmission, 10), started: make(chan A2AAdmission, 10), block: make(chan struct{})}
+	return &integrationExecutor{tasks: tasks, agentID: agentID, admitted: make(chan A2AAdmission, 10), started: make(chan A2AAdmission, 10), hasDeadline: make(chan bool, 10), block: make(chan struct{})}
 }
 
 func (e *integrationExecutor) AdmitA2ATask(ctx context.Context, req TaskExecutionRequest) (A2AAdmissionResult, error) {
@@ -46,6 +47,11 @@ func (e *integrationExecutor) RunA2ATask(ctx context.Context, admission A2AAdmis
 	e.mu.Unlock()
 	select {
 	case e.started <- admission:
+	default:
+	}
+	_, hasDeadline := ctx.Deadline()
+	select {
+	case e.hasDeadline <- hasDeadline:
 	default:
 	}
 	select {
@@ -195,6 +201,37 @@ func TestA2AIntegrationTargetedDelegation(t *testing.T) {
 	row := waitForTaskState(t, p.aliceDB, "outbound", accepted.TaskID, TaskStateCompleted)
 	if row.ExecutorAgent != "adam-n200" || row.ToAgent != "adam-n200" {
 		t.Fatalf("outbound ownership = %#v", row)
+	}
+}
+
+func TestA2AIntegrationTaskTimeoutControlsExecutorDeadline(t *testing.T) {
+	for _, tt := range []struct {
+		name            string
+		timeoutSec      int
+		wantHasDeadline bool
+	}{
+		{name: "unlimited", timeoutSec: 0, wantHasDeadline: false},
+		{name: "configured", timeoutSec: 1, wantHasDeadline: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			p := newIntegrationPair(t, 0)
+			req := integrationRequest(MessageID("msg_timeout_" + tt.name))
+			req.Delivery.TimeoutSec = tt.timeoutSec
+			if _, err := p.alice.SendTask(context.Background(), req); err != nil {
+				t.Fatalf("SendTask: %v", err)
+			}
+			accepted := waitForOutboundAccepted(t, p.aliceDB, req.MessageID)
+			select {
+			case got := <-p.bobExec.hasDeadline:
+				if got != tt.wantHasDeadline {
+					t.Fatalf("executor deadline = %t, want %t", got, tt.wantHasDeadline)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("executor did not start")
+			}
+			releaseExecutor(p.bobExec)
+			waitForTaskState(t, p.aliceDB, "outbound", accepted.TaskID, TaskStateCompleted)
+		})
 	}
 }
 

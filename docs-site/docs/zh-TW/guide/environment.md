@@ -145,12 +145,12 @@ WEBSHARE_HOST_TOKEN_FILE=/etc/kdb-webshare/host-token
 
 | 變數 | 預設 | 用途 |
 | --- | --- | --- |
-| `ASK_TIMEOUT_SEC` | `3600` | 單次 agent 請求最長執行秒數。逾時後 bot 會要求 ACP 取消；即使程序關閉後另有 transport error，terminal reason 仍維持逾時。Backend request 結束前仍保留 interrupt/stop escalation。 |
+| `ASK_TIMEOUT_SEC` | `0` | 單次互動式 agent 請求最長執行秒數。`0` 表示不限時間：請求會持續到完成、明確取消、服務關閉或 backend 離開。正整數會啟用 timeout；逾時後 bot 會要求 ACP 取消，terminal reason 維持逾時，且在 backend request 結束前保留 interrupt/stop escalation。 |
 | `QUEUE_BUFFER_SIZE` | `20` | 每個 target 的 job queue buffer。 |
 | `STREAM_UPDATE_SEC` | `3` | 串流更新最小間隔秒數。 |
 | `MAX_SCANNER_BUFFER_MB` | `64` | 長輸出 scanner buffer。 |
 | `DOWNLOAD_TIMEOUT_SEC` | `120` | Discord attachment 下載 timeout。 |
-| `AGENT_CAPACITY_MODE` | `auto` | ACP child agent 啟動前的主機資源動態 gate。`auto` 會檢查 CPU/load 與記憶體，先回收 idle agents，仍不足才拒絕啟動。`off` 會停用此動態 gate；明確設定的 legacy cap（例如 `THREAD_AGENT_MAX>0`）仍生效。 |
+| `AGENT_CAPACITY_MODE` | `auto` | ACP child agent 啟動前的主機資源動態 gate。`auto` 會檢查 CPU/load 與記憶體，先回收 idle agents；資源仍不足時只拒絕新的啟動，不會中斷 active 工作。拒絕訊息會請使用者等待後重試，並引導管理者使用 `/doctor`。`off` 會停用此動態 gate；明確設定的 legacy cap（例如 `THREAD_AGENT_MAX>0`）仍生效。 |
 | `KIRO_MODEL` | 空 | 初始 model override。 |
 | `KIRO_AGENT` | 空 | 初始 Kiro agent profile 或 mode。 |
 | `TRUST_ALL_TOOLS` | `true` | 完全等於 `true` 時預設允許 ACP server permission request；其他值預設拒絕，除非符合 `TRUST_TOOLS`。 |
@@ -250,7 +250,7 @@ WEBSHARE_HOST_TOKEN_FILE=/etc/kdb-webshare/host-token
 | `A2A_RUNTIME_ID_MODE` | `legacy` | `legacy`、`dual` 或 `runtime`。Production target 是 `runtime`；`dual` 只用於 bounded legacy drain。 |
 | `A2A_AGENT_NAME` | 空 | Public peer-card display name。 |
 | `A2A_AGENT_DESCRIPTION` | 空 | Public capability summary。不要包含 secrets、private paths、hosts 或 user data。 |
-| `A2A_TASK_TIMEOUT_SEC` | `3600` | Remote task timeout 秒數。 |
+| `A2A_TASK_TIMEOUT_SEC` | `0` | Remote task timeout 秒數。`0` 表示不限時間；正整數會啟用 timeout。 |
 | `A2A_MAX_DELEGATION_DEPTH` | `1` | 最大 nested delegation depth。 |
 | `A2A_AUTO_DELEGATE_ENABLED` | `false` | 當 channel policy 也允許時，允許 automatic outbound delegation。 |
 | `A2A_REQUIRE_CONFIRMATION_FOR_REMOTE` | `true` | Remote task execution 前需要 confirmation。 |

@@ -242,7 +242,13 @@ func (b *Bot) runAuditPrompt(ctx cmdCtx, prompt string) {
 		model = currentModel
 	}
 
-	runCtx, cancel := context.WithTimeout(context.Background(), b.manager.AskTimeout())
+	var runCtx context.Context
+	var cancel context.CancelFunc
+	if timeout := b.manager.AskTimeout(); timeout > 0 {
+		runCtx, cancel = context.WithTimeout(context.Background(), timeout)
+	} else {
+		runCtx, cancel = context.WithCancel(context.Background())
+	}
 	defer cancel()
 	response, askErr := agent.Ask(runCtx, prompt, nil)
 	status := "success"

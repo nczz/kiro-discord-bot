@@ -924,10 +924,11 @@ func (m *Manager) agentOptsWithRuntime() acp.AgentOptions {
 	return opts
 }
 
-// AskTimeout returns the configured timeout used for agent Ask calls.
+// AskTimeout returns the configured timeout used for direct agent Ask calls.
+// A zero duration means the request has no deadline.
 func (m *Manager) AskTimeout() time.Duration {
 	if m == nil || m.askTimeoutSec <= 0 {
-		return time.Hour
+		return 0
 	}
 	return time.Duration(m.askTimeoutSec) * time.Second
 }

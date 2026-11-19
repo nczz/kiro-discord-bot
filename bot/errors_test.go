@@ -102,6 +102,19 @@ func TestCommandErrorThreadAgentLimitListsActiveThreads(t *testing.T) {
 	}
 }
 
+func TestCommandErrorAgentCapacityIsActionableWithoutGenericWrapping(t *testing.T) {
+	L.Load("en")
+	msg := commandError(&channel.AgentCapacityError{})
+	for _, want := range []string{"host resources are busy", "Running tasks will continue", "Wait for a task to finish", "/doctor"} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("missing %q in capacity error:\n%s", want, msg)
+		}
+	}
+	if strings.Count(msg, "❌") != 1 {
+		t.Fatalf("capacity error should have one user-facing error marker:\n%s", msg)
+	}
+}
+
 func TestParseThreadIDArg(t *testing.T) {
 	for _, tt := range []struct {
 		raw  string

@@ -782,7 +782,7 @@ Validation：
 | `A2A_RUNTIME_ID_MODE` | `runtime` in release examples | no | `legacy`, `dual`, or `runtime`; production cutover target is `runtime`; `dual` is bounded drain only |
 | `A2A_AGENT_NAME` | Discord bot username | no | Bot display name; runtime cards may override with sanitized runtime display label |
 | `A2A_AGENT_DESCRIPTION` | empty | no | Public card description default; no hosts, paths, tokens, or user data |
-| `A2A_TASK_TIMEOUT_SEC` | 3600 | no | Per task execution timeout |
+| `A2A_TASK_TIMEOUT_SEC` | 0 | no | Per-task execution timeout in seconds; `0` means no deadline and a positive value enables the timeout |
 | `A2A_MAX_DELEGATION_DEPTH` | 1 | no | Loop prevention |
 | `A2A_AUTO_DELEGATE_ENABLED` | false | no | Allow LLM-initiated delegation tool |
 | `A2A_REQUIRE_CONFIRMATION_FOR_REMOTE` | true | no | Require confirmation for sensitive/remote delegation |

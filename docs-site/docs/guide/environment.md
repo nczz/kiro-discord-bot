@@ -144,12 +144,12 @@ Use the matching relay-side `RELAY_HOST_TOKEN_FILE` or `RELAY_HOST_TOKEN`. The p
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `ASK_TIMEOUT_SEC` | `3600` | Maximum duration of one agent request. On expiry, the bot requests ACP cancellation and retains timeout as the terminal reason even if process shutdown later reports a transport error; interrupt/stop escalation remains active until the backend request exits. |
+| `ASK_TIMEOUT_SEC` | `0` | Maximum duration of one interactive agent request in seconds. `0` means no deadline: the request runs until completion, explicit cancellation, service shutdown, or backend exit. A positive value enables the timeout; on expiry, the bot requests ACP cancellation and keeps timeout as the terminal reason while interrupt/stop escalation remains active until the backend request exits. |
 | `QUEUE_BUFFER_SIZE` | `20` | Per-target job queue buffer. |
 | `STREAM_UPDATE_SEC` | `3` | Minimum streaming update interval. |
 | `MAX_SCANNER_BUFFER_MB` | `64` | Scanner buffer for long Kiro CLI output. |
 | `DOWNLOAD_TIMEOUT_SEC` | `120` | Attachment download timeout. |
-| `AGENT_CAPACITY_MODE` | `auto` | Dynamic host resource gate for starting ACP child agents. `auto` checks CPU/load and memory, reclaims idle agents first, then refuses starts under pressure. `off` disables this dynamic gate; explicit legacy caps such as `THREAD_AGENT_MAX>0` still apply. |
+| `AGENT_CAPACITY_MODE` | `auto` | Dynamic host resource gate for starting ACP child agents. `auto` checks CPU/load and memory, reclaims idle agents first, then refuses only the new start under pressure; active work is never evicted. The refusal tells users to wait and retry and directs operators to `/doctor`. `off` disables this dynamic gate; explicit legacy caps such as `THREAD_AGENT_MAX>0` still apply. |
 | `KIRO_MODEL` | empty | Initial model override. |
 | `KIRO_AGENT` | empty | Initial Kiro agent profile or mode. |
 | `TRUST_ALL_TOOLS` | `true` | If exactly `true`, ACP server permission requests are approved by default. Any other value denies by default unless covered by `TRUST_TOOLS`. |
@@ -250,7 +250,7 @@ A2A is disabled while `NATS_URL` is empty. Existing Discord behavior should rema
 | `A2A_CONFIRMATION_SECRET` | empty | Signs A2A policy/delegation confirmation tokens and Discord confirmation buttons. Set a stable secret; otherwise it falls back to `DISCORD_TOKEN` or a process-random value that invalidates pending confirmations on restart. |
 | `A2A_AGENT_NAME` | empty | Public peer-card display name. |
 | `A2A_AGENT_DESCRIPTION` | empty | Public capability summary. Do not include secrets, private paths, hosts, or user data. |
-| `A2A_TASK_TIMEOUT_SEC` | `3600` | Remote task timeout seconds. |
+| `A2A_TASK_TIMEOUT_SEC` | `0` | Remote task timeout seconds. `0` means no deadline; a positive value enables the timeout. |
 | `A2A_MAX_DELEGATION_DEPTH` | `1` | Maximum nested delegation depth. |
 | `A2A_AUTO_DELEGATE_ENABLED` | `false` | Allows automatic outbound delegation when channel policy also permits it. |
 | `A2A_REQUIRE_CONFIRMATION_FOR_REMOTE` | `true` | Requires confirmation before remote task execution. |

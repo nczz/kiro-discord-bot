@@ -55,7 +55,11 @@ func (e *AgentCapacityError) Error() string {
 	if e == nil {
 		return "agent capacity unavailable"
 	}
-	return L.Getf("error.agent_capacity", e.Reclaimed, e.Status.ActiveAgents, e.Status.TempAgents, e.Status.memoryText(), e.Status.cpuText())
+	reclaimNote := L.Get("error.agent_capacity_no_idle")
+	if e.Reclaimed > 0 {
+		reclaimNote = L.Getf("error.agent_capacity_reclaimed", e.Reclaimed)
+	}
+	return L.Getf("error.agent_capacity", reclaimNote, e.Status.ActiveAgents, e.Status.TempAgents, e.Status.memoryText(), e.Status.cpuText())
 }
 
 func (e *AgentCapacityError) UserFacingError() string {

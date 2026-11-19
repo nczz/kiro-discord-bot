@@ -855,12 +855,15 @@ func (t *Transport) recordAndPublishRejected(ctx context.Context, req TaskExecut
 	return t.publisherFrom(subject.To).PublishRejected(ctx, subject.From, env.MessageID, req.ClientTaskRef, taskErr)
 }
 
-func (t *Transport) runAccepted(admission A2AAdmission) {
-	timeout := time.Duration(admission.Request.Delivery.TimeoutSec) * time.Second
-	if timeout <= 0 {
-		timeout = 5 * time.Minute
+func taskExecutionContext(timeoutSec int) (context.Context, context.CancelFunc) {
+	if timeoutSec <= 0 {
+		return context.WithCancel(context.Background())
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	return context.WithTimeout(context.Background(), time.Duration(timeoutSec)*time.Second)
+}
+
+func (t *Transport) runAccepted(admission A2AAdmission) {
+	ctx, cancel := taskExecutionContext(admission.Request.Delivery.TimeoutSec)
 	defer cancel()
 	result, err := t.executor.RunA2ATask(ctx, admission)
 	if err != nil {

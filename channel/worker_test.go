@@ -1202,6 +1202,45 @@ func TestWorkerEnqueueFull(t *testing.T) {
 	}
 }
 
+func TestWorkerInlineZeroTimeoutRunsUntilCompletion(t *testing.T) {
+	L.Load("en")
+	rt := &recordingRoundTripper{}
+	ds := testDiscordSession(rt)
+	agent := &fakeWorkerAgent{}
+	w := newWorker("ch1", agent, 1, 0, 1, 1440, nil, "")
+
+	w.executeInline(&Job{
+		ChannelID:    "ch1",
+		MessageID:    "m1",
+		Prompt:       "long task",
+		Session:      ds,
+		DeliveryMode: DeliveryInline,
+	})
+	callbacks := agent.Callbacks()
+	if callbacks.OnComplete == nil {
+		t.Fatal("expected inline callbacks to remain active without a deadline")
+	}
+	_, bodies := rt.Snapshot()
+	for _, body := range bodies {
+		if strings.Contains(body, "timed out") {
+			t.Fatalf("zero timeout ended the request before completion: %q", body)
+		}
+	}
+
+	callbacks.OnComplete("completed without a deadline", nil)
+	_, bodies = rt.Snapshot()
+	foundCompletion := false
+	for _, body := range bodies {
+		if strings.Contains(body, "completed without a deadline") {
+			foundCompletion = true
+			break
+		}
+	}
+	if !foundCompletion {
+		t.Fatalf("missing completed response; bodies=%v", bodies)
+	}
+}
+
 func TestWorkerInlineInjectsSkillPrefixBeforePrompt(t *testing.T) {
 	L.Load("en")
 	rt := &recordingRoundTripper{}

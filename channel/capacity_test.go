@@ -160,8 +160,10 @@ func TestAgentCapacityReclaimsIdleBeforeRefusing(t *testing.T) {
 	if !activeExists {
 		t.Fatal("active thread agent should not be reclaimed")
 	}
-	if !strings.Contains(err.Error(), "Reclaimed 1 idle agents") {
-		t.Fatalf("localized error = %q", err.Error())
+	for _, want := range []string{"Closed 1 idle agents automatically", "Running tasks will continue", "no active agent was stopped", "Wait for a task to finish", "/doctor"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("localized error missing %q: %q", want, err.Error())
+		}
 	}
 }
 
@@ -192,5 +194,11 @@ func TestAgentCapacityDoesNotReclaimDequeuedWorker(t *testing.T) {
 	}
 	if !dequeuedExists {
 		t.Fatal("dequeued worker was reclaimed")
+	}
+	if !strings.Contains(err.Error(), "No idle agent was available") {
+		t.Fatalf("zero-reclaim error is not actionable: %q", err.Error())
+	}
+	if strings.Contains(err.Error(), "Closed 0") {
+		t.Fatalf("zero-reclaim error reported a misleading close count: %q", err.Error())
 	}
 }
