@@ -468,8 +468,8 @@ data: {"jsonrpc":"2.0","id":` + idJSON(msg.ID) + `,"result":{}}
 	defer srv.Close()
 
 	stdinR, stdinW := io.Pipe()
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
+	var stdout synchronizedBuffer
+	var stderr synchronizedBuffer
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	errCh := make(chan error, 1)
@@ -577,6 +577,23 @@ func TestResolveSSEEndpointStaysOnConfiguredOrigin(t *testing.T) {
 			t.Fatalf("endpoint %q resolved to %q, want denial", endpoint, got)
 		}
 	}
+}
+
+type synchronizedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *synchronizedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *synchronizedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
 
 func waitFor(t *testing.T, ok func() bool) {
